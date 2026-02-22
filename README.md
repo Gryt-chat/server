@@ -6,7 +6,16 @@
 
 <br />
 
-## Quick Start
+## Docker
+
+```bash
+docker pull ghcr.io/gryt-chat/server:1.0.0
+docker run -p 5000:5000 --env-file .env ghcr.io/gryt-chat/server:1.0.0
+```
+
+Browse tags at [ghcr.io/gryt-chat/server](https://github.com/Gryt-chat/server/pkgs/container/server).
+
+## Quick Start (development)
 
 ```bash
 bun install

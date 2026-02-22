@@ -7,6 +7,9 @@ PKG_JSON="$PKG_DIR/package.json"
 PKG_NAME="server"
 IMAGE="ghcr.io/gryt-chat/${PKG_NAME}"
 
+OWNER="Gryt-chat"
+REPO="$PKG_NAME"
+
 CURRENT_VERSION=$(node -p "require('$PKG_JSON').version")
 
 # ── Colors ───────────────────────────────────────────────────────────────
@@ -22,6 +25,7 @@ ok()    { echo -e "${GREEN}✔${RESET}  $*"; }
 warn()  { echo -e "${YELLOW}⚠${RESET}  $*"; }
 err()   { echo -e "${RED}✖${RESET}  $*" >&2; }
 
+# ── Semver helpers ────────────────────────────────────────────────────────
 bump_version() {
   local version="$1" part="$2"
   IFS='.' read -r major minor patch <<< "${version%%-*}"
@@ -32,7 +36,7 @@ bump_version() {
   esac
 }
 
-# ── GHCR auth ────────────────────────────────────────────────────────────
+# ── GH_TOKEN ─────────────────────────────────────────────────────────────
 if [ -z "${GH_TOKEN:-}" ]; then
   if command -v gh &>/dev/null && gh auth status &>/dev/null 2>&1; then
     export GH_TOKEN=$(gh auth token)
@@ -85,6 +89,48 @@ case "$VERSION_CHOICE" in
   *) err "Invalid choice"; exit 1 ;;
 esac
 
+# ── Beta / prerelease ────────────────────────────────────────────────────
+BETA_RELEASE=false
+RELEASE_TYPE="release"
+
+if [ "$RERELEASE" = false ]; then
+  if [[ "$CURRENT_VERSION" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-beta\.([0-9]+)$ ]]; then
+    CUR_BASE="${BASH_REMATCH[1]}"
+    CUR_BETA="${BASH_REMATCH[2]}"
+    NEXT_BETA="${CUR_BASE}-beta.$((CUR_BETA + 1))"
+    echo ""
+    info "Current version is beta (${BOLD}v${CURRENT_VERSION}${RESET}). Quick options:"
+    echo "   a) Next beta iteration → v${NEXT_BETA}  (default)"
+    echo "   b) Promote to stable   → v${CUR_BASE}"
+    echo "   c) Keep selected       → v${NEW_VERSION}"
+    echo ""
+    read -rp "$(echo -e "${CYAN}?${RESET}  Choice ${YELLOW}[a]${RESET}: ")" BETA_CHOICE
+    BETA_CHOICE="${BETA_CHOICE:-a}"
+    case "$BETA_CHOICE" in
+      a|A) NEW_VERSION="$NEXT_BETA"; BETA_RELEASE=true ;;
+      b|B) NEW_VERSION="$CUR_BASE" ;;
+      c|C) ;;
+      *) err "Invalid choice"; exit 1 ;;
+    esac
+  fi
+
+  if [[ "$NEW_VERSION" =~ -beta\. ]]; then
+    BETA_RELEASE=true
+  fi
+
+  if [ "$BETA_RELEASE" = false ] && [[ ! "$NEW_VERSION" =~ -beta\. ]]; then
+    read -rp "$(echo -e "${CYAN}?${RESET}  Release as beta? ${YELLOW}[y/N]${RESET}: ")" BETA_ASK
+    if [[ "$BETA_ASK" =~ ^[Yy]$ ]]; then
+      BETA_RELEASE=true
+      NEW_VERSION="${NEW_VERSION}-beta.1"
+    fi
+  fi
+
+  if [ "$BETA_RELEASE" = true ]; then
+    RELEASE_TYPE="prerelease"
+  fi
+fi
+
 cd "$PKG_DIR"
 
 if [ "$RERELEASE" = true ]; then
@@ -106,11 +152,15 @@ echo ""
 echo -e "${BOLD}── Summary ──────────────────────────────${RESET}"
 if [ "$RERELEASE" = true ]; then
   echo -e "  Version:   ${YELLOW}v${NEW_VERSION} (re-release)${RESET}"
+elif [ "$BETA_RELEASE" = true ]; then
+  echo -e "  Version:   ${YELLOW}v${NEW_VERSION} (beta)${RESET}"
 else
   echo -e "  Version:   ${GREEN}v${NEW_VERSION}${RESET}"
 fi
+echo -e "  Release:   ${GREEN}${RELEASE_TYPE}${RESET}"
 echo -e "  Image:     ${GREEN}${IMAGE}:${NEW_VERSION}${RESET}"
 echo -e "  Tags:      ${GREEN}${NEW_VERSION}, ${V_MAJOR}.${V_MINOR}, ${V_MAJOR}, latest${RESET}"
+echo -e "  Repo:      ${GREEN}${OWNER}/${REPO}${RESET}"
 echo -e "${BOLD}─────────────────────────────────────────${RESET}"
 echo ""
 read -rp "$(echo -e "${CYAN}?${RESET}  Build, push, and tag? ${YELLOW}[Y/n]${RESET}: ")" CONFIRM
@@ -124,15 +174,41 @@ fi
 if [ "$RERELEASE" = true ]; then
   echo ""
   info "Removing existing release v${NEW_VERSION}…"
-  gh release delete "v${NEW_VERSION}" --repo "Gryt-chat/${PKG_NAME}" --yes --cleanup-tag 2>/dev/null || true
+  gh release delete "v${NEW_VERSION}" --repo "${OWNER}/${REPO}" --yes --cleanup-tag 2>/dev/null || true
   git tag -d "v${NEW_VERSION}" 2>/dev/null || true
+fi
+
+# ── Pre-flight checks ────────────────────────────────────────────────────
+echo ""
+info "Running pre-flight checks…"
+
+cd "$PKG_DIR"
+
+info "Type-checking…"
+npx tsc -b
+ok "Type-check passed"
+
+info "Linting…"
+LINT_OUTPUT=$(npx eslint src/ 2>&1) || true
+LINT_ERRORS=$(echo "$LINT_OUTPUT" | grep -c ' error ' || true)
+if [ "$LINT_ERRORS" -gt 0 ]; then
+  echo "$LINT_OUTPUT"
+  err "Lint found ${LINT_ERRORS} error(s). Fix them before releasing."
+  exit 1
+else
+  LINT_WARNINGS=$(echo "$LINT_OUTPUT" | grep -c ' warning ' || true)
+  if [ "$LINT_WARNINGS" -gt 0 ]; then
+    ok "Lint passed (${LINT_WARNINGS} warnings)"
+  else
+    ok "Lint passed"
+  fi
 fi
 
 # ── Docker build & push ─────────────────────────────────────────────────
 echo ""
 info "Building Docker image…"
 
-docker build -t "${IMAGE}:${NEW_VERSION}" .
+docker build --build-arg VERSION="${NEW_VERSION}" -t "${IMAGE}:${NEW_VERSION}" .
 ok "Built ${IMAGE}:${NEW_VERSION}"
 
 info "Tagging…"
@@ -150,27 +226,54 @@ ok "Pushed all tags"
 # ── GitHub release ───────────────────────────────────────────────────────
 echo ""
 info "Creating GitHub release…"
+
+RELEASE_FLAGS=""
+if [ "$BETA_RELEASE" = true ]; then
+  RELEASE_FLAGS="--prerelease"
+fi
+
 gh release create "v${NEW_VERSION}" \
-  --repo "Gryt-chat/${PKG_NAME}" \
+  --repo "${OWNER}/${REPO}" \
   --title "v${NEW_VERSION}" \
-  --generate-notes
+  --generate-notes \
+  $RELEASE_FLAGS
 ok "GitHub release created"
 
 # ── Git commit & tag ─────────────────────────────────────────────────────
 if [ "$RERELEASE" = false ]; then
   echo ""
   info "Committing version bump…"
+
+  COMMIT_SUFFIX=""
+  if [ "$BETA_RELEASE" = true ]; then
+    COMMIT_SUFFIX=" (beta)"
+  fi
+
+  cd "$PKG_DIR"
   git add package.json
-  git commit -m "release: v${NEW_VERSION}"
-  git tag "v${NEW_VERSION}"
+  git commit -m "release: v${NEW_VERSION}${COMMIT_SUFFIX}"
   git push
-  git push origin "v${NEW_VERSION}"
-  ok "Committed, tagged, and pushed"
+
+  REPO_ROOT="$(cd "$PKG_DIR/.." && git rev-parse --show-toplevel 2>/dev/null || echo "")"
+  if [ -n "$REPO_ROOT" ] && [ -f "$REPO_ROOT/.gitmodules" ]; then
+    cd "$REPO_ROOT"
+    git add packages/server
+    git commit -m "release: server v${NEW_VERSION}${COMMIT_SUFFIX}"
+    git tag "server-v${NEW_VERSION}"
+    git push
+    git push origin "server-v${NEW_VERSION}"
+    ok "Committed submodule + monorepo, tagged and pushed ${BOLD}server-v${NEW_VERSION}${RESET}"
+  else
+    cd "$PKG_DIR"
+    git tag "v${NEW_VERSION}"
+    git push origin "v${NEW_VERSION}"
+    ok "Committed, tagged, and pushed ${BOLD}v${NEW_VERSION}${RESET}"
+  fi
 fi
 
 echo ""
 ok "Release ${BOLD}v${NEW_VERSION}${RESET} complete"
 echo ""
 echo -e "  ${CYAN}Image:${RESET}   ${IMAGE}:${NEW_VERSION}"
-echo -e "  ${CYAN}Release:${RESET} https://github.com/Gryt-chat/${PKG_NAME}/releases/tag/v${NEW_VERSION}"
+echo -e "  ${CYAN}Release:${RESET} https://github.com/${OWNER}/${REPO}/releases/tag/v${NEW_VERSION}"
 echo ""

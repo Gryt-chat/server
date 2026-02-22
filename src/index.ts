@@ -23,6 +23,11 @@ import { membersRouter } from "./routes/members";
 import { emojisRouter } from "./routes/emojis";
 import { getObject } from "./storage/s3";
 import { startMediaSweep } from "./jobs/mediaSweep";
+import { readFileSync } from "fs";
+import { join } from "path";
+
+const pkg = JSON.parse(readFileSync(join(__dirname, "..", "package.json"), "utf-8"));
+const VERSION = process.env.SERVER_VERSION || pkg.version || "0.0.0";
 
 const app = express(); // Create an Express app
 
@@ -274,6 +279,7 @@ io.on("connection", (socket) => {
 const PORT = process.env.PORT || 5000;
 
 httpServer.listen(PORT, () => {
+	consola.box(`Gryt Server v${VERSION}`);
 	consola.start(`Starting ${process.env.SERVER_NAME}...`);
 	if (process.env.SFU_WS_HOST)
 		consola.info("SFU host set to " + process.env.SFU_WS_HOST);

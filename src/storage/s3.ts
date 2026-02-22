@@ -25,6 +25,8 @@ export function initS3(): void {
 
 export async function putObject(params: { bucket: string; key: string; body: Buffer | Uint8Array | Blob | string; contentType?: string; aclPublicRead?: boolean; }): Promise<void> {
   const client = getS3();
+  const bodySize = Buffer.isBuffer(params.body) || params.body instanceof Uint8Array ? params.body.length : typeof params.body === "string" ? params.body.length : "unknown";
+  console.log("[S3] putObject:", { bucket: params.bucket, key: params.key, contentType: params.contentType, bodySize });
   const cmd = new PutObjectCommand({
     Bucket: params.bucket,
     Key: params.key,
@@ -32,7 +34,13 @@ export async function putObject(params: { bucket: string; key: string; body: Buf
     ContentType: params.contentType,
     ACL: params.aclPublicRead ? "public-read" : undefined,
   } as any);
-  await client.send(cmd);
+  try {
+    await client.send(cmd);
+    console.log("[S3] putObject success:", params.key);
+  } catch (err) {
+    console.error("[S3] putObject failed:", params.key, err);
+    throw err;
+  }
 }
 
 export async function getObjectSignedUrl(params: { bucket: string; key: string; expiresInSeconds?: number }): Promise<string> {

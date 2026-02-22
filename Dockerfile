@@ -1,50 +1,36 @@
 # Dockerfile for Gryt Signaling Server
-#
-# Important: we must install *devDependencies* to run `tsc` during the image build.
-# The final runtime image installs production deps only.
 
-FROM oven/bun:1 AS builder
+FROM oven/bun:1-alpine AS builder
 
 WORKDIR /app
 ENV BUN_INSTALL_FROZEN_LOCKFILE=0
 
-# Copy package files first for better layer caching
 COPY package.json bun.lockb* ./
-
-# Install all deps (including devDependencies) so TypeScript build works
 RUN bun install --no-save
 
-# Copy source and build
 COPY . .
 RUN bun run build
 
-FROM oven/bun:1 AS runner
+FROM oven/bun:1-alpine AS runner
 
 WORKDIR /app
+ARG VERSION=1.0.0
 ENV NODE_ENV=production
+ENV SERVER_VERSION=${VERSION}
 
-# Healthcheck in docker-compose uses curl
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl \
-  && rm -rf /var/lib/apt/lists/*
-
-# Copy dependencies from builder (avoids bun lockfile issues in runner)
 COPY --from=builder /app/node_modules ./node_modules
-
-# Copy built output and any runtime assets
+COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/public ./public
 
-# Create non-root user (Debian-based image)
-RUN groupadd --system --gid 1001 gryt \
-  && useradd --system --uid 1001 --gid 1001 --home-dir /app --shell /usr/sbin/nologin gryt \
+RUN addgroup -g 1001 -S gryt \
+  && adduser -S gryt -u 1001 -G gryt -h /app -s /sbin/nologin \
   && chown -R gryt:gryt /app
 USER gryt
 
 EXPOSE 5000
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD curl -f http://localhost:5000/health || exit 1
+  CMD wget -qO- http://localhost:5000/health || exit 1
 
-# Run compiled server
 CMD ["bun", "dist/index.js"]
