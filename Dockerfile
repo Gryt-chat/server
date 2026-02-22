@@ -1,9 +1,5 @@
-# Dockerfile for Gryt Signaling Server
-
 FROM oven/bun:1-alpine AS builder
-
 WORKDIR /app
-ENV BUN_INSTALL_FROZEN_LOCKFILE=0
 
 COPY package.json bun.lockb* ./
 RUN bun install --no-save
@@ -11,23 +7,21 @@ RUN bun install --no-save
 COPY . .
 RUN bun run build
 
-FROM oven/bun:1-alpine AS runner
+FROM oven/bun:1-alpine
+
+RUN addgroup -g 1001 -S gryt \
+  && adduser -S gryt -u 1001 -G gryt -h /app -s /sbin/nologin
 
 WORKDIR /app
 ARG VERSION=1.0.0
-ENV NODE_ENV=production
-ENV SERVER_VERSION=${VERSION}
+ENV NODE_ENV=production SERVER_VERSION=${VERSION}
 
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package.json ./package.json
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/public ./public
+COPY --from=builder --chown=gryt:gryt /app/node_modules ./node_modules
+COPY --from=builder --chown=gryt:gryt /app/package.json ./package.json
+COPY --from=builder --chown=gryt:gryt /app/dist ./dist
+COPY --from=builder --chown=gryt:gryt /app/public ./public
 
-RUN addgroup -g 1001 -S gryt \
-  && adduser -S gryt -u 1001 -G gryt -h /app -s /sbin/nologin \
-  && chown -R gryt:gryt /app
 USER gryt
-
 EXPOSE 5000
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
