@@ -30,6 +30,17 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
       syncAllClients(io, clientsInfo);
     },
 
+    'voice:screen:state': (payload: { enabled: boolean; videoStreamId?: string; audioStreamId?: string }) => {
+      if (!clientsInfo[clientId]) return;
+      const enabled = typeof payload === 'object' ? Boolean(payload?.enabled) : Boolean(payload);
+      const videoStreamId = typeof payload === 'object' ? (payload.videoStreamId || "") : "";
+      const audioStreamId = typeof payload === 'object' ? (payload.audioStreamId || "") : "";
+      clientsInfo[clientId].screenShareEnabled = enabled;
+      clientsInfo[clientId].screenShareVideoStreamID = enabled ? videoStreamId : "";
+      clientsInfo[clientId].screenShareAudioStreamID = enabled ? audioStreamId : "";
+      syncAllClients(io, clientsInfo);
+    },
+
     'voice:state:update': (clientState: { isMuted: boolean; isDeafened: boolean; isAFK: boolean }) => {
       if (!clientsInfo[clientId]) return;
       clientsInfo[clientId].isMuted = Boolean(clientState.isMuted);
@@ -77,6 +88,9 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
             clientsInfo[existingClientId].streamID = "";
             clientsInfo[existingClientId].cameraEnabled = false;
             clientsInfo[existingClientId].cameraStreamID = "";
+            clientsInfo[existingClientId].screenShareEnabled = false;
+            clientsInfo[existingClientId].screenShareVideoStreamID = "";
+            clientsInfo[existingClientId].screenShareAudioStreamID = "";
             if (sfuClient) sfuClient.untrackUserConnection(serverUserId);
           }
         }
@@ -102,6 +116,9 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
         clientsInfo[clientId].voiceChannelId = "";
         clientsInfo[clientId].cameraEnabled = false;
         clientsInfo[clientId].cameraStreamID = "";
+        clientsInfo[clientId].screenShareEnabled = false;
+        clientsInfo[clientId].screenShareVideoStreamID = "";
+        clientsInfo[clientId].screenShareAudioStreamID = "";
       }
 
       if (wasInChannel !== newJoinedState) {
@@ -200,6 +217,9 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
         clientsInfo[clientId].voiceChannelId = "";
         clientsInfo[clientId].cameraEnabled = false;
         clientsInfo[clientId].cameraStreamID = "";
+        clientsInfo[clientId].screenShareEnabled = false;
+        clientsInfo[clientId].screenShareVideoStreamID = "";
+        clientsInfo[clientId].screenShareAudioStreamID = "";
       }
 
       syncAllClients(io, clientsInfo);
@@ -284,6 +304,9 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
         targetClient.isConnectedToVoice = false;
         targetClient.cameraEnabled = false;
         targetClient.cameraStreamID = "";
+        targetClient.screenShareEnabled = false;
+        targetClient.screenShareVideoStreamID = "";
+        targetClient.screenShareAudioStreamID = "";
         if (sfuClient) sfuClient.untrackUserConnection(targetUserId);
 
         syncAllClients(io, clientsInfo);

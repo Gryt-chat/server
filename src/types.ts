@@ -15,6 +15,9 @@ export interface Clients {
     isAFK: boolean;
     cameraEnabled: boolean;
     cameraStreamID: string;
+    screenShareEnabled: boolean;
+    screenShareVideoStreamID: string;
+    screenShareAudioStreamID: string;
     isServerMuted: boolean;
     isServerDeafened: boolean;
     status?: UserStatus;
