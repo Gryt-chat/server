@@ -12,11 +12,11 @@ import { getServerRole } from "../db/servers";
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024, files: 201 } });
 
 const EMOJI_NAME_RE = /^[a-z0-9_]{2,32}$/;
-const IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif)$/i;
+const IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|svg)$/i;
 const ZIP_MIME_RE = /^application\/(zip|x-zip|x-zip-compressed)$/;
 
 function deriveEmojiName(filename: string): string {
-  const base = filename.replace(/\.[^.]+$/, "");
+  const base = filename.replace(/\.[^.]+$/, "").replace(/^\d+[-_]/, "");
   const sanitized = base.toLowerCase().replace(/[^a-z0-9_]/g, "_");
   const trimmed = sanitized.replace(/^_+|_+$/g, "").replace(/_{2,}/g, "_");
   if (trimmed.length < 2) return trimmed.padEnd(2, "_");
@@ -29,6 +29,7 @@ function extToMime(ext: string): string {
   if (lower === "png") return "image/png";
   if (lower === "webp") return "image/webp";
   if (lower === "gif") return "image/gif";
+  if (lower === "svg") return "image/svg+xml";
   return "application/octet-stream";
 }
 
