@@ -13,6 +13,8 @@ import {
   deleteMessage,
   getMessageById,
   getFilesByIds,
+  getServerConfig,
+  DEFAULT_UPLOAD_MAX_BYTES,
 } from "../../db/scylla";
 import { verifyAccessToken } from "../../utils/jwt";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
@@ -143,6 +145,24 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         if (!text && (!attachments || attachments.length === 0)) {
           socket.emit("chat:error", "Message is empty");
           return;
+        }
+
+        if (attachments && attachments.length > 0) {
+          const fileMap = await getFilesByIds(attachments);
+          const cfg = await getServerConfig().catch(() => null);
+          const maxBytes = typeof cfg?.upload_max_bytes === "number" ? cfg.upload_max_bytes : DEFAULT_UPLOAD_MAX_BYTES;
+          for (const id of attachments) {
+            const f = fileMap.get(id);
+            if (!f) {
+              socket.emit("chat:error", `Attachment not found: ${id}`);
+              return;
+            }
+            if (typeof maxBytes === "number" && maxBytes > 0 && f.size != null && f.size > maxBytes) {
+              const limitMb = (maxBytes / (1024 * 1024)).toFixed(1);
+              socket.emit("chat:error", `File "${f.original_name || id}" is too large. Max ${limitMb}MB.`);
+              return;
+            }
+          }
         }
 
         const user = await getUserByServerId(auth.tokenPayload.serverUserId);

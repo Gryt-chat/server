@@ -13,28 +13,51 @@ import {
 } from "../../db/scylla";
 
 // ── Password cooldown ──────────────────────────────────────────────
+//
+// Two-tier brute-force protection:
+//   1. Per (IP + user) — prevents targeted attacks against a single account.
+//   2. Per IP only     — catches attackers cycling through accounts from one IP.
+//
+// Cooldowns escalate exponentially on repeated lockouts:
+//   base × 2^(lockouts-1), capped at PASSWORD_MAX_COOLDOWN_MS.
+//   e.g. 1 min → 2 min → 4 min → … → 1 hour (default cap).
 
-type PasswordCooldownState = {
+type CooldownState = {
   count: number;
+  lockouts: number;
   windowStartMs: number;
   cooldownUntilMs: number;
 };
 
 const PASSWORD_MAX_RETRIES = Math.max(1, Math.min(50, parseInt(process.env.SERVER_PASSWORD_MAX_RETRIES || "5", 10) || 5));
 const PASSWORD_RETRY_WINDOW_MS = Math.max(10_000, Math.min(60 * 60_000, parseInt(process.env.SERVER_PASSWORD_RETRY_WINDOW_MS || "300000", 10) || 300_000));
-const PASSWORD_RETRY_COOLDOWN_MS = Math.max(1_000, Math.min(24 * 60 * 60_000, parseInt(process.env.SERVER_PASSWORD_RETRY_COOLDOWN_MS || "60000", 10) || 60_000));
+const PASSWORD_BASE_COOLDOWN_MS = Math.max(1_000, Math.min(24 * 60 * 60_000, parseInt(process.env.SERVER_PASSWORD_RETRY_COOLDOWN_MS || "60000", 10) || 60_000));
+const PASSWORD_MAX_COOLDOWN_MS = Math.max(PASSWORD_BASE_COOLDOWN_MS, Math.min(24 * 60 * 60_000, parseInt(process.env.SERVER_PASSWORD_MAX_COOLDOWN_MS || "3600000", 10) || 3_600_000));
+const IP_PASSWORD_MAX_RETRIES = Math.max(1, Math.min(200, parseInt(process.env.SERVER_PASSWORD_IP_MAX_RETRIES || "15", 10) || 15));
 
-const passwordCooldowns = new Map<string, PasswordCooldownState>();
+const perKeyCooldowns = new Map<string, CooldownState>();
+const perIpCooldowns = new Map<string, CooldownState>();
 
-export function getPasswordCooldownKey(ip: string, grytUserId: string): string {
-  return `${ip}::${grytUserId}`;
+setInterval(() => {
+  const now = Date.now();
+  const staleAfter = PASSWORD_RETRY_WINDOW_MS + PASSWORD_MAX_COOLDOWN_MS;
+  for (const [key, s] of perKeyCooldowns) {
+    if (now - s.windowStartMs > staleAfter && now > (s.cooldownUntilMs || 0)) perKeyCooldowns.delete(key);
+  }
+  for (const [key, s] of perIpCooldowns) {
+    if (now - s.windowStartMs > staleAfter && now > (s.cooldownUntilMs || 0)) perIpCooldowns.delete(key);
+  }
+}, 10 * 60_000).unref();
+
+function computeCooldownMs(lockouts: number): number {
+  return Math.min(PASSWORD_MAX_COOLDOWN_MS, PASSWORD_BASE_COOLDOWN_MS * Math.pow(2, Math.max(0, lockouts - 1)));
 }
 
-export function getPasswordCooldownState(key: string, now = Date.now()): PasswordCooldownState {
-  const existing = passwordCooldowns.get(key);
+function getState(map: Map<string, CooldownState>, key: string, now = Date.now()): CooldownState {
+  const existing = map.get(key);
   if (!existing) {
-    const s = { count: 0, windowStartMs: now, cooldownUntilMs: 0 };
-    passwordCooldowns.set(key, s);
+    const s: CooldownState = { count: 0, lockouts: 0, windowStartMs: now, cooldownUntilMs: 0 };
+    map.set(key, s);
     return s;
   }
   if (now - existing.windowStartMs > PASSWORD_RETRY_WINDOW_MS) {
@@ -42,31 +65,61 @@ export function getPasswordCooldownState(key: string, now = Date.now()): Passwor
     existing.windowStartMs = now;
   }
   if (existing.count === 0 && existing.cooldownUntilMs > 0 && now > existing.cooldownUntilMs + PASSWORD_RETRY_WINDOW_MS) {
-    passwordCooldowns.delete(key);
-    const s = { count: 0, windowStartMs: now, cooldownUntilMs: 0 };
-    passwordCooldowns.set(key, s);
+    map.delete(key);
+    const s: CooldownState = { count: 0, lockouts: 0, windowStartMs: now, cooldownUntilMs: 0 };
+    map.set(key, s);
     return s;
   }
   return existing;
 }
 
-export function clearPasswordCooldown(key: string): void {
-  passwordCooldowns.delete(key);
-}
-
-export function applyPasswordFailure(key: string, now = Date.now()): { locked: boolean; retryAfterMs: number } {
-  const s = getPasswordCooldownState(key, now);
+function applyFailure(map: Map<string, CooldownState>, key: string, maxRetries: number, now = Date.now()): { locked: boolean; retryAfterMs: number } {
+  const s = getState(map, key, now);
   if (s.cooldownUntilMs && now < s.cooldownUntilMs) {
     return { locked: true, retryAfterMs: Math.max(0, s.cooldownUntilMs - now) };
   }
   s.count += 1;
-  if (s.count >= PASSWORD_MAX_RETRIES) {
+  if (s.count >= maxRetries) {
+    s.lockouts += 1;
     s.count = 0;
     s.windowStartMs = now;
-    s.cooldownUntilMs = now + PASSWORD_RETRY_COOLDOWN_MS;
-    return { locked: true, retryAfterMs: PASSWORD_RETRY_COOLDOWN_MS };
+    const cooldown = computeCooldownMs(s.lockouts);
+    s.cooldownUntilMs = now + cooldown;
+    return { locked: true, retryAfterMs: cooldown };
   }
   return { locked: false, retryAfterMs: 0 };
+}
+
+// ── Per (IP + user) ──────────────────────────────────────────────────
+
+export function getPasswordCooldownKey(ip: string, grytUserId: string): string {
+  return `${ip}::${grytUserId}`;
+}
+
+export function getPasswordCooldownState(key: string, now = Date.now()): CooldownState {
+  return getState(perKeyCooldowns, key, now);
+}
+
+export function clearPasswordCooldown(key: string): void {
+  perKeyCooldowns.delete(key);
+}
+
+export function applyPasswordFailure(key: string, now = Date.now()): { locked: boolean; retryAfterMs: number } {
+  return applyFailure(perKeyCooldowns, key, PASSWORD_MAX_RETRIES, now);
+}
+
+// ── Per IP ───────────────────────────────────────────────────────────
+
+export function getIpCooldownState(ip: string, now = Date.now()): CooldownState {
+  return getState(perIpCooldowns, ip, now);
+}
+
+export function clearIpCooldown(ip: string): void {
+  perIpCooldowns.delete(ip);
+}
+
+export function applyIpFailure(ip: string, now = Date.now()): { locked: boolean; retryAfterMs: number } {
+  return applyFailure(perIpCooldowns, ip, IP_PASSWORD_MAX_RETRIES, now);
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────

@@ -23,6 +23,8 @@ import {
   getPasswordCooldownState,
   clearPasswordCooldown,
   applyPasswordFailure,
+  getIpCooldownState,
+  applyIpFailure,
 } from "./joinHelpers";
 
 // ── Rate limit rules ────────────────────────────────────────────────
@@ -116,12 +118,20 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
         if (!isActiveMember) {
           const ip = getClientIp();
           const pwKey = getPasswordCooldownKey(ip, grytUserId);
-          const pwState = getPasswordCooldownState(pwKey);
-          if (pwState.cooldownUntilMs && Date.now() < pwState.cooldownUntilMs) {
+          const now = Date.now();
+          const pwState = getPasswordCooldownState(pwKey, now);
+          const ipState = getIpCooldownState(ip, now);
+          const pwLocked = !!(pwState.cooldownUntilMs && now < pwState.cooldownUntilMs);
+          const ipLocked = !!(ipState.cooldownUntilMs && now < ipState.cooldownUntilMs);
+          if (pwLocked || ipLocked) {
+            const retryAfterMs = Math.max(
+              pwLocked ? pwState.cooldownUntilMs - now : 0,
+              ipLocked ? ipState.cooldownUntilMs - now : 0,
+            );
             socket.emit("server:error", {
               error: "password_rate_limited",
               message: "Too many incorrect attempts. Please wait.",
-              retryAfterMs: Math.max(0, pwState.cooldownUntilMs - Date.now()),
+              retryAfterMs: Math.max(0, retryAfterMs),
               canReapply: true,
             });
             return;
@@ -156,10 +166,13 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
             const ok = await verifyServerPassword(provided, cfg!.password_salt!, cfg!.password_hash!);
             if (!ok) {
               const lock = applyPasswordFailure(pwKey);
+              const ipLock = applyIpFailure(ip);
+              const isLocked = lock.locked || ipLock.locked;
+              const retryAfterMs = Math.max(lock.retryAfterMs, ipLock.retryAfterMs);
               socket.emit("server:error", {
-                error: lock.locked ? "password_rate_limited" : "invalid_password",
-                message: lock.locked ? "Too many attempts. Please wait." : "Invalid password.",
-                retryAfterMs: lock.retryAfterMs || undefined,
+                error: isLocked ? "password_rate_limited" : "invalid_password",
+                message: isLocked ? "Too many attempts. Please wait." : "Invalid password.",
+                retryAfterMs: retryAfterMs || undefined,
                 canReapply: true,
               });
               return;
@@ -173,10 +186,13 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
             }
             if (provided !== envPassword) {
               const lock = applyPasswordFailure(pwKey);
+              const ipLock = applyIpFailure(ip);
+              const isLocked = lock.locked || ipLock.locked;
+              const retryAfterMs = Math.max(lock.retryAfterMs, ipLock.retryAfterMs);
               socket.emit("server:error", {
-                error: lock.locked ? "password_rate_limited" : "invalid_password",
-                message: lock.locked ? "Too many attempts. Please wait." : "Invalid password.",
-                retryAfterMs: lock.retryAfterMs || undefined,
+                error: isLocked ? "password_rate_limited" : "invalid_password",
+                message: isLocked ? "Too many attempts. Please wait." : "Invalid password.",
+                retryAfterMs: retryAfterMs || undefined,
                 canReapply: true,
               });
               return;
