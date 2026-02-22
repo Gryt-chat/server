@@ -21,6 +21,15 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
   const { io, socket, clientId, serverId, clientsInfo, sfuClient, getClientIp } = ctx;
 
   return {
+    'voice:camera:state': (payload: { enabled: boolean; streamId?: string }) => {
+      if (!clientsInfo[clientId]) return;
+      const enabled = typeof payload === 'boolean' ? payload : Boolean(payload?.enabled);
+      const streamId = typeof payload === 'object' ? (payload.streamId || "") : "";
+      clientsInfo[clientId].cameraEnabled = enabled;
+      clientsInfo[clientId].cameraStreamID = enabled ? streamId : "";
+      syncAllClients(io, clientsInfo);
+    },
+
     'voice:state:update': (clientState: { isMuted: boolean; isDeafened: boolean; isAFK: boolean }) => {
       if (!clientsInfo[clientId]) return;
       clientsInfo[clientId].isMuted = Boolean(clientState.isMuted);
@@ -66,6 +75,8 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
             clientsInfo[existingClientId].hasJoinedChannel = false;
             clientsInfo[existingClientId].voiceChannelId = "";
             clientsInfo[existingClientId].streamID = "";
+            clientsInfo[existingClientId].cameraEnabled = false;
+            clientsInfo[existingClientId].cameraStreamID = "";
             if (sfuClient) sfuClient.untrackUserConnection(serverUserId);
           }
         }
@@ -87,7 +98,11 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
 
       clientsInfo[clientId].streamID = streamID;
       clientsInfo[clientId].hasJoinedChannel = newJoinedState;
-      if (!newJoinedState) clientsInfo[clientId].voiceChannelId = "";
+      if (!newJoinedState) {
+        clientsInfo[clientId].voiceChannelId = "";
+        clientsInfo[clientId].cameraEnabled = false;
+        clientsInfo[clientId].cameraStreamID = "";
+      }
 
       if (wasInChannel !== newJoinedState) {
         if (!wasInChannel && newJoinedState) {
@@ -183,6 +198,8 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
       if (!newJoinedState) {
         clientsInfo[clientId].isConnectedToVoice = false;
         clientsInfo[clientId].voiceChannelId = "";
+        clientsInfo[clientId].cameraEnabled = false;
+        clientsInfo[clientId].cameraStreamID = "";
       }
 
       syncAllClients(io, clientsInfo);
@@ -265,6 +282,8 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
         targetClient.voiceChannelId = "";
         targetClient.streamID = "";
         targetClient.isConnectedToVoice = false;
+        targetClient.cameraEnabled = false;
+        targetClient.cameraStreamID = "";
         if (sfuClient) sfuClient.untrackUserConnection(targetUserId);
 
         syncAllClients(io, clientsInfo);

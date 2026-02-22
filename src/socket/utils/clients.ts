@@ -34,6 +34,8 @@ export function syncAllClients(io: Server, clientsInfo: Clients) {
         isMuted: client.isMuted,
         isDeafened: client.isDeafened,
         isAFK: client.isAFK,
+        cameraEnabled: client.cameraEnabled,
+        cameraStreamID: client.cameraStreamID,
         isServerMuted: client.isServerMuted,
         isServerDeafened: client.isServerDeafened,
       }))

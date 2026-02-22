@@ -46,6 +46,8 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
           ci.voiceChannelId = "";
           ci.streamID = "";
           ci.isConnectedToVoice = false;
+          ci.cameraEnabled = false;
+          ci.cameraStreamID = "";
 
           const sock = io.sockets.sockets.get(sid);
           if (sock) {
@@ -93,6 +95,8 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
           ci.voiceChannelId = "";
           ci.streamID = "";
           ci.isConnectedToVoice = false;
+          ci.cameraEnabled = false;
+          ci.cameraStreamID = "";
           sfuClient.untrackUserConnection(ci.serverUserId);
 
           const sock = io.sockets.sockets.get(sid);
@@ -155,6 +159,8 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
     voiceChannelId: "",
     isConnectedToVoice: false,
     isAFK: false,
+    cameraEnabled: false,
+    cameraStreamID: "",
     isServerMuted: false,
     isServerDeafened: false,
   };

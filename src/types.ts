@@ -13,6 +13,8 @@ export interface Clients {
     voiceChannelId: string;
     isConnectedToVoice?: boolean;
     isAFK: boolean;
+    cameraEnabled: boolean;
+    cameraStreamID: string;
     isServerMuted: boolean;
     isServerDeafened: boolean;
     status?: UserStatus;
