@@ -162,19 +162,25 @@ uploadsRouter.post(
         let thumbKey: string | null = null;
         let thumb: Buffer | null = null;
 
-        // For GIFs: store original bytes (keep animation). Thumbnail generation is best-effort.
+        // For GIFs: resize while preserving animation. Thumbnail generation is best-effort.
         if (isGif) {
-          storedBody = file.buffer;
-          storedMime = "image/gif";
-          storedSize = file.size;
           try {
             const meta = await sharp(file.buffer, { animated: true }).metadata().catch(() => null);
             if (meta?.width && meta?.height) { width = meta.width; height = meta.height; }
+            storedBody = await sharp(file.buffer, { animated: true })
+              .resize({ width: 256, height: 256, fit: "cover" })
+              .gif()
+              .toBuffer();
+            storedMime = "image/gif";
+            storedSize = storedBody.length;
             thumb = await sharp(file.buffer, { animated: true })
               .resize({ width: 64, height: 64, fit: "cover" })
               .jpeg({ quality: 70 })
               .toBuffer();
           } catch {
+            storedBody = file.buffer;
+            storedMime = "image/gif";
+            storedSize = file.size;
             thumb = null;
           }
         } else {

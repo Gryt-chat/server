@@ -68,15 +68,31 @@ emojisRouter.post(
           return;
         }
 
-        const processed = await sharp(file.buffer)
-          .resize(128, 128, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
-          .png()
-          .toBuffer();
+        const isGif = (file.mimetype || "").toLowerCase() === "image/gif";
+        let processed: Buffer;
+        let ext: string;
+        let contentType: string;
+
+        if (isGif) {
+          processed = await sharp(file.buffer, { animated: true })
+            .resize(128, 128, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
+            .gif()
+            .toBuffer();
+          ext = "gif";
+          contentType = "image/gif";
+        } else {
+          processed = await sharp(file.buffer)
+            .resize(128, 128, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
+            .png()
+            .toBuffer();
+          ext = "png";
+          contentType = "image/png";
+        }
 
         const fileId = uuidv4();
-        const key = `emojis/${name}.png`;
+        const key = `emojis/${name}.${ext}`;
 
-        await putObject({ bucket, key, body: processed, contentType: "image/png" });
+        await putObject({ bucket, key, body: processed, contentType });
         await insertEmoji({ name, file_id: fileId, s3_key: key, uploaded_by_server_user_id: serverUserId });
 
         res.status(201).json({ name, file_id: fileId });
@@ -104,7 +120,8 @@ emojisRouter.get(
         if (!body) { res.status(502).json({ error: "s3_error" }); return; }
 
         res.setHeader("Cache-Control", "public, max-age=604800, immutable");
-        res.setHeader("Content-Type", "image/png");
+        const imgContentType = emoji.s3_key.endsWith(".gif") ? "image/gif" : "image/png";
+        res.setHeader("Content-Type", imgContentType);
 
         if (typeof body.pipe === "function") { body.pipe(res); return; }
         if (typeof body.transformToByteArray === "function") {

@@ -95,21 +95,34 @@ serverRouter.post(
         return;
       }
 
-      // Normalize to square PNG
+      const isGif = (file.mimetype || "").toLowerCase() === "image/gif";
       let out: Buffer;
+      let outMime: string;
+      let outExt: string;
       try {
-        out = await sharp(file.buffer)
-          .resize(256, 256, { fit: "cover" })
-          .png({ compressionLevel: 9 })
-          .toBuffer();
+        if (isGif) {
+          out = await sharp(file.buffer, { animated: true })
+            .resize(256, 256, { fit: "cover" })
+            .gif()
+            .toBuffer();
+          outMime = "image/gif";
+          outExt = "gif";
+        } else {
+          out = await sharp(file.buffer)
+            .resize(256, 256, { fit: "cover" })
+            .png({ compressionLevel: 9 })
+            .toBuffer();
+          outMime = "image/png";
+          outExt = "png";
+        }
       } catch {
         res.status(400).json({ error: "invalid_file", message: "Could not process image. Please upload a valid PNG/JPEG/WebP/GIF/AVIF under the size limit." });
         return;
       }
 
-      const key = `server-icons/${host}/${uuidv4()}.png`;
+      const key = `server-icons/${host}/${uuidv4()}.${outExt}`;
       try {
-        await putObject({ bucket, key, body: out, contentType: "image/png" });
+        await putObject({ bucket, key, body: out, contentType: outMime });
       } catch (e: any) {
         const msg =
           (typeof e?.message === "string" && e.message.trim().length > 0)
