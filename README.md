@@ -9,8 +9,8 @@
 ## Docker
 
 ```bash
-docker pull ghcr.io/gryt-chat/server:1.0.0
-docker run -p 5000:5000 --env-file .env ghcr.io/gryt-chat/server:1.0.0
+docker pull ghcr.io/gryt-chat/server:latest
+docker run -p 5000:5000 --env-file .env ghcr.io/gryt-chat/server:latest
 ```
 
 Browse tags at [ghcr.io/gryt-chat/server](https://github.com/Gryt-chat/server/pkgs/container/server).
