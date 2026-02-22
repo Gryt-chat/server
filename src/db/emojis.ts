@@ -67,6 +67,23 @@ export async function listEmojis(): Promise<EmojiRecord[]> {
   }
 }
 
+export async function renameEmoji(oldName: string, newName: string): Promise<boolean> {
+  const c = getScyllaClient();
+  const existing = await getEmoji(oldName);
+  if (!existing) return false;
+  await c.execute(
+    `INSERT INTO server_emojis_by_name (name, file_id, s3_key, uploaded_by_server_user_id, created_at) VALUES (?, ?, ?, ?, ?)`,
+    [newName, existing.file_id, existing.s3_key, existing.uploaded_by_server_user_id, existing.created_at],
+    { prepare: true },
+  );
+  await c.execute(
+    `DELETE FROM server_emojis_by_name WHERE name = ?`,
+    [oldName],
+    { prepare: true },
+  );
+  return true;
+}
+
 export async function deleteEmoji(name: string): Promise<boolean> {
   const c = getScyllaClient();
   const existing = await getEmoji(name);

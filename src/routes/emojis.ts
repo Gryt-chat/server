@@ -5,7 +5,7 @@ import { v4 as uuidv4 } from "uuid";
 import sharp from "sharp";
 import { unzipSync } from "fflate";
 import { putObject, deleteObject, getObject } from "../storage/s3";
-import { insertEmoji, getEmoji, listEmojis, deleteEmoji } from "../db/emojis";
+import { insertEmoji, getEmoji, listEmojis, deleteEmoji, renameEmoji } from "../db/emojis";
 import { requireBearerToken } from "../middleware/requireBearerToken";
 import { getServerRole } from "../db/servers";
 
@@ -246,7 +246,12 @@ emojisRouter.get(
         if (!body) { res.status(502).json({ error: "s3_error" }); return; }
 
         res.setHeader("Cache-Control", "public, max-age=604800, immutable");
-        const imgContentType = emoji.s3_key.endsWith(".gif") ? "image/gif" : "image/png";
+        const key = emoji.s3_key.toLowerCase();
+        const imgContentType = key.endsWith(".gif") ? "image/gif"
+          : key.endsWith(".svg") ? "image/svg+xml"
+          : key.endsWith(".webp") ? "image/webp"
+          : key.endsWith(".jpg") || key.endsWith(".jpeg") ? "image/jpeg"
+          : "image/png";
         res.setHeader("Content-Type", imgContentType);
 
         if (typeof body.pipe === "function") { body.pipe(res); return; }
@@ -257,6 +262,51 @@ emojisRouter.get(
         }
         if (Buffer.isBuffer(body) || body instanceof Uint8Array) { res.end(Buffer.from(body)); return; }
         res.status(502).json({ error: "s3_error", message: "Unsupported body type" });
+      })
+      .catch(next);
+  },
+);
+
+emojisRouter.patch(
+  "/:name",
+  requireBearerToken as any,
+  express.json(),
+  (req: Request, res: Response, next: NextFunction): void => {
+    const oldName = req.params.name;
+    const newName = typeof req.body?.name === "string" ? req.body.name.trim().toLowerCase() : "";
+
+    if (!oldName) { res.status(400).json({ error: "name_required" }); return; }
+    if (!newName || !EMOJI_NAME_RE.test(newName)) {
+      res.status(400).json({ error: "invalid_name", message: "Name must be 2-32 lowercase letters, numbers, or underscores." });
+      return;
+    }
+    if (oldName === newName) { res.json({ ok: true, name: newName }); return; }
+
+    const serverUserId = req.tokenPayload?.serverUserId;
+    if (!serverUserId) { res.status(401).json({ error: "auth_required" }); return; }
+
+    Promise.resolve()
+      .then(async () => {
+        const role = await getServerRole(serverUserId);
+        if (role !== "owner" && role !== "admin") {
+          res.status(403).json({ error: "forbidden", message: "Only admins can rename custom emojis." });
+          return;
+        }
+
+        const existing = await getEmoji(oldName);
+        if (!existing) {
+          res.status(404).json({ error: "not_found", message: `Emoji :${oldName}: not found.` });
+          return;
+        }
+
+        const conflict = await getEmoji(newName);
+        if (conflict) {
+          res.status(409).json({ error: "emoji_exists", message: `":${newName}:" already exists.` });
+          return;
+        }
+
+        await renameEmoji(oldName, newName);
+        res.json({ ok: true, name: newName });
       })
       .catch(next);
   },
