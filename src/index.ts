@@ -15,7 +15,7 @@ import {
 	ensureOwnerRoleForGrytUser,
 	insertServerAudit,
 } from "./db/scylla";
-import { initS3 } from "./storage/s3";
+import { initS3, ensureBucket } from "./storage/s3";
 import { serverRouter } from "./routes/server";
 import { messagesRouter } from "./routes/messages";
 import { uploadsRouter } from "./routes/uploads";
@@ -88,6 +88,12 @@ try {
 	} else {
 		initS3();
 		consola.success("S3 client initialized");
+		const bucket = (process.env.S3_BUCKET || "").trim();
+		if (bucket) {
+			ensureBucket(bucket)
+				.then(() => consola.success(`S3 bucket "${bucket}" ready`))
+				.catch((e) => consola.error(`Failed to ensure S3 bucket "${bucket}"`, e));
+		}
 	}
 } catch (e) {
 	consola.error("S3 initialization failed", e);

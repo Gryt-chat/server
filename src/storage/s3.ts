@@ -1,4 +1,4 @@
-import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, HeadBucketCommand, CreateBucketCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 let s3: S3Client | null = null;
@@ -21,6 +21,21 @@ export function initS3(): void {
     forcePathStyle,
     credentials: accessKeyId && secretAccessKey ? { accessKeyId, secretAccessKey } : undefined,
   });
+}
+
+export async function ensureBucket(bucket: string): Promise<void> {
+  const client = getS3();
+  try {
+    await client.send(new HeadBucketCommand({ Bucket: bucket }));
+  } catch (err: any) {
+    if (err?.name === "NotFound" || err?.$metadata?.httpStatusCode === 404 || err?.name === "NoSuchBucket") {
+      console.log(`[S3] Bucket "${bucket}" does not exist, creating…`);
+      await client.send(new CreateBucketCommand({ Bucket: bucket }));
+      console.log(`[S3] Bucket "${bucket}" created`);
+    } else {
+      throw err;
+    }
+  }
 }
 
 export async function putObject(params: { bucket: string; key: string; body: Buffer | Uint8Array | Blob | string; contentType?: string; aclPublicRead?: boolean; }): Promise<void> {
