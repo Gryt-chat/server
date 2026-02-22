@@ -223,23 +223,7 @@ docker push "${IMAGE}:${V_MAJOR}"
 docker push "${IMAGE}:latest"
 ok "Pushed all tags"
 
-# ── GitHub release ───────────────────────────────────────────────────────
-echo ""
-info "Creating GitHub release…"
-
-RELEASE_FLAGS=""
-if [ "$BETA_RELEASE" = true ]; then
-  RELEASE_FLAGS="--prerelease"
-fi
-
-gh release create "v${NEW_VERSION}" \
-  --repo "${OWNER}/${REPO}" \
-  --title "v${NEW_VERSION}" \
-  --generate-notes \
-  $RELEASE_FLAGS
-ok "GitHub release created"
-
-# ── Git commit & tag ─────────────────────────────────────────────────────
+# ── Git commit & push (before GH release so the tag lands on this commit) ──
 if [ "$RERELEASE" = false ]; then
   echo ""
   info "Committing version bump…"
@@ -265,11 +249,25 @@ if [ "$RERELEASE" = false ]; then
     ok "Committed submodule + monorepo, tagged and pushed ${BOLD}server-v${NEW_VERSION}${RESET}"
   else
     cd "$PKG_DIR"
-    git tag "v${NEW_VERSION}"
-    git push origin "v${NEW_VERSION}"
-    ok "Committed, tagged, and pushed ${BOLD}v${NEW_VERSION}${RESET}"
+    ok "Committed and pushed ${BOLD}v${NEW_VERSION}${RESET}"
   fi
 fi
+
+# ── GitHub release (tag now points to the version-bump commit) ───────────
+echo ""
+info "Creating GitHub release…"
+
+RELEASE_FLAGS=""
+if [ "$BETA_RELEASE" = true ]; then
+  RELEASE_FLAGS="--prerelease"
+fi
+
+gh release create "v${NEW_VERSION}" \
+  --repo "${OWNER}/${REPO}" \
+  --title "v${NEW_VERSION}" \
+  --generate-notes \
+  $RELEASE_FLAGS
+ok "GitHub release created"
 
 echo ""
 ok "Release ${BOLD}v${NEW_VERSION}${RESET} complete"
