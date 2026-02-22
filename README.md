@@ -34,6 +34,10 @@ Full docs at **[docs.gryt.chat/docs/server](https://docs.gryt.chat/docs/server)*
 - [Multi-Server](https://docs.gryt.chat/docs/server/multi-server) — server isolation, room IDs
 - [Deployment](https://docs.gryt.chat/docs/deployment) — Docker Compose, Kubernetes
 
+## Issues
+
+Please report bugs and request features in the [main Gryt repository](https://github.com/Gryt-chat/gryt/issues).
+
 ## License
 
 [AGPL-3.0](https://github.com/Gryt-chat/gryt/blob/main/LICENSE) — Part of [Gryt](https://github.com/Gryt-chat/gryt)
