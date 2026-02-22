@@ -1,0 +1,51 @@
+services:
+  ws1:
+    build:
+      context: ..
+      dockerfile: Dockerfile.server
+    container_name: gryt-ws1
+    ports:
+      - "5000:5000"
+    environment:
+      - PORT=5000
+      - SERVER_NAME=ws1
+      # External ScyllaDB (default assumes Scylla is running on the host).
+      - SCYLLA_CONTACT_POINTS=${SCYLLA_CONTACT_POINTS:-host.docker.internal}
+      - SCYLLA_LOCAL_DATACENTER=${SCYLLA_LOCAL_DATACENTER:-datacenter1}
+      # Per-server keyspace (DB isolation)
+      - SCYLLA_KEYSPACE=ws1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  ws2:
+    build:
+      context: ..
+      dockerfile: Dockerfile.server
+    container_name: gryt-ws2
+    ports:
+      - "5001:5001"
+    environment:
+      - PORT=5001
+      - SERVER_NAME=ws2
+      # External ScyllaDB (default assumes Scylla is running on the host).
+      - SCYLLA_CONTACT_POINTS=${SCYLLA_CONTACT_POINTS:-host.docker.internal}
+      - SCYLLA_LOCAL_DATACENTER=${SCYLLA_LOCAL_DATACENTER:-datacenter1}
+      # Per-server keyspace (DB isolation)
+      - SCYLLA_KEYSPACE=ws2
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
