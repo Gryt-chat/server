@@ -14,7 +14,7 @@ export const VALID_CENSOR_STYLES: CensorStyle[] = ["grawlix", "emoji", "asterisk
 export function normalizeCensorStyle(v: unknown): CensorStyle {
   const s = String(v || "").toLowerCase();
   if (VALID_CENSOR_STYLES.includes(s as CensorStyle)) return s as CensorStyle;
-  return "grawlix";
+  return "emoji";
 }
 
 export interface ProfanityMatch {
@@ -70,7 +70,7 @@ export function scanText(text: string): ScanResult {
   };
 }
 
-export function censorText(text: string, style: CensorStyle = "grawlix"): string {
+export function censorText(text: string, style: CensorStyle = "emoji"): string {
   const censor = new TextCensor().setStrategy((ctx) =>
     censorReplacement(ctx.matchLength, style),
   );
@@ -84,7 +84,7 @@ const LONG_TEXT_THRESHOLD = 5000;
 export function processProfanity(
   text: string,
   mode: ProfanityMode,
-  censorStyle: CensorStyle = "grawlix",
+  censorStyle: CensorStyle = "emoji",
 ): Promise<
   | { action: "pass"; text: string; matches?: ProfanityMatch[] }
   | { action: "reject" }

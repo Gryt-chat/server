@@ -72,8 +72,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           hasPassword: !!(cfg.password_hash && cfg.password_salt) || !!(process.env.SERVER_PASSWORD?.trim()),
           avatarMaxBytes: cfg.avatar_max_bytes ?? DEFAULT_AVATAR_MAX_BYTES,
           uploadMaxBytes: cfg.upload_max_bytes ?? DEFAULT_UPLOAD_MAX_BYTES,
-          profanityMode: cfg.profanity_mode ?? "off",
-          profanityCensorStyle: cfg.profanity_censor_style ?? "grawlix",
+          profanityMode: cfg.profanity_mode ?? "censor",
+          profanityCensorStyle: cfg.profanity_censor_style ?? "emoji",
         });
       } catch (e) {
         consola.error("server:settings:get failed", e);
@@ -146,6 +146,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           profanityCensorStyle,
         });
 
+        const passwordChanged = typeof payload.password === "string" || !!payload.clearPassword;
+
         insertServerAudit({
           actorServerUserId: auth.tokenPayload.serverUserId,
           action: "settings_update",
@@ -153,23 +155,25 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           meta: {
             displayName: displayName ?? null,
             description: description ?? null,
-            passwordChanged: typeof payload.password === "string" || !!payload.clearPassword,
+            passwordChanged,
           },
         }).catch(() => undefined);
 
-        const newTokenVersion = await incrementServerTokenVersion();
-        for (const [sid, s] of io.sockets.sockets) {
-          const ci = clientsInfo[sid];
-          if (!ci?.grytUserId || !ci?.serverUserId) continue;
-          const newToken = generateAccessToken({
-            grytUserId: ci.grytUserId,
-            serverUserId: ci.serverUserId,
-            nickname: ci.nickname,
-            serverHost: s.handshake?.headers?.host || socket.handshake.headers.host || "unknown",
-            tokenVersion: newTokenVersion,
-          });
-          ci.accessToken = newToken;
-          s.emit("token:refreshed", { accessToken: newToken });
+        if (passwordChanged) {
+          const newTokenVersion = await incrementServerTokenVersion();
+          for (const [sid, s] of io.sockets.sockets) {
+            const ci = clientsInfo[sid];
+            if (!ci?.grytUserId || !ci?.serverUserId) continue;
+            const newToken = generateAccessToken({
+              grytUserId: ci.grytUserId,
+              serverUserId: ci.serverUserId,
+              nickname: ci.nickname,
+              serverHost: s.handshake?.headers?.host || socket.handshake.headers.host || "unknown",
+              tokenVersion: newTokenVersion,
+            });
+            ci.accessToken = newToken;
+            s.emit("token:refreshed", { accessToken: newToken });
+          }
         }
 
         socket.emit("server:settings", {
@@ -182,8 +186,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           hasPassword: !!(updated.password_hash && updated.password_salt) || !!(process.env.SERVER_PASSWORD?.trim()),
           avatarMaxBytes: updated.avatar_max_bytes ?? DEFAULT_AVATAR_MAX_BYTES,
           uploadMaxBytes: updated.upload_max_bytes ?? DEFAULT_UPLOAD_MAX_BYTES,
-          profanityMode: updated.profanity_mode ?? "off",
-          profanityCensorStyle: updated.profanity_censor_style ?? "grawlix",
+          profanityMode: updated.profanity_mode ?? "censor",
+          profanityCensorStyle: updated.profanity_censor_style ?? "emoji",
         });
         broadcastServerUiUpdate("settings");
       } catch (e) {
