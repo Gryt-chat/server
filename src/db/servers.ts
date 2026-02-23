@@ -82,7 +82,7 @@ const SERVER_CONFIG_ID = "config";
 export async function getServerConfig(): Promise<ServerConfigRecord | null> {
   const c = getScyllaClient();
   const rs = await c.execute(
-    `SELECT owner_gryt_user_id, token_version, display_name, description, icon_url, password_salt, password_hash, password_algo, avatar_max_bytes, upload_max_bytes, voice_max_bitrate_bps, profanity_mode, is_configured, created_at, updated_at
+    `SELECT owner_gryt_user_id, token_version, display_name, description, icon_url, password_salt, password_hash, password_algo, avatar_max_bytes, upload_max_bytes, voice_max_bitrate_bps, profanity_mode, profanity_censor_style, is_configured, created_at, updated_at
      FROM server_config_singleton WHERE id = ?`,
     [SERVER_CONFIG_ID],
     { prepare: true }
@@ -125,10 +125,11 @@ export async function createServerConfigIfNotExists(seed?: {
     upload_max_bytes: DEFAULT_UPLOAD_MAX_BYTES,
     voice_max_bitrate_bps: DEFAULT_VOICE_MAX_BITRATE_BPS,
     profanity_mode: "off",
+    profanity_censor_style: "grawlix",
     is_configured: false,
     created_at: now,
     updated_at: now,
-  };
+  } satisfies ServerConfigRecord;
   return { applied, config };
 }
 
