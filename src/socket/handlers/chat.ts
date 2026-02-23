@@ -315,6 +315,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
 
         const limit = typeof payload.limit === "number" ? payload.limit : 50;
         const before = typeof payload.before === "string" ? new Date(payload.before) : undefined;
+        consola.info("[chat:fetch]", { conversationId: payload.conversationId, limit, before: before?.toISOString(), hasBefore: !!before });
         const items = before
           ? await listMessages(payload.conversationId, limit, before)
           : await getMessagesCached(payload.conversationId, limit);
@@ -325,6 +326,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           items: enrichedItems,
           hasMore: enrichedItems.length >= limit,
         };
+        consola.info("[chat:fetch] response", { itemCount: enrichedItems.length, hasMore: response.hasMore, before: response.before });
         if (before) response.before = payload.before;
         socket.emit("chat:history", response);
       } catch (err) {
