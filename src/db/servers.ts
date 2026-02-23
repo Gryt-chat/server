@@ -11,7 +11,8 @@ export const DEFAULT_AVATAR_MAX_BYTES = 5 * 1024 * 1024; // 5MB
 export const DEFAULT_UPLOAD_MAX_BYTES = 20 * 1024 * 1024; // 20MB (matches typical reverse proxy defaults)
 export const DEFAULT_VOICE_MAX_BITRATE_BPS = 96_000; // 96kbps Opus cap (low-latency friendly default)
 
-import type { ProfanityMode } from "../utils/profanityFilter";
+import type { CensorStyle, ProfanityMode } from "../utils/profanityFilter";
+import { normalizeCensorStyle } from "../utils/profanityFilter";
 
 export interface ServerConfigRecord {
   owner_gryt_user_id: string | null;
@@ -26,6 +27,7 @@ export interface ServerConfigRecord {
   upload_max_bytes: number | null;
   voice_max_bitrate_bps: number | null;
   profanity_mode: ProfanityMode;
+  profanity_censor_style: CensorStyle;
   is_configured: boolean;
   created_at: Date;
   updated_at: Date;
@@ -54,6 +56,7 @@ function rowToServerConfig(r: types.Row): ServerConfigRecord {
     upload_max_bytes: typeof r["upload_max_bytes"] === "number" ? r["upload_max_bytes"] : (r["upload_max_bytes"] == null ? null : Number(r["upload_max_bytes"])),
     voice_max_bitrate_bps: typeof r["voice_max_bitrate_bps"] === "number" ? r["voice_max_bitrate_bps"] : (r["voice_max_bitrate_bps"] == null ? null : Number(r["voice_max_bitrate_bps"])),
     profanity_mode: normalizeProfanityMode(r["profanity_mode"]),
+    profanity_censor_style: normalizeCensorStyle(r["profanity_censor_style"]),
     is_configured: typeof r["is_configured"] === "boolean" ? r["is_configured"] : false,
     created_at: r["created_at"] ?? new Date(0),
     updated_at: r["updated_at"] ?? new Date(0),
@@ -250,6 +253,7 @@ export async function updateServerConfig(patch: {
   uploadMaxBytes?: number | null;
   voiceMaxBitrateBps?: number | null;
   profanityMode?: ProfanityMode;
+  profanityCensorStyle?: CensorStyle;
   isConfigured?: boolean;
 }): Promise<ServerConfigRecord> {
   const c = getScyllaClient();
@@ -257,7 +261,7 @@ export async function updateServerConfig(patch: {
 
   await createServerConfigIfNotExists();
   const current = await getServerConfig();
-  const has = (k: keyof typeof patch) => Object.prototype.hasOwnProperty.call(patch, k);
+  const has = (k: keyof typeof patch) => Object.prototype.hasOwnProperty.call(patch, k) && patch[k] !== undefined;
   const next = {
     display_name: has("displayName") ? (patch.displayName ?? null) : (current?.display_name ?? null),
     description: has("description") ? (patch.description ?? null) : (current?.description ?? null),
@@ -269,14 +273,15 @@ export async function updateServerConfig(patch: {
     upload_max_bytes: has("uploadMaxBytes") ? (patch.uploadMaxBytes ?? null) : (current?.upload_max_bytes ?? null),
     voice_max_bitrate_bps: has("voiceMaxBitrateBps") ? (patch.voiceMaxBitrateBps ?? null) : (current?.voice_max_bitrate_bps ?? null),
     profanity_mode: has("profanityMode") ? normalizeProfanityMode(patch.profanityMode) : (current?.profanity_mode ?? "off"),
+    profanity_censor_style: has("profanityCensorStyle") ? normalizeCensorStyle(patch.profanityCensorStyle) : (current?.profanity_censor_style ?? "grawlix"),
     is_configured: typeof patch.isConfigured === "boolean" ? patch.isConfigured : (current?.is_configured ?? false),
   };
 
   await c.execute(
     `UPDATE server_config_singleton
-     SET display_name = ?, description = ?, icon_url = ?, password_salt = ?, password_hash = ?, password_algo = ?, avatar_max_bytes = ?, upload_max_bytes = ?, voice_max_bitrate_bps = ?, profanity_mode = ?, is_configured = ?, updated_at = ?
+     SET display_name = ?, description = ?, icon_url = ?, password_salt = ?, password_hash = ?, password_algo = ?, avatar_max_bytes = ?, upload_max_bytes = ?, voice_max_bitrate_bps = ?, profanity_mode = ?, profanity_censor_style = ?, is_configured = ?, updated_at = ?
      WHERE id = ?`,
-    [next.display_name, next.description, next.icon_url, next.password_salt, next.password_hash, next.password_algo, next.avatar_max_bytes, next.upload_max_bytes, next.voice_max_bitrate_bps, next.profanity_mode, next.is_configured, now, SERVER_CONFIG_ID],
+    [next.display_name, next.description, next.icon_url, next.password_salt, next.password_hash, next.password_algo, next.avatar_max_bytes, next.upload_max_bytes, next.voice_max_bitrate_bps, next.profanity_mode, next.profanity_censor_style, next.is_configured, now, SERVER_CONFIG_ID],
     { prepare: true }
   );
 

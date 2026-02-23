@@ -19,7 +19,7 @@ import {
   getServerConfig,
   DEFAULT_UPLOAD_MAX_BYTES,
 } from "../../db/scylla";
-import { processProfanity, type ProfanityMode } from "../../utils/profanityFilter";
+import { processProfanity, type CensorStyle, type ProfanityMode } from "../../utils/profanityFilter";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 
 const RL_SEND: RateLimitRule = { limit: 20, windowMs: 10_000, banMs: 30_000, scorePerAction: 1, maxScore: 10, scoreDecayMs: 2000 };
@@ -194,13 +194,13 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
 
         const replyToMessageId = typeof payload.replyToMessageId === "string" ? payload.replyToMessageId : null;
 
-        // Profanity filter
         const profanityMode: ProfanityMode = cfg?.profanity_mode ?? "off";
+        const censorStyle: CensorStyle = cfg?.profanity_censor_style ?? "grawlix";
         let finalText = text;
         let profanityMatches: { startIndex: number; endIndex: number }[] | undefined;
 
         if (profanityMode !== "off" && finalText) {
-          const result = await processProfanity(finalText, profanityMode);
+          const result = await processProfanity(finalText, profanityMode, censorStyle);
           if (result.action === "reject") {
             socket.emit("chat:error", "Message blocked: contains profanity.");
             return;
@@ -258,7 +258,10 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         });
 
         connectedClients.forEach(([cid]) => {
-          io.sockets.sockets.get(cid)?.emit("chat:new", enriched);
+          const msg = cid === clientId && payload.nonce
+            ? { ...enriched, nonce: payload.nonce }
+            : enriched;
+          io.sockets.sockets.get(cid)?.emit("chat:new", msg);
         });
       } catch (err) {
         consola.error("chat:send failed", err);

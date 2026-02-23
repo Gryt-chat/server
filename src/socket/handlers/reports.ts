@@ -13,6 +13,7 @@ import {
   hasUserReportedMessage,
   insertServerAudit,
   banUser,
+  getFilesByIds,
 } from "../../db/scylla";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 
@@ -80,6 +81,7 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
           conversation_id: message.conversation_id,
           reporter_server_user_id: auth.tokenPayload.serverUserId,
           message_text: message.text,
+          message_attachments: message.attachments,
           message_sender_server_id: message.sender_server_id,
           message_sender_nickname: senderUser?.nickname ?? null,
         });
@@ -114,12 +116,33 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
         if (!auth) return;
 
         const aggregated = await getAggregatedPendingReports();
+
+        const allFileIds = new Set<string>();
+        for (const r of aggregated) {
+          if (r.message_attachments) r.message_attachments.forEach((id) => allFileIds.add(id));
+        }
+        const fileMap = allFileIds.size > 0 ? await getFilesByIds([...allFileIds]) : new Map();
+
         socket.emit("reports:list", {
           serverId,
           reports: aggregated.map((r) => ({
             messageId: r.message_id,
             conversationId: r.conversation_id,
             messageText: r.message_text,
+            attachments: r.message_attachments ?? null,
+            enrichedAttachments: r.message_attachments?.map((id) => {
+              const f = fileMap.get(id);
+              if (!f) return { file_id: id, mime: null, size: null, original_name: null, width: null, height: null, has_thumbnail: false };
+              return {
+                file_id: f.file_id,
+                mime: f.mime,
+                size: f.size,
+                original_name: f.original_name,
+                width: f.width,
+                height: f.height,
+                has_thumbnail: !!f.thumbnail_key,
+              };
+            }) ?? null,
             senderServerUserId: r.message_sender_server_id,
             senderNickname: r.message_sender_nickname,
             reportCount: r.report_count,

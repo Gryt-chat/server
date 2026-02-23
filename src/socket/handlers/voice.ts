@@ -49,8 +49,11 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
       syncAllClients(io, clientsInfo);
 
       if (sfuClient && clientsInfo[clientId].hasJoinedChannel) {
-        const roomId = `${clientsInfo[clientId].serverUserId}:${clientsInfo[clientId].streamID}`;
-        sfuClient.updateUserAudioState(roomId, clientId, clientsInfo[clientId].isMuted, clientsInfo[clientId].isDeafened).catch((e) => {
+        const ci = clientsInfo[clientId];
+        const roomId = `${ci.serverUserId}:${ci.streamID}`;
+        const effectiveMuted = ci.isMuted || ci.isServerMuted;
+        const effectiveDeafened = ci.isDeafened || ci.isServerDeafened;
+        sfuClient.updateUserAudioState(roomId, clientId, effectiveMuted, effectiveDeafened).catch((e) => {
           consola.error("Failed to update SFU audio state:", e);
         });
       }
@@ -295,6 +298,11 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
           targetSocket.emit("voice:channel:joined", false);
           targetSocket.emit("voice:stream:set", "");
           targetSocket.emit("voice:room:leave");
+        }
+
+        // Notify other clients about the peer leaving
+        if (targetSocket) {
+          targetSocket.broadcast.emit("voice:peer:left", { clientId: targetSocketId, nickname: targetClient.nickname });
         }
 
         // Update server state

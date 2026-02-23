@@ -7,6 +7,15 @@ import {
 } from "obscenity";
 
 export type ProfanityMode = "off" | "flag" | "censor" | "block";
+export type CensorStyle = "grawlix" | "emoji" | "asterisks" | "block" | "hearts";
+
+export const VALID_CENSOR_STYLES: CensorStyle[] = ["grawlix", "emoji", "asterisks", "block", "hearts"];
+
+export function normalizeCensorStyle(v: unknown): CensorStyle {
+  const s = String(v || "").toLowerCase();
+  if (VALID_CENSOR_STYLES.includes(s as CensorStyle)) return s as CensorStyle;
+  return "grawlix";
+}
 
 export interface ProfanityMatch {
   startIndex: number;
@@ -25,12 +34,25 @@ const matcher = new RegExpMatcher({
 
 const GRAWLIX_CHARS = ["$", "#", "@", "!", "%", "&", "*"];
 
-function randomGrawlix(length: number): string {
-  let result = "";
-  for (let i = 0; i < length; i++) {
-    result += GRAWLIX_CHARS[Math.floor(Math.random() * GRAWLIX_CHARS.length)];
+function censorReplacement(length: number, style: CensorStyle): string {
+  switch (style) {
+    case "emoji":
+      return "\u{1F92C}".repeat(Math.max(1, Math.ceil(length / 2)));
+    case "asterisks":
+      return "*".repeat(length);
+    case "block":
+      return "\u2588".repeat(length);
+    case "hearts":
+      return "\u2665".repeat(length);
+    case "grawlix":
+    default: {
+      let result = "";
+      for (let i = 0; i < length; i++) {
+        result += GRAWLIX_CHARS[Math.floor(Math.random() * GRAWLIX_CHARS.length)];
+      }
+      return result;
+    }
   }
-  return result;
 }
 
 function toMatches(raw: MatchPayload[]): ProfanityMatch[] {
@@ -48,9 +70,9 @@ export function scanText(text: string): ScanResult {
   };
 }
 
-export function censorText(text: string): string {
+export function censorText(text: string, style: CensorStyle = "grawlix"): string {
   const censor = new TextCensor().setStrategy((ctx) =>
-    randomGrawlix(ctx.matchLength),
+    censorReplacement(ctx.matchLength, style),
   );
   const raw = matcher.getAllMatches(text, true);
   if (raw.length === 0) return text;
@@ -62,6 +84,7 @@ const LONG_TEXT_THRESHOLD = 5000;
 export function processProfanity(
   text: string,
   mode: ProfanityMode,
+  censorStyle: CensorStyle = "grawlix",
 ): Promise<
   | { action: "pass"; text: string; matches?: ProfanityMatch[] }
   | { action: "reject" }
@@ -81,7 +104,7 @@ export function processProfanity(
     }
 
     if (mode === "censor") {
-      return { action: "pass", text: censorText(text) };
+      return { action: "pass", text: censorText(text, censorStyle) };
     }
 
     // mode === "block"

@@ -11,17 +11,27 @@ export function unverifyClient(socket: Socket) {
   socket.leave("verifiedClients");
 }
 
-// Enhanced debounce and state tracking per io instance
 const lastEmitAtByIO = new WeakMap<Server, number>();
 const lastClientsStateByIO = new WeakMap<Server, string>();
-const EMIT_MIN_INTERVAL_MS = 100; // increased debounce time
-const MEMBER_LIST_DEBOUNCE_MS = 200; // separate debounce for member list
+const pendingEmitByIO = new WeakMap<Server, ReturnType<typeof setTimeout>>();
+const EMIT_MIN_INTERVAL_MS = 100;
+const MEMBER_LIST_DEBOUNCE_MS = 200;
+
+function emitClientsNow(io: Server, clientsInfo: Clients, stateHash: string) {
+  lastEmitAtByIO.set(io, Date.now());
+  lastClientsStateByIO.set(io, stateHash);
+
+  const registeredClients: Clients = {};
+  Object.entries(clientsInfo).forEach(([clientId, client]) => {
+    if (client.serverUserId && !client.serverUserId.startsWith('temp_')) {
+      registeredClients[clientId] = client;
+    }
+  });
+
+  io.to("verifiedClients").emit("server:clients", registeredClients);
+}
 
 export function syncAllClients(io: Server, clientsInfo: Clients) {
-  const now = Date.now();
-  const last = lastEmitAtByIO.get(io) || 0;
-  
-  // Create a hash of the current client state to detect actual changes
   const currentStateHash = JSON.stringify(
     Object.entries(clientsInfo)
       .filter(([_, client]) => client.serverUserId && !client.serverUserId.startsWith('temp_'))
@@ -45,28 +55,26 @@ export function syncAllClients(io: Server, clientsInfo: Clients) {
       }))
       .sort((a, b) => a.id.localeCompare(b.id))
   );
-  
-  const lastStateHash = lastClientsStateByIO.get(io);
-  
-  // Skip if no actual state change or too frequent
-  if (currentStateHash === lastStateHash || now - last < EMIT_MIN_INTERVAL_MS) {
-    return; // skip if no change or too frequent
+
+  if (currentStateHash === lastClientsStateByIO.get(io)) return;
+
+  const pending = pendingEmitByIO.get(io);
+  if (pending) clearTimeout(pending);
+
+  const now = Date.now();
+  const elapsed = now - (lastEmitAtByIO.get(io) || 0);
+
+  if (elapsed >= EMIT_MIN_INTERVAL_MS) {
+    emitClientsNow(io, clientsInfo, currentStateHash);
+  } else {
+    pendingEmitByIO.set(
+      io,
+      setTimeout(() => {
+        pendingEmitByIO.delete(io);
+        emitClientsNow(io, clientsInfo, currentStateHash);
+      }, EMIT_MIN_INTERVAL_MS - elapsed),
+    );
   }
-  
-  lastEmitAtByIO.set(io, now);
-  lastClientsStateByIO.set(io, currentStateHash);
-
-  // Filter to only include registered users (those with real serverUserId, not temp IDs)
-  const registeredClients: Clients = {};
-  Object.entries(clientsInfo).forEach(([clientId, client]) => {
-    // Only include clients who have been properly registered in the database
-    // (i.e., have a real serverUserId that doesn't start with "temp_")
-    if (client.serverUserId && !client.serverUserId.startsWith('temp_')) {
-      registeredClients[clientId] = client;
-    }
-  });
-
-  io.to("verifiedClients").emit("server:clients", registeredClients);
 }
 
 // Separate debounce tracking for member list
@@ -175,29 +183,18 @@ export async function broadcastMemberList(io: Server, clientsInfo: Clients, _ins
 }
 
 /**
- * Disconnect all OTHER sockets belonging to the same grytUserId,
- * notifying them with `server:session:replaced` so the UI can show
- * a "you connected from elsewhere" message before the socket closes.
+ * Count how many OTHER sockets belong to the same grytUserId.
+ * Used for logging when a user opens multiple clients concurrently.
  */
-export function disconnectOtherSessions(
-  io: Server,
+export function countOtherSessions(
   clientsInfo: Clients,
   currentClientId: string,
   grytUserId: string,
-): void {
+): number {
+  let count = 0;
   for (const [sid, ci] of Object.entries(clientsInfo)) {
     if (sid === currentClientId) continue;
-    if (ci.grytUserId !== grytUserId) continue;
-
-    const sock = io.sockets.sockets.get(sid);
-    if (!sock) continue;
-
-    consola.info(
-      `Replacing session ${sid} (${ci.nickname}) — same user connected as ${currentClientId}`,
-    );
-    sock.emit("server:session:replaced", {
-      message: "You have been disconnected because you signed in from another device or tab.",
-    });
-    sock.disconnect(true);
+    if (ci.grytUserId === grytUserId) count++;
   }
+  return count;
 }

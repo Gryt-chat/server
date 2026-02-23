@@ -2,6 +2,7 @@ import consola from "consola";
 import type { HandlerContext, EventHandlerMap } from "./types";
 import { requireAuth } from "../middleware/auth";
 import { broadcastServerUiUpdate } from "../utils/server";
+import { VALID_CENSOR_STYLES, type CensorStyle } from "../../utils/profanityFilter";
 import { syncAllClients, broadcastMemberList } from "../utils/clients";
 import { generateAccessToken } from "../../utils/jwt";
 import {
@@ -46,7 +47,7 @@ function emitRateLimited(ctx: HandlerContext, rl: { retryAfterMs?: number }) {
 }
 
 export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
-  const { io, socket, clientId, serverId, clientsInfo } = ctx;
+  const { io, socket, clientId, serverId, clientsInfo, sfuClient } = ctx;
 
   return {
     'server:settings:get': async () => {
@@ -72,6 +73,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           avatarMaxBytes: cfg.avatar_max_bytes ?? DEFAULT_AVATAR_MAX_BYTES,
           uploadMaxBytes: cfg.upload_max_bytes ?? DEFAULT_UPLOAD_MAX_BYTES,
           profanityMode: cfg.profanity_mode ?? "off",
+          profanityCensorStyle: cfg.profanity_censor_style ?? "grawlix",
         });
       } catch (e) {
         consola.error("server:settings:get failed", e);
@@ -89,6 +91,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       avatarMaxBytes?: number | null;
       uploadMaxBytes?: number | null;
       profanityMode?: string;
+      profanityCensorStyle?: string;
     }) => {
       try {
         const rl = rlCheck("server:settings:update", ctx, RL_SETTINGS);
@@ -117,6 +120,11 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           ? payload.profanityMode as typeof validProfanityModes[number]
           : undefined;
 
+        const profanityCensorStyle: CensorStyle | undefined =
+          typeof payload.profanityCensorStyle === "string" && VALID_CENSOR_STYLES.includes(payload.profanityCensorStyle as CensorStyle)
+            ? payload.profanityCensorStyle as CensorStyle
+            : undefined;
+
         let passwordSalt: string | null | undefined;
         let passwordHash: string | null | undefined;
         let passwordAlgo: string | null | undefined;
@@ -135,6 +143,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           avatarMaxBytes,
           uploadMaxBytes,
           profanityMode,
+          profanityCensorStyle,
         });
 
         insertServerAudit({
@@ -174,6 +183,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           avatarMaxBytes: updated.avatar_max_bytes ?? DEFAULT_AVATAR_MAX_BYTES,
           uploadMaxBytes: updated.upload_max_bytes ?? DEFAULT_UPLOAD_MAX_BYTES,
           profanityMode: updated.profanity_mode ?? "off",
+          profanityCensorStyle: updated.profanity_censor_style ?? "grawlix",
         });
         broadcastServerUiUpdate("settings");
       } catch (e) {
@@ -461,6 +471,13 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           if (ci?.serverUserId === targetId) {
             ci.isServerMuted = payload.muted;
             s.emit("server:muted", { muted: payload.muted });
+
+            if (sfuClient && ci.hasJoinedChannel) {
+              const roomId = `${ci.serverUserId}:${ci.streamID}`;
+              sfuClient.updateUserAudioState(roomId, sid, ci.isMuted || ci.isServerMuted, ci.isDeafened || ci.isServerDeafened).catch((e) => {
+                consola.error("Failed to update SFU audio state after server mute:", e);
+              });
+            }
           }
         }
 
@@ -503,6 +520,13 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           if (ci?.serverUserId === targetId) {
             ci.isServerDeafened = payload.deafened;
             s.emit("server:deafened", { deafened: payload.deafened });
+
+            if (sfuClient && ci.hasJoinedChannel) {
+              const roomId = `${ci.serverUserId}:${ci.streamID}`;
+              sfuClient.updateUserAudioState(roomId, sid, ci.isMuted || ci.isServerMuted, ci.isDeafened || ci.isServerDeafened).catch((e) => {
+                consola.error("Failed to update SFU audio state after server deafen:", e);
+              });
+            }
           }
         }
 

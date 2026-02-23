@@ -6,7 +6,7 @@ import { SFUClient } from "../sfu/client";
 import type { SFUPeerEvent, SFUSyncRoom } from "../sfu/client";
 import { verifyAccessToken } from "../utils/jwt";
 import { getUserByServerId, getServerConfig } from "../db/scylla";
-import { syncAllClients, verifyClient, broadcastMemberList, disconnectOtherSessions } from "./utils/clients";
+import { syncAllClients, verifyClient, broadcastMemberList, countOtherSessions } from "./utils/clients";
 import { sendInfo, sendServerDetails, setSocketRefs, broadcastServerUiUpdate } from "./utils/server";
 import { getServerIdFromEnv } from "../utils/serverId";
 
@@ -42,6 +42,7 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
 
       for (const [sid, ci] of Object.entries(clientsInfo)) {
         if (ci.serverUserId === ev.userId && ci.hasJoinedChannel) {
+          const nickname = ci.nickname;
           ci.hasJoinedChannel = false;
           ci.voiceChannelId = "";
           ci.streamID = "";
@@ -54,6 +55,7 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
 
           const sock = io.sockets.sockets.get(sid);
           if (sock) {
+            sock.broadcast.emit("voice:peer:left", { clientId: sid, nickname });
             sock.emit("voice:channel:joined", false);
             sock.emit("voice:stream:set", "");
             sock.emit("voice:room:leave");
@@ -94,6 +96,7 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
       for (const [sid, ci] of Object.entries(clientsInfo)) {
         if (ci.hasJoinedChannel && !sfuUsers.has(ci.serverUserId)) {
           consola.info(`[SFU-Sync] Stale voice user ${ci.serverUserId}, forcing disconnect`);
+          const nickname = ci.nickname;
           ci.hasJoinedChannel = false;
           ci.voiceChannelId = "";
           ci.streamID = "";
@@ -107,6 +110,7 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
 
           const sock = io.sockets.sockets.get(sid);
           if (sock) {
+            sock.broadcast.emit("voice:peer:left", { clientId: sid, nickname });
             sock.emit("voice:channel:joined", false);
             sock.emit("voice:stream:set", "");
             sock.emit("voice:room:leave");
@@ -209,6 +213,9 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
     if (clientInfo?.serverUserId && sfuClient) {
       sfuClient.untrackUserConnection(clientInfo.serverUserId);
     }
+    if (clientInfo?.hasJoinedChannel) {
+      socket.broadcast.emit("voice:peer:left", { clientId, nickname: clientInfo.nickname });
+    }
     const wasRegistered = clientInfo?.serverUserId && !clientInfo.serverUserId.startsWith("temp_");
     delete clientsInfo[clientId];
     if (wasRegistered) {
@@ -245,9 +252,11 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
             clientsInfo[clientId].grytUserId = tokenPayload.grytUserId;
             clientsInfo[clientId].serverUserId = tokenPayload.serverUserId;
             clientsInfo[clientId].nickname = tokenPayload.nickname;
-            consola.info(`Restored session: ${tokenPayload.nickname} (${tokenPayload.serverUserId})`);
-
-            disconnectOtherSessions(io, clientsInfo, clientId, tokenPayload.grytUserId);
+            const otherCount = countOtherSessions(clientsInfo, clientId, tokenPayload.grytUserId);
+            consola.info(
+              `Restored session: ${tokenPayload.nickname} (${tokenPayload.serverUserId})` +
+              (otherCount > 0 ? ` — ${otherCount} other session(s) active` : ""),
+            );
 
             syncAllClients(io, clientsInfo);
             broadcastMemberList(io, clientsInfo, serverId);

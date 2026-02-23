@@ -7,6 +7,7 @@ export interface ReportRecord {
   conversation_id: string;
   reporter_server_user_id: string;
   message_text: string | null;
+  message_attachments: string[] | null;
   message_sender_server_id: string;
   message_sender_nickname: string | null;
   status: "pending" | "approved" | "deleted";
@@ -20,6 +21,7 @@ export async function insertReport(record: {
   conversation_id: string;
   reporter_server_user_id: string;
   message_text: string | null;
+  message_attachments: string[] | null;
   message_sender_server_id: string;
   message_sender_nickname: string | null;
 }): Promise<ReportRecord> {
@@ -28,8 +30,8 @@ export async function insertReport(record: {
   const created_at = new Date();
 
   await c.execute(
-    `INSERT INTO message_reports (bucket, created_at, report_id, message_id, conversation_id, reporter_server_user_id, message_text, message_sender_server_id, message_sender_nickname, status, resolved_by_server_user_id, resolved_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ["reports", created_at, report_id, record.message_id, record.conversation_id, record.reporter_server_user_id, record.message_text, record.message_sender_server_id, record.message_sender_nickname, "pending", null, null],
+    `INSERT INTO message_reports (bucket, created_at, report_id, message_id, conversation_id, reporter_server_user_id, message_text, message_attachments, message_sender_server_id, message_sender_nickname, status, resolved_by_server_user_id, resolved_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ["reports", created_at, report_id, record.message_id, record.conversation_id, record.reporter_server_user_id, record.message_text, record.message_attachments, record.message_sender_server_id, record.message_sender_nickname, "pending", null, null],
     { prepare: true },
   );
 
@@ -46,7 +48,7 @@ export async function insertReport(record: {
 export async function listReports(statusFilter?: string, limit = 100): Promise<ReportRecord[]> {
   const c = getScyllaClient();
   const rs = await c.execute(
-    `SELECT report_id, message_id, conversation_id, reporter_server_user_id, message_text, message_sender_server_id, message_sender_nickname, status, resolved_by_server_user_id, created_at, resolved_at FROM message_reports WHERE bucket = ? ORDER BY created_at DESC, report_id DESC LIMIT ?`,
+    `SELECT report_id, message_id, conversation_id, reporter_server_user_id, message_text, message_attachments, message_sender_server_id, message_sender_nickname, status, resolved_by_server_user_id, created_at, resolved_at FROM message_reports WHERE bucket = ? ORDER BY created_at DESC, report_id DESC LIMIT ?`,
     ["reports", limit],
     { prepare: true },
   );
@@ -57,6 +59,7 @@ export async function listReports(statusFilter?: string, limit = 100): Promise<R
     conversation_id: r["conversation_id"],
     reporter_server_user_id: r["reporter_server_user_id"],
     message_text: r["message_text"] ?? null,
+    message_attachments: r["message_attachments"] ?? null,
     message_sender_server_id: r["message_sender_server_id"],
     message_sender_nickname: r["message_sender_nickname"] ?? null,
     status: r["status"] ?? "pending",
@@ -137,6 +140,7 @@ export async function getAggregatedPendingReports(): Promise<
     message_id: string;
     conversation_id: string;
     message_text: string | null;
+    message_attachments: string[] | null;
     message_sender_server_id: string;
     message_sender_nickname: string | null;
     report_count: number;
@@ -152,6 +156,7 @@ export async function getAggregatedPendingReports(): Promise<
       message_id: string;
       conversation_id: string;
       message_text: string | null;
+      message_attachments: string[] | null;
       message_sender_server_id: string;
       message_sender_nickname: string | null;
       reporters: Set<string>;
@@ -173,6 +178,7 @@ export async function getAggregatedPendingReports(): Promise<
         message_id: r.message_id,
         conversation_id: r.conversation_id,
         message_text: r.message_text,
+        message_attachments: r.message_attachments,
         message_sender_server_id: r.message_sender_server_id,
         message_sender_nickname: r.message_sender_nickname,
         reporters: new Set([r.reporter_server_user_id]),

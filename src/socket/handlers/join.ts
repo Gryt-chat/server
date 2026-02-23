@@ -1,6 +1,6 @@
 import consola from "consola";
 import type { HandlerContext, EventHandlerMap } from "./types";
-import { syncAllClients, broadcastMemberList, disconnectOtherSessions } from "../utils/clients";
+import { syncAllClients, broadcastMemberList, countOtherSessions } from "../utils/clients";
 import { sendServerDetails } from "../utils/server";
 import { verifyIdentityToken } from "../../auth/oidc";
 import { generateAccessToken, TokenPayload } from "../../utils/jwt";
@@ -245,7 +245,10 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           clientsInfo[clientId].accessToken = accessToken;
         }
 
-        disconnectOtherSessions(io, clientsInfo, clientId, user.gryt_user_id);
+        const otherCount = countOtherSessions(clientsInfo, clientId, user.gryt_user_id);
+        if (otherCount > 0) {
+          consola.info(`User ${user.nickname} now has ${otherCount + 1} concurrent sessions`);
+        }
 
         socket.emit("server:joined", {
           accessToken,

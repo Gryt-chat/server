@@ -77,6 +77,7 @@ export async function initScylla(): Promise<void> {
   await addCfgCol("upload_max_bytes bigint");
   await addCfgCol("voice_max_bitrate_bps int");
   await addCfgCol("profanity_mode text");
+  await addCfgCol("profanity_censor_style text");
 
   // Invites (ONE server per keyspace; code uniqueness per keyspace)
   await client.execute(
@@ -370,6 +371,15 @@ export async function initScylla(): Promise<void> {
       PRIMARY KEY ((bucket), created_at, report_id)
     ) WITH CLUSTERING ORDER BY (created_at DESC, report_id DESC)`
   );
+
+  try {
+    await client.execute(`ALTER TABLE message_reports ADD message_attachments list<text>`);
+  } catch (error) {
+    const msg = errMsg(error);
+    if (!msg.includes("already exists") && !msg.includes("Invalid column name")) {
+      console.error("Failed to add message_attachments column:", msg);
+    }
+  }
 }
 
 // Re-export everything from sub-modules so existing imports continue to work
