@@ -12,6 +12,7 @@ import {
   addReactionToMessage,
   deleteMessage,
   getMessageById,
+  updateMessageText,
   getFilesByIds,
   getServerConfig,
   DEFAULT_UPLOAD_MAX_BYTES,
@@ -22,6 +23,7 @@ import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 const RL_SEND: RateLimitRule = { limit: 20, windowMs: 10_000, banMs: 30_000, scorePerAction: 1, maxScore: 10, scoreDecayMs: 2000 };
 const RL_REACT: RateLimitRule = { limit: 60, windowMs: 60_000, scorePerAction: 0.5, maxScore: 15, scoreDecayMs: 3000 };
 const RL_DELETE: RateLimitRule = { limit: 30, windowMs: 60_000, scorePerAction: 1, maxScore: 15, scoreDecayMs: 3000 };
+const RL_EDIT: RateLimitRule = { limit: 20, windowMs: 60_000, scorePerAction: 1, maxScore: 10, scoreDecayMs: 2000 };
 const RL_FETCH: RateLimitRule = { limit: 15, windowMs: 10_000, scorePerAction: 0.3, maxScore: 8, scoreDecayMs: 1500 };
 
 const MESSAGE_CACHE_TTL_MS = parseInt(process.env.MESSAGE_CACHE_TTL_MS || "30000");
@@ -359,6 +361,74 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
       } catch (err) {
         consola.error("chat:delete failed", err);
         socket.emit("chat:error", "Failed to delete message");
+      }
+    },
+
+    'chat:edit': async (payload: { conversationId: string; messageId: string; text: string; accessToken: string }) => {
+      try {
+        const ip = getClientIp();
+        const userId = clientsInfo[clientId]?.serverUserId;
+        const rl = checkRateLimit("chat:edit", userId, ip, RL_EDIT);
+        if (!rl.allowed) {
+          socket.emit("chat:error", { error: "rate_limited", retryAfterMs: rl.retryAfterMs, message: `Too fast. Wait ${Math.ceil((rl.retryAfterMs || 0) / 1000)}s.` });
+          return;
+        }
+
+        if (!payload || !payload.conversationId || !payload.messageId || typeof payload.text !== "string" || !payload.accessToken) {
+          socket.emit("chat:error", "Invalid edit payload");
+          return;
+        }
+
+        const text = payload.text.trim();
+        if (!text) {
+          socket.emit("chat:error", "Edited message cannot be empty");
+          return;
+        }
+
+        const auth = await requireAuth(socket, payload);
+        if (!auth) return;
+
+        const message = await getMessageById(payload.conversationId, payload.messageId);
+        if (!message) { socket.emit("chat:error", "Message not found"); return; }
+
+        if (message.sender_server_id !== auth.tokenPayload.serverUserId) {
+          socket.emit("chat:error", "You can only edit your own messages");
+          return;
+        }
+
+        const updated = await updateMessageText(payload.conversationId, payload.messageId, text);
+        if (!updated) { socket.emit("chat:error", "Failed to edit message"); return; }
+
+        const user = await getUserByServerId(auth.tokenPayload.serverUserId);
+        let enriched: MessageRecord = {
+          ...updated,
+          sender_nickname: user?.nickname ?? "Unknown",
+          sender_avatar_file_id: user?.avatar_file_id,
+        };
+        const [withAttachments] = await enrichAttachments([enriched]);
+        enriched = withAttachments;
+
+        const existing = messageCache.get(payload.conversationId);
+        if (existing?.items) {
+          messageCache.set(payload.conversationId, {
+            items: existing.items.map((m) => m.message_id === updated.message_id ? updated : m),
+            fetchedAt: existing.fetchedAt,
+          });
+        }
+
+        const connectedClients = Object.entries(clientsInfo).filter(([, ci]) => {
+          if (isConversationAVoiceChannel(payload.conversationId, sfuClient)) {
+            return isUserConnectedToSpecificVoiceChannel(ci.serverUserId, payload.conversationId, sfuClient);
+          }
+          return true;
+        });
+
+        connectedClients.forEach(([cid]) => {
+          io.sockets.sockets.get(cid)?.emit("chat:edited", enriched);
+        });
+      } catch (err) {
+        consola.error("chat:edit failed", err);
+        socket.emit("chat:error", "Failed to edit message");
       }
     },
   };

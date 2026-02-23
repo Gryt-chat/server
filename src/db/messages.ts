@@ -13,6 +13,7 @@ export interface MessageRecord {
   sender_server_id: string; // Secret server user ID (never exposed)
   text: string | null;
   created_at: Date;
+  edited_at?: Date | null;
   attachments: string[] | null; // file_id uuid strings
   reactions: Reaction[] | null; // Array of reactions to this message
   reply_to_message_id?: string | null;
@@ -48,10 +49,8 @@ export async function insertMessage(record: Omit<MessageRecord, "message_id" | "
 
 export async function listMessages(conversationId: string, limit = 50, before?: Date): Promise<MessageRecord[]> {
   const c = getScyllaClient();
-  const cols = `conversation_id, created_at, message_id, sender_server_id, text, attachments, reactions, reply_to_message_id`;
+  const cols = `conversation_id, created_at, message_id, sender_server_id, text, attachments, reactions, reply_to_message_id, edited_at`;
 
-  // Always fetch in DESC order so we get the *latest* N messages,
-  // then reverse to return chronological (oldest-first) order for the UI.
   const query = before
     ? `SELECT ${cols} FROM messages_by_conversation WHERE conversation_id = ? AND created_at < ? ORDER BY created_at DESC, message_id DESC LIMIT ?`
     : `SELECT ${cols} FROM messages_by_conversation WHERE conversation_id = ? ORDER BY created_at DESC, message_id DESC LIMIT ?`;
@@ -71,6 +70,7 @@ export async function listMessages(conversationId: string, limit = 50, before?: 
     attachments: r["attachments"] ?? null,
     reactions: r["reactions"] ? JSON.parse(r["reactions"]) : null,
     reply_to_message_id: r["reply_to_message_id"] ?? null,
+    edited_at: r["edited_at"] ?? null,
   }));
 
   messages.reverse();
@@ -98,7 +98,7 @@ export async function deleteMessage(conversationId: string, messageId: string): 
 export async function getMessageById(conversationId: string, messageId: string): Promise<MessageRecord | null> {
   const c = getScyllaClient();
   const rs = await c.execute(
-    `SELECT conversation_id, created_at, message_id, sender_server_id, text, attachments, reactions, reply_to_message_id FROM messages_by_conversation WHERE conversation_id = ? AND message_id = ? ALLOW FILTERING`,
+    `SELECT conversation_id, created_at, message_id, sender_server_id, text, attachments, reactions, reply_to_message_id, edited_at FROM messages_by_conversation WHERE conversation_id = ? AND message_id = ? ALLOW FILTERING`,
     [conversationId, messageId],
     { prepare: true },
   );
@@ -113,6 +113,41 @@ export async function getMessageById(conversationId: string, messageId: string):
     attachments: row["attachments"] ?? null,
     reactions: row["reactions"] ? JSON.parse(row["reactions"]) : null,
     reply_to_message_id: row["reply_to_message_id"] ?? null,
+    edited_at: row["edited_at"] ?? null,
+  };
+}
+
+export async function updateMessageText(
+  conversationId: string,
+  messageId: string,
+  newText: string,
+): Promise<MessageRecord | null> {
+  const c = getScyllaClient();
+  const rs = await c.execute(
+    `SELECT conversation_id, created_at, message_id, sender_server_id, text, attachments, reactions, reply_to_message_id FROM messages_by_conversation WHERE conversation_id = ? AND message_id = ? ALLOW FILTERING`,
+    [conversationId, messageId],
+    { prepare: true },
+  );
+  const row = rs.first();
+  if (!row) return null;
+
+  const editedAt = new Date();
+  await c.execute(
+    `UPDATE messages_by_conversation SET text = ?, edited_at = ? WHERE conversation_id = ? AND created_at = ? AND message_id = ?`,
+    [newText, editedAt, conversationId, row["created_at"], messageId],
+    { prepare: true },
+  );
+
+  return {
+    conversation_id: row["conversation_id"],
+    created_at: row["created_at"],
+    message_id: row["message_id"].toString(),
+    sender_server_id: row["sender_server_id"],
+    text: newText,
+    attachments: row["attachments"] ?? null,
+    reactions: row["reactions"] ? JSON.parse(row["reactions"]) : null,
+    reply_to_message_id: row["reply_to_message_id"] ?? null,
+    edited_at: editedAt,
   };
 }
 
@@ -215,7 +250,7 @@ export async function addReactionToMessage(
   const c = getScyllaClient();
 
   const rs = await c.execute(
-    `SELECT conversation_id, created_at, message_id, sender_server_id, text, attachments, reactions, reply_to_message_id FROM messages_by_conversation WHERE conversation_id = ? AND message_id = ? ALLOW FILTERING`,
+    `SELECT conversation_id, created_at, message_id, sender_server_id, text, attachments, reactions, reply_to_message_id, edited_at FROM messages_by_conversation WHERE conversation_id = ? AND message_id = ? ALLOW FILTERING`,
     [conversationId, messageId],
     { prepare: true },
   );
@@ -255,6 +290,7 @@ export async function addReactionToMessage(
     attachments: row["attachments"] ?? null,
     reactions: reactions.length > 0 ? reactions : null,
     reply_to_message_id: row["reply_to_message_id"] ?? null,
+    edited_at: row["edited_at"] ?? null,
   };
 }
 
@@ -267,7 +303,7 @@ export async function removeReactionFromMessage(
   const c = getScyllaClient();
 
   const rs = await c.execute(
-    `SELECT conversation_id, created_at, message_id, sender_server_id, text, attachments, reactions, reply_to_message_id FROM messages_by_conversation WHERE conversation_id = ? AND message_id = ? ALLOW FILTERING`,
+    `SELECT conversation_id, created_at, message_id, sender_server_id, text, attachments, reactions, reply_to_message_id, edited_at FROM messages_by_conversation WHERE conversation_id = ? AND message_id = ? ALLOW FILTERING`,
     [conversationId, messageId],
     { prepare: true },
   );
@@ -303,5 +339,6 @@ export async function removeReactionFromMessage(
     attachments: row["attachments"] ?? null,
     reactions: reactions.length > 0 ? reactions : null,
     reply_to_message_id: row["reply_to_message_id"] ?? null,
+    edited_at: row["edited_at"] ?? null,
   };
 }

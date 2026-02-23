@@ -49,7 +49,7 @@ if [ -z "${GH_TOKEN:-}" ]; then
   fi
 fi
 
-echo "$GH_TOKEN" | docker login ghcr.io -u "$(gh api user -q .login 2>/dev/null || echo gryt)" --password-stdin 2>/dev/null
+echo "$GH_TOKEN" | docker login ghcr.io -u "$(gh api user -q .login 2>/dev/null || echo gryt)" --password-stdin
 ok "Logged in to ghcr.io"
 
 echo ""

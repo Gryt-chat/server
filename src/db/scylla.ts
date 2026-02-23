@@ -275,6 +275,14 @@ export async function initScylla(): Promise<void> {
     }
   }
 
+  try {
+    await client.execute(`ALTER TABLE messages_by_conversation ADD edited_at timestamp`);
+  } catch (error: any) {
+    if (!error.message?.includes('already exists') && !error.message?.includes('Invalid column name')) {
+      console.warn('Warning: Could not add edited_at column:', error.message);
+    }
+  }
+
   await client.execute(
     `CREATE TABLE IF NOT EXISTS files_by_id (
       file_id uuid PRIMARY KEY,
