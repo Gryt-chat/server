@@ -6,7 +6,7 @@ import { SFUClient } from "../sfu/client";
 import type { SFUPeerEvent, SFUSyncRoom } from "../sfu/client";
 import { verifyAccessToken } from "../utils/jwt";
 import { getUserByServerId, getServerConfig } from "../db/scylla";
-import { syncAllClients, verifyClient, broadcastMemberList } from "./utils/clients";
+import { syncAllClients, verifyClient, broadcastMemberList, disconnectOtherSessions } from "./utils/clients";
 import { sendInfo, sendServerDetails, setSocketRefs, broadcastServerUiUpdate } from "./utils/server";
 import { getServerIdFromEnv } from "../utils/serverId";
 
@@ -246,6 +246,9 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
             clientsInfo[clientId].serverUserId = tokenPayload.serverUserId;
             clientsInfo[clientId].nickname = tokenPayload.nickname;
             consola.info(`Restored session: ${tokenPayload.nickname} (${tokenPayload.serverUserId})`);
+
+            disconnectOtherSessions(io, clientsInfo, clientId, tokenPayload.grytUserId);
+
             syncAllClients(io, clientsInfo);
             broadcastMemberList(io, clientsInfo, serverId);
             sendServerDetails(socket, clientsInfo, serverId).catch(() => {});

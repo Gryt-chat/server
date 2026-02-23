@@ -1,3 +1,4 @@
+import consola from "consola";
 import { Server, Socket } from "socket.io";
 import { Clients } from "../../types";
 import { getAllRegisteredUsers, listServerRoles } from "../../db/scylla";
@@ -86,10 +87,18 @@ export async function broadcastMemberList(io: Server, clientsInfo: Clients, _ins
     const roleRows = await listServerRoles();
     const roleMap = new Map(roleRows.map((r) => [r.server_user_id, r.role]));
 
-    const onlineUsers = new Map<string, any>();
+    type ClientInfo = Clients[string];
+    const onlineUsers = new Map<string, ClientInfo>();
+
+    const activityRank = (c: ClientInfo): number =>
+      c.hasJoinedChannel ? 2 : c.isAFK ? 0 : 1;
+
     Object.values(clientsInfo).forEach(client => {
       if (client.serverUserId && !client.serverUserId.startsWith('temp_')) {
-        onlineUsers.set(client.serverUserId, client);
+        const existing = onlineUsers.get(client.serverUserId);
+        if (!existing || activityRank(client) > activityRank(existing)) {
+          onlineUsers.set(client.serverUserId, client);
+        }
       }
     });
     
@@ -161,5 +170,33 @@ export async function broadcastMemberList(io: Server, clientsInfo: Clients, _ins
     io.to("verifiedClients").emit("members:list", members);
   } catch (error) {
     console.error('Failed to broadcast member list:', error);
+  }
+}
+
+/**
+ * Disconnect all OTHER sockets belonging to the same grytUserId,
+ * notifying them with `server:session:replaced` so the UI can show
+ * a "you connected from elsewhere" message before the socket closes.
+ */
+export function disconnectOtherSessions(
+  io: Server,
+  clientsInfo: Clients,
+  currentClientId: string,
+  grytUserId: string,
+): void {
+  for (const [sid, ci] of Object.entries(clientsInfo)) {
+    if (sid === currentClientId) continue;
+    if (ci.grytUserId !== grytUserId) continue;
+
+    const sock = io.sockets.sockets.get(sid);
+    if (!sock) continue;
+
+    consola.info(
+      `Replacing session ${sid} (${ci.nickname}) — same user connected as ${currentClientId}`,
+    );
+    sock.emit("server:session:replaced", {
+      message: "You have been disconnected because you signed in from another device or tab.",
+    });
+    sock.disconnect(true);
   }
 }

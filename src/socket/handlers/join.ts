@@ -1,6 +1,6 @@
 import consola from "consola";
 import type { HandlerContext, EventHandlerMap } from "./types";
-import { syncAllClients, broadcastMemberList } from "../utils/clients";
+import { syncAllClients, broadcastMemberList, disconnectOtherSessions } from "../utils/clients";
 import { sendInfo, sendServerDetails } from "../utils/server";
 import { verifyIdentityToken } from "../../auth/oidc";
 import { generateAccessToken, TokenPayload } from "../../utils/jwt";
@@ -243,6 +243,8 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           clientsInfo[clientId].nickname = user.nickname;
           clientsInfo[clientId].accessToken = accessToken;
         }
+
+        disconnectOtherSessions(io, clientsInfo, clientId, user.gryt_user_id);
 
         socket.emit("server:joined", {
           accessToken,
