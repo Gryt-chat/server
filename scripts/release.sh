@@ -274,4 +274,20 @@ ok "Release ${BOLD}v${NEW_VERSION}${RESET} complete"
 echo ""
 echo -e "  ${CYAN}Image:${RESET}   ${IMAGE}:${NEW_VERSION}"
 echo -e "  ${CYAN}Release:${RESET} https://github.com/${OWNER}/${REPO}/releases/tag/v${NEW_VERSION}"
+
+# ── Deploy to production ──────────────────────────────────────────
+echo ""
+read -rp "$(echo -e "${CYAN}?${RESET}  Deploy to production (pull & restart prod containers)? ${YELLOW}[Y/n]${RESET}: ")" DEPLOY_PROD
+DEPLOY_PROD="${DEPLOY_PROD:-Y}"
+if [[ "$DEPLOY_PROD" =~ ^[Yy]$ ]]; then
+  REPO_ROOT="$(cd "$PKG_DIR/../.." && pwd)"
+  if [ -f "$REPO_ROOT/scripts/update-prod.sh" ]; then
+    info "Running production deployment…"
+    bash "$REPO_ROOT/scripts/update-prod.sh"
+    ok "Production deployment complete"
+  else
+    warn "update-prod.sh not found at $REPO_ROOT/scripts/update-prod.sh"
+  fi
+fi
+
 echo ""
