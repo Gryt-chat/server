@@ -1,4 +1,3 @@
-import consola from "consola";
 import { Server, Socket } from "socket.io";
 import { Clients } from "../../types";
 import { getAllRegisteredUsers, listServerRoles } from "../../db/scylla";
