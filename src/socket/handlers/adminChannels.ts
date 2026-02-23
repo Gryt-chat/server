@@ -60,6 +60,7 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
             disableRnnoise: c.disable_rnnoise || false,
             maxBitrate: c.max_bitrate ?? null,
             eSportsMode: c.esports_mode || false,
+            textInVoice: c.text_in_voice || false,
           })),
         });
       } catch (e) {
@@ -72,7 +73,7 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
       accessToken: string; channelId?: string; name: string; type: "text" | "voice";
       description?: string | null; position?: number;
       requirePushToTalk?: boolean; disableRnnoise?: boolean; maxBitrate?: number | null;
-      eSportsMode?: boolean;
+      eSportsMode?: boolean; textInVoice?: boolean;
     }) => {
       try {
         const rl = rlCheck("server:channels:upsert", ctx, RL_SETTINGS);
@@ -92,6 +93,7 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
           disableRnnoise: payload.disableRnnoise,
           maxBitrate: payload.maxBitrate,
           eSportsMode: payload.eSportsMode,
+          textInVoice: payload.textInVoice,
         });
         insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "channel_upsert", target: channelId, meta: { name: payload.name, type: payload.type } }).catch(() => undefined);
         broadcastDetails(ctx);

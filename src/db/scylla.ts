@@ -126,6 +126,7 @@ export async function initScylla(): Promise<void> {
     "disable_rnnoise boolean",
     "max_bitrate int",
     "esports_mode boolean",
+    "text_in_voice boolean",
   ]) {
     await client.execute(`ALTER TABLE server_channels_by_id ADD ${col}`).catch(() => {});
   }

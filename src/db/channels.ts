@@ -10,6 +10,7 @@ export interface ServerChannelRecord {
   disable_rnnoise: boolean;
   max_bitrate: number | null;
   esports_mode: boolean;
+  text_in_voice: boolean;
   created_at: Date;
   updated_at: Date;
 }
@@ -55,7 +56,7 @@ function rowToSidebarItem(r: any): ServerSidebarItemRecord {
 export async function listServerChannels(): Promise<ServerChannelRecord[]> {
   const c = getScyllaClient();
   const rs = await c.execute(
-    `SELECT channel_id, name, type, position, description, require_push_to_talk, disable_rnnoise, max_bitrate, esports_mode, created_at, updated_at
+    `SELECT channel_id, name, type, position, description, require_push_to_talk, disable_rnnoise, max_bitrate, esports_mode, text_in_voice, created_at, updated_at
      FROM server_channels_by_id`,
     [],
     { prepare: true }
@@ -70,6 +71,7 @@ export async function listServerChannels(): Promise<ServerChannelRecord[]> {
     disable_rnnoise: r["disable_rnnoise"] === true,
     max_bitrate: typeof r["max_bitrate"] === "number" ? r["max_bitrate"] : null,
     esports_mode: r["esports_mode"] === true,
+    text_in_voice: r["text_in_voice"] === true,
     created_at: r["created_at"] ?? new Date(0),
     updated_at: r["updated_at"] ?? new Date(0),
   }));
@@ -87,6 +89,7 @@ export async function upsertServerChannel(channel: {
   disableRnnoise?: boolean;
   maxBitrate?: number | null;
   eSportsMode?: boolean;
+  textInVoice?: boolean;
 }): Promise<void> {
   const c = getScyllaClient();
   const now = new Date();
@@ -99,6 +102,7 @@ export async function upsertServerChannel(channel: {
   const disableRnnoise = channel.disableRnnoise === true;
   const maxBitrate = typeof channel.maxBitrate === "number" ? Math.max(0, Math.min(510_000, channel.maxBitrate)) : null;
   const eSportsMode = channel.eSportsMode === true;
+  const textInVoice = channel.textInVoice === true;
 
   const existing = await c.execute(
     `SELECT created_at FROM server_channels_by_id WHERE channel_id = ?`,
@@ -108,9 +112,9 @@ export async function upsertServerChannel(channel: {
   const createdAt = existing.first()?.["created_at"] ?? now;
 
   await c.execute(
-    `INSERT INTO server_channels_by_id (channel_id, name, type, position, description, require_push_to_talk, disable_rnnoise, max_bitrate, esports_mode, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [channelId, name, type, position, description, requirePushToTalk, disableRnnoise, maxBitrate, eSportsMode, createdAt, now],
+    `INSERT INTO server_channels_by_id (channel_id, name, type, position, description, require_push_to_talk, disable_rnnoise, max_bitrate, esports_mode, text_in_voice, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [channelId, name, type, position, description, requirePushToTalk, disableRnnoise, maxBitrate, eSportsMode, textInVoice, createdAt, now],
     { prepare: true }
   );
 }

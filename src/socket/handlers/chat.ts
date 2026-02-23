@@ -5,6 +5,7 @@ import { requireAuth } from "../middleware/auth";
 import {
   insertMessage,
   listMessages,
+  listServerChannels,
   MessageRecord,
   getUserByServerId,
   getUsersByServerIds,
@@ -65,6 +66,21 @@ function isUserConnectedToSpecificVoiceChannel(serverUserId: string, conversatio
   if (!sfuClient?.isConnected()) return false;
   const userConnection = sfuClient.getActiveUsers().get(serverUserId);
   return userConnection?.roomId === conversationId;
+}
+
+let channelTextCache: { channels: Map<string, boolean>; fetchedAt: number } | null = null;
+const CHANNEL_TEXT_CACHE_TTL = 15_000;
+
+async function isTextInVoiceEnabled(channelId: string): Promise<boolean> {
+  const now = Date.now();
+  if (!channelTextCache || now - channelTextCache.fetchedAt > CHANNEL_TEXT_CACHE_TTL) {
+    const chans = await listServerChannels();
+    channelTextCache = {
+      channels: new Map(chans.map((c) => [c.channel_id, c.text_in_voice])),
+      fetchedAt: now,
+    };
+  }
+  return channelTextCache.channels.get(channelId) === true;
 }
 
 async function enrichMessages(messages: MessageRecord[]): Promise<MessageRecord[]> {
@@ -137,6 +153,10 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
 
         // Voice channel gate
         if (userId && isConversationAVoiceChannel(payload.conversationId, sfuClient)) {
+          if (!await isTextInVoiceEnabled(payload.conversationId)) {
+            socket.emit("chat:error", "Text chat is disabled in this voice channel");
+            return;
+          }
           if (!isUserConnectedToSpecificVoiceChannel(userId, payload.conversationId, sfuClient)) {
             socket.emit("chat:error", "You must be connected to this voice channel to send messages");
             return;
@@ -280,6 +300,10 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         if (!payload || typeof payload.conversationId !== "string") { socket.emit("chat:error", "Invalid fetch payload"); return; }
 
         if (userId && isConversationAVoiceChannel(payload.conversationId, sfuClient)) {
+          if (!await isTextInVoiceEnabled(payload.conversationId)) {
+            socket.emit("chat:error", "Text chat is disabled in this voice channel");
+            return;
+          }
           if (!isUserConnectedToSpecificVoiceChannel(userId, payload.conversationId, sfuClient)) {
             socket.emit("chat:error", "You must be connected to this voice channel");
             return;

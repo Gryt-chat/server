@@ -136,6 +136,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
           disableRnnoise: c.disable_rnnoise || false,
           maxBitrate: c.max_bitrate ?? undefined,
           eSportsMode: c.esports_mode || false,
+          textInVoice: c.text_in_voice || false,
         };
       })
       .filter(Boolean);
@@ -151,6 +152,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
         disableRnnoise: c.disable_rnnoise || false,
         maxBitrate: c.max_bitrate ?? undefined,
         eSportsMode: c.esports_mode || false,
+        textInVoice: c.text_in_voice || false,
       }));
     }
   } catch (e) {
