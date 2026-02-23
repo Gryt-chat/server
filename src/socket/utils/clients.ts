@@ -146,6 +146,7 @@ export async function broadcastMemberList(io: Server, clientsInfo: Clients, _ins
         serverUserId: m.serverUserId,
         nickname: m.nickname,
         avatarFileId: m.avatarFileId,
+        role: m.role,
         status: m.status,
         isConnectedToVoice: m.isConnectedToVoice,
         hasJoinedChannel: m.hasJoinedChannel,

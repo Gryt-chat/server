@@ -71,6 +71,7 @@ export async function initScylla(): Promise<void> {
   await addCfgCol("avatar_max_bytes bigint");
   await addCfgCol("upload_max_bytes bigint");
   await addCfgCol("voice_max_bitrate_bps int");
+  await addCfgCol("profanity_mode text");
 
   // Invites (ONE server per keyspace; code uniqueness per keyspace)
   await client.execute(

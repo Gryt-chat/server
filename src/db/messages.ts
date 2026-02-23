@@ -19,6 +19,7 @@ export interface MessageRecord {
   reply_to_message_id?: string | null;
   sender_nickname?: string; // Enriched at read time, not stored in DB
   sender_avatar_file_id?: string; // Enriched at read time, not stored in DB
+  profanity_matches?: { startIndex: number; endIndex: number }[]; // Enriched at broadcast time, not stored in DB
 }
 
 export interface FileRecord {

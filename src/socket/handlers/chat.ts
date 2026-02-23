@@ -17,6 +17,7 @@ import {
   getServerConfig,
   DEFAULT_UPLOAD_MAX_BYTES,
 } from "../../db/scylla";
+import { processProfanity, type ProfanityMode } from "../../utils/profanityFilter";
 import { verifyAccessToken } from "../../utils/jwt";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 
@@ -149,9 +150,10 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
+        const cfg = await getServerConfig().catch(() => null);
+
         if (attachments && attachments.length > 0) {
           const fileMap = await getFilesByIds(attachments);
-          const cfg = await getServerConfig().catch(() => null);
           const maxBytes = typeof cfg?.upload_max_bytes === "number" ? cfg.upload_max_bytes : DEFAULT_UPLOAD_MAX_BYTES;
           for (const id of attachments) {
             const f = fileMap.get(id);
@@ -172,6 +174,21 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
 
         const replyToMessageId = typeof payload.replyToMessageId === "string" ? payload.replyToMessageId : null;
 
+        // Profanity filter
+        const profanityMode: ProfanityMode = cfg?.profanity_mode ?? "off";
+        let finalText = text;
+        let profanityMatches: { startIndex: number; endIndex: number }[] | undefined;
+
+        if (profanityMode !== "off" && finalText) {
+          const result = await processProfanity(finalText, profanityMode);
+          if (result.action === "reject") {
+            socket.emit("chat:error", "Message blocked: contains profanity.");
+            return;
+          }
+          finalText = result.text;
+          profanityMatches = result.matches;
+        }
+
         if (payload.nonce && recentNonces.has(payload.nonce)) {
           const cached = recentNonces.get(payload.nonce)!;
           const connectedClients = Object.entries(clientsInfo).filter(([, ci]) => {
@@ -189,7 +206,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         const created = await insertMessage({
           conversation_id: payload.conversationId,
           sender_server_id: auth.tokenPayload.serverUserId,
-          text: text || null,
+          text: finalText || null,
           attachments: attachments && attachments.length > 0 ? attachments : null,
           reactions: null,
           reply_to_message_id: replyToMessageId,
@@ -199,6 +216,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           ...created,
           sender_nickname: user.nickname,
           sender_avatar_file_id: user.avatar_file_id,
+          profanity_matches: profanityMatches,
         };
         const [withAttachments] = await enrichAttachments([enriched]);
         enriched = withAttachments;

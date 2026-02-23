@@ -71,6 +71,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           hasPassword: !!(cfg.password_hash && cfg.password_salt) || !!(process.env.SERVER_PASSWORD?.trim()),
           avatarMaxBytes: cfg.avatar_max_bytes ?? DEFAULT_AVATAR_MAX_BYTES,
           uploadMaxBytes: cfg.upload_max_bytes ?? DEFAULT_UPLOAD_MAX_BYTES,
+          profanityMode: cfg.profanity_mode ?? "off",
         });
       } catch (e) {
         consola.error("server:settings:get failed", e);
@@ -87,6 +88,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       clearPassword?: boolean;
       avatarMaxBytes?: number | null;
       uploadMaxBytes?: number | null;
+      profanityMode?: string;
     }) => {
       try {
         const rl = rlCheck("server:settings:update", ctx, RL_SETTINGS);
@@ -110,6 +112,11 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         const avatarMaxBytes = clampBytes(payload.avatarMaxBytes, 256 * 1024, 50 * 1024 * 1024);
         const uploadMaxBytes = clampBytes(payload.uploadMaxBytes, 256 * 1024, 200 * 1024 * 1024);
 
+        const validProfanityModes = ["off", "flag", "censor", "block"] as const;
+        const profanityMode = typeof payload.profanityMode === "string" && validProfanityModes.includes(payload.profanityMode as typeof validProfanityModes[number])
+          ? payload.profanityMode as typeof validProfanityModes[number]
+          : undefined;
+
         let passwordSalt: string | null | undefined;
         let passwordHash: string | null | undefined;
         let passwordAlgo: string | null | undefined;
@@ -127,6 +134,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           iconUrl, passwordSalt, passwordHash, passwordAlgo, isConfigured: true,
           avatarMaxBytes,
           uploadMaxBytes,
+          profanityMode,
         });
 
         insertServerAudit({
@@ -165,6 +173,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           hasPassword: !!(updated.password_hash && updated.password_salt) || !!(process.env.SERVER_PASSWORD?.trim()),
           avatarMaxBytes: updated.avatar_max_bytes ?? DEFAULT_AVATAR_MAX_BYTES,
           uploadMaxBytes: updated.upload_max_bytes ?? DEFAULT_UPLOAD_MAX_BYTES,
+          profanityMode: updated.profanity_mode ?? "off",
         });
         broadcastServerUiUpdate("settings");
       } catch (e) {
@@ -277,7 +286,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         const targetId = payload.serverUserId.trim();
         await setServerRole(targetId, (nextRole === "admin" || nextRole === "mod" ? nextRole : "member") as any);
         insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "role_set", target: targetId, meta: { role: nextRole } }).catch(() => undefined);
-        socket.emit("server:role:updated", { serverId, serverUserId: targetId, role: nextRole });
+        io.to("verifiedClients").emit("server:role:updated", { serverId, serverUserId: targetId, role: nextRole });
       } catch (e) {
         consola.error("server:roles:set failed", e);
         socket.emit("server:error", { error: "roles_update_failed", message: "Failed to update role." });
