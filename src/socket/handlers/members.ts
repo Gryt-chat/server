@@ -1,5 +1,6 @@
 import consola from "consola";
 import type { HandlerContext, EventHandlerMap } from "./types";
+import type { Clients } from "../../types";
 import { getAllRegisteredUsers, listServerRoles } from "../../db/scylla";
 import { syncAllClients, broadcastMemberList } from "../utils/clients";
 import { updateUserNickname, getUserByServerId } from "../../db/users";
@@ -14,7 +15,7 @@ export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
         const roleRows = await listServerRoles();
         const roleMap = new Map(roleRows.map((r) => [r.server_user_id, r.role]));
 
-        const onlineUsers = new Map<string, any>();
+        const onlineUsers = new Map<string, Clients[string]>();
         Object.values(clientsInfo).forEach((client) => {
           if (client.serverUserId && !client.serverUserId.startsWith("temp_")) {
             onlineUsers.set(client.serverUserId, client);

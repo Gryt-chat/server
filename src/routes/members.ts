@@ -5,7 +5,7 @@ import { requireBearerToken } from "../middleware/requireBearerToken";
 
 export const membersRouter = express.Router();
 
-membersRouter.use(requireBearerToken as any);
+membersRouter.use(requireBearerToken);
 
 membersRouter.get(
   "/",

@@ -28,9 +28,9 @@ export function broadcastServerUiUpdate(reason: "settings" | "icon" | "other" = 
   if (!_io || !_serverId || !_clientsInfo) return;
   consola.info(`Broadcasting server UI update (${reason})`);
   for (const [sid, s] of _io.sockets.sockets) {
-    sendInfo(s as any, _clientsInfo, _serverId).catch(() => undefined);
+    sendInfo(s, _clientsInfo, _serverId).catch(() => undefined);
     if (_clientsInfo[sid]?.grytUserId) {
-      sendServerDetails(s as any, _clientsInfo, _serverId).catch(() => undefined);
+      sendServerDetails(s, _clientsInfo, _serverId).catch(() => undefined);
     }
   }
   syncAllClients(_io, _clientsInfo);
@@ -58,9 +58,8 @@ if (stunHosts.length === 0) {
   consola.error("Missing STUN servers! SFU may not reach all clients.");
 }
 
-export async function sendInfo(socket: Socket, clientsInfo: any | undefined, _instanceId: string) {
-  // Count active registered users
-  const activeMembers = clientsInfo ? Object.values(clientsInfo).filter((client: any) => 
+export async function sendInfo(socket: Socket, clientsInfo: Clients | undefined, _instanceId: string) {
+  const activeMembers = clientsInfo ? Object.values(clientsInfo).filter((client) => 
     client.serverUserId && !client.serverUserId.startsWith('temp_')
   ).length : 0;
   
@@ -101,8 +100,8 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
 
   // Sidebar items are persisted in DB; bootstrap defaults if missing.
   // We still emit `channels` for backward compatibility (derived from sidebar items).
-  let sidebar_items: any[] = [];
-  let channels: any[] = [];
+  let sidebar_items: { id: string; kind: string; position: number; channelId?: string; spacerHeight?: number; label?: string }[] = [];
+  let channels: { id: string; name: string; type: string; description?: string; requirePushToTalk?: boolean; disableRnnoise?: boolean; maxBitrate?: number; eSportsMode?: boolean; textInVoice?: boolean }[] = [];
   try {
     await ensureDefaultSidebarItems();
 
@@ -124,10 +123,10 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
 
     channels = items
       .filter((it) => it.kind === "channel" && !!it.channel_id)
-      .map((it) => {
+      .flatMap((it) => {
         const c = channelById.get(it.channel_id as string);
-        if (!c) return null;
-        return {
+        if (!c) return [];
+        return [{
           id: c.channel_id,
           name: c.name,
           type: c.type,
@@ -137,9 +136,8 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
           maxBitrate: c.max_bitrate ?? undefined,
           eSportsMode: c.esports_mode || false,
           textInVoice: c.text_in_voice || false,
-        };
-      })
-      .filter(Boolean);
+        }];
+      });
 
     // If sidebar exists but is missing channels (e.g. manual DB edits), fall back to channel list.
     if (channels.length === 0) {
@@ -207,7 +205,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
       role = "owner";
     } else if (client.serverUserId) {
       const r = await getServerRole(client.serverUserId);
-      role = (r || "member") as any;
+      role = r || "member";
     }
   } catch {
     // ignore DB errors; fall back to env

@@ -14,7 +14,6 @@ export interface ServerConfig {
   password_salt?: string | null;
   password_algo?: string | null;
   is_configured?: boolean;
-  [key: string]: any;
 }
 
 export interface AuthResult {

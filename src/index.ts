@@ -3,6 +3,7 @@ config({ override: false }); // Load environment variables from .env file
 import { consola } from "consola";
 import { socketHandler, setupSFUSync } from "./socket";
 import { createServer } from "http";
+import { Readable } from "stream";
 import { Server } from "socket.io";
 import express from "express"; // Import express
 import { SFUClient } from "./sfu/client"; // Import SFU client
@@ -192,7 +193,7 @@ app.get("/icon", async (_req, res) => {
 		}
 
 		const obj = await getObject({ bucket: process.env.S3_BUCKET, key: iconKey });
-		const body: any = (obj as any)?.Body;
+		const body = obj.Body;
 		if (!body) {
 			res.status(502).json({ error: "s3_error", message: "Empty S3 response body" });
 			return;
@@ -201,7 +202,7 @@ app.get("/icon", async (_req, res) => {
 		res.setHeader("Cache-Control", "public, max-age=60");
 		if (obj.ContentType) res.setHeader("Content-Type", obj.ContentType);
 
-		if (typeof body.pipe === "function") {
+		if (body instanceof Readable) {
 			body.pipe(res);
 			return;
 		}
@@ -209,9 +210,8 @@ app.get("/icon", async (_req, res) => {
 			res.end(body);
 			return;
 		}
-		const chunks: Uint8Array[] = [];
-		for await (const chunk of body) chunks.push(chunk);
-		res.end(Buffer.concat(chunks));
+		const bytes = await body.transformToByteArray();
+		res.end(Buffer.from(bytes));
 	} catch {
 		res.status(404).json({ error: "no_icon", message: "No server icon configured" });
 	}
@@ -226,30 +226,28 @@ app.use("/api/emojis", emojisRouter);
 app.use("/api/link-preview", linkPreviewRouter);
 
 // Basic error handler
-app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-	// Multer errors (file uploads)
-	if (err?.code === "LIMIT_FILE_SIZE") {
+app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+	const e = typeof err === "object" && err !== null ? (err as Record<string, unknown>) : {};
+	if (e.code === "LIMIT_FILE_SIZE") {
 		res.status(413).json({
 			error: "file_too_large",
 			message: "File too large.",
 		});
 		return;
 	}
-	if (typeof err?.message === "string" && err.message.toLowerCase().includes("unsupported")) {
-		res.status(400).json({ error: "invalid_file", message: err.message });
+	if (typeof e.message === "string" && e.message.toLowerCase().includes("unsupported")) {
+		res.status(400).json({ error: "invalid_file", message: e.message });
 		return;
 	}
 	consola.error(err);
-	const message = (err && typeof err.message === "string" && err.message.trim().length > 0)
-		? err.message
+	const message = (typeof e.message === "string" && e.message.trim().length > 0)
+		? e.message
 		: "Internal Server Error";
-	// Always include both `error` (stable-ish code) and `message` (human readable).
-	// If upstream code already provided a structured `error`, preserve it.
 	const errorCode =
-		(typeof err?.error === "string" && err.error.trim().length > 0)
-			? err.error
-			: (typeof err?.code === "string" && err.code.trim().length > 0)
-				? err.code
+		(typeof e.error === "string" && e.error.trim().length > 0)
+			? e.error
+			: (typeof e.code === "string" && e.code.trim().length > 0)
+				? e.code
 				: "internal_error";
 	res.status(500).json({ error: errorCode, message });
 });

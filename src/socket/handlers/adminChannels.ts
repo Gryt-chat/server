@@ -3,7 +3,7 @@ import { randomUUID } from "crypto";
 import type { HandlerContext, EventHandlerMap } from "./types";
 import { requireAuth } from "../middleware/auth";
 import { syncAllClients, broadcastMemberList } from "../utils/clients";
-import { sendServerDetails, broadcastServerUiUpdate } from "../utils/server";
+import { sendServerDetails } from "../utils/server";
 import {
   listServerChannels,
   upsertServerChannel,
@@ -24,7 +24,7 @@ function rlCheck(event: string, ctx: HandlerContext, rule: RateLimitRule) {
   return checkRateLimit(event, userId, ip, rule);
 }
 
-function emitRateLimited(ctx: HandlerContext, rl: any) {
+function emitRateLimited(ctx: HandlerContext, rl: { retryAfterMs?: number }) {
   ctx.socket.emit("server:error", {
     error: "rate_limited",
     retryAfterMs: rl.retryAfterMs,
@@ -36,13 +36,13 @@ function broadcastDetails(ctx: HandlerContext) {
   const { io, clientsInfo, serverId } = ctx;
   for (const [sid, s] of io.sockets.sockets) {
     if (clientsInfo[sid]?.grytUserId) {
-      sendServerDetails(s as any, clientsInfo, serverId).catch(() => undefined);
+      sendServerDetails(s, clientsInfo, serverId).catch(() => undefined);
     }
   }
 }
 
 export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerMap {
-  const { io, socket, clientId, serverId, clientsInfo } = ctx;
+  const { io, socket, serverId, clientsInfo } = ctx;
 
   return {
     // ── Channels ─────────────────────────────────────────────────
@@ -129,9 +129,9 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
             if (!ci?.grytUserId || !ci.hasJoinedChannel) continue;
             if (ci.voiceChannelId !== channelId) continue;
             try {
-              (s as any).emit("voice:channel:joined", false);
-              (s as any).emit("voice:stream:set", "");
-              (s as any).emit("voice:room:leave");
+              s.emit("voice:channel:joined", false);
+              s.emit("voice:stream:set", "");
+              s.emit("voice:room:leave");
             } catch { /* ignore */ }
             ci.hasJoinedChannel = false;
             ci.voiceChannelId = "";

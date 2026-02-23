@@ -1,9 +1,9 @@
 import consola from "consola";
 import type { HandlerContext, EventHandlerMap } from "./types";
 import { requireAuth } from "../middleware/auth";
-import { sendServerDetails, broadcastServerUiUpdate } from "../utils/server";
+import { broadcastServerUiUpdate } from "../utils/server";
 import { syncAllClients, broadcastMemberList } from "../utils/clients";
-import { generateAccessToken, TokenPayload } from "../../utils/jwt";
+import { generateAccessToken } from "../../utils/jwt";
 import {
   getServerConfig,
   createServerConfigIfNotExists,
@@ -37,7 +37,7 @@ function rlCheck(event: string, ctx: HandlerContext, rule: RateLimitRule) {
   return checkRateLimit(event, userId, ip, rule);
 }
 
-function emitRateLimited(ctx: HandlerContext, rl: any) {
+function emitRateLimited(ctx: HandlerContext, rl: { retryAfterMs?: number }) {
   ctx.socket.emit("server:error", {
     error: "rate_limited",
     retryAfterMs: rl.retryAfterMs,
@@ -101,7 +101,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         const description = typeof payload.description === "string" ? payload.description.trim().slice(0, 300) : undefined;
         const iconUrl = typeof payload.iconUrl === "string" ? payload.iconUrl.trim().slice(0, 500) : payload.iconUrl === null ? null : undefined;
 
-        const clampBytes = (v: any, min: number, max: number): number | null | undefined => {
+        const clampBytes = (v: number | null | undefined, min: number, max: number): number | null | undefined => {
           if (v === undefined) return undefined;
           if (v === null) return null;
           const n = typeof v === "number" ? v : Number(v);
@@ -156,11 +156,11 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
             grytUserId: ci.grytUserId,
             serverUserId: ci.serverUserId,
             nickname: ci.nickname,
-            serverHost: (s as any).handshake?.headers?.host || socket.handshake.headers.host || "unknown",
+            serverHost: s.handshake?.headers?.host || socket.handshake.headers.host || "unknown",
             tokenVersion: newTokenVersion,
           });
           ci.accessToken = newToken;
-          (s as any).emit("token:refreshed", { accessToken: newToken });
+          s.emit("token:refreshed", { accessToken: newToken });
         }
 
         socket.emit("server:settings", {
@@ -284,7 +284,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         }
 
         const targetId = payload.serverUserId.trim();
-        await setServerRole(targetId, (nextRole === "admin" || nextRole === "mod" ? nextRole : "member") as any);
+        await setServerRole(targetId, nextRole === "admin" || nextRole === "mod" ? nextRole : "member");
         insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "role_set", target: targetId, meta: { role: nextRole } }).catch(() => undefined);
         io.to("verifiedClients").emit("server:role:updated", { serverId, serverUserId: targetId, role: nextRole });
       } catch (e) {
@@ -322,7 +322,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         for (const [sid, s] of io.sockets.sockets) {
           const ci = clientsInfo[sid];
           if (ci?.serverUserId === targetId) {
-            (s as any).emit("server:kicked", { reason: "You were kicked from the server by an admin." });
+            s.emit("server:kicked", { reason: "You were kicked from the server by an admin." });
             s.disconnect(true);
           }
         }
@@ -385,7 +385,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         for (const [sid, s] of io.sockets.sockets) {
           const ci = clientsInfo[sid];
           if (ci?.serverUserId === targetId) {
-            (s as any).emit("server:kicked", { reason: "You were banned from the server." });
+            s.emit("server:kicked", { reason: "You were banned from the server." });
             s.disconnect(true);
           }
         }
@@ -460,7 +460,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           const ci = clientsInfo[sid];
           if (ci?.serverUserId === targetId) {
             ci.isServerMuted = payload.muted;
-            (s as any).emit("server:muted", { muted: payload.muted });
+            s.emit("server:muted", { muted: payload.muted });
           }
         }
 
@@ -502,7 +502,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           const ci = clientsInfo[sid];
           if (ci?.serverUserId === targetId) {
             ci.isServerDeafened = payload.deafened;
-            (s as any).emit("server:deafened", { deafened: payload.deafened });
+            s.emit("server:deafened", { deafened: payload.deafened });
           }
         }
 

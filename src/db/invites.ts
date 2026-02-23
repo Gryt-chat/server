@@ -1,4 +1,6 @@
+import { types } from "cassandra-driver";
 import { randomBytes, randomUUID } from "crypto";
+
 import { getScyllaClient } from "./scylla";
 
 export interface ServerInviteRecord {
@@ -21,7 +23,7 @@ export interface ServerAuditRecord {
   meta_json: string | null;
 }
 
-function rowToServerInvite(r: any): ServerInviteRecord {
+function rowToServerInvite(r: types.Row): ServerInviteRecord {
   return {
     code: r["code"],
     created_at: r["created_at"] ?? new Date(0),
@@ -150,7 +152,7 @@ export async function insertServerAudit(entry: {
   actorServerUserId?: string | null;
   action: string;
   target?: string | null;
-  meta?: any;
+  meta?: Record<string, unknown>;
   createdAt?: Date;
 }): Promise<ServerAuditRecord> {
   const c = getScyllaClient();

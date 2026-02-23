@@ -1,5 +1,7 @@
 import { randomBytes, scrypt as scryptCb, timingSafeEqual } from "crypto";
 import { promisify } from "util";
+import { types } from "cassandra-driver";
+
 import { getScyllaClient } from "./scylla";
 import { getUserByGrytId } from "./users";
 
@@ -38,7 +40,7 @@ export interface ServerRoleRecord {
   updated_at: Date;
 }
 
-function rowToServerConfig(r: any): ServerConfigRecord {
+function rowToServerConfig(r: types.Row): ServerConfigRecord {
   return {
     owner_gryt_user_id: r["owner_gryt_user_id"] ?? null,
     token_version: typeof r["token_version"] === "number" ? r["token_version"] : 0,
@@ -66,7 +68,7 @@ function normalizeProfanityMode(v: unknown): ProfanityMode {
   return "off";
 }
 
-function normalizeRole(role: any): ServerRole {
+function normalizeRole(role: unknown): ServerRole {
   const r = String(role || "").toLowerCase();
   if (r === "owner" || r === "admin" || r === "mod" || r === "member") return r;
   return "member";

@@ -1,7 +1,7 @@
 import type { HandlerContext, EventHandlerMap } from "./types";
 
 export function registerVoiceLatencyHandlers(ctx: HandlerContext): EventHandlerMap {
-  const { io, socket, clientId, clientsInfo } = ctx;
+  const { io, clientId, clientsInfo } = ctx;
 
   return {
     "voice:latency:report": (payload: {

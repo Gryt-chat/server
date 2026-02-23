@@ -1,4 +1,4 @@
-import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, HeadBucketCommand, CreateBucketCommand } from "@aws-sdk/client-s3";
+import { S3Client, S3ServiceException, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, HeadBucketCommand, CreateBucketCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 let s3: S3Client | null = null;
@@ -27,8 +27,11 @@ export async function ensureBucket(bucket: string): Promise<void> {
   const client = getS3();
   try {
     await client.send(new HeadBucketCommand({ Bucket: bucket }));
-  } catch (err: any) {
-    if (err?.name === "NotFound" || err?.$metadata?.httpStatusCode === 404 || err?.name === "NoSuchBucket") {
+  } catch (err) {
+    if (
+      (err instanceof Error && (err.name === "NotFound" || err.name === "NoSuchBucket")) ||
+      (err instanceof S3ServiceException && err.$metadata.httpStatusCode === 404)
+    ) {
       console.log(`[S3] Bucket "${bucket}" does not exist, creating…`);
       await client.send(new CreateBucketCommand({ Bucket: bucket }));
       console.log(`[S3] Bucket "${bucket}" created`);
@@ -45,10 +48,10 @@ export async function putObject(params: { bucket: string; key: string; body: Buf
   const cmd = new PutObjectCommand({
     Bucket: params.bucket,
     Key: params.key,
-    Body: params.body as any,
+    Body: params.body,
     ContentType: params.contentType,
     ACL: params.aclPublicRead ? "public-read" : undefined,
-  } as any);
+  });
   try {
     await client.send(cmd);
     console.log("[S3] putObject success:", params.key);

@@ -266,7 +266,7 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
             for (const [sid, s] of io.sockets.sockets) {
               const ci = clientsInfo[sid];
               if (ci?.serverUserId === payload.senderServerUserId) {
-                (s as any).emit("server:kicked", { reason: "You were banned from the server." });
+                s.emit("server:kicked", { reason: "You were banned from the server." });
                 s.disconnect(true);
               }
             }

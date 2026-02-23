@@ -28,17 +28,17 @@ function audienceMatches(payload: JWTPayload, expected: string): boolean {
 }
 
 function parsePreferredUsername(payload: JWTPayload): string | undefined {
-  const v = (payload as any)?.preferred_username;
+  const v = payload['preferred_username'];
   return typeof v === 'string' && v.trim().length > 0 ? v.trim() : undefined;
 }
 
 function parseEmail(payload: JWTPayload): string | undefined {
-  const v = (payload as any)?.email;
+  const v = payload['email'];
   return typeof v === 'string' && v.trim().length > 0 ? v.trim() : undefined;
 }
 
 function parseAzp(payload: JWTPayload): string | undefined {
-  const v = (payload as any)?.azp;
+  const v = payload['azp'];
   return typeof v === 'string' && v.trim().length > 0 ? v.trim() : undefined;
 }
 

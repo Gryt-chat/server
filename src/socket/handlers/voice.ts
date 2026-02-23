@@ -50,7 +50,7 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
 
       if (sfuClient && clientsInfo[clientId].hasJoinedChannel) {
         const roomId = `${clientsInfo[clientId].serverUserId}:${clientsInfo[clientId].streamID}`;
-        sfuClient.updateUserAudioState(roomId, clientId, clientsInfo[clientId].isMuted, clientsInfo[clientId].isDeafened).catch((e: any) => {
+        sfuClient.updateUserAudioState(roomId, clientId, clientsInfo[clientId].isMuted, clientsInfo[clientId].isDeafened).catch((e) => {
           consola.error("Failed to update SFU audio state:", e);
         });
       }
@@ -72,7 +72,7 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
         );
 
         if (existingConnection) {
-          const [existingClientId, existingClient] = existingConnection;
+          const [existingClientId] = existingConnection;
           consola.warn(`Device switch detected for ${serverUserId}`);
           const existingSocket = io.sockets.sockets.get(existingClientId);
           if (existingSocket) {
@@ -284,7 +284,7 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
         // Tell the SFU to force-close the user's WebRTC connection
         if (sfuClient && targetClient.streamID) {
           const uniqueRoomId = `${serverId}_${targetClient.streamID}`;
-          sfuClient.disconnectUser(uniqueRoomId, targetUserId).catch((e: any) => {
+          sfuClient.disconnectUser(uniqueRoomId, targetUserId).catch((e) => {
             consola.error("[Voice:kick] SFU disconnectUser failed:", e);
           });
         }

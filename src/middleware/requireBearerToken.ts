@@ -2,11 +2,9 @@ import type { Request, Response, NextFunction } from "express";
 import { verifyAccessToken, TokenPayload } from "../utils/jwt";
 import { getServerConfig } from "../db/scylla";
 
-declare global {
-  namespace Express {
-    interface Request {
-      tokenPayload?: TokenPayload;
-    }
+declare module "express-serve-static-core" {
+  interface Request {
+    tokenPayload?: TokenPayload;
   }
 }
 

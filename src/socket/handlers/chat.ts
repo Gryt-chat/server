@@ -1,6 +1,7 @@
 import consola from "consola";
 import { randomUUID } from "crypto";
 import type { HandlerContext, EventHandlerMap } from "./types";
+import type { SFUClient } from "../../sfu/client";
 import { requireAuth } from "../middleware/auth";
 import {
   insertMessage,
@@ -19,7 +20,6 @@ import {
   DEFAULT_UPLOAD_MAX_BYTES,
 } from "../../db/scylla";
 import { processProfanity, type ProfanityMode } from "../../utils/profanityFilter";
-import { verifyAccessToken } from "../../utils/jwt";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 
 const RL_SEND: RateLimitRule = { limit: 20, windowMs: 10_000, banMs: 30_000, scorePerAction: 1, maxScore: 10, scoreDecayMs: 2000 };
@@ -53,7 +53,7 @@ async function getMessagesCached(conversationId: string, limit = 50): Promise<Me
   return items;
 }
 
-function isConversationAVoiceChannel(conversationId: string, sfuClient: any): boolean {
+function isConversationAVoiceChannel(conversationId: string, sfuClient: SFUClient | null): boolean {
   if (!sfuClient?.isConnected()) return false;
   const activeUsers = sfuClient.getActiveUsers();
   for (const [, conn] of activeUsers) {
@@ -62,7 +62,7 @@ function isConversationAVoiceChannel(conversationId: string, sfuClient: any): bo
   return false;
 }
 
-function isUserConnectedToSpecificVoiceChannel(serverUserId: string, conversationId: string, sfuClient: any): boolean {
+function isUserConnectedToSpecificVoiceChannel(serverUserId: string, conversationId: string, sfuClient: SFUClient | null): boolean {
   if (!sfuClient?.isConnected()) return false;
   const userConnection = sfuClient.getActiveUsers().get(serverUserId);
   return userConnection?.roomId === conversationId;
@@ -264,16 +264,16 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         consola.error("chat:send failed", err);
         try {
           const now = new Date();
-          const fallback = {
+          const fallback: MessageRecord & { ephemeral: boolean } = {
             conversation_id: payload?.conversationId || "unknown",
+            message_id: randomUUID(),
             sender_server_id: "unknown",
             text: payload?.text || null,
             attachments: payload?.attachments?.length ? payload.attachments : null,
-            message_id: randomUUID(),
             created_at: now,
             reactions: null,
             ephemeral: true,
-          } as any;
+          };
           const connectedClients = Object.entries(clientsInfo).filter(([, ci]) => {
             if (isConversationAVoiceChannel(fallback.conversation_id, sfuClient)) {
               return isUserConnectedToSpecificVoiceChannel(ci.serverUserId, fallback.conversation_id, sfuClient);
@@ -288,7 +288,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    'chat:fetch': async (payload: { conversationId: string; limit?: number }) => {
+    'chat:fetch': async (payload: { conversationId: string; limit?: number; before?: string }) => {
       try {
         const ip = getClientIp();
         const userId = clientsInfo[clientId]?.serverUserId;
@@ -311,10 +311,19 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         }
 
         const limit = typeof payload.limit === "number" ? payload.limit : 50;
-        const items = await getMessagesCached(payload.conversationId, limit);
+        const before = typeof payload.before === "string" ? new Date(payload.before) : undefined;
+        const items = before
+          ? await listMessages(payload.conversationId, limit, before)
+          : await getMessagesCached(payload.conversationId, limit);
         let enrichedItems = await enrichMessages(items);
         enrichedItems = await enrichAttachments(enrichedItems);
-        socket.emit("chat:history", { conversation_id: payload.conversationId, items: enrichedItems });
+        const response: { conversation_id: string; items: typeof enrichedItems; hasMore: boolean; before?: string } = {
+          conversation_id: payload.conversationId,
+          items: enrichedItems,
+          hasMore: enrichedItems.length >= limit,
+        };
+        if (before) response.before = payload.before;
+        socket.emit("chat:history", response);
       } catch (err) {
         consola.error("chat:fetch failed", err);
         socket.emit("chat:error", "Failed to fetch messages");

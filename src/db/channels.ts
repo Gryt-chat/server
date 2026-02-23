@@ -1,3 +1,5 @@
+import { types } from "cassandra-driver";
+
 import { getScyllaClient } from "./scylla";
 
 export interface ServerChannelRecord {
@@ -28,19 +30,19 @@ export interface ServerSidebarItemRecord {
   updated_at: Date;
 }
 
-function normalizeChannelType(t: any): "text" | "voice" {
+function normalizeChannelType(t: unknown): "text" | "voice" {
   const s = String(t || "").toLowerCase();
   return s === "voice" ? "voice" : "text";
 }
 
-function normalizeSidebarKind(v: any): ServerSidebarItemKind {
+function normalizeSidebarKind(v: unknown): ServerSidebarItemKind {
   const s = String(v || "").toLowerCase();
   if (s === "separator") return "separator";
   if (s === "spacer") return "spacer";
   return "channel";
 }
 
-function rowToSidebarItem(r: any): ServerSidebarItemRecord {
+function rowToSidebarItem(r: types.Row): ServerSidebarItemRecord {
   return {
     item_id: r["item_id"],
     kind: normalizeSidebarKind(r["kind"]),

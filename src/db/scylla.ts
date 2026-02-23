@@ -1,6 +1,10 @@
-import { Client, auth } from "cassandra-driver";
+import { Client, auth, type ClientOptions } from "cassandra-driver";
 
 let client: Client | null = null;
+
+function errMsg(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
 
 export function getScyllaClient(): Client {
   if (!client) throw new Error("Scylla client not initialized. Call initScylla() first.");
@@ -15,7 +19,7 @@ export async function initScylla(): Promise<void> {
   const username = process.env.SCYLLA_USERNAME;
   const password = process.env.SCYLLA_PASSWORD;
 
-  const commonConfig: any = {
+  const commonConfig: ClientOptions = {
     contactPoints,
     localDataCenter,
     ...(username && password
@@ -62,9 +66,10 @@ export async function initScylla(): Promise<void> {
     try {
       const c = getScyllaClient();
       await c.execute(`ALTER TABLE server_config_singleton ADD ${colDef}`);
-    } catch (error: any) {
-      if (!error?.message?.includes("already exists") && !error?.message?.includes("Invalid column name")) {
-        console.warn(`Warning: Could not add ${colDef} to server_config_singleton:`, error.message);
+    } catch (error) {
+      const msg = errMsg(error);
+      if (!msg.includes("already exists") && !msg.includes("Invalid column name")) {
+        console.warn(`Warning: Could not add ${colDef} to server_config_singleton:`, msg);
       }
     }
   };
@@ -186,38 +191,42 @@ export async function initScylla(): Promise<void> {
   try {
     await client.execute(`ALTER TABLE users_by_gryt_id ADD is_active boolean`);
     console.log('✅ Added is_active column to users_by_gryt_id table');
-  } catch (error: any) {
-    if (error.message.includes('already exists') || error.message.includes('Invalid column name')) {
+  } catch (error) {
+    const msg = errMsg(error);
+    if (msg.includes('already exists') || msg.includes('Invalid column name')) {
       console.log('ℹ️ is_active column already exists in users_by_gryt_id table');
     } else {
-      console.error('❌ Failed to add is_active column to users_by_gryt_id:', error.message);
+      console.error('❌ Failed to add is_active column to users_by_gryt_id:', msg);
     }
   }
 
   try {
     await client.execute(`ALTER TABLE users_by_server_id ADD is_active boolean`);
     console.log('✅ Added is_active column to users_by_server_id table');
-  } catch (error: any) {
-    if (error.message.includes('already exists') || error.message.includes('Invalid column name')) {
+  } catch (error) {
+    const msg = errMsg(error);
+    if (msg.includes('already exists') || msg.includes('Invalid column name')) {
       console.log('ℹ️ is_active column already exists in users_by_server_id table');
     } else {
-      console.error('❌ Failed to add is_active column to users_by_server_id:', error.message);
+      console.error('❌ Failed to add is_active column to users_by_server_id:', msg);
     }
   }
 
   // Add avatar_file_id column to user tables
   try {
     await client.execute(`ALTER TABLE users_by_gryt_id ADD avatar_file_id text`);
-  } catch (error: any) {
-    if (!error.message?.includes('already exists') && !error.message?.includes('Invalid column name')) {
-      console.warn('Warning: Could not add avatar_file_id to users_by_gryt_id:', error.message);
+  } catch (error) {
+    const msg = errMsg(error);
+    if (!msg.includes('already exists') && !msg.includes('Invalid column name')) {
+      console.warn('Warning: Could not add avatar_file_id to users_by_gryt_id:', msg);
     }
   }
   try {
     await client.execute(`ALTER TABLE users_by_server_id ADD avatar_file_id text`);
-  } catch (error: any) {
-    if (!error.message?.includes('already exists') && !error.message?.includes('Invalid column name')) {
-      console.warn('Warning: Could not add avatar_file_id to users_by_server_id:', error.message);
+  } catch (error) {
+    const msg = errMsg(error);
+    if (!msg.includes('already exists') && !msg.includes('Invalid column name')) {
+      console.warn('Warning: Could not add avatar_file_id to users_by_server_id:', msg);
     }
   }
 
@@ -243,8 +252,8 @@ export async function initScylla(): Promise<void> {
     }
     
     console.log(`✅ Set default is_active = true for ${grytUsers.rows.length} users in users_by_gryt_id and ${serverUsers.rows.length} users in users_by_server_id`);
-  } catch (error: any) {
-    console.error('❌ Failed to set default is_active values:', error.message);
+  } catch (error) {
+    console.error('❌ Failed to set default is_active values:', errMsg(error));
   }
 
   await client.execute(
@@ -263,25 +272,28 @@ export async function initScylla(): Promise<void> {
   // Add reactions column if it doesn't exist (for existing tables)
   try {
     await client.execute(`ALTER TABLE messages_by_conversation ADD reactions text`);
-  } catch (error: any) {
-    if (!error.message?.includes('already exists') && !error.message?.includes('Invalid column name')) {
-      console.warn('Warning: Could not add reactions column:', error.message);
+  } catch (error) {
+    const msg = errMsg(error);
+    if (!msg.includes('already exists') && !msg.includes('Invalid column name')) {
+      console.warn('Warning: Could not add reactions column:', msg);
     }
   }
 
   try {
     await client.execute(`ALTER TABLE messages_by_conversation ADD reply_to_message_id text`);
-  } catch (error: any) {
-    if (!error.message?.includes('already exists') && !error.message?.includes('Invalid column name')) {
-      console.warn('Warning: Could not add reply_to_message_id column:', error.message);
+  } catch (error) {
+    const msg = errMsg(error);
+    if (!msg.includes('already exists') && !msg.includes('Invalid column name')) {
+      console.warn('Warning: Could not add reply_to_message_id column:', msg);
     }
   }
 
   try {
     await client.execute(`ALTER TABLE messages_by_conversation ADD edited_at timestamp`);
-  } catch (error: any) {
-    if (!error.message?.includes('already exists') && !error.message?.includes('Invalid column name')) {
-      console.warn('Warning: Could not add edited_at column:', error.message);
+  } catch (error) {
+    const msg = errMsg(error);
+    if (!msg.includes('already exists') && !msg.includes('Invalid column name')) {
+      console.warn('Warning: Could not add edited_at column:', msg);
     }
   }
 
@@ -301,9 +313,10 @@ export async function initScylla(): Promise<void> {
 
   try {
     await client.execute(`ALTER TABLE files_by_id ADD original_name text`);
-  } catch (error: any) {
-    if (!error.message?.includes('already exists') && !error.message?.includes('Invalid column name')) {
-      console.warn('Warning: Could not add original_name column:', error.message);
+  } catch (error) {
+    const msg = errMsg(error);
+    if (!msg.includes('already exists') && !msg.includes('Invalid column name')) {
+      console.warn('Warning: Could not add original_name column:', msg);
     }
   }
 

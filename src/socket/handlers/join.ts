@@ -1,7 +1,7 @@
 import consola from "consola";
 import type { HandlerContext, EventHandlerMap } from "./types";
 import { syncAllClients, broadcastMemberList, disconnectOtherSessions } from "../utils/clients";
-import { sendInfo, sendServerDetails } from "../utils/server";
+import { sendServerDetails } from "../utils/server";
 import { verifyIdentityToken } from "../../auth/oidc";
 import { generateAccessToken, TokenPayload } from "../../utils/jwt";
 import {
@@ -37,7 +37,7 @@ const RL_JOIN: RateLimitRule = {
 // ── Handlers ────────────────────────────────────────────────────────
 
 export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
-  const { io, socket, clientId, serverId, clientsInfo, sfuClient, getClientIp } = ctx;
+  const { io, socket, clientId, serverId, clientsInfo, getClientIp } = ctx;
 
   const helpers = registerJoinHelpers(ctx);
 
@@ -89,8 +89,9 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           const verified = await verifyIdentityToken(payload.identityToken);
           grytUserId = verified.sub;
           suggestedNickname = verified.preferredUsername || verified.email;
-        } catch (e: any) {
-          consola.warn(`Identity token verification failed for ${clientId}`, e?.message);
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e);
+          consola.warn(`Identity token verification failed for ${clientId}`, message);
           socket.emit("server:error", {
             error: "identity_token_invalid",
             message: "Your sign-in token is invalid or expired. Please sign in again.",

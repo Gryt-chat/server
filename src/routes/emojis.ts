@@ -49,7 +49,7 @@ emojisRouter.get(
 
 emojisRouter.post(
   "/",
-  requireBearerToken as any,
+  requireBearerToken,
   upload.fields([{ name: "file", maxCount: 1 }, { name: "files", maxCount: 200 }]),
   (req: Request, res: Response, next: NextFunction): void => {
     const serverUserId = req.tokenPayload?.serverUserId;
@@ -164,18 +164,31 @@ emojisRouter.post(
           }
 
           try {
-            const isGif = entry.mime.toLowerCase() === "image/gif";
+            const mime = entry.mime.toLowerCase();
+            const isGif = mime === "image/gif";
+            const isWebp = mime === "image/webp";
+            const isSvg = mime === "image/svg+xml";
             let processed: Buffer;
             let ext: string;
             let contentType: string;
 
-            console.log("[EmojiUpload] Processing image:", { name: entry.name, mime: entry.mime, isGif, bufferSize: entry.buffer.length });
-            if (isGif) {
+            console.log("[EmojiUpload] Processing image:", { name: entry.name, mime: entry.mime, isGif, isWebp, isSvg, bufferSize: entry.buffer.length });
+            if (isSvg) {
+              processed = entry.buffer;
+              ext = "svg";
+              contentType = "image/svg+xml";
+            } else if (isGif) {
               processed = await sharp(entry.buffer, { animated: true })
                 .resize(128, 128, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
                 .gif().toBuffer();
               ext = "gif";
               contentType = "image/gif";
+            } else if (isWebp) {
+              processed = await sharp(entry.buffer, { animated: true })
+                .resize(128, 128, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
+                .webp().toBuffer();
+              ext = "webp";
+              contentType = "image/webp";
             } else {
               processed = await sharp(entry.buffer)
                 .resize(128, 128, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
@@ -242,7 +255,7 @@ emojisRouter.get(
         if (!emoji) { res.status(404).json({ error: "not_found" }); return; }
 
         const obj = await getObject({ bucket, key: emoji.s3_key });
-        const body: any = (obj as any)?.Body;
+        const body = obj.Body;
         if (!body) { res.status(502).json({ error: "s3_error" }); return; }
 
         res.setHeader("Cache-Control", "public, max-age=604800, immutable");
@@ -254,14 +267,8 @@ emojisRouter.get(
           : "image/png";
         res.setHeader("Content-Type", imgContentType);
 
-        if (typeof body.pipe === "function") { body.pipe(res); return; }
-        if (typeof body.transformToByteArray === "function") {
-          const bytes = await body.transformToByteArray();
-          res.end(Buffer.from(bytes));
-          return;
-        }
-        if (Buffer.isBuffer(body) || body instanceof Uint8Array) { res.end(Buffer.from(body)); return; }
-        res.status(502).json({ error: "s3_error", message: "Unsupported body type" });
+        const bytes = await body.transformToByteArray();
+        res.end(Buffer.from(bytes));
       })
       .catch(next);
   },
@@ -269,7 +276,7 @@ emojisRouter.get(
 
 emojisRouter.patch(
   "/:name",
-  requireBearerToken as any,
+  requireBearerToken,
   express.json(),
   (req: Request, res: Response, next: NextFunction): void => {
     const oldName = req.params.name;
@@ -312,9 +319,163 @@ emojisRouter.patch(
   },
 );
 
+/* ─── BetterTTV import ──────────────────────────────────────────────── */
+
+const BTTV_API = "https://api.betterttv.net/3";
+const BTTV_CDN = "https://cdn.betterttv.net/emote";
+
+interface BttvEmoteInput {
+  id: string;
+  code: string;
+  imageType: string;
+  name: string;
+}
+
+emojisRouter.get(
+  "/bttv/user/:userId",
+  (_req: Request, res: Response, next: NextFunction): void => {
+    const { userId } = _req.params;
+    if (!userId || !/^[a-f0-9]{20,30}$/.test(userId)) {
+      res.status(400).json({ error: "invalid_user_id" });
+      return;
+    }
+
+    Promise.resolve()
+      .then(async () => {
+        const resp = await fetch(`${BTTV_API}/users/${userId}`);
+        if (!resp.ok) {
+          res.status(resp.status).json({ error: "bttv_fetch_failed", message: `BetterTTV returned ${resp.status}` });
+          return;
+        }
+        const data = await resp.json();
+        const channelEmotes = (data.channelEmotes || []).map((e: Record<string, unknown>) => ({
+          id: e.id,
+          code: e.code,
+          imageType: e.imageType,
+          animated: e.animated,
+        }));
+        const sharedEmotes = (data.sharedEmotes || []).map((e: Record<string, unknown>) => ({
+          id: e.id,
+          code: e.code,
+          imageType: e.imageType,
+          animated: e.animated,
+        }));
+        res.json({
+          username: data.displayName || data.name,
+          channelEmotes,
+          sharedEmotes,
+        });
+      })
+      .catch(next);
+  },
+);
+
+emojisRouter.post(
+  "/bttv/import",
+  requireBearerToken,
+  express.json(),
+  (req: Request, res: Response, next: NextFunction): void => {
+    const serverUserId = req.tokenPayload?.serverUserId;
+    if (!serverUserId) { res.status(401).json({ error: "auth_required" }); return; }
+
+    const bucket = process.env.S3_BUCKET as string;
+    if (!bucket) { res.status(500).json({ error: "s3_not_configured" }); return; }
+
+    const emotes: BttvEmoteInput[] = req.body?.emotes;
+    if (!Array.isArray(emotes) || emotes.length === 0) {
+      res.status(400).json({ error: "emotes_required", message: "Provide an array of emotes to import." });
+      return;
+    }
+    if (emotes.length > 200) {
+      res.status(400).json({ error: "too_many", message: "Max 200 emotes per import." });
+      return;
+    }
+
+    Promise.resolve()
+      .then(async () => {
+        const role = await getServerRole(serverUserId);
+        if (role !== "owner" && role !== "admin") {
+          res.status(403).json({ error: "forbidden", message: "Only admins can import emojis." });
+          return;
+        }
+
+        const existingEmojis = await listEmojis();
+        const usedNames = new Set(existingEmojis.map(e => e.name));
+        const results: Array<{ name: string; file_id?: string; ok: boolean; error?: string; message?: string }> = [];
+
+        for (const emote of emotes) {
+          const name = emote.name?.trim().toLowerCase();
+          if (!name || !EMOJI_NAME_RE.test(name)) {
+            results.push({ name: name || emote.code, ok: false, error: "invalid_name", message: "Invalid emoji name." });
+            continue;
+          }
+          if (usedNames.has(name)) {
+            results.push({ name, ok: false, error: "emoji_exists", message: `":${name}:" already exists.` });
+            continue;
+          }
+          if (!emote.id || !/^[a-f0-9]{20,30}$/.test(emote.id)) {
+            results.push({ name, ok: false, error: "invalid_bttv_id", message: "Invalid BetterTTV emote ID." });
+            continue;
+          }
+
+          try {
+            const cdnResp = await fetch(`${BTTV_CDN}/${emote.id}/3x`);
+            if (!cdnResp.ok) {
+              results.push({ name, ok: false, error: "cdn_fetch_failed", message: `CDN returned ${cdnResp.status}` });
+              continue;
+            }
+            const arrayBuf = await cdnResp.arrayBuffer();
+            const imgBuffer = Buffer.from(arrayBuf);
+
+            const isGif = emote.imageType === "gif";
+            const isWebp = emote.imageType === "webp";
+            let processed: Buffer;
+            let ext: string;
+            let contentType: string;
+
+            if (isGif) {
+              processed = await sharp(imgBuffer, { animated: true })
+                .resize(128, 128, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
+                .gif().toBuffer();
+              ext = "gif";
+              contentType = "image/gif";
+            } else if (isWebp) {
+              processed = await sharp(imgBuffer, { animated: true })
+                .resize(128, 128, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
+                .webp().toBuffer();
+              ext = "webp";
+              contentType = "image/webp";
+            } else {
+              processed = await sharp(imgBuffer)
+                .resize(128, 128, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
+                .png().toBuffer();
+              ext = "png";
+              contentType = "image/png";
+            }
+
+            const fileId = uuidv4();
+            const key = `emojis/${name}.${ext}`;
+            await putObject({ bucket, key, body: processed, contentType });
+            await insertEmoji({ name, file_id: fileId, s3_key: key, uploaded_by_server_user_id: serverUserId });
+
+            usedNames.add(name);
+            results.push({ name, file_id: fileId, ok: true });
+          } catch (err) {
+            console.error("[BttvImport] Failed to import emote:", emote.code, err);
+            results.push({ name, ok: false, error: "processing_failed", message: "Failed to process image." });
+          }
+        }
+
+        const successCount = results.filter(r => r.ok).length;
+        res.status(successCount > 0 ? 201 : 400).json({ results });
+      })
+      .catch(next);
+  },
+);
+
 emojisRouter.delete(
   "/:name",
-  requireBearerToken as any,
+  requireBearerToken,
   (req: Request, res: Response, next: NextFunction): void => {
     const name = req.params.name;
     if (!name) { res.status(400).json({ error: "name_required" }); return; }

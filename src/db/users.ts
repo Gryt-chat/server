@@ -1,4 +1,6 @@
+import { types } from "cassandra-driver";
 import { randomUUID } from "crypto";
+
 import { getScyllaClient } from "./scylla";
 
 export interface UserRecord {
@@ -12,7 +14,7 @@ export interface UserRecord {
   is_active: boolean; // Whether the user is currently active on the server
 }
 
-function rowToUserRecord(r: any): UserRecord {
+function rowToUserRecord(r: types.Row): UserRecord {
   return {
     gryt_user_id: r["gryt_user_id"],
     server_user_id: r["server_user_id"],
@@ -24,29 +26,6 @@ function rowToUserRecord(r: any): UserRecord {
   };
 }
 
-async function getLegacyUserByGrytId(grytUserId: string): Promise<UserRecord | null> {
-  const c = getScyllaClient();
-  const rs = await c.execute(
-    `SELECT gryt_user_id, server_user_id, nickname, avatar_file_id, created_at, last_seen, is_active FROM users_by_gryt_id WHERE gryt_user_id = ?`,
-    [grytUserId],
-    { prepare: true }
-  );
-  const r = rs.first();
-  if (!r) return null;
-  return rowToUserRecord(r);
-}
-
-async function getLegacyUserByServerId(serverUserId: string): Promise<UserRecord | null> {
-  const c = getScyllaClient();
-  const rs = await c.execute(
-    `SELECT server_user_id, gryt_user_id, nickname, avatar_file_id, created_at, last_seen, is_active FROM users_by_server_id WHERE server_user_id = ?`,
-    [serverUserId],
-    { prepare: true }
-  );
-  const r = rs.first();
-  if (!r) return null;
-  return rowToUserRecord(r);
-}
 
 export async function upsertUser(grytUserId: string, nickname: string, avatarFileId?: string): Promise<UserRecord> {
   const c = getScyllaClient();

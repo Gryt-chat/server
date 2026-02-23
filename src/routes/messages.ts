@@ -5,7 +5,7 @@ import { requireBearerToken } from "../middleware/requireBearerToken";
 
 export const messagesRouter = express.Router();
 
-messagesRouter.use(requireBearerToken as any);
+messagesRouter.use(requireBearerToken);
 
 messagesRouter.get(
   "/:conversationId",

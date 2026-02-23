@@ -123,9 +123,9 @@ serverRouter.post(
       const key = `server-icons/${host}/${uuidv4()}.${outExt}`;
       try {
         await putObject({ bucket, key, body: out, contentType: outMime });
-      } catch (e: any) {
+      } catch (e) {
         const msg =
-          (typeof e?.message === "string" && e.message.trim().length > 0)
+          (e instanceof Error && e.message.trim().length > 0)
             ? e.message
             : "S3 upload failed.";
         res.status(502).json({ error: "s3_error", message: msg });

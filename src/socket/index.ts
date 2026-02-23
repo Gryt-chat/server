@@ -144,11 +144,11 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
 
   if (verboseLogs) {
     const originalEmit = socket.emit;
-    socket.emit = function (event: string, ...args: any[]) {
+    socket.emit = function (event: string, ...args: unknown[]) {
       console.log(`SERVER EMIT ${clientId}:`, event, args.length > 0 ? args : "");
       return originalEmit.call(this, event, ...args);
     };
-    socket.onAny((event: string, ...args: any[]) => {
+    socket.onAny((event: string, ...args: unknown[]) => {
       console.log(`SERVER RECV ${clientId}:`, event, args.length > 0 ? args : "");
     });
   }

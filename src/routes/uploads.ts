@@ -4,6 +4,7 @@ import multer from "multer";
 import { v4 as uuidv4 } from "uuid";
 import mime from "mime-types";
 import sharp from "sharp";
+import { Readable } from "stream";
 import { execFile } from "child_process";
 import { writeFile, unlink, readFile } from "fs/promises";
 import { tmpdir } from "os";
@@ -45,7 +46,7 @@ export const uploadsRouter = express.Router();
 
 uploadsRouter.post(
   "/",
-  requireBearerToken as any,
+  requireBearerToken,
   upload.single("file"),
   (req: Request, res: Response, next: NextFunction): void => {
     const file = req.file;
@@ -119,7 +120,7 @@ uploadsRouter.post(
 
 uploadsRouter.post(
   "/avatar",
-  requireBearerToken as any,
+  requireBearerToken,
   upload.single("file"),
   (req: Request, res: Response, next: NextFunction): void => {
     const file = req.file;
@@ -209,8 +210,8 @@ uploadsRouter.post(
         // Upload main object
         try {
           await putObject({ bucket, key, body: storedBody, contentType: storedMime });
-        } catch (e: any) {
-          const msg = (typeof e?.message === "string" && e.message.trim().length > 0) ? e.message : "S3 upload failed.";
+        } catch (e) {
+          const msg = (e instanceof Error && e.message.trim().length > 0) ? e.message : "S3 upload failed.";
           console.error("avatar_upload_s3_error", { bucket, key, message: msg });
           res.status(502).json({ error: "s3_error", message: msg });
           return;
@@ -221,8 +222,8 @@ uploadsRouter.post(
           thumbKey = `avatars/thumb_${fileId}.jpg`;
           try {
             await putObject({ bucket, key: thumbKey, body: thumb, contentType: "image/jpeg" });
-          } catch (e: any) {
-            const msg = (typeof e?.message === "string" && e.message.trim().length > 0) ? e.message : "S3 upload failed.";
+          } catch (e) {
+            const msg = (e instanceof Error && e.message.trim().length > 0) ? e.message : "S3 upload failed.";
             console.error("avatar_thumb_s3_error", { bucket, key: thumbKey, message: msg });
             thumbKey = null;
           }
@@ -249,7 +250,7 @@ uploadsRouter.post(
 
 uploadsRouter.delete(
   "/avatar",
-  requireBearerToken as any,
+  requireBearerToken,
   (req: Request, res: Response, next: NextFunction): void => {
     const serverUserId = req.tokenPayload?.serverUserId;
     if (!serverUserId) { res.status(401).json({ error: "auth_required" }); return; }
@@ -291,7 +292,7 @@ uploadsRouter.get(
         // IMPORTANT: do not redirect to S3/MinIO endpoints. In dev those are often localhost,
         // and browsers cannot reach the server's localhost. Stream through the API instead.
         const obj = await getObject({ bucket, key: s3Key, range: rangeHeader || undefined });
-        const body: any = (obj as any)?.Body;
+        const body = obj.Body;
         if (!body) {
           res.status(502).json({ error: "s3_error", message: "Empty S3 response body" });
           return;
@@ -307,35 +308,25 @@ uploadsRouter.get(
           res.setHeader("Content-Disposition", `attachment; filename="${fileName.replace(/"/g, '\\"')}"`);
         }
 
-        const isPartial = (obj as any).ContentRange || (obj as any).$metadata?.httpStatusCode === 206;
-        if (isPartial && (obj as any).ContentRange) {
+        const isPartial = obj.ContentRange || obj.$metadata?.httpStatusCode === 206;
+        if (isPartial && obj.ContentRange) {
           res.status(206);
-          res.setHeader("Content-Range", (obj as any).ContentRange);
+          res.setHeader("Content-Range", obj.ContentRange);
         } else if (totalSize != null) {
           res.setHeader("Content-Length", String(totalSize));
         }
 
-        if ((obj as any).ContentLength != null) {
-          res.setHeader("Content-Length", String((obj as any).ContentLength));
+        if (obj.ContentLength != null) {
+          res.setHeader("Content-Length", String(obj.ContentLength));
         }
 
-        if (typeof body.pipe === "function") {
+        if (body instanceof Readable) {
           body.pipe(res);
           return;
         }
 
-        if (typeof body.transformToByteArray === "function") {
-          const bytes = await body.transformToByteArray();
-          res.end(Buffer.from(bytes));
-          return;
-        }
-
-        if (Buffer.isBuffer(body) || body instanceof Uint8Array) {
-          res.end(Buffer.from(body));
-          return;
-        }
-
-        res.status(502).json({ error: "s3_error", message: "Unsupported S3 body type" });
+        const bytes = await body.transformToByteArray();
+        res.end(Buffer.from(bytes));
       })
       .catch(next);
   },

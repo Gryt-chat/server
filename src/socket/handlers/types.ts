@@ -16,4 +16,5 @@ export interface HandlerContext {
   getClientIp: () => string;
 }
 
-export type EventHandlerMap = Record<string, (...args: any[]) => void>;
+type SocketListener = Parameters<Socket["on"]>[1];
+export type EventHandlerMap = Record<string, SocketListener>;
