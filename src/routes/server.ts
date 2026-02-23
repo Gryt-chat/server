@@ -95,34 +95,22 @@ serverRouter.post(
         return;
       }
 
-      const isGif = (file.mimetype || "").toLowerCase() === "image/gif";
+      const iconMime = (file.mimetype || "").toLowerCase();
+      const isAnimated = iconMime === "image/gif" || iconMime === "image/webp" || iconMime === "image/avif";
       let out: Buffer;
-      let outMime: string;
-      let outExt: string;
       try {
-        if (isGif) {
-          out = await sharp(file.buffer, { animated: true })
-            .resize(256, 256, { fit: "cover" })
-            .gif()
-            .toBuffer();
-          outMime = "image/gif";
-          outExt = "gif";
-        } else {
-          out = await sharp(file.buffer)
-            .resize(256, 256, { fit: "cover" })
-            .png({ compressionLevel: 9 })
-            .toBuffer();
-          outMime = "image/png";
-          outExt = "png";
-        }
+        out = await sharp(file.buffer, { animated: isAnimated })
+          .resize(256, 256, { fit: "cover" })
+          .avif()
+          .toBuffer();
       } catch {
         res.status(400).json({ error: "invalid_file", message: "Could not process image. Please upload a valid PNG/JPEG/WebP/GIF/AVIF under the size limit." });
         return;
       }
 
-      const key = `server-icons/${host}/${uuidv4()}.${outExt}`;
+      const key = `server-icons/${host}/${uuidv4()}.avif`;
       try {
-        await putObject({ bucket, key, body: out, contentType: outMime });
+        await putObject({ bucket, key, body: out, contentType: "image/avif" });
       } catch (e) {
         const msg =
           (e instanceof Error && e.message.trim().length > 0)

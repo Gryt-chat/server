@@ -9,11 +9,12 @@ import { insertEmoji, getEmoji, listEmojis, deleteEmoji, renameEmoji } from "../
 import { requireBearerToken } from "../middleware/requireBearerToken";
 import { getServerRole } from "../db/servers";
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024, files: 201 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
 const EMOJI_NAME_RE = /^[a-z0-9_]{2,32}$/;
-const IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|svg)$/i;
+const IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|svg|avif)$/i;
 const ZIP_MIME_RE = /^application\/(zip|x-zip|x-zip-compressed)$/;
+const ANIMATED_MIME_SET = new Set(["image/gif", "image/webp", "image/avif"]);
 
 function deriveEmojiName(filename: string): string {
   const base = filename.replace(/\.[^.]+$/, "").replace(/^\d+[-_]/, "");
@@ -30,7 +31,20 @@ function extToMime(ext: string): string {
   if (lower === "webp") return "image/webp";
   if (lower === "gif") return "image/gif";
   if (lower === "svg") return "image/svg+xml";
+  if (lower === "avif") return "image/avif";
   return "application/octet-stream";
+}
+
+async function processEmojiToAvif(
+  buffer: Buffer,
+  mime: string,
+): Promise<{ processed: Buffer; ext: string; contentType: string }> {
+  const animated = ANIMATED_MIME_SET.has(mime);
+  const processed = await sharp(buffer, { animated })
+    .resize(128, 128, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
+    .avif()
+    .toBuffer();
+  return { processed, ext: "avif", contentType: "image/avif" };
 }
 
 export const emojisRouter = express.Router();
@@ -50,7 +64,7 @@ emojisRouter.get(
 emojisRouter.post(
   "/",
   requireBearerToken,
-  upload.fields([{ name: "file", maxCount: 1 }, { name: "files", maxCount: 200 }]),
+  upload.fields([{ name: "file", maxCount: 1 }, { name: "files" }]),
   (req: Request, res: Response, next: NextFunction): void => {
     const serverUserId = req.tokenPayload?.serverUserId;
     console.log("[EmojiUpload] POST /api/emojis — serverUserId:", serverUserId);
@@ -157,46 +171,15 @@ emojisRouter.post(
             results.push({ name: entry.name, ok: false, error: "invalid_name", message: "Invalid emoji name." });
             continue;
           }
-          if (usedNames.has(entry.name)) {
-            console.warn("[EmojiUpload] Emoji already exists:", entry.name);
-            results.push({ name: entry.name, ok: false, error: "emoji_exists", message: `":${entry.name}:" already exists.` });
-            continue;
-          }
-
           try {
-            const mime = entry.mime.toLowerCase();
-            const isGif = mime === "image/gif";
-            const isWebp = mime === "image/webp";
-            const isSvg = mime === "image/svg+xml";
-            let processed: Buffer;
-            let ext: string;
-            let contentType: string;
-
-            console.log("[EmojiUpload] Processing image:", { name: entry.name, mime: entry.mime, isGif, isWebp, isSvg, bufferSize: entry.buffer.length });
-            if (isSvg) {
-              processed = entry.buffer;
-              ext = "svg";
-              contentType = "image/svg+xml";
-            } else if (isGif) {
-              processed = await sharp(entry.buffer, { animated: true })
-                .resize(128, 128, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
-                .gif().toBuffer();
-              ext = "gif";
-              contentType = "image/gif";
-            } else if (isWebp) {
-              processed = await sharp(entry.buffer, { animated: true })
-                .resize(128, 128, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
-                .webp().toBuffer();
-              ext = "webp";
-              contentType = "image/webp";
-            } else {
-              processed = await sharp(entry.buffer)
-                .resize(128, 128, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
-                .png().toBuffer();
-              ext = "png";
-              contentType = "image/png";
+            const existingEmoji = usedNames.has(entry.name) ? await getEmoji(entry.name) : null;
+            if (existingEmoji) {
+              console.log("[EmojiUpload] Replacing existing emoji:", entry.name);
+              await deleteObject({ bucket, key: existingEmoji.s3_key }).catch(() => {});
             }
-            console.log("[EmojiUpload] Sharp resize done:", { name: entry.name, processedSize: processed.length });
+            console.log("[EmojiUpload] Processing image:", { name: entry.name, mime: entry.mime, bufferSize: entry.buffer.length });
+            const { processed, ext, contentType } = await processEmojiToAvif(entry.buffer, entry.mime.toLowerCase());
+            console.log("[EmojiUpload] Sharp resize done:", { name: entry.name, ext, processedSize: processed.length });
 
             const fileId = uuidv4();
             const key = `emojis/${entry.name}.${ext}`;
@@ -260,7 +243,8 @@ emojisRouter.get(
 
         res.setHeader("Cache-Control", "public, max-age=604800, immutable");
         const key = emoji.s3_key.toLowerCase();
-        const imgContentType = key.endsWith(".gif") ? "image/gif"
+        const imgContentType = key.endsWith(".avif") ? "image/avif"
+          : key.endsWith(".gif") ? "image/gif"
           : key.endsWith(".svg") ? "image/svg+xml"
           : key.endsWith(".webp") ? "image/webp"
           : key.endsWith(".jpg") || key.endsWith(".jpeg") ? "image/jpeg"
@@ -386,11 +370,6 @@ emojisRouter.post(
       res.status(400).json({ error: "emotes_required", message: "Provide an array of emotes to import." });
       return;
     }
-    if (emotes.length > 200) {
-      res.status(400).json({ error: "too_many", message: "Max 200 emotes per import." });
-      return;
-    }
-
     Promise.resolve()
       .then(async () => {
         const role = await getServerRole(serverUserId);
@@ -409,16 +388,18 @@ emojisRouter.post(
             results.push({ name: name || emote.code, ok: false, error: "invalid_name", message: "Invalid emoji name." });
             continue;
           }
-          if (usedNames.has(name)) {
-            results.push({ name, ok: false, error: "emoji_exists", message: `":${name}:" already exists.` });
-            continue;
-          }
           if (!emote.id || !/^[a-f0-9]{20,30}$/.test(emote.id)) {
             results.push({ name, ok: false, error: "invalid_bttv_id", message: "Invalid BetterTTV emote ID." });
             continue;
           }
 
           try {
+            const existingEmoji = usedNames.has(name) ? await getEmoji(name) : null;
+            if (existingEmoji) {
+              console.log("[BttvImport] Replacing existing emoji:", name);
+              await deleteObject({ bucket, key: existingEmoji.s3_key }).catch(() => {});
+            }
+
             const cdnResp = await fetch(`${BTTV_CDN}/${emote.id}/3x`);
             if (!cdnResp.ok) {
               results.push({ name, ok: false, error: "cdn_fetch_failed", message: `CDN returned ${cdnResp.status}` });
@@ -427,31 +408,10 @@ emojisRouter.post(
             const arrayBuf = await cdnResp.arrayBuffer();
             const imgBuffer = Buffer.from(arrayBuf);
 
-            const isGif = emote.imageType === "gif";
-            const isWebp = emote.imageType === "webp";
-            let processed: Buffer;
-            let ext: string;
-            let contentType: string;
-
-            if (isGif) {
-              processed = await sharp(imgBuffer, { animated: true })
-                .resize(128, 128, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
-                .gif().toBuffer();
-              ext = "gif";
-              contentType = "image/gif";
-            } else if (isWebp) {
-              processed = await sharp(imgBuffer, { animated: true })
-                .resize(128, 128, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
-                .webp().toBuffer();
-              ext = "webp";
-              contentType = "image/webp";
-            } else {
-              processed = await sharp(imgBuffer)
-                .resize(128, 128, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
-                .png().toBuffer();
-              ext = "png";
-              contentType = "image/png";
-            }
+            const sourceMime = emote.imageType === "gif" ? "image/gif"
+              : emote.imageType === "webp" ? "image/webp"
+              : "image/png";
+            const { processed, ext, contentType } = await processEmojiToAvif(imgBuffer, sourceMime);
 
             const fileId = uuidv4();
             const key = `emojis/${name}.${ext}`;
@@ -468,6 +428,48 @@ emojisRouter.post(
 
         const successCount = results.filter(r => r.ok).length;
         res.status(successCount > 0 ? 201 : 400).json({ results });
+      })
+      .catch(next);
+  },
+);
+
+emojisRouter.delete(
+  "/all",
+  requireBearerToken,
+  (req: Request, res: Response, next: NextFunction): void => {
+    const serverUserId = req.tokenPayload?.serverUserId;
+    if (!serverUserId) { res.status(401).json({ error: "auth_required" }); return; }
+
+    const bucket = process.env.S3_BUCKET as string;
+
+    Promise.resolve()
+      .then(async () => {
+        const role = await getServerRole(serverUserId);
+        if (role !== "owner" && role !== "admin") {
+          res.status(403).json({ error: "forbidden", message: "Only admins can delete emojis." });
+          return;
+        }
+
+        const allEmojis = await listEmojis();
+        if (allEmojis.length === 0) {
+          res.json({ ok: true, deleted: 0 });
+          return;
+        }
+
+        let deleted = 0;
+        for (const emoji of allEmojis) {
+          try {
+            if (bucket) {
+              await deleteObject({ bucket, key: emoji.s3_key }).catch(() => {});
+            }
+            await deleteEmoji(emoji.name);
+            deleted++;
+          } catch (err) {
+            console.error("[EmojiDeleteAll] Failed to delete:", emoji.name, err);
+          }
+        }
+
+        res.json({ ok: true, deleted });
       })
       .catch(next);
   },

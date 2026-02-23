@@ -61,14 +61,16 @@ uploadsRouter.post(
     }
 
     const fileId = uuidv4();
-    const ext = mime.extension(file.mimetype || "") || "bin";
-    const key = `uploads/${fileId}.${ext}`;
+    const fileMime = (file.mimetype || "").toLowerCase();
+    const isImage = fileMime.startsWith("image/");
+    const isVideo = fileMime.startsWith("video/");
+    const isAnimatedSource = fileMime === "image/gif" || fileMime === "image/webp" || fileMime === "image/avif";
 
-    const isImage = (file.mimetype || "").startsWith("image/");
+    const ext = isImage ? "avif" : (mime.extension(file.mimetype || "") || "bin");
+    const key = `uploads/${fileId}.${ext}`;
 
     Promise.resolve()
       .then(async () => {
-        // Enforce server-configured upload max size (best-effort; falls back to multer limit).
         const cfg = await getServerConfig().catch(() => null);
         const maxBytes = (typeof cfg?.upload_max_bytes === "number" ? cfg.upload_max_bytes : DEFAULT_UPLOAD_MAX_BYTES);
         if (typeof maxBytes === "number" && maxBytes > 0 && file.size > maxBytes) {
@@ -79,33 +81,44 @@ uploadsRouter.post(
           return;
         }
 
-        await putObject({ bucket, key, body: file.buffer, contentType: file.mimetype || undefined });
+        let storedBody: Buffer = file.buffer;
+        let storedMime: string = file.mimetype || "application/octet-stream";
+        let storedSize: number = file.size;
         let thumbKey: string | null = null;
         let width: number | null = null;
         let height: number | null = null;
-        const isVideo = (file.mimetype || "").startsWith("video/");
+
         if (isImage) {
-          const image = sharp(file.buffer);
-          const metadata = await image.metadata();
-          if (metadata.width && metadata.height) {
-            width = metadata.width;
-            height = metadata.height;
-          }
-          const thumb = await image.resize({ width: 320, withoutEnlargement: true }).jpeg({ quality: 75 }).toBuffer();
-          thumbKey = `thumbnails/${fileId}.jpg`;
-          await putObject({ bucket, key: thumbKey, body: thumb, contentType: "image/jpeg" });
-        } else if (isVideo) {
+          const meta = await sharp(file.buffer, { animated: isAnimatedSource }).metadata().catch(() => null);
+          if (meta?.width && meta?.height) { width = meta.width; height = meta.height; }
+          storedBody = await sharp(file.buffer, { animated: isAnimatedSource })
+            .avif()
+            .toBuffer();
+          storedMime = "image/avif";
+          storedSize = storedBody.length;
+          const thumb = await sharp(file.buffer, { animated: isAnimatedSource })
+            .resize({ width: 320, withoutEnlargement: true })
+            .avif({ quality: 50 })
+            .toBuffer();
+          thumbKey = `thumbnails/${fileId}.avif`;
+          await putObject({ bucket, key: thumbKey, body: thumb, contentType: "image/avif" });
+        }
+
+        await putObject({ bucket, key, body: storedBody, contentType: storedMime });
+
+        if (isVideo) {
           const thumb = await extractVideoThumbnail(file.buffer, fileId);
           if (thumb) {
             thumbKey = `thumbnails/${fileId}.jpg`;
             await putObject({ bucket, key: thumbKey, body: thumb, contentType: "image/jpeg" }).catch(() => { thumbKey = null; });
           }
         }
+
         await insertFile({
           file_id: fileId,
           s3_key: key,
-          mime: file.mimetype || null,
-          size: file.size ?? null,
+          mime: storedMime,
+          size: storedSize,
           width,
           height,
           thumbnail_key: thumbKey,
@@ -136,9 +149,9 @@ uploadsRouter.post(
     if (!serverUserId) { res.status(401).json({ error: "auth_required" }); return; }
 
     const fileId = uuidv4();
-    const isGif = (file.mimetype || "").toLowerCase() === "image/gif";
-    const ext = isGif ? "gif" : (mime.extension(file.mimetype || "") || "png");
-    const key = `avatars/${fileId}.${ext}`;
+    const inputMime = (file.mimetype || "").toLowerCase();
+    const isAnimated = inputMime === "image/gif" || inputMime === "image/webp" || inputMime === "image/avif";
+    const key = `avatars/${fileId}.avif`;
 
     Promise.resolve()
       .then(async () => {
@@ -154,57 +167,29 @@ uploadsRouter.post(
         }
 
         let storedBody: Buffer;
-        let storedMime: string;
+        const storedMime = "image/avif";
         let storedSize: number;
         let width: number | null = null;
         let height: number | null = null;
 
-        // Always attempt to compute a thumbnail (first frame for GIFs).
         let thumbKey: string | null = null;
         let thumb: Buffer | null = null;
 
-        // For GIFs: resize while preserving animation. Thumbnail generation is best-effort.
-        if (isGif) {
-          try {
-            const meta = await sharp(file.buffer, { animated: true }).metadata().catch(() => null);
-            if (meta?.width && meta?.height) { width = meta.width; height = meta.height; }
-            storedBody = await sharp(file.buffer, { animated: true })
-              .resize({ width: 256, height: 256, fit: "cover" })
-              .gif()
-              .toBuffer();
-            storedMime = "image/gif";
-            storedSize = storedBody.length;
-            thumb = await sharp(file.buffer, { animated: true })
-              .resize({ width: 64, height: 64, fit: "cover" })
-              .jpeg({ quality: 70 })
-              .toBuffer();
-          } catch {
-            storedBody = file.buffer;
-            storedMime = "image/gif";
-            storedSize = file.size;
-            thumb = null;
-          }
-        } else {
-          try {
-            const image = sharp(file.buffer);
-            const meta = await image.metadata().catch(() => null);
-            if (meta?.width && meta?.height) { width = meta.width; height = meta.height; }
-
-            storedBody = await image
-              .resize({ width: 256, height: 256, fit: "cover" })
-              .png({ quality: 85 })
-              .toBuffer();
-            storedMime = "image/png";
-            storedSize = storedBody.length;
-
-            thumb = await sharp(file.buffer)
-              .resize({ width: 64, height: 64, fit: "cover" })
-              .jpeg({ quality: 70 })
-              .toBuffer();
-          } catch {
-            res.status(400).json({ error: "invalid_file", message: "Could not process image. Please upload a valid image under the size limit." });
-            return;
-          }
+        try {
+          const meta = await sharp(file.buffer, { animated: isAnimated }).metadata().catch(() => null);
+          if (meta?.width && meta?.height) { width = meta.width; height = meta.height; }
+          storedBody = await sharp(file.buffer, { animated: isAnimated })
+            .resize({ width: 256, height: 256, fit: "cover" })
+            .avif()
+            .toBuffer();
+          storedSize = storedBody.length;
+          thumb = await sharp(file.buffer, { animated: isAnimated })
+            .resize({ width: 64, height: 64, fit: "cover" })
+            .avif({ quality: 50 })
+            .toBuffer();
+        } catch {
+          res.status(400).json({ error: "invalid_file", message: "Could not process image. Please upload a valid image under the size limit." });
+          return;
         }
 
         // Upload main object
@@ -219,9 +204,9 @@ uploadsRouter.post(
 
         // Upload thumbnail (best-effort; don't fail the avatar on thumb issues)
         if (thumb) {
-          thumbKey = `avatars/thumb_${fileId}.jpg`;
+          thumbKey = `avatars/thumb_${fileId}.avif`;
           try {
-            await putObject({ bucket, key: thumbKey, body: thumb, contentType: "image/jpeg" });
+            await putObject({ bucket, key: thumbKey, body: thumb, contentType: "image/avif" });
           } catch (e) {
             const msg = (e instanceof Error && e.message.trim().length > 0) ? e.message : "S3 upload failed.";
             console.error("avatar_thumb_s3_error", { bucket, key: thumbKey, message: msg });
@@ -298,7 +283,9 @@ uploadsRouter.get(
           return;
         }
 
-        const contentType = useThumb ? "image/jpeg" : (fileMeta.mime || undefined);
+        const contentType = useThumb
+          ? (fileMeta.thumbnail_key?.endsWith(".avif") ? "image/avif" : "image/jpeg")
+          : (fileMeta.mime || undefined);
         if (contentType) res.setHeader("Content-Type", contentType);
         res.setHeader("Cache-Control", "public, max-age=60");
         res.setHeader("Accept-Ranges", "bytes");
