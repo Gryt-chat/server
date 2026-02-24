@@ -8,6 +8,8 @@ import { putObject, deleteObject, getObject } from "../storage/s3";
 import { insertEmoji, getEmoji, listEmojis, deleteEmoji, renameEmoji } from "../db/emojis";
 import { requireBearerToken } from "../middleware/requireBearerToken";
 import { getServerRole } from "../db/servers";
+import { broadcastCustomEmojisUpdate } from "../socket";
+import { DEFAULT_EMOJI_MAX_BYTES, getServerConfig } from "../db/scylla";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
@@ -35,16 +37,25 @@ function extToMime(ext: string): string {
   return "application/octet-stream";
 }
 
-async function processEmojiToAvif(
+async function processEmojiToOptimizedImage(
   buffer: Buffer,
   mime: string,
 ): Promise<{ processed: Buffer; ext: string; contentType: string }> {
   const animated = ANIMATED_MIME_SET.has(mime);
-  const processed = await sharp(buffer, { animated })
+  const startedAt = Date.now();
+  console.log("[EmojiProcess] start", { mime, animated, bytes: buffer.length });
+  const pipeline = sharp(buffer, { animated })
     // Keep aspect ratio; only shrink to max height 128 (width unrestricted).
-    .resize({ height: 128, withoutEnlargement: true })
-    .avif()
-    .toBuffer();
+    .resize({ height: 128, withoutEnlargement: true });
+
+  if (animated) {
+    const processed = await pipeline.webp({ effort: 6 }).toBuffer();
+    console.log("[EmojiProcess] done", { mime, animated, outExt: "webp", outBytes: processed.length, ms: Date.now() - startedAt });
+    return { processed, ext: "webp", contentType: "image/webp" };
+  }
+
+  const processed = await pipeline.avif().toBuffer();
+  console.log("[EmojiProcess] done", { mime, animated, outExt: "avif", outBytes: processed.length, ms: Date.now() - startedAt });
   return { processed, ext: "avif", contentType: "image/avif" };
 }
 
@@ -56,6 +67,9 @@ emojisRouter.get(
     Promise.resolve()
       .then(async () => {
         const emojis = await listEmojis();
+        // Prevent stale emoji lists in browsers/proxies.
+        res.setHeader("Cache-Control", "no-store");
+        res.setHeader("Pragma", "no-cache");
         res.json(emojis.map((e) => ({ name: e.name, file_id: e.file_id })));
       })
       .catch(next);
@@ -84,6 +98,10 @@ emojisRouter.post(
           res.status(403).json({ error: "forbidden", message: "Only admins can upload custom emojis." });
           return;
         }
+
+        const cfg = await getServerConfig().catch(() => null);
+        const maxEmojiBytes = cfg?.emoji_max_bytes ?? DEFAULT_EMOJI_MAX_BYTES;
+        console.log("[EmojiUpload] Emoji max bytes:", maxEmojiBytes);
 
         const fileMap = req.files as Record<string, Express.Multer.File[]> | undefined;
         const singleFiles = fileMap?.["file"] || [];
@@ -132,7 +150,7 @@ emojisRouter.post(
                 if (archivePath.startsWith("__MACOSX/") || archivePath.endsWith("/")) continue;
                 const filename = archivePath.split("/").pop() || archivePath;
                 if (!IMAGE_EXT_RE.test(filename)) { console.log("[EmojiUpload] Zip: skipping non-image:", filename); continue; }
-                if (data.length === 0 || data.length > 5 * 1024 * 1024) { console.log("[EmojiUpload] Zip: skipping bad size:", filename, data.length); continue; }
+                if (data.length === 0 || data.length > maxEmojiBytes) { console.log("[EmojiUpload] Zip: skipping bad size:", filename, data.length); continue; }
                 const ext = (filename.split(".").pop() || "png").toLowerCase();
                 entries.push({ buffer: Buffer.from(data), mime: extToMime(ext), name: deriveEmojiName(filename) });
               }
@@ -140,7 +158,7 @@ emojisRouter.post(
               console.error("[EmojiUpload] Failed to extract zip:", file.originalname, err);
             }
           } else if ((file.mimetype || "").startsWith("image/")) {
-            if (file.size > 5 * 1024 * 1024) { console.warn("[EmojiUpload] Skipping oversized image:", file.originalname, file.size); nameIdx++; continue; }
+            if (file.size > maxEmojiBytes) { console.warn("[EmojiUpload] Skipping oversized image:", file.originalname, file.size); nameIdx++; continue; }
             entries.push({
               buffer: file.buffer,
               mime: file.mimetype || "image/png",
@@ -179,7 +197,7 @@ emojisRouter.post(
               await deleteObject({ bucket, key: existingEmoji.s3_key }).catch(() => {});
             }
             console.log("[EmojiUpload] Processing image:", { name: entry.name, mime: entry.mime, bufferSize: entry.buffer.length });
-            const { processed, ext, contentType } = await processEmojiToAvif(entry.buffer, entry.mime.toLowerCase());
+            const { processed, ext, contentType } = await processEmojiToOptimizedImage(entry.buffer, entry.mime.toLowerCase());
             console.log("[EmojiUpload] Sharp resize done:", { name: entry.name, ext, processedSize: processed.length });
 
             const fileId = uuidv4();
@@ -205,6 +223,7 @@ emojisRouter.post(
         if (!isBatchRequest && results.length === 1) {
           const r = results[0];
           if (r.ok) {
+            broadcastCustomEmojisUpdate();
             res.status(201).json({ name: r.name, file_id: r.file_id });
           } else {
             const status = r.error === "emoji_exists" ? 409 : 400;
@@ -215,6 +234,7 @@ emojisRouter.post(
 
         const successCount = results.filter(r => r.ok).length;
         console.log("[EmojiUpload] Batch complete — success:", successCount, "total:", results.length);
+        if (successCount > 0) broadcastCustomEmojisUpdate();
         res.status(successCount > 0 ? 201 : 400).json({ results });
       })
       .catch((err) => {
@@ -298,6 +318,7 @@ emojisRouter.patch(
         }
 
         await renameEmoji(oldName, newName);
+        broadcastCustomEmojisUpdate();
         res.json({ ok: true, name: newName });
       })
       .catch(next);
@@ -466,7 +487,7 @@ emojisRouter.post(
             const sourceMime = emote.imageType === "gif" ? "image/gif"
               : emote.imageType === "webp" ? "image/webp"
               : "image/png";
-            const { processed, ext, contentType } = await processEmojiToAvif(imgBuffer, sourceMime);
+            const { processed, ext, contentType } = await processEmojiToOptimizedImage(imgBuffer, sourceMime);
 
             const fileId = uuidv4();
             const key = `emojis/${name}.${ext}`;
@@ -482,6 +503,7 @@ emojisRouter.post(
         }
 
         const successCount = results.filter(r => r.ok).length;
+        if (successCount > 0) broadcastCustomEmojisUpdate();
         res.status(successCount > 0 ? 201 : 400).json({ results });
       })
       .catch(next);
@@ -524,6 +546,7 @@ emojisRouter.delete(
           }
         }
 
+        if (deleted > 0) broadcastCustomEmojisUpdate();
         res.json({ ok: true, deleted });
       })
       .catch(next);
@@ -560,6 +583,7 @@ emojisRouter.delete(
         }
 
         await deleteEmoji(name);
+        broadcastCustomEmojisUpdate();
         res.json({ ok: true });
       })
       .catch(next);

@@ -9,6 +9,7 @@ const scrypt = promisify(scryptCb);
 
 export const DEFAULT_AVATAR_MAX_BYTES = 5 * 1024 * 1024; // 5MB
 export const DEFAULT_UPLOAD_MAX_BYTES = 20 * 1024 * 1024; // 20MB (matches typical reverse proxy defaults)
+export const DEFAULT_EMOJI_MAX_BYTES = 5 * 1024 * 1024; // 5MB
 export const DEFAULT_VOICE_MAX_BITRATE_BPS = 96_000; // 96kbps Opus cap (low-latency friendly default)
 
 import type { CensorStyle, ProfanityMode } from "../utils/profanityFilter";
@@ -25,6 +26,7 @@ export interface ServerConfigRecord {
   password_algo: string | null; // e.g. "scrypt"
   avatar_max_bytes: number | null;
   upload_max_bytes: number | null;
+  emoji_max_bytes: number | null;
   voice_max_bitrate_bps: number | null;
   profanity_mode: ProfanityMode;
   profanity_censor_style: CensorStyle;
@@ -54,6 +56,7 @@ function rowToServerConfig(r: types.Row): ServerConfigRecord {
     password_algo: r["password_algo"] ?? null,
     avatar_max_bytes: typeof r["avatar_max_bytes"] === "number" ? r["avatar_max_bytes"] : (r["avatar_max_bytes"] == null ? null : Number(r["avatar_max_bytes"])),
     upload_max_bytes: typeof r["upload_max_bytes"] === "number" ? r["upload_max_bytes"] : (r["upload_max_bytes"] == null ? null : Number(r["upload_max_bytes"])),
+    emoji_max_bytes: typeof r["emoji_max_bytes"] === "number" ? r["emoji_max_bytes"] : (r["emoji_max_bytes"] == null ? null : Number(r["emoji_max_bytes"])),
     voice_max_bitrate_bps: typeof r["voice_max_bitrate_bps"] === "number" ? r["voice_max_bitrate_bps"] : (r["voice_max_bitrate_bps"] == null ? null : Number(r["voice_max_bitrate_bps"])),
     profanity_mode: normalizeProfanityMode(r["profanity_mode"]),
     profanity_censor_style: normalizeCensorStyle(r["profanity_censor_style"]),
@@ -82,7 +85,7 @@ const SERVER_CONFIG_ID = "config";
 export async function getServerConfig(): Promise<ServerConfigRecord | null> {
   const c = getScyllaClient();
   const rs = await c.execute(
-    `SELECT owner_gryt_user_id, token_version, display_name, description, icon_url, password_salt, password_hash, password_algo, avatar_max_bytes, upload_max_bytes, voice_max_bitrate_bps, profanity_mode, profanity_censor_style, is_configured, created_at, updated_at
+    `SELECT owner_gryt_user_id, token_version, display_name, description, icon_url, password_salt, password_hash, password_algo, avatar_max_bytes, upload_max_bytes, emoji_max_bytes, voice_max_bitrate_bps, profanity_mode, profanity_censor_style, is_configured, created_at, updated_at
      FROM server_config_singleton WHERE id = ?`,
     [SERVER_CONFIG_ID],
     { prepare: true }
@@ -104,9 +107,9 @@ export async function createServerConfigIfNotExists(seed?: {
   const iconUrl = seed?.iconUrl ?? null;
 
   const rs = await c.execute(
-    `INSERT INTO server_config_singleton (id, owner_gryt_user_id, token_version, display_name, description, icon_url, password_salt, password_hash, password_algo, avatar_max_bytes, upload_max_bytes, voice_max_bitrate_bps, profanity_mode, profanity_censor_style, is_configured, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) IF NOT EXISTS`,
-    [SERVER_CONFIG_ID, null, 0, displayName, description, iconUrl, null, null, null, DEFAULT_AVATAR_MAX_BYTES, DEFAULT_UPLOAD_MAX_BYTES, DEFAULT_VOICE_MAX_BITRATE_BPS, "censor", "emoji", false, now, now],
+    `INSERT INTO server_config_singleton (id, owner_gryt_user_id, token_version, display_name, description, icon_url, password_salt, password_hash, password_algo, avatar_max_bytes, upload_max_bytes, emoji_max_bytes, voice_max_bitrate_bps, profanity_mode, profanity_censor_style, is_configured, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) IF NOT EXISTS`,
+    [SERVER_CONFIG_ID, null, 0, displayName, description, iconUrl, null, null, null, DEFAULT_AVATAR_MAX_BYTES, DEFAULT_UPLOAD_MAX_BYTES, DEFAULT_EMOJI_MAX_BYTES, DEFAULT_VOICE_MAX_BITRATE_BPS, "censor", "emoji", false, now, now],
     { prepare: true }
   );
 
@@ -123,6 +126,7 @@ export async function createServerConfigIfNotExists(seed?: {
     password_algo: null,
     avatar_max_bytes: DEFAULT_AVATAR_MAX_BYTES,
     upload_max_bytes: DEFAULT_UPLOAD_MAX_BYTES,
+    emoji_max_bytes: DEFAULT_EMOJI_MAX_BYTES,
     voice_max_bitrate_bps: DEFAULT_VOICE_MAX_BITRATE_BPS,
     profanity_mode: "censor",
     profanity_censor_style: "emoji",
@@ -252,6 +256,7 @@ export async function updateServerConfig(patch: {
   passwordAlgo?: string | null;
   avatarMaxBytes?: number | null;
   uploadMaxBytes?: number | null;
+  emojiMaxBytes?: number | null;
   voiceMaxBitrateBps?: number | null;
   profanityMode?: ProfanityMode;
   profanityCensorStyle?: CensorStyle;
@@ -271,6 +276,7 @@ export async function updateServerConfig(patch: {
     passwordAlgo: { col: "password_algo" },
     avatarMaxBytes: { col: "avatar_max_bytes" },
     uploadMaxBytes: { col: "upload_max_bytes" },
+    emojiMaxBytes: { col: "emoji_max_bytes" },
     voiceMaxBitrateBps: { col: "voice_max_bitrate_bps" },
     profanityMode: { col: "profanity_mode", transform: (v) => normalizeProfanityMode(v) },
     profanityCensorStyle: { col: "profanity_censor_style", transform: (v) => normalizeCensorStyle(v as string) },

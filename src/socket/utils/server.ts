@@ -37,6 +37,12 @@ export function broadcastServerUiUpdate(reason: "settings" | "icon" | "other" = 
   broadcastMemberList(_io, _clientsInfo, _serverId).catch(() => undefined);
 }
 
+export function broadcastCustomEmojisUpdate(): void {
+  if (!_io) return;
+  consola.info("Broadcasting custom emojis update");
+  _io.to("verifiedClients").emit("server:emojis:updated");
+}
+
 const sfuHostsRaw = process.env.SFU_PUBLIC_HOST || process.env.SFU_WS_HOST || "";
 const sfuHosts = sfuHostsRaw.split(",").map(h => h.trim()).filter(Boolean);
 const sfuHost = sfuHosts[0] || undefined;

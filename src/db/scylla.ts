@@ -54,6 +54,7 @@ export async function initScylla(): Promise<void> {
       password_algo text,
       avatar_max_bytes bigint,
       upload_max_bytes bigint,
+      emoji_max_bytes bigint,
       voice_max_bitrate_bps int,
       is_configured boolean,
       created_at timestamp,
@@ -75,6 +76,7 @@ export async function initScylla(): Promise<void> {
   };
   await addCfgCol("avatar_max_bytes bigint");
   await addCfgCol("upload_max_bytes bigint");
+  await addCfgCol("emoji_max_bytes bigint");
   await addCfgCol("voice_max_bitrate_bps int");
   await addCfgCol("profanity_mode text");
   await addCfgCol("profanity_censor_style text");

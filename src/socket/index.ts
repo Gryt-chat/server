@@ -7,7 +7,7 @@ import type { SFUPeerEvent, SFUSyncRoom } from "../sfu/client";
 import { verifyAccessToken } from "../utils/jwt";
 import { getUserByServerId, getServerConfig } from "../db/scylla";
 import { syncAllClients, verifyClient, broadcastMemberList, countOtherSessions } from "./utils/clients";
-import { sendInfo, sendServerDetails, setSocketRefs, broadcastServerUiUpdate } from "./utils/server";
+import { sendInfo, sendServerDetails, setSocketRefs, broadcastCustomEmojisUpdate, broadcastServerUiUpdate } from "./utils/server";
 import { getServerIdFromEnv } from "../utils/serverId";
 
 import type { HandlerContext, EventHandlerMap } from "./handlers/types";
@@ -20,7 +20,7 @@ import { registerDiagnosticsHandlers } from "./handlers/diagnostics";
 import { registerVoiceLatencyHandlers } from "./handlers/voiceLatency";
 import { registerReportHandlers } from "./handlers/reports";
 
-export { broadcastServerUiUpdate };
+export { broadcastCustomEmojisUpdate, broadcastServerUiUpdate };
 
 const clientsInfo: Clients = {};
 

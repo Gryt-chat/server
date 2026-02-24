@@ -12,6 +12,7 @@ import {
   incrementServerTokenVersion,
   hashServerPassword,
   DEFAULT_AVATAR_MAX_BYTES,
+  DEFAULT_EMOJI_MAX_BYTES,
   DEFAULT_UPLOAD_MAX_BYTES,
   createServerInvite,
   listServerInvites,
@@ -72,6 +73,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           hasPassword: !!(cfg.password_hash && cfg.password_salt) || !!(process.env.SERVER_PASSWORD?.trim()),
           avatarMaxBytes: cfg.avatar_max_bytes ?? DEFAULT_AVATAR_MAX_BYTES,
           uploadMaxBytes: cfg.upload_max_bytes ?? DEFAULT_UPLOAD_MAX_BYTES,
+          emojiMaxBytes: cfg.emoji_max_bytes ?? DEFAULT_EMOJI_MAX_BYTES,
           profanityMode: cfg.profanity_mode ?? "censor",
           profanityCensorStyle: cfg.profanity_censor_style ?? "emoji",
         });
@@ -90,6 +92,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       clearPassword?: boolean;
       avatarMaxBytes?: number | null;
       uploadMaxBytes?: number | null;
+      emojiMaxBytes?: number | null;
       profanityMode?: string;
       profanityCensorStyle?: string;
     }) => {
@@ -114,6 +117,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
 
         const avatarMaxBytes = clampBytes(payload.avatarMaxBytes, 256 * 1024, 50 * 1024 * 1024);
         const uploadMaxBytes = clampBytes(payload.uploadMaxBytes, 256 * 1024, 200 * 1024 * 1024);
+        const emojiMaxBytes = clampBytes(payload.emojiMaxBytes, 64 * 1024, 200 * 1024 * 1024);
 
         const validProfanityModes = ["off", "flag", "censor", "block"] as const;
         const profanityMode = typeof payload.profanityMode === "string" && validProfanityModes.includes(payload.profanityMode as typeof validProfanityModes[number])
@@ -142,6 +146,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           iconUrl, passwordSalt, passwordHash, passwordAlgo, isConfigured: true,
           avatarMaxBytes,
           uploadMaxBytes,
+          emojiMaxBytes,
           profanityMode,
           profanityCensorStyle,
         });
@@ -186,6 +191,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           hasPassword: !!(updated.password_hash && updated.password_salt) || !!(process.env.SERVER_PASSWORD?.trim()),
           avatarMaxBytes: updated.avatar_max_bytes ?? DEFAULT_AVATAR_MAX_BYTES,
           uploadMaxBytes: updated.upload_max_bytes ?? DEFAULT_UPLOAD_MAX_BYTES,
+          emojiMaxBytes: updated.emoji_max_bytes ?? DEFAULT_EMOJI_MAX_BYTES,
           profanityMode: updated.profanity_mode ?? "censor",
           profanityCensorStyle: updated.profanity_censor_style ?? "emoji",
         });
