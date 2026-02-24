@@ -338,6 +338,51 @@ interface BttvEmoteInput {
 }
 
 emojisRouter.get(
+  "/bttv/file/:emoteId",
+  (req: Request, res: Response, next: NextFunction): void => {
+    const { emoteId } = req.params;
+    if (!emoteId || !/^[a-f0-9]{20,30}$/.test(emoteId)) {
+      res.status(400).json({ error: "invalid_emote_id" });
+      return;
+    }
+
+    Promise.resolve()
+      .then(async () => {
+        const cfg = await getServerConfig().catch(() => null);
+        const maxEmojiBytes = cfg?.emoji_max_bytes ?? DEFAULT_EMOJI_MAX_BYTES;
+
+        const cdnResp = await fetch(`${BTTV_CDN}/${emoteId}/3x`);
+        if (!cdnResp.ok) {
+          res.status(cdnResp.status).json({
+            error: "bttv_cdn_fetch_failed",
+            message: `CDN returned ${cdnResp.status}`,
+          });
+          return;
+        }
+
+        const arrayBuf = await cdnResp.arrayBuffer();
+        const bytes = Buffer.from(arrayBuf);
+
+        if (bytes.length > maxEmojiBytes) {
+          res.status(413).json({
+            error: "emoji_too_large",
+            message: `Emoji is larger than max allowed (${maxEmojiBytes} bytes).`,
+            bytes: bytes.length,
+            maxBytes: maxEmojiBytes,
+          });
+          return;
+        }
+
+        const contentType = cdnResp.headers.get("content-type") ?? "application/octet-stream";
+        res.setHeader("Cache-Control", "no-store");
+        res.setHeader("Content-Type", contentType);
+        res.end(bytes);
+      })
+      .catch(next);
+  },
+);
+
+emojisRouter.get(
   "/bttv/emote/:emoteId",
   (req: Request, res: Response, next: NextFunction): void => {
     const { emoteId } = req.params;
