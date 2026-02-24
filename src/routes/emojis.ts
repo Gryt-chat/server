@@ -11,14 +11,14 @@ import { getServerRole } from "../db/servers";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
-const EMOJI_NAME_RE = /^[a-z0-9_]{2,32}$/;
+const EMOJI_NAME_RE = /^[A-Za-z0-9_]{2,32}$/;
 const IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|svg|avif)$/i;
 const ZIP_MIME_RE = /^application\/(zip|x-zip|x-zip-compressed)$/;
 const ANIMATED_MIME_SET = new Set(["image/gif", "image/webp", "image/avif"]);
 
 function deriveEmojiName(filename: string): string {
   const base = filename.replace(/\.[^.]+$/, "").replace(/^\d+[-_]/, "");
-  const sanitized = base.toLowerCase().replace(/[^a-z0-9_]/g, "_");
+  const sanitized = base.replace(/[^A-Za-z0-9_]/g, "_");
   const trimmed = sanitized.replace(/^_+|_+$/g, "").replace(/_{2,}/g, "_");
   if (trimmed.length < 2) return trimmed.padEnd(2, "_");
   return trimmed.slice(0, 32);
@@ -101,7 +101,7 @@ emojisRouter.post(
         if (typeof req.body?.names === "string") {
           try {
             const parsed = JSON.parse(req.body.names);
-            if (Array.isArray(parsed)) names = parsed.map((n: unknown) => typeof n === "string" ? n.trim().toLowerCase() : "");
+            if (Array.isArray(parsed)) names = parsed.map((n: unknown) => typeof n === "string" ? n.trim() : "");
             console.log("[EmojiUpload] Parsed names from body:", names);
           } catch {
             console.warn("[EmojiUpload] Failed to parse names JSON:", req.body.names);
@@ -109,7 +109,7 @@ emojisRouter.post(
             return;
           }
         } else if (typeof req.body?.name === "string") {
-          names = [req.body.name.trim().toLowerCase()];
+          names = [req.body.name.trim()];
           console.log("[EmojiUpload] Single name from body:", names[0]);
         } else {
           console.log("[EmojiUpload] No names in body — will derive from filenames");
@@ -264,11 +264,11 @@ emojisRouter.patch(
   express.json(),
   (req: Request, res: Response, next: NextFunction): void => {
     const oldName = req.params.name;
-    const newName = typeof req.body?.name === "string" ? req.body.name.trim().toLowerCase() : "";
+    const newName = typeof req.body?.name === "string" ? req.body.name.trim() : "";
 
     if (!oldName) { res.status(400).json({ error: "name_required" }); return; }
     if (!newName || !EMOJI_NAME_RE.test(newName)) {
-      res.status(400).json({ error: "invalid_name", message: "Name must be 2-32 lowercase letters, numbers, or underscores." });
+      res.status(400).json({ error: "invalid_name", message: "Name must be 2-32 letters (case-sensitive), numbers, or underscores." });
       return;
     }
     if (oldName === newName) { res.json({ ok: true, name: newName }); return; }
@@ -383,7 +383,7 @@ emojisRouter.post(
         const results: Array<{ name: string; file_id?: string; ok: boolean; error?: string; message?: string }> = [];
 
         for (const emote of emotes) {
-          const name = emote.name?.trim().toLowerCase();
+          const name = emote.name?.trim();
           if (!name || !EMOJI_NAME_RE.test(name)) {
             results.push({ name: name || emote.code, ok: false, error: "invalid_name", message: "Invalid emoji name." });
             continue;
