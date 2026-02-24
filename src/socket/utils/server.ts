@@ -267,7 +267,6 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
   let cfgName = process.env.SERVER_NAME || "Unknown Server";
   let cfgDesc = process.env.SERVER_DESCRIPTION || "A Gryt server";
   let cfgIconUrl: string | null = null;
-  let cfgHasPassword = !!(process.env.SERVER_PASSWORD && process.env.SERVER_PASSWORD.trim().length > 0);
   let cfgAvatarMaxBytes: number = DEFAULT_AVATAR_MAX_BYTES;
   let cfgUploadMaxBytes: number = DEFAULT_UPLOAD_MAX_BYTES;
   let isOwner = false;
@@ -277,7 +276,6 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
     if (cfg?.display_name) cfgName = cfg.display_name;
     if (cfg?.description) cfgDesc = cfg.description;
     if (cfg?.icon_url) cfgIconUrl = cfg.icon_url;
-    cfgHasPassword = cfgHasPassword || !!(cfg?.password_hash && cfg?.password_salt);
     if (typeof cfg?.avatar_max_bytes === "number") cfgAvatarMaxBytes = cfg.avatar_max_bytes;
     if (typeof cfg?.upload_max_bytes === "number") cfgUploadMaxBytes = cfg.upload_max_bytes;
     isOwner = !!(cfg?.owner_gryt_user_id && cfg.owner_gryt_user_id === client.grytUserId);
@@ -304,7 +302,6 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
       name: cfgName,
       description: cfgDesc,
       icon_url: cfgIconUrl,
-      has_password: cfgHasPassword,
       is_owner: isOwner,
       role,
       max_members: parseInt(process.env.MAX_MEMBERS || "100"),

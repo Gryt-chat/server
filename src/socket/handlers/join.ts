@@ -7,10 +7,10 @@ import { generateAccessToken, TokenPayload } from "../../utils/jwt";
 import {
   getServerConfig,
   createServerConfigIfNotExists,
+  claimServerOwner,
   getUserByGrytId,
   upsertUser,
   consumeServerInvite,
-  verifyServerPassword,
   getServerRole,
   setServerRole,
   createRefreshToken,
@@ -19,12 +19,13 @@ import {
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 import {
   registerJoinHelpers,
-  getPasswordCooldownKey,
-  getPasswordCooldownState,
-  clearPasswordCooldown,
-  applyPasswordFailure,
-  getIpCooldownState,
-  applyIpFailure,
+  applyInviteFailure,
+  applyInviteIpFailure,
+  clearInviteCooldown,
+  clearInviteIpCooldown,
+  getInviteCooldownKey,
+  getInviteCooldownState,
+  getInviteIpCooldownState,
 } from "./joinHelpers";
 
 // ── Rate limit rules ────────────────────────────────────────────────
@@ -45,7 +46,6 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
     ...helpers,
 
     'server:join': async (payload: {
-      password?: string;
       nickname?: string;
       identityToken?: string;
       inviteCode?: string;
@@ -115,23 +115,24 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
         // Existing active members skip password
         const existingMember = await getUserByGrytId(grytUserId);
         const isActiveMember = !!(existingMember && existingMember.is_active);
+        let claimedOwnerGrytUserId: string | null | undefined;
 
         if (!isActiveMember) {
           const ip = getClientIp();
-          const pwKey = getPasswordCooldownKey(ip, grytUserId);
+          const inviteKey = getInviteCooldownKey(ip, grytUserId);
           const now = Date.now();
-          const pwState = getPasswordCooldownState(pwKey, now);
-          const ipState = getIpCooldownState(ip, now);
-          const pwLocked = !!(pwState.cooldownUntilMs && now < pwState.cooldownUntilMs);
+          const inviteState = getInviteCooldownState(inviteKey, now);
+          const ipState = getInviteIpCooldownState(ip, now);
+          const inviteLocked = !!(inviteState.cooldownUntilMs && now < inviteState.cooldownUntilMs);
           const ipLocked = !!(ipState.cooldownUntilMs && now < ipState.cooldownUntilMs);
-          if (pwLocked || ipLocked) {
+          if (inviteLocked || ipLocked) {
             const retryAfterMs = Math.max(
-              pwLocked ? pwState.cooldownUntilMs - now : 0,
+              inviteLocked ? inviteState.cooldownUntilMs - now : 0,
               ipLocked ? ipState.cooldownUntilMs - now : 0,
             );
             socket.emit("server:error", {
-              error: "password_rate_limited",
-              message: "Too many incorrect attempts. Please wait.",
+              error: "invite_rate_limited",
+              message: "Too many incorrect invite attempts. Please wait.",
               retryAfterMs: Math.max(0, retryAfterMs),
               canReapply: true,
             });
@@ -139,7 +140,6 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           }
 
           const inviteCode = typeof payload.inviteCode === "string" ? payload.inviteCode.trim() : "";
-          let inviteAccepted = false;
           if (inviteCode) {
             const consumed = await consumeServerInvite(inviteCode);
             if (!consumed.ok) {
@@ -148,57 +148,33 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
                   : consumed.reason === "revoked" ? "That invite code has been revoked."
                     : consumed.reason === "used_up" ? "No uses remaining."
                       : "Invalid invite code.";
-              socket.emit("server:error", { error: "invalid_invite", message: msg, canReapply: true });
-              return;
-            }
-            inviteAccepted = true;
-            clearPasswordCooldown(pwKey);
-          }
-
-          const envPassword = (process.env.SERVER_PASSWORD || "").trim();
-          const dbHasPassword = !!(cfg?.password_hash && cfg?.password_salt);
-
-          if (!inviteAccepted && dbHasPassword) {
-            const provided = typeof payload.password === "string" ? payload.password : "";
-            if (!provided) {
-              socket.emit("server:error", { error: "password_required", message: "Password required.", canReapply: true });
-              return;
-            }
-            const ok = await verifyServerPassword(provided, cfg!.password_salt!, cfg!.password_hash!);
-            if (!ok) {
-              const lock = applyPasswordFailure(pwKey);
-              const ipLock = applyIpFailure(ip);
+              const lock = applyInviteFailure(inviteKey);
+              const ipLock = applyInviteIpFailure(ip);
               const isLocked = lock.locked || ipLock.locked;
               const retryAfterMs = Math.max(lock.retryAfterMs, ipLock.retryAfterMs);
               socket.emit("server:error", {
-                error: isLocked ? "password_rate_limited" : "invalid_password",
-                message: isLocked ? "Too many attempts. Please wait." : "Invalid password.",
-                retryAfterMs: retryAfterMs || undefined,
+                error: isLocked ? "invite_rate_limited" : "invalid_invite",
+                message: isLocked ? "Too many incorrect invite attempts. Please wait." : msg,
+                retryAfterMs: isLocked ? (retryAfterMs || undefined) : undefined,
                 canReapply: true,
               });
               return;
             }
-            clearPasswordCooldown(pwKey);
-          } else if (!inviteAccepted && envPassword) {
-            const provided = typeof payload.password === "string" ? payload.password : "";
-            if (!provided) {
-              socket.emit("server:error", { error: "password_required", message: "Password required.", canReapply: true });
-              return;
-            }
-            if (provided !== envPassword) {
-              const lock = applyPasswordFailure(pwKey);
-              const ipLock = applyIpFailure(ip);
-              const isLocked = lock.locked || ipLock.locked;
-              const retryAfterMs = Math.max(lock.retryAfterMs, ipLock.retryAfterMs);
+            clearInviteCooldown(inviteKey);
+            clearInviteIpCooldown(ip);
+          } else {
+            const claimed = await claimServerOwner(grytUserId);
+            claimedOwnerGrytUserId = claimed.owner;
+            if (claimedOwnerGrytUserId !== grytUserId) {
               socket.emit("server:error", {
-                error: isLocked ? "password_rate_limited" : "invalid_password",
-                message: isLocked ? "Too many attempts. Please wait." : "Invalid password.",
-                retryAfterMs: retryAfterMs || undefined,
+                error: "invite_required",
+                message: "Invite required to join this server.",
                 canReapply: true,
               });
               return;
             }
-            clearPasswordCooldown(pwKey);
+            clearInviteCooldown(inviteKey);
+            clearInviteIpCooldown(ip);
           }
         }
 
@@ -211,7 +187,7 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
         }
 
         const user = await upsertUser(grytUserId, nickname.trim());
-        const isOwner = (cfg?.owner_gryt_user_id || null) === grytUserId;
+        const isOwner = ((claimedOwnerGrytUserId ?? cfg?.owner_gryt_user_id) || null) === grytUserId;
         const setupRequired = isOwner && !cfg?.is_configured;
         const tokenVersion = cfg?.token_version ?? 0;
 
@@ -266,7 +242,6 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
               displayName: cfg?.display_name || process.env.SERVER_NAME || "Unknown Server",
               description: cfg?.description || process.env.SERVER_DESCRIPTION || "A Gryt server",
               iconUrl: cfg?.icon_url || null,
-              hasPassword: !!(cfg?.password_hash && cfg?.password_salt) || !!(process.env.SERVER_PASSWORD?.trim()),
               isConfigured: !!cfg?.is_configured,
             },
           });

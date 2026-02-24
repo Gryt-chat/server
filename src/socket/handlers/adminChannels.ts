@@ -18,6 +18,10 @@ import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 
 const RL_SETTINGS: RateLimitRule = { limit: 30, windowMs: 60_000, scorePerAction: 1, maxScore: 20, scoreDecayMs: 3_000 };
 
+function voiceRoomName(serverId: string, channelId: string): string {
+  return `voice:${serverId}:${channelId}`;
+}
+
 function rlCheck(event: string, ctx: HandlerContext, rule: RateLimitRule) {
   const ip = ctx.getClientIp();
   const userId = ctx.clientsInfo[ctx.clientId]?.serverUserId;
@@ -124,11 +128,13 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
         } catch { /* ignore */ }
 
         if (channelType === "voice") {
+          const roomName = voiceRoomName(serverId, channelId);
           for (const [sid, s] of io.sockets.sockets) {
             const ci = clientsInfo[sid];
             if (!ci?.grytUserId || !ci.hasJoinedChannel) continue;
             if (ci.voiceChannelId !== channelId) continue;
             try {
+              s.leave(roomName);
               s.emit("voice:channel:joined", false);
               s.emit("voice:stream:set", "");
               s.emit("voice:room:leave");

@@ -10,6 +10,7 @@ export interface ServerInviteRecord {
   expires_at: Date | null;
   max_uses: number;
   uses_remaining: number;
+  uses_consumed: number;
   revoked: boolean;
   note: string | null;
 }
@@ -24,13 +25,28 @@ export interface ServerAuditRecord {
 }
 
 function rowToServerInvite(r: types.Row): ServerInviteRecord {
+  const maxUsesRaw = typeof r["max_uses"] === "number" ? r["max_uses"] : 1;
+  const usesRemainingRaw = typeof r["uses_remaining"] === "number" ? r["uses_remaining"] : 0;
+  const usesConsumedRaw = typeof r["uses_consumed"] === "number" ? r["uses_consumed"] : null;
+
+  const isInfinite = maxUsesRaw < 0 || usesRemainingRaw < 0;
+  const max_uses = isInfinite ? -1 : maxUsesRaw;
+  const uses_remaining = isInfinite ? -1 : usesRemainingRaw;
+  const uses_consumed =
+    typeof usesConsumedRaw === "number"
+      ? usesConsumedRaw
+      : isInfinite
+        ? 0
+        : Math.max(0, Math.min(max_uses, max_uses - uses_remaining));
+
   return {
     code: r["code"],
     created_at: r["created_at"] ?? new Date(0),
     created_by_server_user_id: r["created_by_server_user_id"] ?? null,
     expires_at: r["expires_at"] ?? null,
-    max_uses: typeof r["max_uses"] === "number" ? r["max_uses"] : 1,
-    uses_remaining: typeof r["uses_remaining"] === "number" ? r["uses_remaining"] : 0,
+    max_uses,
+    uses_remaining,
+    uses_consumed,
     revoked: typeof r["revoked"] === "boolean" ? r["revoked"] : false,
     note: r["note"] ?? null,
   };
@@ -50,22 +66,25 @@ function generateInviteCode(): string {
 
 export async function createServerInvite(createdByServerUserId: string | null, opts?: {
   expiresAt?: Date | null;
+  infinite?: boolean;
   maxUses?: number;
   note?: string | null;
 }): Promise<ServerInviteRecord> {
   const c = getScyllaClient();
   const now = new Date();
-  const maxUses = Math.max(1, Math.min(1000, Math.floor(opts?.maxUses ?? 1)));
+  const infinite = !!opts?.infinite;
+  const maxUses = infinite ? -1 : Math.max(1, Math.min(1000, Math.floor(opts?.maxUses ?? 1)));
   const expiresAt = opts?.expiresAt ?? null;
   const note = (opts?.note ?? null) ? String(opts?.note).slice(0, 200) : null;
+  const usesRemaining = infinite ? -1 : maxUses;
 
   for (let i = 0; i < 5; i++) {
     const code = generateInviteCode();
     const rs = await c.execute(
       `INSERT INTO server_invites_by_code
-       (code, created_at, created_by_server_user_id, expires_at, max_uses, uses_remaining, revoked, note)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?) IF NOT EXISTS`,
-      [code, now, createdByServerUserId, expiresAt, maxUses, maxUses, false, note],
+       (code, created_at, created_by_server_user_id, expires_at, max_uses, uses_remaining, uses_consumed, revoked, note)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) IF NOT EXISTS`,
+      [code, now, createdByServerUserId, expiresAt, maxUses, usesRemaining, 0, false, note],
       { prepare: true }
     );
     const r = rs.first();
@@ -77,7 +96,8 @@ export async function createServerInvite(createdByServerUserId: string | null, o
         created_by_server_user_id: createdByServerUserId,
         expires_at: expiresAt,
         max_uses: maxUses,
-        uses_remaining: maxUses,
+        uses_remaining: usesRemaining,
+        uses_consumed: 0,
         revoked: false,
         note,
       };
@@ -89,7 +109,7 @@ export async function createServerInvite(createdByServerUserId: string | null, o
 export async function listServerInvites(): Promise<ServerInviteRecord[]> {
   const c = getScyllaClient();
   const rs = await c.execute(
-    `SELECT code, created_at, created_by_server_user_id, expires_at, max_uses, uses_remaining, revoked, note
+    `SELECT code, created_at, created_by_server_user_id, expires_at, max_uses, uses_remaining, uses_consumed, revoked, note
      FROM server_invites_by_code`,
     [],
     { prepare: true }
@@ -113,7 +133,7 @@ export async function consumeServerInvite(code: string): Promise<{ ok: boolean; 
 
   for (let i = 0; i < 5; i++) {
     const rs = await c.execute(
-      `SELECT code, created_at, created_by_server_user_id, expires_at, max_uses, uses_remaining, revoked, note
+      `SELECT code, created_at, created_by_server_user_id, expires_at, max_uses, uses_remaining, uses_consumed, revoked, note
        FROM server_invites_by_code WHERE code = ?`,
       [norm],
       { prepare: true }
@@ -124,21 +144,47 @@ export async function consumeServerInvite(code: string): Promise<{ ok: boolean; 
 
     if (invite.revoked) return { ok: false, reason: "revoked" };
     if (invite.expires_at && invite.expires_at.getTime() <= Date.now()) return { ok: false, reason: "expired" };
-    if ((invite.uses_remaining ?? 0) <= 0) return { ok: false, reason: "used_up" };
+    const isInfinite = invite.max_uses < 0 || invite.uses_remaining < 0;
+    if (!isInfinite && (invite.uses_remaining ?? 0) <= 0) return { ok: false, reason: "used_up" };
 
-    const nextRemaining = invite.uses_remaining - 1;
-    const nextRevoked = nextRemaining <= 0 ? true : false;
-    const lwt = await c.execute(
-      `UPDATE server_invites_by_code
-       SET uses_remaining = ?, revoked = ?
-       WHERE code = ?
-       IF uses_remaining = ? AND revoked = ?`,
-      [nextRemaining, nextRevoked, norm, invite.uses_remaining, false],
-      { prepare: true }
-    );
-    const lr = lwt.first();
-    const applied = !!lr?.["[applied]"];
-    if (applied) return { ok: true };
+    if (!isInfinite) {
+      const nextRemaining = invite.uses_remaining - 1;
+      const nextRevoked = nextRemaining <= 0 ? true : false;
+      const nextConsumed = (invite.uses_consumed ?? 0) + 1;
+      const lwt = await c.execute(
+        `UPDATE server_invites_by_code
+         SET uses_remaining = ?, uses_consumed = ?, revoked = ?
+         WHERE code = ?
+         IF uses_remaining = ? AND revoked = ?`,
+        [nextRemaining, nextConsumed, nextRevoked, norm, invite.uses_remaining, false],
+        { prepare: true }
+      );
+      const lr = lwt.first();
+      const applied = !!lr?.["[applied]"];
+      if (applied) return { ok: true };
+    } else {
+      const rawConsumed = r["uses_consumed"];
+      const currentConsumed = typeof rawConsumed === "number" ? rawConsumed : 0;
+      const nextConsumed = currentConsumed + 1;
+      const lwt = await c.execute(
+        typeof rawConsumed === "number"
+          ? `UPDATE server_invites_by_code
+             SET uses_consumed = ?
+             WHERE code = ?
+             IF uses_consumed = ? AND revoked = ?`
+          : `UPDATE server_invites_by_code
+             SET uses_consumed = ?
+             WHERE code = ?
+             IF uses_consumed = null AND revoked = ?`,
+        typeof rawConsumed === "number"
+          ? [nextConsumed, norm, currentConsumed, false]
+          : [nextConsumed, norm, false],
+        { prepare: true }
+      );
+      const lr = lwt.first();
+      const applied = !!lr?.["[applied]"];
+      if (applied) return { ok: true };
+    }
   }
 
   return { ok: false, reason: "used_up" };

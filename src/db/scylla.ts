@@ -90,10 +90,20 @@ export async function initScylla(): Promise<void> {
       expires_at timestamp,
       max_uses int,
       uses_remaining int,
+      uses_consumed int,
       revoked boolean,
       note text
     )`
   );
+  // Add invite columns (best-effort for existing tables)
+  try {
+    await client.execute(`ALTER TABLE server_invites_by_code ADD uses_consumed int`);
+  } catch (error) {
+    const msg = errMsg(error);
+    if (!msg.includes("already exists") && !msg.includes("Invalid column name")) {
+      console.warn("Warning: Could not add uses_consumed to server_invites_by_code:", msg);
+    }
+  }
 
   // Roles (ONE server per keyspace)
   await client.execute(

@@ -35,6 +35,7 @@
     "typescript": "^5.9.3"
   },
   "scripts": {
+    "admin:set-owner": "node dist/admin/setOwner.js",
     "build": "tsc",
     "dev": "node --watch -r ts-node/register src/index.ts",
     "start": "node dist/index.js"

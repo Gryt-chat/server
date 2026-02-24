@@ -11,10 +11,6 @@ import {
 	initScylla,
 	createServerConfigIfNotExists,
 	getServerConfig,
-	setServerOwner,
-	demoteAllOwnerRoles,
-	ensureOwnerRoleForGrytUser,
-	insertServerAudit,
 } from "./db/scylla";
 import { initS3, ensureBucket } from "./storage/s3";
 import { serverRouter } from "./routes/server";
@@ -111,41 +107,10 @@ if (disableScylla) {
 } else if (!scyllaContactPoints) {
 	consola.warn("ScyllaDB not configured (SCYLLA_CONTACT_POINTS missing). Skipping Scylla init.");
 } else {
-	const ownerId = (process.env.OWNER_ID || "").trim();
 	initScylla()
 		.then(async () => {
 			consola.success("ScyllaDB initialized");
-			if (!ownerId) {
-				consola.warn("OWNER_ID is required; server will run without an owner until it is set.");
-				await createServerConfigIfNotExists();
-				return;
-			}
-
 			await createServerConfigIfNotExists();
-			const cfg = await getServerConfig();
-			const prev = cfg?.owner_gryt_user_id || null;
-			if (prev === ownerId) {
-				consola.info("OWNER_ID matches current owner; no change needed.");
-				return;
-			}
-
-			await setServerOwner(ownerId);
-			const demoted = await demoteAllOwnerRoles();
-			const ensured = await ensureOwnerRoleForGrytUser(ownerId);
-
-			insertServerAudit({
-				actorServerUserId: null,
-				action: "owner_override",
-				target: ownerId,
-				meta: { from: prev, to: ownerId, demotedOwners: demoted.demoted, ensuredOwnerRole: ensured.applied },
-			}).catch(() => undefined);
-
-			consola.warn("Server owner overridden from env", {
-				from: prev,
-				to: ownerId,
-				demotedOwners: demoted.demoted,
-				ensuredOwnerRole: ensured.applied,
-			});
 		})
 		.then(() => {
 			if (!disableS3) startMediaSweep();

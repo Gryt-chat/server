@@ -24,6 +24,10 @@ export { broadcastCustomEmojisUpdate, broadcastEmojiQueueUpdate, broadcastServer
 
 const clientsInfo: Clients = {};
 
+function voiceRoomName(serverId: string, channelId: string): string {
+  return `voice:${serverId}:${channelId}`;
+}
+
 /**
  * Wire SFU peer_joined / peer_left / sync_response callbacks so the server
  * stays in 1:1 sync with the SFU about who is connected.
@@ -43,6 +47,8 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
       for (const [sid, ci] of Object.entries(clientsInfo)) {
         if (ci.serverUserId === ev.userId && ci.hasJoinedChannel) {
           const nickname = ci.nickname;
+          const channelId = ci.voiceChannelId || "";
+          const roomName = channelId ? voiceRoomName(serverId, channelId) : "";
           ci.hasJoinedChannel = false;
           ci.voiceChannelId = "";
           ci.streamID = "";
@@ -55,7 +61,10 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
 
           const sock = io.sockets.sockets.get(sid);
           if (sock) {
-            sock.broadcast.emit("voice:peer:left", { clientId: sid, nickname });
+            if (roomName) {
+              sock.leave(roomName);
+              sock.to(roomName).emit("voice:peer:left", { clientId: sid, nickname, channelId });
+            }
             sock.emit("voice:channel:joined", false);
             sock.emit("voice:stream:set", "");
             sock.emit("voice:room:leave");
@@ -97,6 +106,8 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
         if (ci.hasJoinedChannel && !sfuUsers.has(ci.serverUserId)) {
           consola.info(`[SFU-Sync] Stale voice user ${ci.serverUserId}, forcing disconnect`);
           const nickname = ci.nickname;
+          const channelId = ci.voiceChannelId || "";
+          const roomName = channelId ? voiceRoomName(serverId, channelId) : "";
           ci.hasJoinedChannel = false;
           ci.voiceChannelId = "";
           ci.streamID = "";
@@ -110,7 +121,10 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
 
           const sock = io.sockets.sockets.get(sid);
           if (sock) {
-            sock.broadcast.emit("voice:peer:left", { clientId: sid, nickname });
+            if (roomName) {
+              sock.leave(roomName);
+              sock.to(roomName).emit("voice:peer:left", { clientId: sid, nickname, channelId });
+            }
             sock.emit("voice:channel:joined", false);
             sock.emit("voice:stream:set", "");
             sock.emit("voice:room:leave");
@@ -214,7 +228,15 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
       sfuClient.untrackUserConnection(clientInfo.serverUserId);
     }
     if (clientInfo?.hasJoinedChannel) {
-      socket.broadcast.emit("voice:peer:left", { clientId, nickname: clientInfo.nickname });
+      const channelId = clientInfo.voiceChannelId || "";
+      const roomName = channelId ? voiceRoomName(serverId, channelId) : "";
+      if (roomName) {
+        socket.to(roomName).emit("voice:peer:left", {
+          clientId,
+          nickname: clientInfo.nickname,
+          channelId,
+        });
+      }
     }
     const wasRegistered = clientInfo?.serverUserId && !clientInfo.serverUserId.startsWith("temp_");
     delete clientsInfo[clientId];
@@ -271,7 +293,6 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
                     displayName: cfg.display_name || process.env.SERVER_NAME || "Unknown Server",
                     description: cfg.description || process.env.SERVER_DESCRIPTION || "A Gryt server",
                     iconUrl: cfg.icon_url || null,
-                    hasPassword: !!(cfg.password_hash && cfg.password_salt) || !!(process.env.SERVER_PASSWORD?.trim()),
                     isConfigured: !!cfg.is_configured,
                   },
                 });

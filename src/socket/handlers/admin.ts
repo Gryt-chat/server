@@ -4,13 +4,10 @@ import { requireAuth } from "../middleware/auth";
 import { broadcastServerUiUpdate, sendEmojiQueueStateToSocket } from "../utils/server";
 import { VALID_CENSOR_STYLES, type CensorStyle } from "../../utils/profanityFilter";
 import { syncAllClients, broadcastMemberList } from "../utils/clients";
-import { generateAccessToken } from "../../utils/jwt";
 import {
   getServerConfig,
   createServerConfigIfNotExists,
   updateServerConfig,
-  incrementServerTokenVersion,
-  hashServerPassword,
   DEFAULT_AVATAR_MAX_BYTES,
   DEFAULT_EMOJI_MAX_BYTES,
   DEFAULT_UPLOAD_MAX_BYTES,
@@ -70,7 +67,6 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           displayName: cfg.display_name || process.env.SERVER_NAME || "Unknown Server",
           description: cfg.description || process.env.SERVER_DESCRIPTION || "A Gryt server",
           iconUrl: cfg.icon_url || null,
-          hasPassword: !!(cfg.password_hash && cfg.password_salt) || !!(process.env.SERVER_PASSWORD?.trim()),
           avatarMaxBytes: cfg.avatar_max_bytes ?? DEFAULT_AVATAR_MAX_BYTES,
           uploadMaxBytes: cfg.upload_max_bytes ?? DEFAULT_UPLOAD_MAX_BYTES,
           emojiMaxBytes: cfg.emoji_max_bytes ?? DEFAULT_EMOJI_MAX_BYTES,
@@ -99,8 +95,6 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       displayName?: string;
       description?: string;
       iconUrl?: string | null;
-      password?: string;
-      clearPassword?: boolean;
       avatarMaxBytes?: number | null;
       uploadMaxBytes?: number | null;
       emojiMaxBytes?: number | null;
@@ -140,29 +134,17 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
             ? payload.profanityCensorStyle as CensorStyle
             : undefined;
 
-        let passwordSalt: string | null | undefined;
-        let passwordHash: string | null | undefined;
-        let passwordAlgo: string | null | undefined;
-
-        if (payload.clearPassword || payload.password === "") {
-          passwordSalt = null; passwordHash = null; passwordAlgo = null;
-        } else if (typeof payload.password === "string" && payload.password.length > 0) {
-          const h = await hashServerPassword(payload.password);
-          passwordSalt = h.saltB64; passwordHash = h.hashB64; passwordAlgo = h.algo;
-        }
-
         const updated = await updateServerConfig({
           displayName: displayName === undefined ? undefined : (displayName!.length > 0 ? displayName : null),
           description: description === undefined ? undefined : (description!.length > 0 ? description : null),
-          iconUrl, passwordSalt, passwordHash, passwordAlgo, isConfigured: true,
+          iconUrl,
+          isConfigured: true,
           avatarMaxBytes,
           uploadMaxBytes,
           emojiMaxBytes,
           profanityMode,
           profanityCensorStyle,
         });
-
-        const passwordChanged = typeof payload.password === "string" || !!payload.clearPassword;
 
         insertServerAudit({
           actorServerUserId: auth.tokenPayload.serverUserId,
@@ -171,26 +153,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           meta: {
             displayName: displayName ?? null,
             description: description ?? null,
-            passwordChanged,
           },
         }).catch(() => undefined);
-
-        if (passwordChanged) {
-          const newTokenVersion = await incrementServerTokenVersion();
-          for (const [sid, s] of io.sockets.sockets) {
-            const ci = clientsInfo[sid];
-            if (!ci?.grytUserId || !ci?.serverUserId) continue;
-            const newToken = generateAccessToken({
-              grytUserId: ci.grytUserId,
-              serverUserId: ci.serverUserId,
-              nickname: ci.nickname,
-              serverHost: s.handshake?.headers?.host || socket.handshake.headers.host || "unknown",
-              tokenVersion: newTokenVersion,
-            });
-            ci.accessToken = newToken;
-            s.emit("token:refreshed", { accessToken: newToken });
-          }
-        }
 
         socket.emit("server:settings", {
           serverId,
@@ -199,7 +163,6 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           displayName: updated.display_name || process.env.SERVER_NAME || "Unknown Server",
           description: updated.description || process.env.SERVER_DESCRIPTION || "A Gryt server",
           iconUrl: updated.icon_url || null,
-          hasPassword: !!(updated.password_hash && updated.password_salt) || !!(process.env.SERVER_PASSWORD?.trim()),
           avatarMaxBytes: updated.avatar_max_bytes ?? DEFAULT_AVATAR_MAX_BYTES,
           uploadMaxBytes: updated.upload_max_bytes ?? DEFAULT_UPLOAD_MAX_BYTES,
           emojiMaxBytes: updated.emoji_max_bytes ?? DEFAULT_EMOJI_MAX_BYTES,
@@ -223,7 +186,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         socket.emit("server:invites", {
           serverId,
           invites: invites
-            .map((i) => ({ code: i.code, createdAt: i.created_at, expiresAt: i.expires_at, maxUses: i.max_uses, usesRemaining: i.uses_remaining, revoked: i.revoked, note: i.note }))
+            .map((i) => ({ code: i.code, createdAt: i.created_at, expiresAt: i.expires_at, maxUses: i.max_uses, usesRemaining: i.uses_remaining, usesConsumed: i.uses_consumed, revoked: i.revoked, note: i.note }))
             .sort((a, b) => (b.createdAt?.getTime?.() || 0) - (a.createdAt?.getTime?.() || 0)),
         });
       } catch (e) {
@@ -232,25 +195,26 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    'server:invites:create': async (payload: { accessToken: string; maxUses?: number; expiresInHours?: number; note?: string | null }) => {
+    'server:invites:create': async (payload: { accessToken: string; infinite?: boolean; maxUses?: number; expiresInHours?: number; note?: string | null }) => {
       try {
         const rl = rlCheck("server:invites:create", ctx, RL_INVITE);
         if (!rl.allowed) { emitRateLimited(ctx, rl); return; }
         const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
         if (!auth) return;
 
-        const maxUses = typeof payload.maxUses === "number" ? payload.maxUses : 1;
+        const infinite = payload.infinite === true;
+        const maxUses = infinite ? undefined : (typeof payload.maxUses === "number" ? payload.maxUses : 1);
         const expiresInHours = typeof payload.expiresInHours === "number" ? payload.expiresInHours : undefined;
         const expiresAt = typeof expiresInHours === "number" && expiresInHours > 0
           ? new Date(Date.now() + Math.min(expiresInHours, 24 * 365) * 3_600_000)
           : null;
 
-        const created = await createServerInvite(auth.tokenPayload.serverUserId, { maxUses, expiresAt, note: payload.note ?? null });
-        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "invite_create", target: created.code, meta: { maxUses: created.max_uses, expiresAt: created.expires_at } }).catch(() => undefined);
+        const created = await createServerInvite(auth.tokenPayload.serverUserId, { infinite, maxUses, expiresAt, note: payload.note ?? null });
+        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "invite_create", target: created.code, meta: { infinite, maxUses: created.max_uses, expiresAt: created.expires_at } }).catch(() => undefined);
 
         socket.emit("server:invite:created", {
           serverId,
-          invite: { code: created.code, createdAt: created.created_at, expiresAt: created.expires_at, maxUses: created.max_uses, usesRemaining: created.uses_remaining, revoked: created.revoked, note: created.note },
+          invite: { code: created.code, createdAt: created.created_at, expiresAt: created.expires_at, maxUses: created.max_uses, usesRemaining: created.uses_remaining, usesConsumed: created.uses_consumed, revoked: created.revoked, note: created.note },
         });
       } catch (e) {
         consola.error("server:invites:create failed", e);
@@ -258,7 +222,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    'server:invites:revoke': async (payload: { accessToken: string; code: string; revoked?: boolean }) => {
+    'server:invites:revoke': async (payload: { accessToken: string; code: string }) => {
       try {
         const rl = rlCheck("server:invites:revoke", ctx, RL_INVITE);
         if (!rl.allowed) { emitRateLimited(ctx, rl); return; }
@@ -269,10 +233,10 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
         if (!auth) return;
 
-        const nextRevoked = payload.revoked ?? true;
-        await revokeServerInvite(payload.code, nextRevoked);
-        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "invite_revoke", target: payload.code, meta: { revoked: nextRevoked } }).catch(() => undefined);
-        socket.emit("server:invite:revoked", { serverId, code: payload.code, revoked: nextRevoked });
+        const code = payload.code.trim();
+        await revokeServerInvite(code, true);
+        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "invite_revoke", target: code, meta: { revoked: true } }).catch(() => undefined);
+        socket.emit("server:invite:revoked", { serverId, code, revoked: true });
       } catch (e) {
         consola.error("server:invites:revoke failed", e);
         socket.emit("server:error", { error: "invite_revoke_failed", message: "Failed to revoke invite." });

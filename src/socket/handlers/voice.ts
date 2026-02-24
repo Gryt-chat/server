@@ -8,6 +8,10 @@ import { insertServerAudit } from "../../db/scylla";
 const RL_REQUEST_ROOM: RateLimitRule = { limit: 10, windowMs: 60_000, scorePerAction: 1, maxScore: 8, scoreDecayMs: 5000 };
 const RL_JOINED_CHANNEL: RateLimitRule = { limit: 10, windowMs: 60_000, scorePerAction: 0.5, maxScore: 6, scoreDecayMs: 3000 };
 
+function voiceRoomName(serverId: string, channelId: string): string {
+  return `voice:${serverId}:${channelId}`;
+}
+
 function getVoiceSeatLimit(): number | null {
   const explicit = parseInt(process.env.VOICE_MAX_USERS || "0", 10);
   if (explicit > 0) return explicit;
@@ -79,6 +83,10 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
           consola.warn(`Device switch detected for ${serverUserId}`);
           const existingSocket = io.sockets.sockets.get(existingClientId);
           if (existingSocket) {
+            const prevChannelId = clientsInfo[existingClientId]?.voiceChannelId || "";
+            if (prevChannelId) {
+              existingSocket.leave(voiceRoomName(serverId, prevChannelId));
+            }
             existingSocket.emit("voice:device:disconnect", {
               type: "device_switch",
               message: "Disconnected: you connected from another device.",
@@ -214,6 +222,15 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
       const newJoinedState = Boolean(hasJoined);
       if (wasInChannel === newJoinedState) return;
 
+      const channelId = clientsInfo[clientId].voiceChannelId || "";
+      const roomName = channelId ? voiceRoomName(serverId, channelId) : "";
+
+      if (newJoinedState) {
+        if (roomName) socket.join(roomName);
+      } else {
+        if (roomName) socket.leave(roomName);
+      }
+
       clientsInfo[clientId].hasJoinedChannel = newJoinedState;
       if (!newJoinedState) {
         clientsInfo[clientId].isConnectedToVoice = false;
@@ -228,9 +245,21 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
       syncAllClients(io, clientsInfo);
 
       if (newJoinedState && !wasInChannel) {
-        socket.broadcast.emit("voice:peer:joined", { clientId, nickname: clientsInfo[clientId].nickname });
+        if (roomName) {
+          socket.to(roomName).emit("voice:peer:joined", {
+            clientId,
+            nickname: clientsInfo[clientId].nickname,
+            channelId,
+          });
+        }
       } else if (!newJoinedState && wasInChannel) {
-        socket.broadcast.emit("voice:peer:left", { clientId, nickname: clientsInfo[clientId].nickname });
+        if (roomName) {
+          socket.to(roomName).emit("voice:peer:left", {
+            clientId,
+            nickname: clientsInfo[clientId].nickname,
+            channelId,
+          });
+        }
       }
     },
 
@@ -302,7 +331,16 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
 
         // Notify other clients about the peer leaving
         if (targetSocket) {
-          targetSocket.broadcast.emit("voice:peer:left", { clientId: targetSocketId, nickname: targetClient.nickname });
+          const channelId = targetClient.voiceChannelId || "";
+          const roomName = channelId ? voiceRoomName(serverId, channelId) : "";
+          if (roomName) {
+            targetSocket.leave(roomName);
+            targetSocket.to(roomName).emit("voice:peer:left", {
+              clientId: targetSocketId,
+              nickname: targetClient.nickname,
+              channelId,
+            });
+          }
         }
 
         // Update server state
