@@ -154,7 +154,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
             displayName: displayName ?? null,
             description: description ?? null,
           },
-        }).catch(() => undefined);
+        }).catch((e) => consola.warn("audit log write failed", e));
 
         socket.emit("server:settings", {
           serverId,
@@ -210,7 +210,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           : null;
 
         const created = await createServerInvite(auth.tokenPayload.serverUserId, { infinite, maxUses, expiresAt, note: payload.note ?? null });
-        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "invite_create", target: created.code, meta: { infinite, maxUses: created.max_uses, expiresAt: created.expires_at } }).catch(() => undefined);
+        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "invite_create", target: created.code, meta: { infinite, maxUses: created.max_uses, expiresAt: created.expires_at } }).catch((e) => consola.warn("audit log write failed", e));
 
         socket.emit("server:invite:created", {
           serverId,
@@ -235,7 +235,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
 
         const code = payload.code.trim();
         await revokeServerInvite(code, true);
-        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "invite_revoke", target: code, meta: { revoked: true } }).catch(() => undefined);
+        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "invite_revoke", target: code, meta: { revoked: true } }).catch((e) => consola.warn("audit log write failed", e));
         socket.emit("server:invite:revoked", { serverId, code, revoked: true });
       } catch (e) {
         consola.error("server:invites:revoke failed", e);
@@ -280,7 +280,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
 
         const targetId = payload.serverUserId.trim();
         await setServerRole(targetId, nextRole === "admin" || nextRole === "mod" ? nextRole : "member");
-        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "role_set", target: targetId, meta: { role: nextRole } }).catch(() => undefined);
+        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "role_set", target: targetId, meta: { role: nextRole } }).catch((e) => consola.warn("audit log write failed", e));
         io.to("verifiedClients").emit("server:role:updated", { serverId, serverUserId: targetId, role: nextRole });
       } catch (e) {
         consola.error("server:roles:set failed", e);
@@ -322,7 +322,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           }
         }
 
-        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "kick", target: targetId }).catch(() => undefined);
+        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "kick", target: targetId }).catch((e) => consola.warn("audit log write failed", e));
         socket.emit("server:kick:success", { targetServerUserId: targetId });
         syncAllClients(io, clientsInfo);
         broadcastMemberList(io, clientsInfo, serverId);
@@ -385,7 +385,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           }
         }
 
-        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "ban", target: targetId, meta: { reason: payload.reason ?? null } }).catch(() => undefined);
+        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "ban", target: targetId, meta: { reason: payload.reason ?? null } }).catch((e) => consola.warn("audit log write failed", e));
         socket.emit("server:ban:success", { targetServerUserId: targetId });
         syncAllClients(io, clientsInfo);
         broadcastMemberList(io, clientsInfo, serverId);
@@ -407,7 +407,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         if (!auth) return;
 
         await unbanUser(payload.grytUserId.trim());
-        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "unban", target: payload.grytUserId.trim() }).catch(() => undefined);
+        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "unban", target: payload.grytUserId.trim() }).catch((e) => consola.warn("audit log write failed", e));
         socket.emit("server:unban:success", { grytUserId: payload.grytUserId.trim() });
       } catch (e) {
         consola.error("server:unban failed", e);
@@ -466,7 +466,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           }
         }
 
-        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: payload.muted ? "server_mute" : "server_unmute", target: targetId }).catch(() => undefined);
+        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: payload.muted ? "server_mute" : "server_unmute", target: targetId }).catch((e) => consola.warn("audit log write failed", e));
         socket.emit("server:mute:success", { targetServerUserId: targetId, muted: payload.muted });
         syncAllClients(io, clientsInfo);
         broadcastMemberList(io, clientsInfo, serverId);
@@ -515,7 +515,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           }
         }
 
-        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: payload.deafened ? "server_deafen" : "server_undeafen", target: targetId }).catch(() => undefined);
+        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: payload.deafened ? "server_deafen" : "server_undeafen", target: targetId }).catch((e) => consola.warn("audit log write failed", e));
         socket.emit("server:deafen:success", { targetServerUserId: targetId, deafened: payload.deafened });
         syncAllClients(io, clientsInfo);
         broadcastMemberList(io, clientsInfo, serverId);

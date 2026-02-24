@@ -40,7 +40,7 @@ function broadcastDetails(ctx: HandlerContext) {
   const { io, clientsInfo, serverId } = ctx;
   for (const [sid, s] of io.sockets.sockets) {
     if (clientsInfo[sid]?.grytUserId) {
-      sendServerDetails(s, clientsInfo, serverId).catch(() => undefined);
+      sendServerDetails(s, clientsInfo, serverId).catch((e) => consola.warn("sendServerDetails failed", e));
     }
   }
 }
@@ -99,7 +99,7 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
           eSportsMode: payload.eSportsMode,
           textInVoice: payload.textInVoice,
         });
-        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "channel_upsert", target: channelId, meta: { name: payload.name, type: payload.type } }).catch(() => undefined);
+        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "channel_upsert", target: channelId, meta: { name: payload.name, type: payload.type } }).catch((e) => consola.warn("audit log write failed", e));
         broadcastDetails(ctx);
       } catch (e) {
         consola.error("server:channels:upsert failed", e);
@@ -148,7 +148,7 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
             }
           }
           syncAllClients(io, clientsInfo);
-          broadcastMemberList(io, clientsInfo, serverId).catch(() => undefined);
+          broadcastMemberList(io, clientsInfo, serverId).catch((e) => consola.warn("broadcastMemberList failed", e));
         }
 
         await deleteServerChannel(channelId);
@@ -160,7 +160,7 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
           }
         } catch { /* ignore */ }
 
-        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "channel_delete", target: channelId }).catch(() => undefined);
+        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "channel_delete", target: channelId }).catch((e) => consola.warn("audit log write failed", e));
         broadcastDetails(ctx);
       } catch (e) {
         consola.error("server:channels:delete failed", e);
@@ -188,7 +188,7 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
           await upsertServerChannel({ channelId: ch.channel_id, name: ch.name, type: ch.type, description: ch.description, position: pos });
           pos += 10;
         }
-        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "channels_reorder", meta: { order: payload.order } }).catch(() => undefined);
+        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "channels_reorder", meta: { order: payload.order } }).catch((e) => consola.warn("audit log write failed", e));
         broadcastDetails(ctx);
       } catch (e) {
         consola.error("server:channels:reorder failed", e);
@@ -229,7 +229,7 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
         if (!auth) return;
 
         await upsertServerSidebarItem({ itemId: payload.itemId, kind: payload.kind, position: payload.position, channelId: payload.channelId ?? null, spacerHeight: payload.spacerHeight ?? null, label: payload.label ?? null });
-        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "sidebar_item_upsert", target: payload.itemId, meta: { kind: payload.kind } }).catch(() => undefined);
+        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "sidebar_item_upsert", target: payload.itemId, meta: { kind: payload.kind } }).catch((e) => consola.warn("audit log write failed", e));
         broadcastDetails(ctx);
       } catch (e) {
         consola.error("server:sidebar:item:upsert failed", e);
@@ -249,7 +249,7 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
         if (!auth) return;
 
         await deleteServerSidebarItem(payload.itemId);
-        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "sidebar_item_delete", target: payload.itemId }).catch(() => undefined);
+        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "sidebar_item_delete", target: payload.itemId }).catch((e) => consola.warn("audit log write failed", e));
         broadcastDetails(ctx);
       } catch (e) {
         consola.error("server:sidebar:item:delete failed", e);
@@ -277,7 +277,7 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
           await upsertServerSidebarItem({ itemId: it.item_id, kind: it.kind, position: pos, channelId: it.channel_id, spacerHeight: it.spacer_height, label: it.label });
           pos += 10;
         }
-        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "sidebar_reorder", meta: { order: payload.order } }).catch(() => undefined);
+        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "sidebar_reorder", meta: { order: payload.order } }).catch((e) => consola.warn("audit log write failed", e));
         broadcastDetails(ctx);
       } catch (e) {
         consola.error("server:sidebar:reorder failed", e);

@@ -29,13 +29,13 @@ export function broadcastServerUiUpdate(reason: "settings" | "icon" | "other" = 
   if (!_io || !_serverId || !_clientsInfo) return;
   consola.info(`Broadcasting server UI update (${reason})`);
   for (const [sid, s] of _io.sockets.sockets) {
-    sendInfo(s, _clientsInfo, _serverId).catch(() => undefined);
+    sendInfo(s, _clientsInfo, _serverId).catch((e) => consola.warn("sendInfo failed", e));
     if (_clientsInfo[sid]?.grytUserId) {
-      sendServerDetails(s, _clientsInfo, _serverId).catch(() => undefined);
+      sendServerDetails(s, _clientsInfo, _serverId).catch((e) => consola.warn("sendServerDetails failed", e));
     }
   }
   syncAllClients(_io, _clientsInfo);
-  broadcastMemberList(_io, _clientsInfo, _serverId).catch(() => undefined);
+  broadcastMemberList(_io, _clientsInfo, _serverId).catch((e) => consola.warn("broadcastMemberList failed", e));
 }
 
 export function broadcastCustomEmojisUpdate(): void {
@@ -235,7 +235,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
     }
   } catch (e) {
     consola.warn("Failed to load persisted sidebar/channels (falling back to defaults):", e);
-    await ensureDefaultChannels().catch(() => undefined);
+    await ensureDefaultChannels().catch((e) => consola.warn("ensureDefaultChannels fallback failed", e));
     channels = [
       { name: "General", type: "text", id: "general", description: "General text chat" },
       { name: "Random", type: "text", id: "random", description: "Random discussions and off-topic chat" },

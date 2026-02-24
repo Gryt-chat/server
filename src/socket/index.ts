@@ -282,7 +282,7 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
 
             syncAllClients(io, clientsInfo);
             broadcastMemberList(io, clientsInfo, serverId);
-            sendServerDetails(socket, clientsInfo, serverId).catch(() => {});
+            sendServerDetails(socket, clientsInfo, serverId).catch((e) => consola.warn("sendServerDetails failed", e));
 
             try {
               const cfg = await getServerConfig();

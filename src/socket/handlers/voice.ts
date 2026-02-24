@@ -362,7 +362,7 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
           actorServerUserId: auth.tokenPayload.serverUserId,
           action: "voice_disconnect",
           target: targetUserId,
-        }).catch(() => undefined);
+        }).catch((e) => consola.warn("audit log write failed", e));
 
         socket.emit("voice:disconnect:success", { targetServerUserId: targetUserId });
       } catch (e) {

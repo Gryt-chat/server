@@ -44,7 +44,7 @@ export async function runMediaSweep(): Promise<{ deleted: number; errors: number
     try {
       await deleteObject({ bucket, key: file.s3_key });
       if (file.thumbnail_key) {
-        await deleteObject({ bucket, key: file.thumbnail_key }).catch(() => {});
+        await deleteObject({ bucket, key: file.thumbnail_key }).catch((e) => consola.warn("S3 thumbnail delete failed", e));
       }
       await deleteFileRecord(file.file_id);
       deleted++;

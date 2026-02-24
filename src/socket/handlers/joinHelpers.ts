@@ -139,7 +139,7 @@ export function registerJoinHelpers(ctx: HandlerContext): EventHandlerMap {
         await setUserInactive(clientInfo.serverUserId);
 
         if (clientInfo.grytUserId) {
-          await revokeUserRefreshTokens(clientInfo.grytUserId).catch(() => undefined);
+          await revokeUserRefreshTokens(clientInfo.grytUserId).catch((e) => consola.warn("token revocation failed", e));
         }
 
         if (clientInfo.hasJoinedChannel && sfuClient) {

@@ -34,6 +34,76 @@ export interface FileRecord {
   created_at: Date;
 }
 
+const MSG_COLS = `conversation_id, created_at, message_id, sender_server_id, text, attachments, reactions, reply_to_message_id, edited_at`;
+
+function rowToMessage(r: Record<string, unknown>): MessageRecord {
+  return {
+    conversation_id: r["conversation_id"] as string,
+    created_at: r["created_at"] as Date,
+    message_id: String(r["message_id"]),
+    sender_server_id: r["sender_server_id"] as string,
+    text: (r["text"] as string) ?? null,
+    attachments: (r["attachments"] as string[] | null) ?? null,
+    reactions: r["reactions"] ? JSON.parse(r["reactions"] as string) : null,
+    reply_to_message_id: (r["reply_to_message_id"] as string) ?? null,
+    edited_at: (r["edited_at"] as Date) ?? null,
+  };
+}
+
+// ── Timestamp lookup ────────────────────────────────────────────
+// message_ts_by_id allows O(1) resolution of created_at from
+// (conversation_id, message_id), avoiding ALLOW FILTERING on the
+// main table whose PK is (conversation_id, created_at, message_id).
+
+async function writeTimestampLookup(conversationId: string, messageId: string, createdAt: Date): Promise<void> {
+  const c = getScyllaClient();
+  await c.execute(
+    `INSERT INTO message_ts_by_id (conversation_id, message_id, created_at) VALUES (?, ?, ?)`,
+    [conversationId, messageId, createdAt],
+    { prepare: true },
+  );
+}
+
+async function deleteTimestampLookup(conversationId: string, messageId: string): Promise<void> {
+  const c = getScyllaClient();
+  await c.execute(
+    `DELETE FROM message_ts_by_id WHERE conversation_id = ? AND message_id = ?`,
+    [conversationId, messageId],
+    { prepare: true },
+  );
+}
+
+async function resolveCreatedAt(conversationId: string, messageId: string): Promise<Date | null> {
+  const c = getScyllaClient();
+  const rs = await c.execute(
+    `SELECT created_at FROM message_ts_by_id WHERE conversation_id = ? AND message_id = ?`,
+    [conversationId, messageId],
+    { prepare: true },
+  );
+  const row = rs.first();
+  return row ? (row["created_at"] as Date) : null;
+}
+
+async function getMessageByFullPK(conversationId: string, createdAt: Date, messageId: string): Promise<MessageRecord | null> {
+  const c = getScyllaClient();
+  const rs = await c.execute(
+    `SELECT ${MSG_COLS} FROM messages_by_conversation WHERE conversation_id = ? AND created_at = ? AND message_id = ?`,
+    [conversationId, createdAt, messageId],
+    { prepare: true },
+  );
+  const row = rs.first();
+  return row ? rowToMessage(row) : null;
+}
+
+async function resolveMessage(conversationId: string, messageId: string): Promise<{ msg: MessageRecord; createdAt: Date } | null> {
+  const createdAt = await resolveCreatedAt(conversationId, messageId);
+  if (!createdAt) return null;
+  const msg = await getMessageByFullPK(conversationId, createdAt, messageId);
+  return msg ? { msg, createdAt } : null;
+}
+
+// ── CRUD ────────────────────────────────────────────────────────
+
 export async function insertMessage(record: Omit<MessageRecord, "message_id" | "created_at"> & { created_at?: Date; message_id?: string }): Promise<MessageRecord> {
   const c = getScyllaClient();
   const created_at = record.created_at ?? new Date();
@@ -45,77 +115,45 @@ export async function insertMessage(record: Omit<MessageRecord, "message_id" | "
     [record.conversation_id, created_at, message_id, record.sender_server_id, record.text ?? null, record.attachments ?? null, reactionsJson, record.reply_to_message_id ?? null],
     { prepare: true },
   );
+
+  await writeTimestampLookup(record.conversation_id, message_id, created_at);
+
   return { ...record, created_at, message_id } as MessageRecord;
 }
 
 export async function listMessages(conversationId: string, limit = 50, before?: Date): Promise<MessageRecord[]> {
   const c = getScyllaClient();
-  const cols = `conversation_id, created_at, message_id, sender_server_id, text, attachments, reactions, reply_to_message_id, edited_at`;
-
   const query = before
-    ? `SELECT ${cols} FROM messages_by_conversation WHERE conversation_id = ? AND created_at < ? ORDER BY created_at DESC, message_id DESC LIMIT ?`
-    : `SELECT ${cols} FROM messages_by_conversation WHERE conversation_id = ? ORDER BY created_at DESC, message_id DESC LIMIT ?`;
+    ? `SELECT ${MSG_COLS} FROM messages_by_conversation WHERE conversation_id = ? AND created_at < ? ORDER BY created_at DESC, message_id DESC LIMIT ?`
+    : `SELECT ${MSG_COLS} FROM messages_by_conversation WHERE conversation_id = ? ORDER BY created_at DESC, message_id DESC LIMIT ?`;
 
   const params = before
     ? [conversationId, before, limit]
     : [conversationId, limit];
 
   const rs = await c.execute(query, params, { prepare: true });
-
-  const messages: MessageRecord[] = rs.rows.map((r) => ({
-    conversation_id: r["conversation_id"],
-    created_at: r["created_at"],
-    message_id: r["message_id"].toString(),
-    sender_server_id: r["sender_server_id"],
-    text: r["text"],
-    attachments: r["attachments"] ?? null,
-    reactions: r["reactions"] ? JSON.parse(r["reactions"]) : null,
-    reply_to_message_id: r["reply_to_message_id"] ?? null,
-    edited_at: r["edited_at"] ?? null,
-  }));
-
+  const messages = rs.rows.map((r) => rowToMessage(r));
   messages.reverse();
   return messages;
 }
 
 export async function deleteMessage(conversationId: string, messageId: string): Promise<boolean> {
   const c = getScyllaClient();
-  const rs = await c.execute(
-    `SELECT created_at FROM messages_by_conversation WHERE conversation_id = ? AND message_id = ? ALLOW FILTERING`,
-    [conversationId, messageId],
-    { prepare: true },
-  );
-  const row = rs.first();
-  if (!row) return false;
+  const createdAt = await resolveCreatedAt(conversationId, messageId);
+  if (!createdAt) return false;
 
   await c.execute(
     `DELETE FROM messages_by_conversation WHERE conversation_id = ? AND created_at = ? AND message_id = ?`,
-    [conversationId, row["created_at"], messageId],
+    [conversationId, createdAt, messageId],
     { prepare: true },
   );
+  await deleteTimestampLookup(conversationId, messageId);
   return true;
 }
 
 export async function getMessageById(conversationId: string, messageId: string): Promise<MessageRecord | null> {
-  const c = getScyllaClient();
-  const rs = await c.execute(
-    `SELECT conversation_id, created_at, message_id, sender_server_id, text, attachments, reactions, reply_to_message_id, edited_at FROM messages_by_conversation WHERE conversation_id = ? AND message_id = ? ALLOW FILTERING`,
-    [conversationId, messageId],
-    { prepare: true },
-  );
-  const row = rs.first();
-  if (!row) return null;
-  return {
-    conversation_id: row["conversation_id"],
-    created_at: row["created_at"],
-    message_id: row["message_id"].toString(),
-    sender_server_id: row["sender_server_id"],
-    text: row["text"],
-    attachments: row["attachments"] ?? null,
-    reactions: row["reactions"] ? JSON.parse(row["reactions"]) : null,
-    reply_to_message_id: row["reply_to_message_id"] ?? null,
-    edited_at: row["edited_at"] ?? null,
-  };
+  const resolved = await resolveMessage(conversationId, messageId);
+  return resolved?.msg ?? null;
 }
 
 export async function updateMessageText(
@@ -123,34 +161,21 @@ export async function updateMessageText(
   messageId: string,
   newText: string,
 ): Promise<MessageRecord | null> {
-  const c = getScyllaClient();
-  const rs = await c.execute(
-    `SELECT conversation_id, created_at, message_id, sender_server_id, text, attachments, reactions, reply_to_message_id FROM messages_by_conversation WHERE conversation_id = ? AND message_id = ? ALLOW FILTERING`,
-    [conversationId, messageId],
-    { prepare: true },
-  );
-  const row = rs.first();
-  if (!row) return null;
+  const resolved = await resolveMessage(conversationId, messageId);
+  if (!resolved) return null;
 
   const editedAt = new Date();
+  const c = getScyllaClient();
   await c.execute(
     `UPDATE messages_by_conversation SET text = ?, edited_at = ? WHERE conversation_id = ? AND created_at = ? AND message_id = ?`,
-    [newText, editedAt, conversationId, row["created_at"], messageId],
+    [newText, editedAt, conversationId, resolved.createdAt, messageId],
     { prepare: true },
   );
 
-  return {
-    conversation_id: row["conversation_id"],
-    created_at: row["created_at"],
-    message_id: row["message_id"].toString(),
-    sender_server_id: row["sender_server_id"],
-    text: newText,
-    attachments: row["attachments"] ?? null,
-    reactions: row["reactions"] ? JSON.parse(row["reactions"]) : null,
-    reply_to_message_id: row["reply_to_message_id"] ?? null,
-    edited_at: editedAt,
-  };
+  return { ...resolved.msg, text: newText, edited_at: editedAt };
 }
+
+// ── Files ───────────────────────────────────────────────────────
 
 export async function insertFile(record: Omit<FileRecord, "created_at"> & { created_at?: Date }): Promise<FileRecord> {
   const c = getScyllaClient();
@@ -182,7 +207,7 @@ export async function getFile(fileId: string): Promise<FileRecord | null> {
     thumbnail_key: r["thumbnail_key"],
     original_name: r["original_name"] ?? null,
     created_at: r["created_at"],
-  };
+  } as FileRecord;
 }
 
 export async function getFilesByIds(fileIds: string[]): Promise<Map<string, FileRecord>> {
@@ -213,7 +238,7 @@ export async function getAllFileRecords(): Promise<FileRecord[]> {
     thumbnail_key: r["thumbnail_key"],
     original_name: r["original_name"] ?? null,
     created_at: r["created_at"],
-  }));
+  } as FileRecord));
 }
 
 export async function getAllReferencedAttachmentIds(): Promise<Set<string>> {
@@ -225,7 +250,7 @@ export async function getAllReferencedAttachmentIds(): Promise<Set<string>> {
     { prepare: true, fetchSize: 5000 },
   );
   for (const row of rs.rows) {
-    const attachments: string[] | null = row["attachments"];
+    const attachments: string[] | null = row["attachments"] as string[] | null;
     if (attachments) {
       for (const id of attachments) ids.add(id);
     }
@@ -242,6 +267,30 @@ export async function deleteFileRecord(fileId: string): Promise<void> {
   );
 }
 
+// ── Reactions (CAS-protected) ───────────────────────────────────
+
+const MAX_REACTION_RETRIES = 5;
+
+function applyReactionToggle(reactions: Reaction[], reactionSrc: string, serverUserId: string): Reaction[] {
+  const next = reactions.map((r) => ({ ...r, users: [...r.users] }));
+  const existing = next.find((r) => r.src === reactionSrc);
+
+  if (existing) {
+    const idx = existing.users.indexOf(serverUserId);
+    if (idx !== -1) {
+      existing.users.splice(idx, 1);
+      existing.amount = existing.users.length;
+    } else {
+      existing.users.push(serverUserId);
+      existing.amount = existing.users.length;
+    }
+  } else {
+    next.push({ src: reactionSrc, amount: 1, users: [serverUserId] });
+  }
+
+  return next.filter((r) => r.amount > 0);
+}
+
 export async function addReactionToMessage(
   conversationId: string,
   messageId: string,
@@ -249,50 +298,43 @@ export async function addReactionToMessage(
   serverUserId: string,
 ): Promise<MessageRecord | null> {
   const c = getScyllaClient();
+  const createdAt = await resolveCreatedAt(conversationId, messageId);
+  if (!createdAt) return null;
 
-  const rs = await c.execute(
-    `SELECT conversation_id, created_at, message_id, sender_server_id, text, attachments, reactions, reply_to_message_id, edited_at FROM messages_by_conversation WHERE conversation_id = ? AND message_id = ? ALLOW FILTERING`,
-    [conversationId, messageId],
-    { prepare: true },
-  );
+  for (let attempt = 0; attempt < MAX_REACTION_RETRIES; attempt++) {
+    const rs = await c.execute(
+      `SELECT ${MSG_COLS} FROM messages_by_conversation WHERE conversation_id = ? AND created_at = ? AND message_id = ?`,
+      [conversationId, createdAt, messageId],
+      { prepare: true },
+    );
+    const row = rs.first();
+    if (!row) return null;
 
-  const row = rs.first();
-  if (!row) return null;
+    const oldReactionsRaw = row["reactions"] as string | null;
+    const oldReactions: Reaction[] = oldReactionsRaw ? JSON.parse(oldReactionsRaw) : [];
+    const newReactions = applyReactionToggle(oldReactions, reactionSrc, serverUserId);
+    const newJson = newReactions.length > 0 ? JSON.stringify(newReactions) : null;
 
-  const reactions: Reaction[] = row["reactions"] ? JSON.parse(row["reactions"]) : [];
-  const existingReaction = reactions.find(r => r.src === reactionSrc);
+    const cas = oldReactionsRaw != null
+      ? await c.execute(
+        `UPDATE messages_by_conversation SET reactions = ? WHERE conversation_id = ? AND created_at = ? AND message_id = ? IF reactions = ?`,
+        [newJson, conversationId, createdAt, messageId, oldReactionsRaw],
+        { prepare: true },
+      )
+      : await c.execute(
+        `UPDATE messages_by_conversation SET reactions = ? WHERE conversation_id = ? AND created_at = ? AND message_id = ? IF reactions = null`,
+        [newJson, conversationId, createdAt, messageId],
+        { prepare: true },
+      );
 
-  if (existingReaction) {
-    if (existingReaction.users.includes(serverUserId)) {
-      existingReaction.users.splice(existingReaction.users.indexOf(serverUserId), 1);
-      existingReaction.amount = existingReaction.users.length;
-      if (existingReaction.amount === 0) reactions.splice(reactions.indexOf(existingReaction), 1);
-    } else {
-      existingReaction.users.push(serverUserId);
-      existingReaction.amount = existingReaction.users.length;
+    const applied = !!cas.first()?.["[applied]"];
+    if (applied) {
+      const msg = rowToMessage(row);
+      return { ...msg, reactions: newReactions.length > 0 ? newReactions : null };
     }
-  } else {
-    reactions.push({ src: reactionSrc, amount: 1, users: [serverUserId] });
   }
 
-  const reactionsJson = reactions.length > 0 ? JSON.stringify(reactions) : null;
-  await c.execute(
-    `UPDATE messages_by_conversation SET reactions = ? WHERE conversation_id = ? AND created_at = ? AND message_id = ?`,
-    [reactionsJson, conversationId, row["created_at"], messageId],
-    { prepare: true },
-  );
-
-  return {
-    conversation_id: row["conversation_id"],
-    created_at: row["created_at"],
-    message_id: row["message_id"].toString(),
-    sender_server_id: row["sender_server_id"],
-    text: row["text"],
-    attachments: row["attachments"] ?? null,
-    reactions: reactions.length > 0 ? reactions : null,
-    reply_to_message_id: row["reply_to_message_id"] ?? null,
-    edited_at: row["edited_at"] ?? null,
-  };
+  return null;
 }
 
 export async function removeReactionFromMessage(
@@ -302,44 +344,48 @@ export async function removeReactionFromMessage(
   serverUserId: string,
 ): Promise<MessageRecord | null> {
   const c = getScyllaClient();
+  const createdAt = await resolveCreatedAt(conversationId, messageId);
+  if (!createdAt) return null;
 
-  const rs = await c.execute(
-    `SELECT conversation_id, created_at, message_id, sender_server_id, text, attachments, reactions, reply_to_message_id, edited_at FROM messages_by_conversation WHERE conversation_id = ? AND message_id = ? ALLOW FILTERING`,
-    [conversationId, messageId],
-    { prepare: true },
-  );
+  for (let attempt = 0; attempt < MAX_REACTION_RETRIES; attempt++) {
+    const rs = await c.execute(
+      `SELECT ${MSG_COLS} FROM messages_by_conversation WHERE conversation_id = ? AND created_at = ? AND message_id = ?`,
+      [conversationId, createdAt, messageId],
+      { prepare: true },
+    );
+    const row = rs.first();
+    if (!row) return null;
 
-  const row = rs.first();
-  if (!row) return null;
+    const oldReactionsRaw = row["reactions"] as string | null;
+    const oldReactions: Reaction[] = oldReactionsRaw ? JSON.parse(oldReactionsRaw) : [];
+    const existing = oldReactions.find((r) => r.src === reactionSrc);
+    if (!existing || !existing.users.includes(serverUserId)) return null;
 
-  const reactions: Reaction[] = row["reactions"] ? JSON.parse(row["reactions"]) : [];
-  const idx = reactions.findIndex(r => r.src === reactionSrc);
-  if (idx === -1) return null;
+    const newReactions = oldReactions.map((r) => {
+      if (r.src !== reactionSrc) return r;
+      const users = r.users.filter((u) => u !== serverUserId);
+      return { ...r, users, amount: users.length };
+    }).filter((r) => r.amount > 0);
+    const newJson = newReactions.length > 0 ? JSON.stringify(newReactions) : null;
 
-  const existing = reactions[idx];
-  const userIdx = existing.users.indexOf(serverUserId);
-  if (userIdx === -1) return null;
+    const cas = oldReactionsRaw != null
+      ? await c.execute(
+        `UPDATE messages_by_conversation SET reactions = ? WHERE conversation_id = ? AND created_at = ? AND message_id = ? IF reactions = ?`,
+        [newJson, conversationId, createdAt, messageId, oldReactionsRaw],
+        { prepare: true },
+      )
+      : await c.execute(
+        `UPDATE messages_by_conversation SET reactions = ? WHERE conversation_id = ? AND created_at = ? AND message_id = ? IF reactions = null`,
+        [newJson, conversationId, createdAt, messageId],
+        { prepare: true },
+      );
 
-  existing.users.splice(userIdx, 1);
-  existing.amount = existing.users.length;
-  if (existing.amount === 0) reactions.splice(idx, 1);
+    const applied = !!cas.first()?.["[applied]"];
+    if (applied) {
+      const msg = rowToMessage(row);
+      return { ...msg, reactions: newReactions.length > 0 ? newReactions : null };
+    }
+  }
 
-  const reactionsJson = reactions.length > 0 ? JSON.stringify(reactions) : null;
-  await c.execute(
-    `UPDATE messages_by_conversation SET reactions = ? WHERE conversation_id = ? AND created_at = ? AND message_id = ?`,
-    [reactionsJson, conversationId, row["created_at"], messageId],
-    { prepare: true },
-  );
-
-  return {
-    conversation_id: row["conversation_id"],
-    created_at: row["created_at"],
-    message_id: row["message_id"].toString(),
-    sender_server_id: row["sender_server_id"],
-    text: row["text"],
-    attachments: row["attachments"] ?? null,
-    reactions: reactions.length > 0 ? reactions : null,
-    reply_to_message_id: row["reply_to_message_id"] ?? null,
-    edited_at: row["edited_at"] ?? null,
-  };
+  return null;
 }

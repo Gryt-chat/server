@@ -48,7 +48,7 @@ async function readUpToBytes(res: Response, maxBytes: number): Promise<Buffer | 
       }
     }
   } finally {
-    reader.cancel().catch(() => {});
+    reader.cancel().catch((e) => consola.warn("reader cancel failed", e));
   }
   if (chunks.length === 0) return Buffer.from([]);
   return Buffer.concat(chunks.map((c) => Buffer.from(c)));

@@ -93,7 +93,7 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
           action: "message_report",
           target: payload.messageId,
           meta: { conversationId: payload.conversationId },
-        }).catch(() => undefined);
+        }).catch((e) => consola.warn("audit log write failed", e));
       } catch (err) {
         consola.error("chat:report failed", err);
         socket.emit("chat:error", "Failed to submit report");
@@ -194,7 +194,7 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
             actorServerUserId: auth.tokenPayload.serverUserId,
             action: "report_approve",
             target: payload.messageId,
-          }).catch(() => undefined);
+          }).catch((e) => consola.warn("audit log write failed", e));
 
           socket.emit("reports:resolved", {
             messageId: payload.messageId,
@@ -218,7 +218,7 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
             action: "report_delete",
             target: payload.messageId,
             meta: { conversationId: payload.conversationId },
-          }).catch(() => undefined);
+          }).catch((e) => consola.warn("audit log write failed", e));
 
           socket.emit("reports:resolved", {
             messageId: payload.messageId,
@@ -304,7 +304,7 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
               affectedConversations,
               banned: !!targetGrytUserId,
             },
-          }).catch(() => undefined);
+          }).catch((e) => consola.warn("audit log write failed", e));
 
           socket.emit("reports:resolved", {
             messageId: payload.messageId,

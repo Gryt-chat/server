@@ -1,3 +1,4 @@
+import consola from "consola";
 import express from "express";
 import type { Request, Response, NextFunction } from "express";
 import multer from "multer";
@@ -129,7 +130,7 @@ serverRouter.post(
         actorServerUserId: decoded.serverUserId,
         action: "icon_update",
         target: key,
-      }).catch(() => undefined);
+      }).catch((e) => consola.warn("audit log write failed", e));
 
       res.status(201).json({
         ok: true,
@@ -194,7 +195,7 @@ serverRouter.delete(
         actorServerUserId: decoded.serverUserId,
         action: "icon_clear",
         target: prev,
-      }).catch(() => undefined);
+      }).catch((e) => consola.warn("audit log write failed", e));
 
       res.status(200).json({ ok: true, cleared: true });
 

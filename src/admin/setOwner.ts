@@ -68,7 +68,7 @@ async function main(): Promise<void> {
     action: "owner_set",
     target: nextOwner,
     meta: { from: prev, to: nextOwner, demotedOwners: demoted.demoted, ensuredOwnerRole: ensured.applied },
-  }).catch(() => undefined);
+  }).catch((e) => consola.warn("audit log write failed", e));
 
   consola.success("Owner updated", {
     from: prev,
@@ -78,7 +78,7 @@ async function main(): Promise<void> {
     ensuredServerUserId: ensured.serverUserId,
   });
 
-  await getScyllaClient().shutdown().catch(() => undefined);
+  await getScyllaClient().shutdown().catch((e) => consola.warn("scylla shutdown failed", e));
 }
 
 main().catch((e: unknown) => {

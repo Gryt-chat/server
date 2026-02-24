@@ -126,7 +126,7 @@ async function fetchPreview(url: string): Promise<LinkPreviewData> {
       html += decoder.decode(value, { stream: true });
       bytesRead += value.length;
     }
-    reader.cancel().catch(() => {});
+    reader.cancel().catch((e) => consola.warn("reader cancel failed", e));
 
     const title =
       extractMeta(html, "og:title") ||

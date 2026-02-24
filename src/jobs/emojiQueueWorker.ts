@@ -45,7 +45,7 @@ export function startEmojiQueueWorker(): void {
       if (latestId && latestId !== jobId) {
         await updateEmojiJobStatus({ job_id: jobId, status: "superseded" });
         broadcastEmojiQueueUpdate();
-        await deleteObject({ bucket, key: job.raw_s3_key }).catch(() => undefined);
+        await deleteObject({ bucket, key: job.raw_s3_key }).catch((e) => consola.warn("S3 cleanup failed", e));
         return;
       }
 
@@ -61,14 +61,14 @@ export function startEmojiQueueWorker(): void {
       if (latestAfterProcess && latestAfterProcess !== jobId) {
         await updateEmojiJobStatus({ job_id: jobId, status: "superseded" });
         broadcastEmojiQueueUpdate();
-        await deleteObject({ bucket, key: job.raw_s3_key }).catch(() => undefined);
+        await deleteObject({ bucket, key: job.raw_s3_key }).catch((e) => consola.warn("S3 cleanup failed", e));
         return;
       }
 
       const outKey = `emojis/${job.name}.${ext}`;
       const existing = await getEmoji(job.name);
       if (existing) {
-        await deleteObject({ bucket, key: existing.s3_key }).catch(() => undefined);
+        await deleteObject({ bucket, key: existing.s3_key }).catch((e) => consola.warn("S3 cleanup failed", e));
       }
 
       const fileId = uuidv4();
@@ -86,11 +86,11 @@ export function startEmojiQueueWorker(): void {
 
       broadcastCustomEmojisUpdate();
       broadcastEmojiQueueUpdate();
-      await deleteObject({ bucket, key: job.raw_s3_key }).catch(() => undefined);
+      await deleteObject({ bucket, key: job.raw_s3_key }).catch((e) => consola.warn("S3 cleanup failed", e));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       consola.error("[EmojiQueue] Job failed:", jobId, msg);
-      await updateEmojiJobStatus({ job_id: jobId, status: "error", error_message: msg }).catch(() => undefined);
+      await updateEmojiJobStatus({ job_id: jobId, status: "error", error_message: msg }).catch((e) => consola.warn("emoji job status update failed", e));
       broadcastEmojiQueueUpdate();
     } finally {
       // Yield so we don't starve the event loop during heavy bursts.
@@ -107,13 +107,13 @@ export function startEmojiQueueWorker(): void {
       if (inFlight >= concurrency) break;
       inFlight++;
       runOne(job_id)
-        .catch(() => undefined)
+        .catch((e) => consola.warn("emoji queue tick failed", e))
         .finally(() => { inFlight--; });
     }
   };
 
   setInterval(() => {
-    tick().catch(() => undefined);
+    tick().catch((e) => consola.warn("emoji queue tick failed", e));
   }, pollMs);
 }
 

@@ -1,3 +1,4 @@
+import consola from "consola";
 import { Client, auth, type ClientOptions } from "cassandra-driver";
 
 let client: Client | null = null;
@@ -146,7 +147,10 @@ export async function initScylla(): Promise<void> {
     "esports_mode boolean",
     "text_in_voice boolean",
   ]) {
-    await client.execute(`ALTER TABLE server_channels_by_id ADD ${col}`).catch(() => {});
+    await client.execute(`ALTER TABLE server_channels_by_id ADD ${col}`).catch((e) => {
+      const msg = typeof e === "object" && e && "message" in e ? String((e as { message: string }).message) : String(e);
+      if (!msg.includes("already exists")) consola.warn("ALTER TABLE failed:", msg);
+    });
   }
 
   // Sidebar items (ONE server per keyspace)
@@ -292,6 +296,16 @@ export async function initScylla(): Promise<void> {
       reactions text,
       PRIMARY KEY ((conversation_id), created_at, message_id)
     ) WITH CLUSTERING ORDER BY (created_at ASC, message_id ASC)`
+  );
+
+  // Lookup table: resolve created_at from (conversation_id, message_id) for O(1) access
+  await client.execute(
+    `CREATE TABLE IF NOT EXISTS message_ts_by_id (
+      conversation_id text,
+      message_id text,
+      created_at timestamp,
+      PRIMARY KEY ((conversation_id, message_id))
+    )`
   );
 
   // Add reactions column if it doesn't exist (for existing tables)

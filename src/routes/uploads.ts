@@ -1,3 +1,4 @@
+import consola from "consola";
 import express from "express";
 import type { Request, Response, NextFunction } from "express";
 import multer from "multer";
@@ -34,8 +35,8 @@ async function extractVideoThumbnail(buffer: Buffer, fileId: string): Promise<Bu
   } catch {
     return null;
   } finally {
-    await unlink(inputPath).catch(() => {});
-    await unlink(outputPath).catch(() => {});
+    await unlink(inputPath).catch((e) => consola.warn("temp file cleanup failed", e));
+    await unlink(outputPath).catch((e) => consola.warn("temp file cleanup failed", e));
   }
 }
 
