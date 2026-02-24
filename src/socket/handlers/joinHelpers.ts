@@ -1,7 +1,8 @@
 import consola from "consola";
 import type { HandlerContext, EventHandlerMap } from "./types";
-import { syncAllClients, broadcastMemberList } from "../utils/clients";
+import { syncAllClients, broadcastMemberList, verifyClient } from "../utils/clients";
 import { sendServerDetails } from "../utils/server";
+import { postSystemMessage, formatLeaveMessage } from "../utils/systemMessages";
 import { verifyIdentityToken } from "../../auth/oidc";
 import { generateAccessToken, verifyAccessToken } from "../../utils/jwt";
 import {
@@ -136,19 +137,22 @@ export function registerJoinHelpers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        await setUserInactive(clientInfo.serverUserId);
+        const { nickname, serverUserId } = clientInfo;
+
+        await setUserInactive(serverUserId);
 
         if (clientInfo.grytUserId) {
           await revokeUserRefreshTokens(clientInfo.grytUserId).catch((e) => consola.warn("token revocation failed", e));
         }
 
         if (clientInfo.hasJoinedChannel && sfuClient) {
-          sfuClient.untrackUserConnection(clientInfo.serverUserId);
+          sfuClient.untrackUserConnection(serverUserId);
         }
 
         delete clientsInfo[clientId];
         syncAllClients(io, clientsInfo);
         broadcastMemberList(io, clientsInfo, serverId);
+        postSystemMessage(io, clientsInfo, formatLeaveMessage(nickname, serverUserId));
         socket.emit("server:left", { message: "Successfully left the server" });
       } catch (err) {
         consola.error("server:leave failed", err);
@@ -215,7 +219,13 @@ export function registerJoinHelpers(ctx: HandlerContext): EventHandlerMap {
 
           if (clientsInfo[clientId]) {
             clientsInfo[clientId].accessToken = newAccessToken;
+            clientsInfo[clientId].grytUserId = record.gryt_user_id;
+            clientsInfo[clientId].serverUserId = record.server_user_id;
+            clientsInfo[clientId].nickname = user.nickname;
           }
+          verifyClient(socket);
+          syncAllClients(io, clientsInfo);
+          broadcastMemberList(io, clientsInfo, serverId);
           socket.emit("token:refreshed", { accessToken: newAccessToken });
         } else if (payload?.accessToken) {
           const decoded = verifyAccessToken(payload.accessToken);
@@ -237,7 +247,15 @@ export function registerJoinHelpers(ctx: HandlerContext): EventHandlerMap {
 
           const { grytUserId, serverUserId, nickname, serverHost } = decoded;
           const newToken = generateAccessToken({ grytUserId, serverUserId, nickname, serverHost, tokenVersion: currentVersion });
-          if (clientsInfo[clientId]) clientsInfo[clientId].accessToken = newToken;
+          if (clientsInfo[clientId]) {
+            clientsInfo[clientId].accessToken = newToken;
+            clientsInfo[clientId].grytUserId = grytUserId;
+            clientsInfo[clientId].serverUserId = serverUserId;
+            clientsInfo[clientId].nickname = nickname;
+          }
+          verifyClient(socket);
+          syncAllClients(io, clientsInfo);
+          broadcastMemberList(io, clientsInfo, serverId);
           socket.emit("token:refreshed", { accessToken: newToken });
         } else {
           socket.emit("token:error", "Invalid refresh payload");

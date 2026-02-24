@@ -182,6 +182,10 @@ export class SFURoomManager {
     }
   }
 
+  getTrackedUser(userId: string): { roomId: string; userId: string; connectedAt: number } | undefined {
+    return this.activeUsers.get(userId);
+  }
+
   getActiveUsers(): Map<string, { roomId: string; userId: string; connectedAt: number }> {
     return new Map(this.activeUsers);
   }

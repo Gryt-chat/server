@@ -33,6 +33,7 @@ export class SFUClient {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private shouldReconnect = true;
   private healthInterval: NodeJS.Timeout | null = null;
+  private syncInterval: NodeJS.Timeout | null = null;
   private connectionHealth = {
     lastPing: 0,
     isHealthy: true,
@@ -154,6 +155,10 @@ export class SFUClient {
       clearInterval(this.healthInterval);
       this.healthInterval = null;
     }
+    if (this.syncInterval) {
+      clearInterval(this.syncInterval);
+      this.syncInterval = null;
+    }
   }
 
   private startHealthCheck(): void {
@@ -179,6 +184,12 @@ export class SFUClient {
         this.stopHealthCheck();
       }
     }, 15000);
+
+    this.syncInterval = setInterval(() => {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.roomManager.requestSync();
+      }
+    }, 60_000);
   }
 
   private scheduleReconnect(): void {
@@ -273,6 +284,10 @@ export class SFUClient {
 
   untrackUserConnection(userId: string): void {
     this.roomManager.untrackUserConnection(userId);
+  }
+
+  getTrackedUser(userId: string): { roomId: string; userId: string; connectedAt: number } | undefined {
+    return this.roomManager.getTrackedUser(userId);
   }
 
   getActiveUsers(): Map<string, { roomId: string; userId: string; connectedAt: number }> {

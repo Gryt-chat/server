@@ -1,7 +1,8 @@
 import consola from "consola";
 import type { HandlerContext, EventHandlerMap } from "./types";
-import { syncAllClients, broadcastMemberList, countOtherSessions } from "../utils/clients";
+import { syncAllClients, broadcastMemberList, countOtherSessions, verifyClient } from "../utils/clients";
 import { sendServerDetails } from "../utils/server";
+import { postSystemMessage, formatJoinMessage } from "../utils/systemMessages";
 import { verifyIdentityToken } from "../../auth/oidc";
 import { generateAccessToken, TokenPayload } from "../../utils/jwt";
 import {
@@ -225,6 +226,8 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           clientsInfo[clientId].accessToken = accessToken;
         }
 
+        verifyClient(socket);
+
         const otherCount = countOtherSessions(clientsInfo, clientId, user.gryt_user_id);
         if (otherCount > 0) {
           consola.info(`User ${user.nickname} now has ${otherCount + 1} concurrent sessions`);
@@ -258,6 +261,7 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
         }
         syncAllClients(io, clientsInfo);
         broadcastMemberList(io, clientsInfo, serverId);
+        postSystemMessage(io, clientsInfo, formatJoinMessage(user.nickname, user.server_user_id));
       } catch (err) {
         consola.error("server:join failed", err);
         socket.emit("server:error", { error: "join_failed", message: "Failed to join server." });

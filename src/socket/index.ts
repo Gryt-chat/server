@@ -42,8 +42,20 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
     },
 
     onPeerLeft(ev: SFUPeerEvent) {
+      const RECONNECT_GRACE_MS = 10_000;
+      const tracked = sfuClient.getTrackedUser(ev.userId);
+
+      if (tracked && (Date.now() - tracked.connectedAt) < RECONNECT_GRACE_MS) {
+        consola.info(
+          `[SFU-Sync] Ignoring stale peer_left for ${ev.userId} — ` +
+          `reconnected ${Date.now() - tracked.connectedAt}ms ago`,
+        );
+        return;
+      }
+
       sfuClient.untrackUserConnection(ev.userId);
 
+      let changed = false;
       for (const [sid, ci] of Object.entries(clientsInfo)) {
         if (ci.serverUserId === ev.userId && ci.hasJoinedChannel) {
           const nickname = ci.nickname;
@@ -69,11 +81,14 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
             sock.emit("voice:stream:set", "");
             sock.emit("voice:room:leave");
           }
+          changed = true;
         }
       }
 
-      syncAllClients(io, clientsInfo);
-      broadcastMemberList(io, clientsInfo, serverId);
+      if (changed) {
+        syncAllClients(io, clientsInfo);
+        broadcastMemberList(io, clientsInfo, serverId);
+      }
     },
 
     onSyncResponse(rooms: SFUSyncRoom[]) {
@@ -254,7 +269,6 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
   // ── Session restoration (access token on connect) ────────────
 
   sendInfo(socket, clientsInfo, serverId);
-  verifyClient(socket);
 
   const clientAccessToken = socket.handshake.auth?.accessToken;
   if (clientAccessToken) {
@@ -280,6 +294,7 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
               (otherCount > 0 ? ` — ${otherCount} other session(s) active` : ""),
             );
 
+            verifyClient(socket);
             syncAllClients(io, clientsInfo);
             broadcastMemberList(io, clientsInfo, serverId);
             sendServerDetails(socket, clientsInfo, serverId).catch((e) => consola.warn("sendServerDetails failed", e));
