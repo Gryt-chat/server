@@ -375,6 +375,7 @@ emojisRouter.get(
 
         const contentType = cdnResp.headers.get("content-type") ?? "application/octet-stream";
         res.setHeader("Cache-Control", "no-store");
+        res.setHeader("Content-Length", String(bytes.length));
         res.setHeader("Content-Type", contentType);
         res.end(bytes);
       })
