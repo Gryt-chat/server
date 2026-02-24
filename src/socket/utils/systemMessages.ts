@@ -1,25 +1,38 @@
 import consola from "consola";
 import { Server } from "socket.io";
 
-import { insertMessage, listServerChannels } from "../../db/scylla";
+import { getServerConfig, insertMessage, listServerChannels } from "../../db/scylla";
 import type { Clients } from "../../types";
 
 const SYSTEM_SENDER_ID = "system";
 
-let cachedTextChannelId: string | null = null;
+let cachedChannelId: string | null = null;
 let channelCacheFetchedAt = 0;
 const CHANNEL_CACHE_TTL_MS = 30_000;
 
-async function getFirstTextChannelId(): Promise<string | null> {
+async function getSystemChannelId(): Promise<string | null> {
   const now = Date.now();
-  if (cachedTextChannelId && now - channelCacheFetchedAt < CHANNEL_CACHE_TTL_MS) {
-    return cachedTextChannelId;
+  if (cachedChannelId && now - channelCacheFetchedAt < CHANNEL_CACHE_TTL_MS) {
+    return cachedChannelId;
   }
+
+  const cfg = await getServerConfig();
+  if (cfg?.system_channel_id) {
+    cachedChannelId = cfg.system_channel_id;
+    channelCacheFetchedAt = now;
+    return cachedChannelId;
+  }
+
   const channels = await listServerChannels();
   const textChannel = channels.find((c) => c.type === "text");
-  cachedTextChannelId = textChannel?.channel_id ?? null;
+  cachedChannelId = textChannel?.channel_id ?? null;
   channelCacheFetchedAt = now;
-  return cachedTextChannelId;
+  return cachedChannelId;
+}
+
+export function invalidateSystemChannelCache(): void {
+  cachedChannelId = null;
+  channelCacheFetchedAt = 0;
 }
 
 export async function postSystemMessage(
@@ -28,9 +41,9 @@ export async function postSystemMessage(
   text: string,
 ): Promise<void> {
   try {
-    const channelId = await getFirstTextChannelId();
+    const channelId = await getSystemChannelId();
     if (!channelId) {
-      consola.warn("[systemMessage] No text channel found, skipping system message");
+      consola.warn("[systemMessage] No system channel found, skipping system message");
       return;
     }
 

@@ -30,6 +30,7 @@ export interface ServerConfigRecord {
   voice_max_bitrate_bps: number | null;
   profanity_mode: ProfanityMode;
   profanity_censor_style: CensorStyle;
+  system_channel_id: string | null;
   is_configured: boolean;
   created_at: Date;
   updated_at: Date;
@@ -60,6 +61,7 @@ function rowToServerConfig(r: types.Row): ServerConfigRecord {
     voice_max_bitrate_bps: typeof r["voice_max_bitrate_bps"] === "number" ? r["voice_max_bitrate_bps"] : (r["voice_max_bitrate_bps"] == null ? null : Number(r["voice_max_bitrate_bps"])),
     profanity_mode: normalizeProfanityMode(r["profanity_mode"]),
     profanity_censor_style: normalizeCensorStyle(r["profanity_censor_style"]),
+    system_channel_id: typeof r["system_channel_id"] === "string" ? r["system_channel_id"] : null,
     is_configured: typeof r["is_configured"] === "boolean" ? r["is_configured"] : false,
     created_at: r["created_at"] ?? new Date(0),
     updated_at: r["updated_at"] ?? new Date(0),
@@ -85,7 +87,7 @@ const SERVER_CONFIG_ID = "config";
 export async function getServerConfig(): Promise<ServerConfigRecord | null> {
   const c = getScyllaClient();
   const rs = await c.execute(
-    `SELECT owner_gryt_user_id, token_version, display_name, description, icon_url, password_salt, password_hash, password_algo, avatar_max_bytes, upload_max_bytes, emoji_max_bytes, voice_max_bitrate_bps, profanity_mode, profanity_censor_style, is_configured, created_at, updated_at
+    `SELECT owner_gryt_user_id, token_version, display_name, description, icon_url, password_salt, password_hash, password_algo, avatar_max_bytes, upload_max_bytes, emoji_max_bytes, voice_max_bitrate_bps, profanity_mode, profanity_censor_style, system_channel_id, is_configured, created_at, updated_at
      FROM server_config_singleton WHERE id = ?`,
     [SERVER_CONFIG_ID],
     { prepare: true }
@@ -107,9 +109,9 @@ export async function createServerConfigIfNotExists(seed?: {
   const iconUrl = seed?.iconUrl ?? null;
 
   const rs = await c.execute(
-    `INSERT INTO server_config_singleton (id, owner_gryt_user_id, token_version, display_name, description, icon_url, password_salt, password_hash, password_algo, avatar_max_bytes, upload_max_bytes, emoji_max_bytes, voice_max_bitrate_bps, profanity_mode, profanity_censor_style, is_configured, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) IF NOT EXISTS`,
-    [SERVER_CONFIG_ID, null, 0, displayName, description, iconUrl, null, null, null, DEFAULT_AVATAR_MAX_BYTES, DEFAULT_UPLOAD_MAX_BYTES, DEFAULT_EMOJI_MAX_BYTES, DEFAULT_VOICE_MAX_BITRATE_BPS, "censor", "emoji", false, now, now],
+    `INSERT INTO server_config_singleton (id, owner_gryt_user_id, token_version, display_name, description, icon_url, password_salt, password_hash, password_algo, avatar_max_bytes, upload_max_bytes, emoji_max_bytes, voice_max_bitrate_bps, profanity_mode, profanity_censor_style, system_channel_id, is_configured, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) IF NOT EXISTS`,
+    [SERVER_CONFIG_ID, null, 0, displayName, description, iconUrl, null, null, null, DEFAULT_AVATAR_MAX_BYTES, DEFAULT_UPLOAD_MAX_BYTES, DEFAULT_EMOJI_MAX_BYTES, DEFAULT_VOICE_MAX_BITRATE_BPS, "censor", "emoji", null, false, now, now],
     { prepare: true }
   );
 
@@ -130,6 +132,7 @@ export async function createServerConfigIfNotExists(seed?: {
     voice_max_bitrate_bps: DEFAULT_VOICE_MAX_BITRATE_BPS,
     profanity_mode: "censor",
     profanity_censor_style: "emoji",
+    system_channel_id: null,
     is_configured: false,
     created_at: now,
     updated_at: now,
@@ -260,6 +263,7 @@ export async function updateServerConfig(patch: {
   voiceMaxBitrateBps?: number | null;
   profanityMode?: ProfanityMode;
   profanityCensorStyle?: CensorStyle;
+  systemChannelId?: string | null;
   isConfigured?: boolean;
 }): Promise<ServerConfigRecord> {
   const c = getScyllaClient();
@@ -280,6 +284,7 @@ export async function updateServerConfig(patch: {
     voiceMaxBitrateBps: { col: "voice_max_bitrate_bps" },
     profanityMode: { col: "profanity_mode", transform: (v) => normalizeProfanityMode(v) },
     profanityCensorStyle: { col: "profanity_censor_style", transform: (v) => normalizeCensorStyle(v as string) },
+    systemChannelId: { col: "system_channel_id" },
     isConfigured: { col: "is_configured" },
   };
 

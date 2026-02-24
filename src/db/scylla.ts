@@ -81,6 +81,7 @@ export async function initScylla(): Promise<void> {
   await addCfgCol("voice_max_bitrate_bps int");
   await addCfgCol("profanity_mode text");
   await addCfgCol("profanity_censor_style text");
+  await addCfgCol("system_channel_id text");
 
   // Invites (ONE server per keyspace; code uniqueness per keyspace)
   await client.execute(

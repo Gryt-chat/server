@@ -2,6 +2,7 @@ import consola from "consola";
 import type { HandlerContext, EventHandlerMap } from "./types";
 import { requireAuth } from "../middleware/auth";
 import { broadcastServerUiUpdate, sendEmojiQueueStateToSocket } from "../utils/server";
+import { invalidateSystemChannelCache } from "../utils/systemMessages";
 import { VALID_CENSOR_STYLES, type CensorStyle } from "../../utils/profanityFilter";
 import { syncAllClients, broadcastMemberList } from "../utils/clients";
 import {
@@ -72,6 +73,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           emojiMaxBytes: cfg.emoji_max_bytes ?? DEFAULT_EMOJI_MAX_BYTES,
           profanityMode: cfg.profanity_mode ?? "censor",
           profanityCensorStyle: cfg.profanity_censor_style ?? "emoji",
+          systemChannelId: cfg.system_channel_id ?? null,
         });
       } catch (e) {
         consola.error("server:settings:get failed", e);
@@ -100,6 +102,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       emojiMaxBytes?: number | null;
       profanityMode?: string;
       profanityCensorStyle?: string;
+      systemChannelId?: string | null;
     }) => {
       try {
         const rl = rlCheck("server:settings:update", ctx, RL_SETTINGS);
@@ -134,6 +137,11 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
             ? payload.profanityCensorStyle as CensorStyle
             : undefined;
 
+        const systemChannelId: string | null | undefined =
+          payload.systemChannelId === null ? null
+            : typeof payload.systemChannelId === "string" ? payload.systemChannelId.trim().slice(0, 64) || null
+              : undefined;
+
         const updated = await updateServerConfig({
           displayName: displayName === undefined ? undefined : (displayName!.length > 0 ? displayName : null),
           description: description === undefined ? undefined : (description!.length > 0 ? description : null),
@@ -144,7 +152,10 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           emojiMaxBytes,
           profanityMode,
           profanityCensorStyle,
+          systemChannelId,
         });
+
+        if (systemChannelId !== undefined) invalidateSystemChannelCache();
 
         insertServerAudit({
           actorServerUserId: auth.tokenPayload.serverUserId,
@@ -168,6 +179,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           emojiMaxBytes: updated.emoji_max_bytes ?? DEFAULT_EMOJI_MAX_BYTES,
           profanityMode: updated.profanity_mode ?? "censor",
           profanityCensorStyle: updated.profanity_censor_style ?? "emoji",
+          systemChannelId: updated.system_channel_id ?? null,
         });
         broadcastServerUiUpdate("settings");
       } catch (e) {
