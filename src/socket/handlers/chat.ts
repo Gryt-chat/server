@@ -397,7 +397,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         const message = await getMessageById(payload.conversationId, payload.messageId);
         if (!message) { socket.emit("chat:error", "Message not found"); return; }
 
-        if (message.sender_server_id !== auth.tokenPayload.serverUserId && auth.role !== "owner") {
+        if (message.sender_server_id !== auth.tokenPayload.serverUserId && auth.role !== "owner" && auth.role !== "admin") {
           socket.emit("chat:error", "You can only delete your own messages");
           return;
         }
