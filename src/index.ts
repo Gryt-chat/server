@@ -150,6 +150,25 @@ if (process.env.SFU_WS_HOST) {
 	);
 }
 
+// Public server info (used by the "Add Server" dialog — no auth required)
+app.get("/info", async (_req, res) => {
+	let displayName = process.env.SERVER_NAME || "Unknown Server";
+	let description = process.env.SERVER_DESCRIPTION || "A Gryt server";
+	try {
+		const cfg = await getServerConfig();
+		if (cfg?.display_name) displayName = cfg.display_name;
+		if (cfg?.description) description = cfg.description;
+	} catch {
+		// fall back to env
+	}
+
+	res.json({
+		name: displayName,
+		description,
+		version: process.env.SERVER_VERSION || "1.0.0",
+	});
+});
+
 // Serve the uploaded server icon by streaming from S3.
 // Streams through the API instead of redirecting to presigned URLs, because in
 // dev/self-hosted setups the S3 endpoint is often an internal address (e.g.
