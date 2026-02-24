@@ -35,7 +35,7 @@ export function broadcastServerUiUpdate(reason: "settings" | "icon" | "other" = 
     }
   }
   syncAllClients(_io, _clientsInfo);
-  broadcastMemberList(_io, _clientsInfo, _serverId).catch((e) => consola.warn("broadcastMemberList failed", e));
+  broadcastMemberList(_io, _clientsInfo, _serverId);
 }
 
 export function broadcastCustomEmojisUpdate(): void {

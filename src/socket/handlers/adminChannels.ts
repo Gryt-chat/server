@@ -148,7 +148,7 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
             }
           }
           syncAllClients(io, clientsInfo);
-          broadcastMemberList(io, clientsInfo, serverId).catch((e) => consola.warn("broadcastMemberList failed", e));
+          broadcastMemberList(io, clientsInfo, serverId);
         }
 
         await deleteServerChannel(channelId);

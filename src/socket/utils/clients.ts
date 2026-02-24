@@ -76,19 +76,12 @@ export function syncAllClients(io: Server, clientsInfo: Clients) {
   }
 }
 
-// Separate debounce tracking for member list
+// Separate debounce tracking for member list (trailing-edge, like syncAllClients)
 const lastMemberListEmitByIO = new WeakMap<Server, number>();
 const lastMemberListStateByIO = new WeakMap<Server, string>();
+const pendingMemberListByIO = new WeakMap<Server, ReturnType<typeof setTimeout>>();
 
-export async function broadcastMemberList(io: Server, clientsInfo: Clients, _instanceId: string) {
-  const now = Date.now();
-  const last = lastMemberListEmitByIO.get(io) || 0;
-  
-  // Skip if too frequent
-  if (now - last < MEMBER_LIST_DEBOUNCE_MS) {
-    return;
-  }
-  
+async function emitMemberListNow(io: Server, clientsInfo: Clients): Promise<void> {
   try {
     const registeredUsers = await getAllRegisteredUsers();
     const roleRows = await listServerRoles();
@@ -108,13 +101,12 @@ export async function broadcastMemberList(io: Server, clientsInfo: Clients, _ins
         }
       }
     });
-    
-    // Combine registered users with online status, filtering out inactive users
+
     const members = registeredUsers
-      .filter(user => user.is_active) // Only include active users
+      .filter(user => user.is_active)
       .map(user => {
         const onlineClient = onlineUsers.get(user.server_user_id);
-        
+
         let status: 'online' | 'in_voice' | 'afk' | 'offline' = 'offline';
         if (onlineClient) {
           if (onlineClient.isAFK) {
@@ -125,7 +117,7 @@ export async function broadcastMemberList(io: Server, clientsInfo: Clients, _ins
             status = 'online';
           }
         }
-        
+
         return {
           serverUserId: user.server_user_id,
           nickname: user.nickname,
@@ -144,8 +136,7 @@ export async function broadcastMemberList(io: Server, clientsInfo: Clients, _ins
           streamID: onlineClient?.streamID || '',
         };
       });
-    
-    // Create a hash of the member list to detect actual changes.
+
     // IMPORTANT: include fields that should trigger UI updates (e.g. avatar/nickname),
     // otherwise updates can get deduped away and clients won't refresh.
     const currentMemberStateHash = JSON.stringify(
@@ -164,20 +155,37 @@ export async function broadcastMemberList(io: Server, clientsInfo: Clients, _ins
         isServerDeafened: m.isServerDeafened,
       })).sort((a, b) => a.serverUserId.localeCompare(b.serverUserId))
     );
-    
-    const lastMemberStateHash = lastMemberListStateByIO.get(io);
-    
-    // Skip if no actual member state change
-    if (currentMemberStateHash === lastMemberStateHash) {
+
+    if (currentMemberStateHash === lastMemberListStateByIO.get(io)) {
       return;
     }
-    
-    lastMemberListEmitByIO.set(io, now);
+
+    lastMemberListEmitByIO.set(io, Date.now());
     lastMemberListStateByIO.set(io, currentMemberStateHash);
-    
+
     io.to("verifiedClients").emit("members:list", members);
   } catch (error) {
     console.error('Failed to broadcast member list:', error);
+  }
+}
+
+export function broadcastMemberList(io: Server, clientsInfo: Clients, _instanceId: string): void {
+  const pending = pendingMemberListByIO.get(io);
+  if (pending) clearTimeout(pending);
+
+  const now = Date.now();
+  const elapsed = now - (lastMemberListEmitByIO.get(io) || 0);
+
+  if (elapsed >= MEMBER_LIST_DEBOUNCE_MS) {
+    void emitMemberListNow(io, clientsInfo);
+  } else {
+    pendingMemberListByIO.set(
+      io,
+      setTimeout(() => {
+        pendingMemberListByIO.delete(io);
+        void emitMemberListNow(io, clientsInfo);
+      }, MEMBER_LIST_DEBOUNCE_MS - elapsed),
+    );
   }
 }
 

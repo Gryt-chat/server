@@ -83,7 +83,7 @@ export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
         });
 
         syncAllClients(io, clientsInfo);
-        await broadcastMemberList(io, clientsInfo, serverId);
+        broadcastMemberList(io, clientsInfo, serverId);
       } catch (err) {
         consola.error("profile:update failed", err);
         socket.emit("profile:error", "Failed to update profile");
@@ -100,7 +100,7 @@ export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
             avatarFileId: user?.avatar_file_id ?? null,
           });
         }
-        await broadcastMemberList(io, clientsInfo, serverId);
+        broadcastMemberList(io, clientsInfo, serverId);
       } catch (err) {
         consola.error("avatar:updated failed", err);
       }
