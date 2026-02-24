@@ -188,6 +188,19 @@ export async function insertFile(record: Omit<FileRecord, "created_at"> & { crea
   return { ...record, created_at };
 }
 
+export async function updateFileRecord(fileId: string, updates: { s3_key?: string; mime?: string; size?: number; thumbnail_key?: string | null }): Promise<void> {
+  const c = getScyllaClient();
+  const sets: string[] = [];
+  const vals: unknown[] = [];
+  if (updates.s3_key !== undefined) { sets.push("s3_key = ?"); vals.push(updates.s3_key); }
+  if (updates.mime !== undefined) { sets.push("mime = ?"); vals.push(updates.mime); }
+  if (updates.size !== undefined) { sets.push("size = ?"); vals.push(updates.size); }
+  if (updates.thumbnail_key !== undefined) { sets.push("thumbnail_key = ?"); vals.push(updates.thumbnail_key); }
+  if (sets.length === 0) return;
+  vals.push(fileId);
+  await c.execute(`UPDATE files_by_id SET ${sets.join(", ")} WHERE file_id = ?`, vals, { prepare: true });
+}
+
 export async function getFile(fileId: string): Promise<FileRecord | null> {
   const c = getScyllaClient();
   const rs = await c.execute(

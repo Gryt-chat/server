@@ -10,8 +10,8 @@ import { execFile } from "child_process";
 import { writeFile, unlink, readFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
-import { putObject, getObject } from "../storage/s3";
-import { insertFile, getFile, updateUserAvatar, setUserAvatar, getServerConfig, DEFAULT_AVATAR_MAX_BYTES, DEFAULT_UPLOAD_MAX_BYTES } from "../db/scylla";
+import { deleteObject, putObject, getObject } from "../storage/s3";
+import { insertFile, getFile, updateFileRecord, updateUserAvatar, setUserAvatar, getServerConfig, DEFAULT_AVATAR_MAX_BYTES, DEFAULT_UPLOAD_MAX_BYTES } from "../db/scylla";
 import { requireBearerToken } from "../middleware/requireBearerToken";
 
 async function extractVideoThumbnail(buffer: Buffer, fileId: string): Promise<Buffer | null> {
@@ -151,15 +151,15 @@ uploadsRouter.post(
 
     const fileId = uuidv4();
     const inputMime = (file.mimetype || "").toLowerCase();
-    const isAnimated = inputMime === "image/gif" || inputMime === "image/webp" || inputMime === "image/avif";
-    const key = `avatars/${fileId}.avif`;
+    const isAnimated = inputMime === "image/gif" || inputMime === "image/webp";
+    const animExt = inputMime === "image/gif" ? "gif" : "webp";
 
     Promise.resolve()
       .then(async () => {
-        // Enforce server-configured avatar max size (best-effort; falls back to multer limit).
         const cfg = await getServerConfig().catch(() => null);
         const maxBytes = (typeof cfg?.avatar_max_bytes === "number" ? cfg.avatar_max_bytes : DEFAULT_AVATAR_MAX_BYTES);
-        if (typeof maxBytes === "number" && maxBytes > 0 && file.size > maxBytes) {
+
+        if (!isAnimated && typeof maxBytes === "number" && maxBytes > 0 && file.size > maxBytes) {
           res.status(413).json({
             error: "file_too_large",
             message: `Avatar too large. Max ${(maxBytes / (1024 * 1024)).toFixed(1)}MB.`,
@@ -167,33 +167,80 @@ uploadsRouter.post(
           return;
         }
 
+        let key: string;
         let storedBody: Buffer;
-        const storedMime = "image/avif";
+        let storedMime: string;
         let storedSize: number;
         let width: number | null = null;
         let height: number | null = null;
-
         let thumbKey: string | null = null;
-        let thumb: Buffer | null = null;
+        let processing = false;
 
-        try {
-          const meta = await sharp(file.buffer, { animated: isAnimated }).metadata().catch(() => null);
-          if (meta?.width && meta?.height) { width = meta.width; height = meta.height; }
-          storedBody = await sharp(file.buffer, { animated: isAnimated })
-            .resize({ width: 256, height: 256, fit: "cover" })
-            .avif()
-            .toBuffer();
-          storedSize = storedBody.length;
-          thumb = await sharp(file.buffer, { animated: isAnimated })
+        const meta = await sharp(file.buffer, { pages: 1 }).metadata().catch(() => null);
+        if (meta?.width && meta?.height) { width = meta.width; height = meta.height; }
+
+        if (isAnimated && file.size <= maxBytes) {
+          key = `avatars/${fileId}.${animExt}`;
+          storedBody = file.buffer;
+          storedMime = inputMime;
+          storedSize = file.size;
+
+          const thumb = await sharp(file.buffer, { pages: 1 })
             .resize({ width: 64, height: 64, fit: "cover" })
             .avif({ quality: 50 })
-            .toBuffer();
-        } catch {
-          res.status(400).json({ error: "invalid_file", message: "Could not process image. Please upload a valid image under the size limit." });
-          return;
+            .toBuffer()
+            .catch(() => null);
+
+          if (thumb) {
+            thumbKey = `avatars/thumb_${fileId}.avif`;
+            await putObject({ bucket, key: thumbKey, body: thumb, contentType: "image/avif" }).catch((e) => {
+              console.error("avatar_thumb_s3_error", { bucket, key: thumbKey, message: (e instanceof Error ? e.message : "S3 upload failed.") });
+              thumbKey = null;
+            });
+          }
+        } else if (isAnimated) {
+          key = `avatars/${fileId}.avif`;
+          processing = true;
+          try {
+            storedBody = await sharp(file.buffer, { pages: 1 })
+              .resize({ width: 256, height: 256, fit: "cover" })
+              .avif()
+              .toBuffer();
+          } catch {
+            res.status(400).json({ error: "invalid_file", message: "Could not process image." });
+            return;
+          }
+          storedMime = "image/avif";
+          storedSize = storedBody.length;
+        } else {
+          key = `avatars/${fileId}.avif`;
+          try {
+            storedBody = await sharp(file.buffer)
+              .resize({ width: 256, height: 256, fit: "cover" })
+              .avif()
+              .toBuffer();
+          } catch {
+            res.status(400).json({ error: "invalid_file", message: "Could not process image. Please upload a valid image under the size limit." });
+            return;
+          }
+          storedMime = "image/avif";
+          storedSize = storedBody.length;
+
+          const thumb = await sharp(file.buffer)
+            .resize({ width: 64, height: 64, fit: "cover" })
+            .avif({ quality: 50 })
+            .toBuffer()
+            .catch(() => null);
+
+          if (thumb) {
+            thumbKey = `avatars/thumb_${fileId}.avif`;
+            await putObject({ bucket, key: thumbKey, body: thumb, contentType: "image/avif" }).catch((e) => {
+              console.error("avatar_thumb_s3_error", { bucket, key: thumbKey, message: (e instanceof Error ? e.message : "S3 upload failed.") });
+              thumbKey = null;
+            });
+          }
         }
 
-        // Upload main object
         try {
           await putObject({ bucket, key, body: storedBody, contentType: storedMime });
         } catch (e) {
@@ -201,18 +248,6 @@ uploadsRouter.post(
           console.error("avatar_upload_s3_error", { bucket, key, message: msg });
           res.status(502).json({ error: "s3_error", message: msg });
           return;
-        }
-
-        // Upload thumbnail (best-effort; don't fail the avatar on thumb issues)
-        if (thumb) {
-          thumbKey = `avatars/thumb_${fileId}.avif`;
-          try {
-            await putObject({ bucket, key: thumbKey, body: thumb, contentType: "image/avif" });
-          } catch (e) {
-            const msg = (e instanceof Error && e.message.trim().length > 0) ? e.message : "S3 upload failed.";
-            console.error("avatar_thumb_s3_error", { bucket, key: thumbKey, message: msg });
-            thumbKey = null;
-          }
         }
 
         await insertFile({
@@ -228,7 +263,48 @@ uploadsRouter.post(
         });
 
         await updateUserAvatar(serverUserId, fileId);
-        res.status(201).json({ avatarFileId: fileId });
+        res.status(201).json({ avatarFileId: fileId, processing });
+
+        // Background: resize oversized animated file and replace the placeholder
+        if (processing) {
+          const animBuf = file.buffer;
+          setImmediate(() => {
+            (async () => {
+              try {
+                const outputFormat = inputMime === "image/gif" ? "gif" : "webp";
+                const outputMime = `image/${outputFormat}`;
+                const pipeline = sharp(animBuf, { animated: true })
+                  .resize({ width: 256, height: 256, fit: "cover" });
+                const resized = outputFormat === "gif"
+                  ? await pipeline.gif().toBuffer()
+                  : await pipeline.webp().toBuffer();
+
+                const animKey = `avatars/${fileId}.${outputFormat}`;
+                await putObject({ bucket, key: animKey, body: resized, contentType: outputMime });
+
+                const thumbBuf = await sharp(resized, { pages: 1 })
+                  .resize({ width: 64, height: 64, fit: "cover" })
+                  .avif({ quality: 50 })
+                  .toBuffer()
+                  .catch(() => null);
+                const newThumbKey = thumbBuf ? `avatars/thumb_${fileId}.avif` : null;
+                if (thumbBuf && newThumbKey) {
+                  await putObject({ bucket, key: newThumbKey, body: thumbBuf, contentType: "image/avif" }).catch(() => {});
+                }
+
+                await updateFileRecord(fileId, { s3_key: animKey, mime: outputMime, size: resized.length, thumbnail_key: newThumbKey });
+
+                if (animKey !== key) {
+                  await deleteObject({ bucket, key }).catch(() => {});
+                }
+
+                consola.info(`Background avatar processing done for ${fileId} (${(resized.length / 1024).toFixed(0)}KB ${outputFormat})`);
+              } catch (err) {
+                consola.error(`Background avatar processing failed for ${fileId}`, err);
+              }
+            })();
+          });
+        }
       })
       .catch(next);
   },
@@ -285,7 +361,7 @@ uploadsRouter.get(
         }
 
         const contentType = useThumb
-          ? (fileMeta.thumbnail_key?.endsWith(".avif") ? "image/avif" : "image/jpeg")
+          ? (mime.lookup(fileMeta.thumbnail_key || "") || "image/avif")
           : (fileMeta.mime || undefined);
         if (contentType) res.setHeader("Content-Type", contentType);
         res.setHeader("Cache-Control", "public, max-age=60");
