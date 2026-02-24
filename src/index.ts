@@ -32,12 +32,12 @@ const VERSION = process.env.SERVER_VERSION || pkg.version || "0.0.0";
 
 const app = express(); // Create an Express app
 
-const allowedCorsOrigins = (process.env.CORS_ORIGIN || "https://app.gryt.chat")
+const allowedCorsOrigins = (process.env.CORS_ORIGIN || "http://127.0.0.1:15738,https://app.gryt.chat")
 	.split(",")
 	.map((s) => s.trim())
 	.filter(Boolean);
 
-// Electron production builds load from file:// which sends Origin: "null" (literal string).
+// Electron production builds load from http://127.0.0.1:15738 or send Origin: "null" (file://).
 function isAllowedOrigin(origin: string): boolean {
 	if (allowedCorsOrigins.includes("*")) return true;
 	if (origin === "null") return true;
