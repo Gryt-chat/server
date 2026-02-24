@@ -355,6 +355,57 @@ export async function initScylla(): Promise<void> {
     )`
   );
 
+  // Emoji jobs (upload-first, process-later) (ONE server per keyspace)
+  await client.execute(
+    `CREATE TABLE IF NOT EXISTS server_emoji_jobs_by_id (
+      job_id uuid PRIMARY KEY,
+      name text,
+      status text,
+      raw_s3_key text,
+      raw_content_type text,
+      raw_bytes bigint,
+      out_s3_key text,
+      out_content_type text,
+      file_id uuid,
+      error_message text,
+      uploaded_by_server_user_id text,
+      created_at timestamp,
+      updated_at timestamp
+    )`
+  );
+
+  await client.execute(
+    `CREATE TABLE IF NOT EXISTS server_emoji_jobs_by_status (
+      status text,
+      created_at timestamp,
+      job_id uuid,
+      name text,
+      updated_at timestamp,
+      PRIMARY KEY ((status), created_at, job_id)
+    ) WITH CLUSTERING ORDER BY (created_at ASC, job_id ASC)`
+  );
+
+  await client.execute(
+    `CREATE TABLE IF NOT EXISTS server_emoji_jobs_by_created (
+      bucket text,
+      created_at timestamp,
+      job_id uuid,
+      name text,
+      status text,
+      error_message text,
+      updated_at timestamp,
+      PRIMARY KEY ((bucket), created_at, job_id)
+    ) WITH CLUSTERING ORDER BY (created_at DESC, job_id DESC)`
+  );
+
+  await client.execute(
+    `CREATE TABLE IF NOT EXISTS server_emoji_latest_job_by_name (
+      name text PRIMARY KEY,
+      job_id uuid,
+      updated_at timestamp
+    )`
+  );
+
   // Message reports (ONE server per keyspace)
   await client.execute(
     `CREATE TABLE IF NOT EXISTS message_reports (

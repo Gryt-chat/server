@@ -27,6 +27,7 @@ import { oEmbedRouter } from "./routes/oembed";
 import { mediaMetadataRouter } from "./routes/mediaMetadata";
 import { getObject } from "./storage/s3";
 import { startMediaSweep } from "./jobs/mediaSweep";
+import { startEmojiQueueWorker } from "./jobs/emojiQueueWorker";
 import { readFileSync } from "fs";
 import { join } from "path";
 
@@ -300,4 +301,8 @@ httpServer.listen(PORT, () => {
 		corsOrigin: allowedCorsOrigins,
 		ready: true
 	});
+
+	if (!disableS3 && !disableScylla && scyllaContactPoints && (process.env.S3_BUCKET || "").trim()) {
+		startEmojiQueueWorker();
+	}
 });
