@@ -146,3 +146,62 @@ serverRouter.post(
   }
 );
 
+serverRouter.delete(
+  "/icon",
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const token = getBearerToken(req);
+      if (!token) {
+        res.status(401).json({ error: "auth_required", message: "Missing Authorization bearer token" });
+        return;
+      }
+
+      const decoded = verifyAccessToken(token);
+      if (!decoded) {
+        res.status(401).json({ error: "token_invalid", message: "Invalid access token" });
+        return;
+      }
+
+      const host = req.headers.host || "unknown";
+      if (decoded.serverHost !== host) {
+        res.status(403).json({ error: "forbidden", message: "Invalid token for this server" });
+        return;
+      }
+
+      await createServerConfigIfNotExists();
+      const cfg = await getServerConfig();
+      if (!cfg?.owner_gryt_user_id) {
+        res.status(409).json({ error: "no_owner", message: "Server has no owner configured" });
+        return;
+      }
+      if (cfg.owner_gryt_user_id !== decoded.grytUserId) {
+        res.status(403).json({ error: "forbidden", message: "Only the server owner can change the icon" });
+        return;
+      }
+
+      const prev = cfg.icon_url || null;
+      if (!prev) {
+        res.status(200).json({ ok: true, cleared: false });
+        return;
+      }
+
+      await updateServerConfig({
+        iconUrl: null,
+        isConfigured: true,
+      });
+
+      insertServerAudit({
+        actorServerUserId: decoded.serverUserId,
+        action: "icon_clear",
+        target: prev,
+      }).catch(() => undefined);
+
+      res.status(200).json({ ok: true, cleared: true });
+
+      broadcastServerUiUpdate("icon");
+    } catch (e) {
+      next(e);
+    }
+  }
+);
+

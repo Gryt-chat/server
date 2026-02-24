@@ -41,7 +41,8 @@ async function processEmojiToAvif(
 ): Promise<{ processed: Buffer; ext: string; contentType: string }> {
   const animated = ANIMATED_MIME_SET.has(mime);
   const processed = await sharp(buffer, { animated })
-    .resize(128, 128, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
+    // Keep aspect ratio; only shrink to max height 128 (width unrestricted).
+    .resize({ height: 128, withoutEnlargement: true })
     .avif()
     .toBuffer();
   return { processed, ext: "avif", contentType: "image/avif" };
@@ -314,6 +315,60 @@ interface BttvEmoteInput {
   imageType: string;
   name: string;
 }
+
+emojisRouter.get(
+  "/bttv/emote/:emoteId",
+  (req: Request, res: Response, next: NextFunction): void => {
+    const { emoteId } = req.params;
+    if (!emoteId || !/^[a-f0-9]{20,30}$/.test(emoteId)) {
+      res.status(400).json({ error: "invalid_emote_id" });
+      return;
+    }
+
+    const tryFetch = async (path: string): Promise<Record<string, unknown> | null> => {
+      const resp = await fetch(`${BTTV_API}${path}`);
+      if (!resp.ok) return null;
+      const json = await resp.json().catch(() => null);
+      if (!json || typeof json !== "object") return null;
+      return json as Record<string, unknown>;
+    };
+
+    Promise.resolve()
+      .then(async () => {
+        const data =
+          (await tryFetch(`/emotes/shared/${emoteId}`)) ??
+          (await tryFetch(`/emotes/${emoteId}`));
+
+        if (!data) {
+          res.status(404).json({ error: "not_found", message: "BetterTTV emote not found." });
+          return;
+        }
+
+        const id = typeof data.id === "string" ? data.id : emoteId;
+        const code = typeof data.code === "string" ? data.code : "";
+        const imageType = typeof data.imageType === "string" ? data.imageType : "png";
+        const animated =
+          (typeof data.animated === "boolean")
+            ? data.animated
+            : imageType.toLowerCase() === "gif";
+
+        if (!code) {
+          res.status(502).json({ error: "invalid_bttv_response", message: "BetterTTV returned an invalid emote payload." });
+          return;
+        }
+
+        res.json({
+          emote: {
+            id,
+            code,
+            imageType,
+            animated,
+          },
+        });
+      })
+      .catch(next);
+  },
+);
 
 emojisRouter.get(
   "/bttv/user/:userId",
