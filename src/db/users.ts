@@ -8,6 +8,7 @@ export interface UserRecord {
   server_user_id: string; // Secret server user ID (never exposed to clients)
   nickname: string;
   avatar_file_id?: string; // file_id referencing files_by_id for avatar image
+  joined_with_invite_code?: string; // invite code used on first join (for leak tracking)
   created_at: Date;
   last_seen: Date;
   last_token_refresh?: Date; // Track when token was last refreshed
@@ -20,6 +21,7 @@ function rowToUserRecord(r: types.Row): UserRecord {
     server_user_id: r["server_user_id"],
     nickname: r["nickname"],
     avatar_file_id: r["avatar_file_id"] ?? undefined,
+    joined_with_invite_code: r["joined_with_invite_code"] ?? undefined,
     created_at: r["created_at"],
     last_seen: r["last_seen"],
     is_active: typeof r["is_active"] === "boolean" ? r["is_active"] : true,
@@ -27,7 +29,11 @@ function rowToUserRecord(r: types.Row): UserRecord {
 }
 
 
-export async function upsertUser(grytUserId: string, nickname: string, avatarFileId?: string): Promise<UserRecord> {
+export async function upsertUser(
+  grytUserId: string,
+  nickname: string,
+  opts?: { avatarFileId?: string; inviteCode?: string },
+): Promise<UserRecord> {
   const c = getScyllaClient();
   const now = new Date();
 
@@ -35,7 +41,7 @@ export async function upsertUser(grytUserId: string, nickname: string, avatarFil
     const existingUser = await getUserByGrytId(grytUserId);
 
     if (existingUser) {
-      const newAvatar = avatarFileId ?? existingUser.avatar_file_id;
+      const newAvatar = opts?.avatarFileId ?? existingUser.avatar_file_id;
       await c.execute(
         `UPDATE users_by_gryt_id SET nickname = ?, avatar_file_id = ?, last_seen = ?, is_active = ? WHERE gryt_user_id = ?`,
         [nickname, newAvatar ?? null, now, true, grytUserId],
@@ -53,22 +59,25 @@ export async function upsertUser(grytUserId: string, nickname: string, avatarFil
         server_user_id: existingUser.server_user_id, 
         nickname,
         avatar_file_id: newAvatar,
+        joined_with_invite_code: existingUser.joined_with_invite_code,
         created_at: existingUser.created_at, 
         last_seen: now,
         is_active: true
       };
     } else {
       const serverUserId = `user_${randomUUID()}`;
+      const inviteCode = opts?.inviteCode ?? null;
+      const avatarFileId = opts?.avatarFileId ?? null;
 
       await c.execute(
-        `INSERT INTO users_by_gryt_id (gryt_user_id, server_user_id, nickname, avatar_file_id, created_at, last_seen, is_active) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [grytUserId, serverUserId, nickname, avatarFileId ?? null, now, now, true],
+        `INSERT INTO users_by_gryt_id (gryt_user_id, server_user_id, nickname, avatar_file_id, joined_with_invite_code, created_at, last_seen, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [grytUserId, serverUserId, nickname, avatarFileId, inviteCode, now, now, true],
         { prepare: true }
       );
       
       await c.execute(
-        `INSERT INTO users_by_server_id (server_user_id, gryt_user_id, nickname, avatar_file_id, created_at, last_seen, is_active) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [serverUserId, grytUserId, nickname, avatarFileId ?? null, now, now, true],
+        `INSERT INTO users_by_server_id (server_user_id, gryt_user_id, nickname, avatar_file_id, joined_with_invite_code, created_at, last_seen, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [serverUserId, grytUserId, nickname, avatarFileId, inviteCode, now, now, true],
         { prepare: true }
       );
 
@@ -76,7 +85,8 @@ export async function upsertUser(grytUserId: string, nickname: string, avatarFil
         gryt_user_id: grytUserId, 
         server_user_id: serverUserId, 
         nickname,
-        avatar_file_id: avatarFileId,
+        avatar_file_id: avatarFileId ?? undefined,
+        joined_with_invite_code: inviteCode ?? undefined,
         created_at: now, 
         last_seen: now,
         is_active: true

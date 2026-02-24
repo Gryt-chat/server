@@ -225,6 +225,18 @@ export async function initScylla(): Promise<void> {
     }
   }
 
+  // Add joined_with_invite_code column to user tables
+  for (const tbl of ["users_by_gryt_id", "users_by_server_id"] as const) {
+    try {
+      await client.execute(`ALTER TABLE ${tbl} ADD joined_with_invite_code text`);
+    } catch (error) {
+      const msg = errMsg(error);
+      if (!msg.includes("already exists") && !msg.includes("Invalid column name")) {
+        console.warn(`Warning: Could not add joined_with_invite_code to ${tbl}:`, msg);
+      }
+    }
+  }
+
   // Add avatar_file_id column to user tables
   try {
     await client.execute(`ALTER TABLE users_by_gryt_id ADD avatar_file_id text`);

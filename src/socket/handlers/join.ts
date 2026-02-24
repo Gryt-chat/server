@@ -116,6 +116,7 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
         const existingMember = await getUserByGrytId(grytUserId);
         const isActiveMember = !!(existingMember && existingMember.is_active);
         let claimedOwnerGrytUserId: string | null | undefined;
+        let usedInviteCode: string | undefined;
 
         if (!isActiveMember) {
           const ip = getClientIp();
@@ -160,6 +161,7 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
               });
               return;
             }
+            usedInviteCode = inviteCode;
             clearInviteCooldown(inviteKey);
             clearInviteIpCooldown(ip);
           } else {
@@ -186,7 +188,9 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           cfg = created.config;
         }
 
-        const user = await upsertUser(grytUserId, nickname.trim());
+        const user = await upsertUser(grytUserId, nickname.trim(), {
+          inviteCode: usedInviteCode,
+        });
         const isOwner = ((claimedOwnerGrytUserId ?? cfg?.owner_gryt_user_id) || null) === grytUserId;
         const setupRequired = isOwner && !cfg?.is_configured;
         const tokenVersion = cfg?.token_version ?? 0;
