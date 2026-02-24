@@ -2,6 +2,7 @@ import consola from "consola";
 import { Server, Socket } from "socket.io";
 import { Clients } from "../../types";
 import { syncAllClients, broadcastMemberList } from "./clients";
+import { listEmojiJobs } from "../../db/emojiJobs";
 import {
   ensureDefaultChannels,
   ensureDefaultSidebarItems,
@@ -45,8 +46,75 @@ export function broadcastCustomEmojisUpdate(): void {
 
 export function broadcastEmojiQueueUpdate(): void {
   if (!_io) return;
-  consola.info("Broadcasting emoji queue update");
-  _io.to("verifiedClients").emit("server:emojiQueue:updated");
+  scheduleEmojiQueueStateBroadcast();
+}
+
+export function sendEmojiQueueStateToSocket(socket: Socket): void {
+  if (!_io) return;
+  void Promise.resolve()
+    .then(async () => {
+      const jobs = await listEmojiJobs(150);
+      const pendingCount = jobs.filter((j) => j.status === "queued" || j.status === "processing").length;
+      socket.emit("server:emojiQueue:state", {
+        pendingCount,
+        jobs: jobs.map((j) => ({
+          job_id: j.job_id,
+          name: j.name,
+          status: j.status,
+          error_message: j.error_message,
+          created_at: j.created_at.toISOString(),
+          updated_at: j.updated_at.toISOString(),
+        })),
+      });
+    })
+    .catch((e) => {
+      consola.warn("Failed to send emoji queue state", e);
+    });
+}
+
+type EmojiQueueState = {
+  pendingCount: number;
+  jobs: Array<{
+    job_id: string;
+    name: string;
+    status: string;
+    error_message: string | null;
+    created_at: string;
+    updated_at: string;
+  }>;
+};
+
+let _emojiQueueBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleEmojiQueueStateBroadcast(): void {
+  const io = _io;
+  if (!io) return;
+  if (_emojiQueueBroadcastTimer) return;
+
+  _emojiQueueBroadcastTimer = setTimeout(() => {
+    _emojiQueueBroadcastTimer = null;
+    void Promise.resolve()
+      .then(async () => {
+        const jobs = await listEmojiJobs(150);
+        const pendingCount = jobs.filter((j) => j.status === "queued" || j.status === "processing").length;
+        const state: EmojiQueueState = {
+          pendingCount,
+          jobs: jobs.map((j) => ({
+            job_id: j.job_id,
+            name: j.name,
+            status: j.status,
+            error_message: j.error_message,
+            created_at: j.created_at.toISOString(),
+            updated_at: j.updated_at.toISOString(),
+          })),
+        };
+        consola.info("Broadcasting emoji queue state", { pendingCount });
+        io.to("verifiedClients").emit("server:emojiQueue:state", state);
+      })
+      .catch((e) => {
+        consola.warn("Failed to broadcast emoji queue state", e);
+      });
+  }, 250);
 }
 
 const sfuHostsRaw = process.env.SFU_PUBLIC_HOST || process.env.SFU_WS_HOST || "";

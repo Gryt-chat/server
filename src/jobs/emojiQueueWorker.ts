@@ -15,6 +15,10 @@ function clampInt(value: string | undefined, fallback: number, min: number, max:
 }
 
 export function startEmojiQueueWorker(): void {
+  // Ensure we don't start multiple polling loops (can happen if called from multiple init paths).
+  if ((globalThis as { __grytEmojiWorkerStarted?: boolean }).__grytEmojiWorkerStarted) return;
+  (globalThis as { __grytEmojiWorkerStarted?: boolean }).__grytEmojiWorkerStarted = true;
+
   const bucket = (process.env.S3_BUCKET || "").trim();
   if (!bucket) {
     consola.warn("[EmojiQueue] S3_BUCKET missing; worker disabled.");

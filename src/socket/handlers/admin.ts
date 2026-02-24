@@ -1,7 +1,7 @@
 import consola from "consola";
 import type { HandlerContext, EventHandlerMap } from "./types";
 import { requireAuth } from "../middleware/auth";
-import { broadcastServerUiUpdate } from "../utils/server";
+import { broadcastServerUiUpdate, sendEmojiQueueStateToSocket } from "../utils/server";
 import { VALID_CENSOR_STYLES, type CensorStyle } from "../../utils/profanityFilter";
 import { syncAllClients, broadcastMemberList } from "../utils/clients";
 import { generateAccessToken } from "../../utils/jwt";
@@ -80,6 +80,17 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       } catch (e) {
         consola.error("server:settings:get failed", e);
         socket.emit("server:error", { error: "settings_failed", message: "Failed to load settings." });
+      }
+    },
+
+    "server:emojiQueue:get": async (payload: { accessToken: string }) => {
+      try {
+        const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
+        if (!auth) return;
+        sendEmojiQueueStateToSocket(socket);
+      } catch (e) {
+        consola.error("server:emojiQueue:get failed", e);
+        socket.emit("server:error", { error: "emoji_queue_failed", message: "Failed to load emoji queue." });
       }
     },
 

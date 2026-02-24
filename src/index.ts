@@ -149,6 +149,9 @@ if (disableScylla) {
 		})
 		.then(() => {
 			if (!disableS3) startMediaSweep();
+			if (!disableS3 && (process.env.S3_BUCKET || "").trim()) {
+				startEmojiQueueWorker();
+			}
 		})
 		.catch((e) => consola.error("ScyllaDB initialization failed", e));
 }
@@ -301,8 +304,4 @@ httpServer.listen(PORT, () => {
 		corsOrigin: allowedCorsOrigins,
 		ready: true
 	});
-
-	if (!disableS3 && !disableScylla && scyllaContactPoints && (process.env.S3_BUCKET || "").trim()) {
-		startEmojiQueueWorker();
-	}
 });
