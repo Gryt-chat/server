@@ -23,6 +23,8 @@ import { uploadsRouter } from "./routes/uploads";
 import { membersRouter } from "./routes/members";
 import { emojisRouter } from "./routes/emojis";
 import { linkPreviewRouter } from "./routes/linkPreview";
+import { oEmbedRouter } from "./routes/oembed";
+import { mediaMetadataRouter } from "./routes/mediaMetadata";
 import { getObject } from "./storage/s3";
 import { startMediaSweep } from "./jobs/mediaSweep";
 import { readFileSync } from "fs";
@@ -224,6 +226,8 @@ app.use("/api/uploads", uploadsRouter);
 app.use("/api/members", membersRouter);
 app.use("/api/emojis", emojisRouter);
 app.use("/api/link-preview", linkPreviewRouter);
+app.use("/api/oembed", oEmbedRouter);
+app.use("/api/media/metadata", mediaMetadataRouter);
 
 // Basic error handler
 app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

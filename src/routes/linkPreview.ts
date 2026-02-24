@@ -1,12 +1,15 @@
 import { Router } from "express";
 import consola from "consola";
 import { requireBearerToken } from "../middleware/requireBearerToken";
+import { fetchRemoteImageMetadata } from "../utils/remoteImageMetadata";
 
 interface LinkPreviewData {
   url: string;
   title: string | null;
   description: string | null;
   image: string | null;
+  imageWidth: number | null;
+  imageHeight: number | null;
   siteName: string | null;
   favicon: string | null;
 }
@@ -88,7 +91,7 @@ function isBlockedHost(hostname: string): boolean {
 }
 
 async function fetchPreview(url: string): Promise<LinkPreviewData> {
-  const empty: LinkPreviewData = { url, title: null, description: null, image: null, siteName: null, favicon: null };
+  const empty: LinkPreviewData = { url, title: null, description: null, image: null, imageWidth: null, imageHeight: null, siteName: null, favicon: null };
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5000);
 
@@ -144,7 +147,15 @@ async function fetchPreview(url: string): Promise<LinkPreviewData> {
       try { image = new URL(image, url).href; } catch { /* keep as-is */ }
     }
 
-    return { url, title, description, image, siteName, favicon };
+    let imageWidth: number | null = null;
+    let imageHeight: number | null = null;
+    if (image && image.startsWith("http")) {
+      const meta = await fetchRemoteImageMetadata(image);
+      imageWidth = meta.width;
+      imageHeight = meta.height;
+    }
+
+    return { url, title, description, image, imageWidth, imageHeight, siteName, favicon };
   } finally {
     clearTimeout(timeout);
   }
