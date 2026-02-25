@@ -46,8 +46,8 @@ export class SFUClient {
     this.serverToken = serverPassword;
     this.sfuHost = sfuHost;
     
-    if (!serverId || !serverPassword || !sfuHost) {
-      throw new Error('SFU client requires serverId, serverPassword, and sfuHost');
+    if (!serverId || !sfuHost) {
+      throw new Error('SFU client requires serverId and sfuHost');
     }
 
     this.roomManager = new SFURoomManager(() => this.ws, serverId, serverPassword);
