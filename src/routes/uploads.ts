@@ -268,9 +268,17 @@ uploadsRouter.post(
         try {
           await putObject({ bucket, key, body: storedBody, contentType: storedMime });
         } catch (e) {
-          const msg = (e instanceof Error && e.message.trim().length > 0) ? e.message : "S3 upload failed.";
-          console.error("avatar_upload_s3_error", { bucket, key, message: msg });
-          res.status(502).json({ error: "s3_error", message: msg });
+          const raw = (e instanceof Error && e.message.trim().length > 0) ? e.message : "";
+          console.error("avatar_upload_s3_error", { bucket, key, message: raw });
+          const friendly =
+            /InvalidBucketName|NoSuchBucket|bucket/i.test(raw)
+              ? "File storage is misconfigured on this server. Please contact the server administrator."
+              : /AccessDenied|Forbidden/i.test(raw)
+                ? "File storage access denied. Please contact the server administrator."
+                : raw.length > 0
+                  ? `Avatar upload failed: ${raw}`
+                  : "Avatar upload failed due to a storage error.";
+          res.status(502).json({ error: "s3_error", message: friendly });
           return;
         }
 
