@@ -24,6 +24,7 @@ import { mediaMetadataRouter } from "./routes/mediaMetadata";
 import { getObject } from "./storage/s3";
 import { startMediaSweep } from "./jobs/mediaSweep";
 import { startEmojiQueueWorker } from "./jobs/emojiQueueWorker";
+import { metricsMiddleware, register, socketConnectionsActive } from "./metrics";
 import { readFileSync } from "fs";
 import { join } from "path";
 
@@ -67,6 +68,13 @@ app.use((req, res, next) => {
 
 // Parse JSON bodies
 app.use(express.json({ limit: "2mb" }));
+
+// Prometheus metrics
+app.use(metricsMiddleware);
+app.get("/metrics", async (_req, res) => {
+	res.setHeader("Content-Type", register.contentType);
+	res.end(await register.metrics());
+});
 
 // Basic health check (used by docker-compose healthcheck)
 app.get("/health", (_req, res) => {
@@ -261,6 +269,9 @@ if (sfuClient) {
 }
 
 io.on("connection", (socket) => {
+	socketConnectionsActive.inc();
+	socket.on("disconnect", () => socketConnectionsActive.dec());
+
 	const verboseLogs = (process.env.NODE_ENV || "").toLowerCase() !== "production";
 	if (verboseLogs) {
 		console.log(`🔌 MAIN SERVER: New WebSocket connection established`);
