@@ -119,7 +119,8 @@ if [ "$RERELEASE" = false ]; then
   fi
 
   if [ "$BETA_RELEASE" = false ] && [[ ! "$NEW_VERSION" =~ -beta\. ]]; then
-    read -rp "$(echo -e "${CYAN}?${RESET}  Release as beta? ${YELLOW}[y/N]${RESET}: ")" BETA_ASK
+    read -rp "$(echo -e "${CYAN}?${RESET}  Release as beta? ${YELLOW}[Y/n]${RESET}: ")" BETA_ASK
+    BETA_ASK="${BETA_ASK:-Y}"
     if [[ "$BETA_ASK" =~ ^[Yy]$ ]]; then
       BETA_RELEASE=true
       NEW_VERSION="${NEW_VERSION}-beta.1"
