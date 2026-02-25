@@ -70,6 +70,20 @@ export function scanText(text: string): ScanResult {
   };
 }
 
+function logProfanityMatches(
+  text: string,
+  raw: MatchPayload[],
+  mode: ProfanityMode,
+) {
+  if (raw.length === 0) return;
+  const matched = raw.map(
+    (m) => `"${text.slice(m.startIndex, m.endIndex + 1)}" [${m.startIndex}:${m.endIndex}]`,
+  );
+  console.log(
+    `[Profanity] mode=${mode} text=${JSON.stringify(text)} matched=[${matched.join(", ")}]`,
+  );
+}
+
 export function censorText(text: string, style: CensorStyle = "emoji"): string {
   const censor = new TextCensor().setStrategy((ctx) =>
     censorReplacement(ctx.matchLength, style),
@@ -94,22 +108,27 @@ export function processProfanity(
   }
 
   const run = (): { action: "pass"; text: string; matches?: ProfanityMatch[] } | { action: "reject" } => {
+    const raw = matcher.getAllMatches(text, true);
+    logProfanityMatches(text, raw, mode);
+
     if (mode === "flag") {
-      const scan = scanText(text);
       return {
         action: "pass",
         text,
-        matches: scan.hasProfanity ? scan.matches : undefined,
+        matches: raw.length > 0 ? toMatches(raw) : undefined,
       };
     }
 
     if (mode === "censor") {
-      return { action: "pass", text: censorText(text, censorStyle) };
+      if (raw.length === 0) return { action: "pass", text };
+      const censor = new TextCensor().setStrategy((ctx) =>
+        censorReplacement(ctx.matchLength, censorStyle),
+      );
+      return { action: "pass", text: censor.applyTo(text, raw) };
     }
 
     // mode === "block"
-    const scan = scanText(text);
-    if (scan.hasProfanity) return { action: "reject" };
+    if (raw.length > 0) return { action: "reject" };
     return { action: "pass", text };
   };
 
