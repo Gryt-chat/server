@@ -47,7 +47,7 @@ setInterval(() => {
 async function getMessagesCached(conversationId: string, limit = 50): Promise<MessageRecord[]> {
   const now = Date.now();
   const cached = messageCache.get(conversationId);
-  if (cached && now - cached.fetchedAt < MESSAGE_CACHE_TTL_MS) return cached.items.slice(0, limit);
+  if (cached && now - cached.fetchedAt < MESSAGE_CACHE_TTL_MS) return cached.items.slice(-limit);
   const items = await listMessages(conversationId, limit);
   messageCache.set(conversationId, { items, fetchedAt: now });
   return items;
@@ -246,7 +246,8 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         }
 
         const existing = messageCache.get(created.conversation_id);
-        const items = existing?.items ? [...existing.items, created] : [created];
+        const appended = existing?.items ? [...existing.items, created] : [created];
+        const items = appended.length > 100 ? appended.slice(-100) : appended;
         messageCache.set(created.conversation_id, { items, fetchedAt: Date.now() });
 
         // Targeted broadcast (voice channels only to connected users)
