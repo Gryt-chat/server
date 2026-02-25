@@ -33,7 +33,7 @@ const VERSION = process.env.SERVER_VERSION || pkg.version || "0.0.0";
 
 const app = express(); // Create an Express app
 
-const allowedCorsOrigins = (process.env.CORS_ORIGIN || "http://127.0.0.1:15738,https://app.gryt.chat")
+const allowedCorsOrigins = (process.env.CORS_ORIGIN || "http://127.0.0.1:15738,https://app.gryt.chat,https://beta.gryt.chat")
 	.split(",")
 	.map((s) => s.trim())
 	.filter(Boolean);
