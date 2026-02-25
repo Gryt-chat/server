@@ -74,7 +74,9 @@ uploadsRouter.post(
       .then(async () => {
         const cfg = await getServerConfig().catch(() => null);
         const maxBytes = (typeof cfg?.upload_max_bytes === "number" ? cfg.upload_max_bytes : DEFAULT_UPLOAD_MAX_BYTES);
-        if (typeof maxBytes === "number" && maxBytes > 0 && file.size > maxBytes) {
+        const hasLimit = typeof maxBytes === "number" && maxBytes > 0;
+
+        if (!isImage && hasLimit && file.size > maxBytes) {
           res.status(413).json({
             error: "file_too_large",
             message: `File too large. Max ${(maxBytes / (1024 * 1024)).toFixed(1)}MB.`,
@@ -97,22 +99,31 @@ uploadsRouter.post(
           const meta = await metaPromise.catch(() => null);
           if (meta?.width && meta?.height) { width = meta.width; height = meta.height; }
 
-          // GIFs should stay GIFs. Animated WebP should stay WebP.
-          // Converting animated images to AVIF can fail in libheif (e.g. "heifsave: image too large")
-          // and also risks losing animation depending on encoder support.
           const isAnimated = isPotentiallyAnimatedImage && typeof meta?.pages === "number" && meta.pages > 1;
           const shouldStoreOriginal = isGif || isAvif || (isWebp && isAnimated);
 
           if (shouldStoreOriginal) {
-            key = `uploads/${fileId}.${mime.extension(file.mimetype || "") || "bin"}`;
-            storedBody = file.buffer;
-            storedMime = file.mimetype || "application/octet-stream";
-            storedSize = file.size;
-          } else {
+            if (hasLimit && file.size > maxBytes) {
+              res.status(413).json({
+                error: "file_too_large",
+                message: `File too large. Max ${(maxBytes / (1024 * 1024)).toFixed(1)}MB.`,
+              });
+              return;
+            }
+          } else if (hasLimit && file.size > maxBytes) {
+            // Over the limit — try AVIF compression to bring it under
+            const avifBuf = await sharp(file.buffer).avif().toBuffer();
+            if (avifBuf.length > maxBytes) {
+              res.status(413).json({
+                error: "file_too_large",
+                message: `File too large even after compression. Max ${(maxBytes / (1024 * 1024)).toFixed(1)}MB.`,
+              });
+              return;
+            }
             key = `uploads/${fileId}.avif`;
-            storedBody = await sharp(file.buffer).avif().toBuffer();
+            storedBody = avifBuf;
             storedMime = "image/avif";
-            storedSize = storedBody.length;
+            storedSize = avifBuf.length;
           }
 
           const thumbPipeline = isPotentiallyAnimatedImage

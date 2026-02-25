@@ -54,10 +54,10 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
 
       if (sfuClient && clientsInfo[clientId].hasJoinedChannel) {
         const ci = clientsInfo[clientId];
-        const roomId = `${ci.serverUserId}:${ci.streamID}`;
+        const sfuRoomId = `${serverId}_${ci.voiceChannelId}`;
         const effectiveMuted = ci.isMuted || ci.isServerMuted;
         const effectiveDeafened = ci.isDeafened || ci.isServerDeafened;
-        sfuClient.updateUserAudioState(roomId, clientId, effectiveMuted, effectiveDeafened).catch((e) => {
+        sfuClient.updateUserAudioState(sfuRoomId, ci.serverUserId, effectiveMuted, effectiveDeafened).catch((e) => {
           consola.error("Failed to update SFU audio state:", e);
         });
       }
