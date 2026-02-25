@@ -159,7 +159,7 @@ else
 fi
 echo -e "  Release:   ${GREEN}${RELEASE_TYPE}${RESET}"
 echo -e "  Image:     ${GREEN}${IMAGE}:${NEW_VERSION}${RESET}"
-echo -e "  Tags:      ${GREEN}${NEW_VERSION}, ${V_MAJOR}.${V_MINOR}, ${V_MAJOR}, latest${RESET}"
+echo -e "  Tags:      ${GREEN}${NEW_VERSION}, ${V_MAJOR}.${V_MINOR}, ${V_MAJOR}, latest-beta${RESET}"
 echo -e "  Repo:      ${GREEN}${OWNER}/${REPO}${RESET}"
 echo -e "${BOLD}─────────────────────────────────────────${RESET}"
 echo ""
@@ -214,13 +214,13 @@ ok "Built ${IMAGE}:${NEW_VERSION}"
 info "Tagging…"
 docker tag "${IMAGE}:${NEW_VERSION}" "${IMAGE}:${V_MAJOR}.${V_MINOR}"
 docker tag "${IMAGE}:${NEW_VERSION}" "${IMAGE}:${V_MAJOR}"
-docker tag "${IMAGE}:${NEW_VERSION}" "${IMAGE}:latest"
+docker tag "${IMAGE}:${NEW_VERSION}" "${IMAGE}:latest-beta"
 
 info "Pushing to ghcr.io…"
 docker push "${IMAGE}:${NEW_VERSION}"
 docker push "${IMAGE}:${V_MAJOR}.${V_MINOR}"
 docker push "${IMAGE}:${V_MAJOR}"
-docker push "${IMAGE}:latest"
+docker push "${IMAGE}:latest-beta"
 ok "Pushed all tags"
 
 # ── Git commit & push (before GH release so the tag lands on this commit) ──
