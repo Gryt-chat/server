@@ -261,7 +261,9 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
         }
         syncAllClients(io, clientsInfo);
         broadcastMemberList(io, clientsInfo, serverId);
-        postSystemMessage(io, clientsInfo, formatJoinMessage(user.nickname, user.server_user_id));
+        if (!isActiveMember) {
+          postSystemMessage(io, clientsInfo, formatJoinMessage(user.nickname, user.server_user_id));
+        }
       } catch (err) {
         consola.error("server:join failed", err);
         socket.emit("server:error", { error: "join_failed", message: "Failed to join server." });
