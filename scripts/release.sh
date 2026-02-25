@@ -257,10 +257,8 @@ fi
 echo ""
 info "Creating GitHub release…"
 
-RELEASE_FLAGS=""
-if [ "$BETA_RELEASE" = true ]; then
-  RELEASE_FLAGS="--prerelease"
-fi
+# All releases are prerelease until promoted via promote-beta.sh
+RELEASE_FLAGS="--prerelease"
 
 gh release create "v${NEW_VERSION}" \
   --repo "${OWNER}/${REPO}" \
