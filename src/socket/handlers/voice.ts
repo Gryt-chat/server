@@ -70,8 +70,6 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
       const serverUserId = clientsInfo[clientId].serverUserId;
       consola.info(`[Voice:stream:set] client=${clientId} user=${serverUserId} streamID="${streamID}" wasInChannel=${wasInChannel}`);
 
-      if (!streamID && !wasInChannel) return;
-
       // Duplicate connection detection
       if (newJoinedState && serverUserId) {
         const existingConnection = Object.entries(clientsInfo).find(
@@ -118,30 +116,20 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
       }
 
       const prevStreamID = clientsInfo[clientId].streamID;
-      const prevJoinedState = wasInChannel;
-      if (prevStreamID === streamID && prevJoinedState === newJoinedState) return;
+      if (prevStreamID === streamID) return;
 
       clientsInfo[clientId].streamID = streamID;
-      clientsInfo[clientId].hasJoinedChannel = newJoinedState;
       if (!newJoinedState) {
-        clientsInfo[clientId].voiceChannelId = "";
         clientsInfo[clientId].cameraEnabled = false;
         clientsInfo[clientId].cameraStreamID = "";
         clientsInfo[clientId].screenShareEnabled = false;
         clientsInfo[clientId].screenShareVideoStreamID = "";
         clientsInfo[clientId].screenShareAudioStreamID = "";
+        if (sfuClient && serverUserId) sfuClient.untrackUserConnection(serverUserId);
       }
 
-      if (wasInChannel !== newJoinedState) {
-        if (!wasInChannel && newJoinedState) {
-          consola.info(`Client ${clientId} joined voice`);
-        } else if (wasInChannel && !newJoinedState) {
-          consola.info(`Client ${clientId} left voice`);
-          if (sfuClient && serverUserId) sfuClient.untrackUserConnection(serverUserId);
-        }
-        syncAllClients(io, clientsInfo);
-        broadcastMemberList(io, clientsInfo, serverId);
-      }
+      syncAllClients(io, clientsInfo);
+      broadcastMemberList(io, clientsInfo, serverId);
     },
 
     'voice:room:request': async (roomId: string) => {
