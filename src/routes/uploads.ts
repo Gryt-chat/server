@@ -65,10 +65,10 @@ uploadsRouter.post(
     const fileMime = (file.mimetype || "").toLowerCase();
     const isImage = fileMime.startsWith("image/");
     const isVideo = fileMime.startsWith("video/");
-    const isAnimatedSource = fileMime === "image/gif" || fileMime === "image/webp" || fileMime === "image/avif";
-
-    const ext = isImage ? "avif" : (mime.extension(file.mimetype || "") || "bin");
-    const key = `uploads/${fileId}.${ext}`;
+    const isGif = fileMime === "image/gif";
+    const isWebp = fileMime === "image/webp";
+    const isAvif = fileMime === "image/avif";
+    const isPotentiallyAnimatedImage = isGif || isWebp;
 
     Promise.resolve()
       .then(async () => {
@@ -82,6 +82,7 @@ uploadsRouter.post(
           return;
         }
 
+        let key = `uploads/${fileId}.${mime.extension(file.mimetype || "") || "bin"}`;
         let storedBody: Buffer = file.buffer;
         let storedMime: string = file.mimetype || "application/octet-stream";
         let storedSize: number = file.size;
@@ -90,19 +91,42 @@ uploadsRouter.post(
         let height: number | null = null;
 
         if (isImage) {
-          const meta = await sharp(file.buffer, { animated: isAnimatedSource }).metadata().catch(() => null);
+          const metaPromise = isPotentiallyAnimatedImage
+            ? sharp(file.buffer, { animated: true }).metadata()
+            : sharp(file.buffer).metadata();
+          const meta = await metaPromise.catch(() => null);
           if (meta?.width && meta?.height) { width = meta.width; height = meta.height; }
-          storedBody = await sharp(file.buffer, { animated: isAnimatedSource })
-            .avif()
-            .toBuffer();
-          storedMime = "image/avif";
-          storedSize = storedBody.length;
-          const thumb = await sharp(file.buffer, { animated: isAnimatedSource })
+
+          // GIFs should stay GIFs. Animated WebP should stay WebP.
+          // Converting animated images to AVIF can fail in libheif (e.g. "heifsave: image too large")
+          // and also risks losing animation depending on encoder support.
+          const isAnimated = isPotentiallyAnimatedImage && typeof meta?.pages === "number" && meta.pages > 1;
+          const shouldStoreOriginal = isGif || isAvif || (isWebp && isAnimated);
+
+          if (shouldStoreOriginal) {
+            key = `uploads/${fileId}.${mime.extension(file.mimetype || "") || "bin"}`;
+            storedBody = file.buffer;
+            storedMime = file.mimetype || "application/octet-stream";
+            storedSize = file.size;
+          } else {
+            key = `uploads/${fileId}.avif`;
+            storedBody = await sharp(file.buffer).avif().toBuffer();
+            storedMime = "image/avif";
+            storedSize = storedBody.length;
+          }
+
+          const thumbPipeline = isPotentiallyAnimatedImage
+            ? sharp(file.buffer, { pages: 1 })
+            : sharp(file.buffer);
+          const thumb = await thumbPipeline
             .resize({ width: 320, withoutEnlargement: true })
             .avif({ quality: 50 })
-            .toBuffer();
-          thumbKey = `thumbnails/${fileId}.avif`;
-          await putObject({ bucket, key: thumbKey, body: thumb, contentType: "image/avif" });
+            .toBuffer()
+            .catch(() => null);
+          if (thumb) {
+            thumbKey = `thumbnails/${fileId}.avif`;
+            await putObject({ bucket, key: thumbKey, body: thumb, contentType: "image/avif" });
+          }
         }
 
         await putObject({ bucket, key, body: storedBody, contentType: storedMime });
