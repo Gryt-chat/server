@@ -113,11 +113,17 @@ serverRouter.post(
       try {
         await putObject({ bucket, key, body: out, contentType: "image/avif" });
       } catch (e) {
-        const msg =
-          (e instanceof Error && e.message.trim().length > 0)
-            ? e.message
-            : "S3 upload failed.";
-        res.status(502).json({ error: "s3_error", message: msg });
+        const raw = e instanceof Error ? e.message : "";
+        consola.error("icon upload s3 error", { bucket, key, message: raw });
+        const friendly =
+          /InvalidBucketName|NoSuchBucket|bucket/i.test(raw)
+            ? "File storage is misconfigured on this server. Please contact the server administrator."
+            : /AccessDenied|Forbidden/i.test(raw)
+              ? "File storage access denied. Please contact the server administrator."
+              : raw.trim().length > 0
+                ? `Icon upload failed: ${raw}`
+                : "Icon upload failed due to a storage error.";
+        res.status(502).json({ error: "s3_error", message: friendly });
         return;
       }
 
