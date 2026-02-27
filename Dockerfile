@@ -2,7 +2,7 @@ FROM oven/bun:1-alpine AS builder
 WORKDIR /app
 
 COPY package.json bun.lockb* ./
-RUN bun install --no-save
+RUN bun install
 
 COPY . .
 RUN bun run build
@@ -10,7 +10,7 @@ RUN bun run build
 FROM oven/bun:1-alpine AS deps
 WORKDIR /app
 COPY package.json bun.lockb* ./
-RUN bun install --no-save --production
+RUN bun install --production
 
 FROM oven/bun:1-alpine
 
