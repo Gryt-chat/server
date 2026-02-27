@@ -21,6 +21,7 @@ import { emojisRouter } from "./routes/emojis";
 import { linkPreviewRouter } from "./routes/linkPreview";
 import { oEmbedRouter } from "./routes/oembed";
 import { mediaMetadataRouter } from "./routes/mediaMetadata";
+import { getRegisteredUserCount } from "./db/users";
 import { getObject } from "./storage/s3";
 import { startMediaSweep } from "./jobs/mediaSweep";
 import { startEmojiQueueWorker } from "./jobs/emojiQueueWorker";
@@ -172,9 +173,12 @@ app.get("/info", async (_req, res) => {
 		// fall back to env
 	}
 
+	const memberCount = await getRegisteredUserCount().catch(() => 0);
+
 	res.json({
 		name: displayName,
 		description,
+		members: memberCount.toString(),
 		version: process.env.SERVER_VERSION || "1.0.0",
 	});
 });

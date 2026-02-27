@@ -187,6 +187,17 @@ export async function getAllRegisteredUsers(): Promise<UserRecord[]> {
   }
 }
 
+export async function getRegisteredUserCount(): Promise<number> {
+  const c = getScyllaClient();
+  const rs = await c.execute(
+    "SELECT COUNT(*) AS count FROM users_by_server_id",
+    [],
+    { prepare: true },
+  );
+  const row = rs.first();
+  return Number(row?.["count"] ?? 0);
+}
+
 export async function updateUserNickname(serverUserId: string, nickname: string): Promise<void> {
   const c = getScyllaClient();
   try {
