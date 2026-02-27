@@ -158,8 +158,10 @@ if (process.env.SFU_WS_HOST) {
 	);
 }
 
-// Public server info (used by the "Add Server" dialog — no auth required)
+// Public server info (used by the "Add Server" dialog & site invite page — no auth required)
 app.get("/info", async (_req, res) => {
+	res.setHeader("Access-Control-Allow-Origin", "*");
+
 	let displayName = process.env.SERVER_NAME || "Unknown Server";
 	let description = process.env.SERVER_DESCRIPTION || "A Gryt server";
 	try {
