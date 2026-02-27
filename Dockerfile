@@ -7,6 +7,11 @@ RUN bun install --no-save
 COPY . .
 RUN bun run build
 
+FROM oven/bun:1-alpine AS deps
+WORKDIR /app
+COPY package.json bun.lockb* ./
+RUN bun install --no-save --production
+
 FROM oven/bun:1-alpine
 
 RUN addgroup -g 1001 -S gryt \
@@ -16,7 +21,7 @@ WORKDIR /app
 ARG VERSION=1.0.0
 ENV NODE_ENV=production SERVER_VERSION=${VERSION}
 
-COPY --from=builder --chown=gryt:gryt /app/node_modules ./node_modules
+COPY --from=deps --chown=gryt:gryt /app/node_modules ./node_modules
 COPY --from=builder --chown=gryt:gryt /app/package.json ./package.json
 COPY --from=builder --chown=gryt:gryt /app/dist ./dist
 COPY --from=builder --chown=gryt:gryt /app/public ./public
