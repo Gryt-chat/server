@@ -20,6 +20,17 @@ export interface MessageRecord {
   sender_nickname?: string; // Enriched at read time, not stored in DB
   sender_avatar_file_id?: string; // Enriched at read time, not stored in DB
   profanity_matches?: { startIndex: number; endIndex: number }[]; // Enriched at broadcast time, not stored in DB
+  enriched_attachments?: EnrichedAttachment[]; // Enriched at read time, not stored in DB
+}
+
+export interface EnrichedAttachment {
+  file_id: string;
+  mime: string | null;
+  size: number | null;
+  original_name: string | null;
+  width: number | null;
+  height: number | null;
+  has_thumbnail: boolean;
 }
 
 export interface FileRecord {

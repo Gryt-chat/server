@@ -104,8 +104,11 @@ async function enrichAttachments(messages: MessageRecord[]): Promise<MessageReco
   }
   if (allFileIds.size === 0) return messages;
   const fileMap = await getFilesByIds([...allFileIds]);
-  return messages.map(m => {
-    if (!m.attachments || m.attachments.length === 0) return m;
+
+  const result: MessageRecord[] = [];
+  for (const m of messages) {
+    if (!m.attachments || m.attachments.length === 0) { result.push(m); continue; }
+
     const enriched = m.attachments.map(id => {
       const f = fileMap.get(id);
       if (!f) return { file_id: id, mime: null, size: null, original_name: null, width: null, height: null, has_thumbnail: false };
@@ -119,8 +122,24 @@ async function enrichAttachments(messages: MessageRecord[]): Promise<MessageReco
         has_thumbnail: !!f.thumbnail_key,
       };
     });
-    return { ...m, enriched_attachments: enriched };
-  });
+
+    const hasText = !!m.text?.trim();
+    const allMissing = enriched.every(a => a.mime === null);
+    if (!hasText && allMissing) {
+      deleteMessage(m.conversation_id, m.message_id).catch(err =>
+        consola.warn("Auto-pruned empty message with missing attachments", m.message_id, err),
+      );
+      const cached = messageCache.get(m.conversation_id);
+      if (cached?.items) {
+        cached.items = cached.items.filter(c => c.message_id !== m.message_id);
+      }
+      continue;
+    }
+
+    result.push({ ...m, enriched_attachments: enriched });
+  }
+
+  return result;
 }
 
 export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
