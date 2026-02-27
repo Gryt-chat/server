@@ -13,6 +13,7 @@ import {
   updateServerConfig,
 } from "../db/scylla";
 import { broadcastServerUiUpdate } from "../socket";
+import { validateImage } from "../utils/imageValidation";
 import { verifyAccessToken } from "../utils/jwt";
 
 const iconMaxMbRaw = (process.env.GRYT_SERVER_ICON_MAX_MB || process.env.SERVER_ICON_MAX_MB || "25").trim();
@@ -98,9 +99,16 @@ serverRouter.post(
 
       const iconMime = (file.mimetype || "").toLowerCase();
       const isAnimated = iconMime === "image/gif" || iconMime === "image/webp" || iconMime === "image/avif";
+
+      const validation = await validateImage(file.buffer, { animated: isAnimated });
+      if (!validation.valid) {
+        res.status(400).json({ error: "invalid_file", message: validation.reason });
+        return;
+      }
+
       let out: Buffer;
       try {
-        out = await sharp(file.buffer, { animated: isAnimated })
+        out = await sharp(file.buffer, { animated: isAnimated, failOn: "error" })
           .resize(256, 256, { fit: "cover" })
           .avif()
           .toBuffer();

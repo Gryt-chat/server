@@ -1,5 +1,7 @@
 import sharp from "sharp";
 
+import { validateImage } from "./imageValidation";
+
 const ANIMATED_MIME_SET = new Set(["image/gif", "image/webp", "image/avif"]);
 
 export async function processEmojiToOptimizedImage(
@@ -9,8 +11,13 @@ export async function processEmojiToOptimizedImage(
   const animated = ANIMATED_MIME_SET.has(mime);
   const startedAt = Date.now();
   console.log("[EmojiProcess] start", { mime, animated, bytes: buffer.length });
-  const pipeline = sharp(buffer, { animated })
-    // Keep aspect ratio; only shrink to max height 128 (width unrestricted).
+
+  const validation = await validateImage(buffer, { animated });
+  if (!validation.valid) {
+    throw new Error(validation.reason);
+  }
+
+  const pipeline = sharp(buffer, { animated, failOn: "error" })
     .resize({ height: 128, withoutEnlargement: true });
 
   if (animated) {

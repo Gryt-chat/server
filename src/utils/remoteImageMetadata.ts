@@ -87,7 +87,7 @@ export async function fetchRemoteImageMetadata(url: string): Promise<RemoteImage
     const buf = await readUpToBytes(res, 450_000);
     if (buf === null) return empty;
 
-    const meta = await sharp(buf, { animated: true }).metadata().catch(() => null);
+    const meta = await sharp(buf, { animated: true, failOn: "error" }).metadata().catch(() => null);
     const data: RemoteImageMetadata = {
       url,
       mime: contentType || null,

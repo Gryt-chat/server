@@ -13,6 +13,7 @@ import { join } from "path";
 import { deleteObject, putObject, getObject } from "../storage/s3";
 import { insertFile, getFile, updateFileRecord, updateUserAvatar, setUserAvatar, getServerConfig, DEFAULT_AVATAR_MAX_BYTES, DEFAULT_UPLOAD_MAX_BYTES } from "../db/scylla";
 import { requireBearerToken } from "../middleware/requireBearerToken";
+import { validateImage } from "../utils/imageValidation";
 
 async function extractVideoThumbnail(buffer: Buffer, fileId: string): Promise<Buffer | null> {
   const inputPath = join(tmpdir(), `gryt-vid-${fileId}`);
@@ -93,13 +94,15 @@ uploadsRouter.post(
         let height: number | null = null;
 
         if (isImage) {
-          const metaPromise = isPotentiallyAnimatedImage
-            ? sharp(file.buffer, { animated: true }).metadata()
-            : sharp(file.buffer).metadata();
-          const meta = await metaPromise.catch(() => null);
-          if (meta?.width && meta?.height) { width = meta.width; height = meta.height; }
+          const validation = await validateImage(file.buffer, { animated: isPotentiallyAnimatedImage });
+          if (!validation.valid) {
+            res.status(400).json({ error: "invalid_file", message: validation.reason });
+            return;
+          }
+          width = validation.width;
+          height = validation.height;
 
-          const isAnimated = isPotentiallyAnimatedImage && typeof meta?.pages === "number" && meta.pages > 1;
+          const isAnimated = isPotentiallyAnimatedImage && typeof validation.pages === "number" && validation.pages > 1;
           const shouldStoreOriginal = isGif || isAvif || (isWebp && isAnimated);
 
           if (shouldStoreOriginal) {
@@ -111,8 +114,13 @@ uploadsRouter.post(
               return;
             }
           } else if (hasLimit && file.size > maxBytes) {
-            // Over the limit — try AVIF compression to bring it under
-            const avifBuf = await sharp(file.buffer).avif().toBuffer();
+            let avifBuf: Buffer;
+            try {
+              avifBuf = await sharp(file.buffer, { failOn: "error" }).avif().toBuffer();
+            } catch {
+              res.status(400).json({ error: "invalid_file", message: "Could not process image." });
+              return;
+            }
             if (avifBuf.length > maxBytes) {
               res.status(413).json({
                 error: "file_too_large",
@@ -127,8 +135,8 @@ uploadsRouter.post(
           }
 
           const thumbPipeline = isPotentiallyAnimatedImage
-            ? sharp(file.buffer, { pages: 1 })
-            : sharp(file.buffer);
+            ? sharp(file.buffer, { pages: 1, failOn: "error" })
+            : sharp(file.buffer, { failOn: "error" });
           const thumb = await thumbPipeline
             .resize({ width: 320, withoutEnlargement: true })
             .avif({ quality: 50 })
@@ -211,8 +219,13 @@ uploadsRouter.post(
         let thumbKey: string | null = null;
         let processing = false;
 
-        const meta = await sharp(file.buffer, { pages: 1 }).metadata().catch(() => null);
-        if (meta?.width && meta?.height) { width = meta.width; height = meta.height; }
+        const validation = await validateImage(file.buffer, { animated: isAnimated });
+        if (!validation.valid) {
+          res.status(400).json({ error: "invalid_file", message: validation.reason });
+          return;
+        }
+        width = validation.width;
+        height = validation.height;
 
         if (isAnimated && file.size <= maxBytes) {
           key = `avatars/${fileId}.${animExt}`;
@@ -220,7 +233,7 @@ uploadsRouter.post(
           storedMime = inputMime;
           storedSize = file.size;
 
-          const thumb = await sharp(file.buffer, { pages: 1 })
+          const thumb = await sharp(file.buffer, { pages: 1, failOn: "error" })
             .resize({ width: 64, height: 64, fit: "cover" })
             .avif({ quality: 50 })
             .toBuffer()
@@ -237,7 +250,7 @@ uploadsRouter.post(
           key = `avatars/${fileId}.avif`;
           processing = true;
           try {
-            storedBody = await sharp(file.buffer, { pages: 1 })
+            storedBody = await sharp(file.buffer, { pages: 1, failOn: "error" })
               .resize({ width: 256, height: 256, fit: "cover" })
               .avif()
               .toBuffer();
@@ -250,7 +263,7 @@ uploadsRouter.post(
         } else {
           key = `avatars/${fileId}.avif`;
           try {
-            storedBody = await sharp(file.buffer)
+            storedBody = await sharp(file.buffer, { failOn: "error" })
               .resize({ width: 256, height: 256, fit: "cover" })
               .avif()
               .toBuffer();
@@ -261,7 +274,7 @@ uploadsRouter.post(
           storedMime = "image/avif";
           storedSize = storedBody.length;
 
-          const thumb = await sharp(file.buffer)
+          const thumb = await sharp(file.buffer, { failOn: "error" })
             .resize({ width: 64, height: 64, fit: "cover" })
             .avif({ quality: 50 })
             .toBuffer()
@@ -316,7 +329,7 @@ uploadsRouter.post(
               try {
                 const outputFormat = inputMime === "image/gif" ? "gif" : "webp";
                 const outputMime = `image/${outputFormat}`;
-                const pipeline = sharp(animBuf, { animated: true })
+                const pipeline = sharp(animBuf, { animated: true, failOn: "error" })
                   .resize({ width: 256, height: 256, fit: "cover" });
                 const resized = outputFormat === "gif"
                   ? await pipeline.gif().toBuffer()
@@ -325,7 +338,7 @@ uploadsRouter.post(
                 const animKey = `avatars/${fileId}.${outputFormat}`;
                 await putObject({ bucket, key: animKey, body: resized, contentType: outputMime });
 
-                const thumbBuf = await sharp(resized, { pages: 1 })
+                const thumbBuf = await sharp(resized, { pages: 1, failOn: "error" })
                   .resize({ width: 64, height: 64, fit: "cover" })
                   .avif({ quality: 50 })
                   .toBuffer()
