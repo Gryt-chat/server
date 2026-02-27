@@ -3,7 +3,6 @@ import type { HandlerContext, EventHandlerMap } from "./types";
 import { syncAllClients, broadcastMemberList, verifyClient } from "../utils/clients";
 import { sendServerDetails } from "../utils/server";
 import { postSystemMessage, formatLeaveMessage } from "../utils/systemMessages";
-import { verifyIdentityToken } from "../../auth/oidc";
 import { generateAccessToken, verifyAccessToken } from "../../utils/jwt";
 import {
   getServerConfig,
@@ -171,11 +170,10 @@ export function registerJoinHelpers(ctx: HandlerContext): EventHandlerMap {
 
     'token:refresh': async (payload: {
       refreshToken?: string;
-      identityToken?: string;
       accessToken?: string;
     }) => {
       try {
-        if (payload?.refreshToken && payload?.identityToken) {
+        if (payload?.refreshToken) {
           const record = await getRefreshToken(payload.refreshToken);
           if (!record || record.revoked) {
             socket.emit("token:error", { error: "refresh_token_invalid", message: "Refresh token is invalid or revoked. Please rejoin." });
@@ -183,20 +181,6 @@ export function registerJoinHelpers(ctx: HandlerContext): EventHandlerMap {
           }
           if (record.expires_at && new Date(record.expires_at) < new Date()) {
             socket.emit("token:error", { error: "refresh_token_expired", message: "Refresh token expired. Please rejoin." });
-            return;
-          }
-
-          let grytUserId: string;
-          try {
-            const verified = await verifyIdentityToken(payload.identityToken);
-            grytUserId = verified.sub;
-          } catch {
-            socket.emit("token:error", { error: "identity_token_invalid", message: "Identity token invalid. Please sign in again." });
-            return;
-          }
-
-          if (grytUserId !== record.gryt_user_id) {
-            socket.emit("token:error", { error: "identity_mismatch", message: "Identity mismatch. Please rejoin." });
             return;
           }
 

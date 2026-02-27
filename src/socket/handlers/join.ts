@@ -3,7 +3,7 @@ import type { HandlerContext, EventHandlerMap } from "./types";
 import { syncAllClients, broadcastMemberList, countOtherSessions, verifyClient } from "../utils/clients";
 import { sendServerDetails } from "../utils/server";
 import { postSystemMessage, formatJoinMessage } from "../utils/systemMessages";
-import { verifyIdentityToken } from "../../auth/oidc";
+import { createChallenge, consumeChallenge, verifyCertificate, verifyAssertion } from "../../auth/identity";
 import { generateAccessToken, TokenPayload } from "../../utils/jwt";
 import {
   getServerConfig,
@@ -46,9 +46,10 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
   return {
     ...helpers,
 
+    // Step 1: Client requests to join. Server validates basic pre-conditions
+    // and responds with a cryptographic challenge.
     'server:join': async (payload: {
       nickname?: string;
-      identityToken?: string;
       inviteCode?: string;
     }) => {
       try {
@@ -73,10 +74,53 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        if (!payload?.identityToken || typeof payload.identityToken !== "string") {
+        const nickname = (payload?.nickname || "User").trim();
+        if (nickname.length > 50) {
+          socket.emit("server:error", { error: "invalid_nickname", message: "Nickname too long (max 50)." });
+          return;
+        }
+
+        const serverHost = socket.handshake.headers.host || "unknown";
+        const inviteCode = typeof payload?.inviteCode === "string" ? payload.inviteCode.trim() : undefined;
+
+        const challenge = createChallenge(socket.id, serverHost, nickname, inviteCode);
+        socket.emit("server:challenge", challenge);
+      } catch (err) {
+        consola.error("server:join failed", err);
+        socket.emit("server:error", { error: "join_failed", message: "Failed to initiate join." });
+      }
+    },
+
+    // Step 2: Client responds to the challenge with a signed assertion
+    // and an identity certificate. Server verifies both and completes the join.
+    'server:verify': async (payload: {
+      certificate?: string;
+      assertion?: string;
+    }) => {
+      try {
+        const challenge = consumeChallenge(socket.id);
+        if (!challenge) {
+          socket.emit("server:error", {
+            error: "challenge_expired",
+            message: "Challenge expired or not found. Please try joining again.",
+            canReapply: true,
+          });
+          return;
+        }
+
+        if (!payload?.certificate || typeof payload.certificate !== "string") {
           socket.emit("server:error", {
             error: "auth_required",
-            message: "Gryt authentication is required. Please sign in.",
+            message: "Identity certificate is required. Please sign in.",
+            canReapply: true,
+          });
+          return;
+        }
+
+        if (!payload?.assertion || typeof payload.assertion !== "string") {
+          socket.emit("server:error", {
+            error: "auth_required",
+            message: "Signed assertion is required.",
             canReapply: true,
           });
           return;
@@ -84,28 +128,35 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
 
         let grytUserId: string;
         let suggestedNickname: string | undefined;
-        let cfg = await getServerConfig().catch(() => null);
 
         try {
-          const verified = await verifyIdentityToken(payload.identityToken);
-          grytUserId = verified.sub;
-          suggestedNickname = verified.preferredUsername || verified.email;
+          const cert = await verifyCertificate(payload.certificate);
+          const assertionResult = await verifyAssertion(
+            payload.assertion,
+            cert.jwk,
+            challenge.serverHost,
+            challenge.nonce,
+          );
+
+          if (assertionResult.sub !== cert.sub) {
+            throw new Error("Assertion subject does not match certificate subject");
+          }
+
+          grytUserId = cert.sub;
+          suggestedNickname = cert.preferredUsername;
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
-          consola.warn(`Identity token verification failed for ${clientId}`, message);
+          consola.warn(`Identity verification failed for ${clientId}:`, message);
           socket.emit("server:error", {
-            error: "identity_token_invalid",
-            message: "Your sign-in token is invalid or expired. Please sign in again.",
+            error: "identity_verification_failed",
+            message: "Identity verification failed. Please sign in again.",
             canReapply: true,
           });
           return;
         }
 
-        const nickname = (payload.nickname || suggestedNickname || "User").trim();
-        if (nickname.length > 50) {
-          socket.emit("server:error", { error: "invalid_nickname", message: "Nickname too long (max 50)." });
-          return;
-        }
+        const nickname = (challenge.nickname || suggestedNickname || "User").trim();
+        let cfg = await getServerConfig().catch(() => null);
 
         const banned = await isUserBanned(grytUserId);
         if (banned) {
@@ -113,7 +164,6 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        // Existing active members skip password
         const existingMember = await getUserByGrytId(grytUserId);
         const isActiveMember = !!(existingMember && existingMember.is_active);
         let claimedOwnerGrytUserId: string | null | undefined;
@@ -141,7 +191,7 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
             return;
           }
 
-          const inviteCode = typeof payload.inviteCode === "string" ? payload.inviteCode.trim() : "";
+          const inviteCode = challenge.inviteCode || "";
           if (inviteCode) {
             const consumed = await consumeServerInvite(inviteCode);
             if (!consumed.ok) {
@@ -265,7 +315,7 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           postSystemMessage(io, clientsInfo, formatJoinMessage(user.nickname, user.server_user_id));
         }
       } catch (err) {
-        consola.error("server:join failed", err);
+        consola.error("server:verify failed", err);
         socket.emit("server:error", { error: "join_failed", message: "Failed to join server." });
       }
     },

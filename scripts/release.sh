@@ -204,24 +204,20 @@ else
   fi
 fi
 
-# ── Docker build & push ─────────────────────────────────────────────────
+# ── Docker build & push (multi-arch) ─────────────────────────────────────
 echo ""
-info "Building Docker image…"
+PLATFORMS="linux/amd64,linux/arm64"
+info "Building & pushing multi-arch Docker image (${PLATFORMS})…"
 
-docker build --build-arg VERSION="${NEW_VERSION}" -t "${IMAGE}:${NEW_VERSION}" .
-ok "Built ${IMAGE}:${NEW_VERSION}"
-
-info "Tagging…"
-docker tag "${IMAGE}:${NEW_VERSION}" "${IMAGE}:${V_MAJOR}.${V_MINOR}"
-docker tag "${IMAGE}:${NEW_VERSION}" "${IMAGE}:${V_MAJOR}"
-docker tag "${IMAGE}:${NEW_VERSION}" "${IMAGE}:latest-beta"
-
-info "Pushing to ghcr.io…"
-docker push "${IMAGE}:${NEW_VERSION}"
-docker push "${IMAGE}:${V_MAJOR}.${V_MINOR}"
-docker push "${IMAGE}:${V_MAJOR}"
-docker push "${IMAGE}:latest-beta"
-ok "Pushed all tags"
+docker buildx build \
+  --platform "$PLATFORMS" \
+  --build-arg VERSION="${NEW_VERSION}" \
+  -t "${IMAGE}:${NEW_VERSION}" \
+  -t "${IMAGE}:${V_MAJOR}.${V_MINOR}" \
+  -t "${IMAGE}:${V_MAJOR}" \
+  -t "${IMAGE}:latest-beta" \
+  --push .
+ok "Pushed ${IMAGE}:${NEW_VERSION} (${PLATFORMS})"
 
 # ── Git commit & push (before GH release so the tag lands on this commit) ──
 if [ "$RERELEASE" = false ]; then
