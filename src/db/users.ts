@@ -2,6 +2,8 @@ import { types } from "cassandra-driver";
 import { randomUUID } from "crypto";
 
 import { getScyllaClient } from "./scylla";
+import { getServerConfig, setServerOwner } from "./servers";
+import { revokeUserRefreshTokens } from "./tokens";
 
 export interface UserRecord {
   gryt_user_id: string; // Internal Gryt Auth user ID (never exposed)
@@ -300,4 +302,49 @@ export async function setUserInactive(serverUserId: string): Promise<void> {
     console.error(`❌ Failed to set user as inactive:`, error);
     throw error;
   }
+}
+
+export async function replaceUserIdentity(
+  serverUserId: string,
+  newGrytUserId: string,
+): Promise<{ oldGrytUserId: string; ownerUpdated: boolean }> {
+  const c = getScyllaClient();
+
+  const oldUser = await getUserByServerId(serverUserId);
+  if (!oldUser) throw new Error("Target user not found on this server.");
+
+  const oldGrytUserId = oldUser.gryt_user_id;
+  if (oldGrytUserId === newGrytUserId) throw new Error("New identity is the same as the current one.");
+
+  const existing = await getUserByGrytId(newGrytUserId);
+  if (existing) throw new Error("New identity already belongs to another user on this server.");
+
+  await c.execute(
+    `INSERT INTO users_by_gryt_id (gryt_user_id, server_user_id, nickname, avatar_file_id, joined_with_invite_code, created_at, last_seen, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [newGrytUserId, oldUser.server_user_id, oldUser.nickname, oldUser.avatar_file_id ?? null, oldUser.joined_with_invite_code ?? null, oldUser.created_at, oldUser.last_seen, oldUser.is_active],
+    { prepare: true },
+  );
+
+  await c.execute(
+    `UPDATE users_by_server_id SET gryt_user_id = ? WHERE server_user_id = ?`,
+    [newGrytUserId, serverUserId],
+    { prepare: true },
+  );
+
+  await c.execute(
+    `DELETE FROM users_by_gryt_id WHERE gryt_user_id = ?`,
+    [oldGrytUserId],
+    { prepare: true },
+  );
+
+  let ownerUpdated = false;
+  const cfg = await getServerConfig();
+  if (cfg?.owner_gryt_user_id === oldGrytUserId) {
+    await setServerOwner(newGrytUserId);
+    ownerUpdated = true;
+  }
+
+  await revokeUserRefreshTokens(oldGrytUserId).catch(() => {});
+
+  return { oldGrytUserId, ownerUpdated };
 }

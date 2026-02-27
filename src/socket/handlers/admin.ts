@@ -537,6 +537,49 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
+    // ── User identity replace ─────────────────────────────────────
+
+    'server:user:replace': async (payload: { accessToken: string; targetServerUserId: string; newGrytUserId: string }) => {
+      try {
+        const rl = rlCheck("server:user:replace", ctx, RL_MODERATION);
+        if (!rl.allowed) { emitRateLimited(ctx, rl); return; }
+        if (!payload || typeof payload.targetServerUserId !== "string" || typeof payload.newGrytUserId !== "string") {
+          socket.emit("server:error", { error: "invalid_payload", message: "targetServerUserId and newGrytUserId required." });
+          return;
+        }
+        const auth = await requireAuth(socket, payload, { requiredRole: "owner" });
+        if (!auth) return;
+
+        const targetId = payload.targetServerUserId.trim();
+        const newGrytId = payload.newGrytUserId.trim();
+        if (!targetId || !newGrytId) {
+          socket.emit("server:error", { error: "invalid_payload", message: "IDs must not be empty." });
+          return;
+        }
+
+        const { replaceUserIdentity } = await import("../../db/users");
+        const result = await replaceUserIdentity(targetId, newGrytId);
+
+        insertServerAudit({
+          actorServerUserId: auth.tokenPayload.serverUserId,
+          action: "user_identity_replace",
+          target: targetId,
+          meta: { oldGrytUserId: result.oldGrytUserId, newGrytUserId: newGrytId, ownerUpdated: result.ownerUpdated },
+        }).catch((e) => consola.warn("audit log write failed", e));
+
+        socket.emit("server:user:replace:success", {
+          targetServerUserId: targetId,
+          oldGrytUserId: result.oldGrytUserId,
+          newGrytUserId: newGrytId,
+          ownerUpdated: result.ownerUpdated,
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Failed to replace user identity.";
+        consola.error("server:user:replace failed", e);
+        socket.emit("server:error", { error: "user_replace_failed", message: msg });
+      }
+    },
+
     // ── Audit ────────────────────────────────────────────────────
 
     'server:audit:list': async (payload: { accessToken: string; limit?: number; before?: string }) => {
