@@ -7,17 +7,17 @@ export type VerifiedIdentity = {
   raw: JWTPayload;
 };
 
+const DEFAULT_OIDC_ISSUER = "https://auth.gryt.chat/realms/gryt";
+const DEFAULT_OIDC_AUDIENCE = "gryt-web";
+
 function getIssuer(): string {
-  const issuer = process.env.GRYT_OIDC_ISSUER;
-  if (!issuer) {
-    throw new Error('Missing GRYT_OIDC_ISSUER (expected something like https://auth.gryt.chat/realms/gryt)');
-  }
+  const issuer = process.env.GRYT_OIDC_ISSUER || DEFAULT_OIDC_ISSUER;
   return issuer.replace(/\/+$/, '');
 }
 
 function getExpectedAudience(): string | undefined {
-  const aud = process.env.GRYT_OIDC_AUDIENCE;
-  return aud && aud.trim().length > 0 ? aud.trim() : undefined;
+  const aud = process.env.GRYT_OIDC_AUDIENCE ?? DEFAULT_OIDC_AUDIENCE;
+  return aud.trim().length > 0 ? aud.trim() : undefined;
 }
 
 function audienceMatches(payload: JWTPayload, expected: string): boolean {

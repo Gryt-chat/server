@@ -3,14 +3,11 @@ import { createRemoteJWKSet, importJWK, jwtVerify, type JWTPayload } from "jose"
 
 // ── Configuration ────────────────────────────────────────────────────
 
+const DEFAULT_IDENTITY_JWKS_URL = "https://id.gryt.chat/.well-known/jwks.json";
+const DEFAULT_IDENTITY_ISSUER = "https://id.gryt.chat";
+
 function getIdentityJwksUrl(): string {
-  const url = process.env.GRYT_IDENTITY_JWKS_URL;
-  if (!url) {
-    throw new Error(
-      "Missing GRYT_IDENTITY_JWKS_URL (expected something like https://id.gryt.chat/.well-known/jwks.json)"
-    );
-  }
-  return url;
+  return process.env.GRYT_IDENTITY_JWKS_URL || DEFAULT_IDENTITY_JWKS_URL;
 }
 
 function getIdentityIssuer(): string {
@@ -22,7 +19,7 @@ function getIdentityIssuer(): string {
     const url = new URL(jwksUrl);
     return `${url.protocol}//${url.host}`;
   } catch {
-    throw new Error("Cannot derive identity issuer from GRYT_IDENTITY_JWKS_URL");
+    return DEFAULT_IDENTITY_ISSUER;
   }
 }
 
