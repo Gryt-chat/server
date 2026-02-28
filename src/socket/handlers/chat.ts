@@ -18,7 +18,7 @@ import {
   getFilesByIds,
   getServerConfig,
   DEFAULT_UPLOAD_MAX_BYTES,
-} from "../../db/scylla";
+} from "../../db";
 import { processProfanity, type CensorStyle, type ProfanityMode } from "../../utils/profanityFilter";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 

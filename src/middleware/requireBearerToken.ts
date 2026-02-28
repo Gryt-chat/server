@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 import { verifyAccessToken, TokenPayload } from "../utils/jwt";
-import { getServerConfig } from "../db/scylla";
+import { getServerConfig } from "../db";
 
 declare module "express-serve-static-core" {
   interface Request {

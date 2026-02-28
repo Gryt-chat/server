@@ -13,7 +13,7 @@ import {
   upsertServerSidebarItem,
   deleteServerSidebarItem,
   insertServerAudit,
-} from "../../db/scylla";
+} from "../../db";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 
 const RL_SETTINGS: RateLimitRule = { limit: 30, windowMs: 60_000, scorePerAction: 1, maxScore: 20, scoreDecayMs: 3_000 };

@@ -15,7 +15,7 @@ export function getServerIdFromEnv(): string {
   return computeServerId({
     serverName: process.env.SERVER_NAME,
     port: process.env.PORT,
-    keyspace: process.env.SCYLLA_KEYSPACE,
+    keyspace: process.env.SERVER_INSTANCE_ID,
   });
 }
 

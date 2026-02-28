@@ -3,17 +3,16 @@ import { consola } from "consola";
 import {
   demoteAllOwnerRoles,
   ensureOwnerRoleForGrytUser,
-  getScyllaClient,
   getServerConfig,
-  initScylla,
+  initSqlite,
   insertServerAudit,
   setServerOwner,
-} from "../db/scylla";
+} from "../db";
 
 function usage(): string {
   return [
     "Usage:",
-    "  node dist/admin/setOwner.js --grytUserId <keycloak_sub>",
+    "  node dist/admin/setOwner.js --grytUserId <user_sub>",
     "",
     "Example:",
     "  node dist/admin/setOwner.js --grytUserId 00000000-0000-0000-0000-000000000000",
@@ -42,21 +41,9 @@ async function main(): Promise<void> {
     process.exit(parsed.error ? 2 : 0);
   }
 
-  const disableScylla = (process.env.DISABLE_SCYLLA || "").toLowerCase() === "true";
-  if (disableScylla) {
-    consola.error("ScyllaDB is disabled (DISABLE_SCYLLA=true). Cannot set owner.");
-    process.exit(2);
-  }
-
-  const scyllaContactPoints = (process.env.SCYLLA_CONTACT_POINTS || "").trim();
-  if (!scyllaContactPoints) {
-    consola.error("SCYLLA_CONTACT_POINTS is missing. Cannot set owner.");
-    process.exit(2);
-  }
-
   const nextOwner = parsed.grytUserId;
 
-  await initScylla();
+  await initSqlite();
   const prev = (await getServerConfig())?.owner_gryt_user_id ?? null;
 
   await setServerOwner(nextOwner);
@@ -77,12 +64,9 @@ async function main(): Promise<void> {
     ensuredOwnerRole: ensured.applied,
     ensuredServerUserId: ensured.serverUserId,
   });
-
-  await getScyllaClient().shutdown().catch((e) => consola.warn("scylla shutdown failed", e));
 }
 
 main().catch((e: unknown) => {
   consola.error("Failed to set owner", e);
   process.exit(1);
 });
-

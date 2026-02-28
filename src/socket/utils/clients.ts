@@ -1,6 +1,6 @@
 import { Server, Socket } from "socket.io";
 import { Clients } from "../../types";
-import { getAllRegisteredUsers, listServerRoles } from "../../db/scylla";
+import { getAllRegisteredUsers, listServerRoles } from "../../db";
 
 export function verifyClient(socket: Socket) {
   socket.join("verifiedClients");
@@ -125,6 +125,7 @@ async function emitMemberListNow(io: Server, clientsInfo: Clients): Promise<void
           role: roleMap.get(user.server_user_id) || 'member',
           status,
           lastSeen: user.last_seen,
+          createdAt: user.created_at,
           isMuted: onlineClient?.isMuted || false,
           isDeafened: onlineClient?.isDeafened || false,
           isServerMuted: onlineClient?.isServerMuted || false,

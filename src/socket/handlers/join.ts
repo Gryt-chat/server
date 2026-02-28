@@ -16,7 +16,7 @@ import {
   setServerRole,
   createRefreshToken,
   isUserBanned,
-} from "../../db/scylla";
+} from "../../db";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 import {
   registerJoinHelpers,

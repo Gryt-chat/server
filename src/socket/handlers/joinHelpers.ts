@@ -10,7 +10,7 @@ import {
   setUserInactive,
   getRefreshToken,
   revokeUserRefreshTokens,
-} from "../../db/scylla";
+} from "../../db";
 
 // ── Password cooldown ──────────────────────────────────────────────
 //

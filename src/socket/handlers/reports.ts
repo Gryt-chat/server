@@ -14,7 +14,7 @@ import {
   insertServerAudit,
   banUser,
   getFilesByIds,
-} from "../../db/scylla";
+} from "../../db";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 
 const RL_REPORT: RateLimitRule = { limit: 10, windowMs: 60_000, scorePerAction: 2, maxScore: 10, scoreDecayMs: 5_000 };

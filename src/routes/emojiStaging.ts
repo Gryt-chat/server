@@ -3,12 +3,16 @@ import type { Router, Request, Response, NextFunction } from "express";
 import { v4 as uuidv4 } from "uuid";
 import { unzipSync } from "fflate";
 
-import { putObject } from "../storage/s3";
-import { insertEmojiJob, listEmojiJobs } from "../db/emojiJobs";
+import { putObject } from "../storage";
 import { requireBearerToken } from "../middleware/requireBearerToken";
-import { getServerRole } from "../db/servers";
 import { broadcastEmojiQueueUpdate } from "../socket";
-import { DEFAULT_EMOJI_MAX_BYTES, getServerConfig } from "../db/scylla";
+import {
+  DEFAULT_EMOJI_MAX_BYTES,
+  getServerConfig,
+  getServerRole,
+  insertEmojiJob,
+  listEmojiJobs,
+} from "../db";
 import {
   upload,
   EMOJI_NAME_RE,

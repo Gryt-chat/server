@@ -1,6 +1,6 @@
 import express from "express";
 import type { Request, Response, NextFunction } from "express";
-import { listMessages } from "../db/scylla";
+import { listMessages } from "../db";
 import { requireBearerToken } from "../middleware/requireBearerToken";
 
 export const messagesRouter = express.Router();

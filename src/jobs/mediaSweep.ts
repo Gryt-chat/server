@@ -1,7 +1,11 @@
 import consola from "consola";
-import { getAllFileRecords, getAllReferencedAttachmentIds, deleteFileRecord } from "../db/messages";
-import { getAllAvatarFileIds } from "../db/users";
-import { deleteObject } from "../storage/s3";
+import {
+  deleteFileRecord,
+  getAllAvatarFileIds,
+  getAllFileRecords,
+  getAllReferencedAttachmentIds,
+} from "../db";
+import { deleteObject } from "../storage";
 
 const SWEEP_INTERVAL_MS = parseInt(process.env.MEDIA_SWEEP_INTERVAL_MS || String(10 * 60 * 1000)); // default 10 min
 const GRACE_PERIOD_MS = parseInt(process.env.MEDIA_SWEEP_GRACE_MS || String(30 * 60 * 1000)); // default 30 min

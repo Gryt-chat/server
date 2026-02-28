@@ -5,13 +5,13 @@ import multer from "multer";
 import sharp from "sharp";
 import { v4 as uuidv4 } from "uuid";
 
-import { putObject } from "../storage/s3";
+import { putObject } from "../storage";
 import {
   createServerConfigIfNotExists,
   getServerConfig,
   insertServerAudit,
   updateServerConfig,
-} from "../db/scylla";
+} from "../db";
 import { broadcastServerUiUpdate } from "../socket";
 import { validateImage } from "../utils/imageValidation";
 import { verifyAccessToken } from "../utils/jwt";

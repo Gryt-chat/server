@@ -3,16 +3,18 @@ config({ override: false }); // Load environment variables from .env file
 import { consola } from "consola";
 import { socketHandler, setupSFUSync } from "./socket";
 import { createServer } from "http";
-import { Readable } from "stream";
 import { Server } from "socket.io";
 import express from "express"; // Import express
 import { SFUClient } from "./sfu/client"; // Import SFU client
 import {
-	initScylla,
 	createServerConfigIfNotExists,
+	getRegisteredUserCount,
 	getServerConfig,
-} from "./db/scylla";
-import { initS3, ensureBucket } from "./storage/s3";
+	initSqlite,
+} from "./db";
+import { getIssuer, getJwksResponse, initBuiltinIdentity } from "./auth/builtinIdentity";
+
+import { initStorage, ensureBucket, getObject } from "./storage";
 import { serverRouter } from "./routes/server";
 import { messagesRouter } from "./routes/messages";
 import { uploadsRouter } from "./routes/uploads";
@@ -21,8 +23,6 @@ import { emojisRouter } from "./routes/emojis";
 import { linkPreviewRouter } from "./routes/linkPreview";
 import { oEmbedRouter } from "./routes/oembed";
 import { mediaMetadataRouter } from "./routes/mediaMetadata";
-import { getRegisteredUserCount } from "./db/users";
-import { getObject } from "./storage/s3";
 import { startMediaSweep } from "./jobs/mediaSweep";
 import { startEmojiQueueWorker } from "./jobs/emojiQueueWorker";
 import { metricsMiddleware, register, socketConnectionsActive } from "./metrics";
@@ -87,16 +87,24 @@ app.get("/health", (_req, res) => {
 	});
 });
 
+// JWKS endpoint for built-in identity provider (self-hosted mode)
+app.get("/.well-known/jwks.json", (_req, res) => {
+	try {
+		res.json(getJwksResponse());
+	} catch {
+		res.status(503).json({ error: "identity_not_initialized" });
+	}
+});
+
 // Initialize storage and database
 const disableS3 = (process.env.DISABLE_S3 || "").toLowerCase() === "true";
-const disableScylla = (process.env.DISABLE_SCYLLA || "").toLowerCase() === "true";
 
 // S3 is optional in dev. We only initialize if not disabled.
 try {
 	if (disableS3) {
 		consola.warn("S3 disabled via DISABLE_S3=true");
 	} else {
-		initS3();
+		initStorage();
 		consola.success("S3 client initialized");
 		const bucket = (process.env.S3_BUCKET || "").trim();
 		if (bucket) {
@@ -109,45 +117,46 @@ try {
 	consola.error("S3 initialization failed", e);
 }
 
-// Scylla is optional in dev. Avoid defaulting to 127.0.0.1:9042 unless explicitly configured.
-const scyllaContactPoints = (process.env.SCYLLA_CONTACT_POINTS || "").trim();
-if (disableScylla) {
-	consola.warn("ScyllaDB disabled via DISABLE_SCYLLA=true");
-} else if (!scyllaContactPoints) {
-	consola.warn("ScyllaDB not configured (SCYLLA_CONTACT_POINTS missing). Skipping Scylla init.");
-} else {
-	initScylla()
-		.then(async () => {
-			consola.success("ScyllaDB initialized");
-			await createServerConfigIfNotExists();
-		})
+// Built-in identity provider (self-hosted mode)
+const identityMode = (process.env.IDENTITY_MODE || "").toLowerCase();
+if (identityMode === "builtin") {
+	initBuiltinIdentity()
 		.then(() => {
-			if (!disableS3) startMediaSweep();
-			if (!disableS3 && (process.env.S3_BUCKET || "").trim()) {
-				startEmojiQueueWorker();
-			}
+			const issuer = getIssuer();
+			process.env.GRYT_IDENTITY_JWKS_URL = `${issuer}/.well-known/jwks.json`;
+			process.env.GRYT_IDENTITY_ISSUER = issuer;
+			consola.success(`Built-in identity provider initialized (issuer: ${issuer})`);
 		})
-		.catch((e) => consola.error("ScyllaDB initialization failed", e));
+		.catch((e) => consola.error("Built-in identity initialization failed", e));
 }
+
+// Database initialization (SQLite)
+initSqlite()
+	.then(async () => {
+		consola.success("SQLite initialized");
+		await createServerConfigIfNotExists();
+	})
+	.then(() => {
+		if (!disableS3) startMediaSweep();
+		if (!disableS3 && (process.env.S3_BUCKET || "").trim()) {
+			startEmojiQueueWorker();
+		}
+	})
+	.catch((e) => consola.error("SQLite initialization failed", e));
 
 // Initialize SFU client if host is configured
 let sfuClient: SFUClient | null = null;
 
 if (process.env.SFU_WS_HOST) {
-	// Create unique server ID by combining SERVER_NAME with PORT and SCYLLA_KEYSPACE
-	// This ensures each server instance gets a unique ID even if SERVER_NAME is the same
 	const serverName = process.env.SERVER_NAME?.replace(/\s+/g, '_').toLowerCase() || 'unknown_server';
 	const port = process.env.PORT || '5000';
-	const keyspace = process.env.SCYLLA_KEYSPACE || 'default';
-	const serverId = `${serverName}_${port}_${keyspace}`;
+	const instanceId = process.env.SERVER_INSTANCE_ID || 'default';
+	const serverId = `${serverName}_${port}_${instanceId}`;
 	const serverPassword = process.env.SERVER_PASSWORD || '';
 	
 	sfuClient = new SFUClient(serverId, serverPassword, process.env.SFU_WS_HOST);
 	
-	consola.info(`🔧 SFU Client initialized with unique server ID: ${serverId}`);
-	consola.info(`   - Server Name: ${serverName}`);
-	consola.info(`   - Port: ${port}`);
-	consola.info(`   - Keyspace: ${keyspace}`);
+	consola.info(`SFU Client initialized with server ID: ${serverId}`);
 	
 	// Connect to SFU server
 	sfuClient.connect().catch((error) => {
@@ -205,17 +214,7 @@ app.get("/icon", async (_req, res) => {
 
 		res.setHeader("Cache-Control", "public, max-age=60");
 		if (obj.ContentType) res.setHeader("Content-Type", obj.ContentType);
-
-		if (body instanceof Readable) {
-			body.pipe(res);
-			return;
-		}
-		if (body instanceof Uint8Array || Buffer.isBuffer(body)) {
-			res.end(body);
-			return;
-		}
-		const bytes = await body.transformToByteArray();
-		res.end(Buffer.from(bytes));
+		body.pipe(res);
 	} catch {
 		res.status(404).json({ error: "no_icon", message: "No server icon configured" });
 	}

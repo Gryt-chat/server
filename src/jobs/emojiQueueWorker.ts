@@ -2,9 +2,15 @@ import consola from "consola";
 import sharp from "sharp";
 import { v4 as uuidv4 } from "uuid";
 
-import { deleteObject, getObject, putObject } from "../storage/s3";
-import { getEmoji, insertEmoji } from "../db/emojis";
-import { getEmojiJob, getLatestEmojiJobIdByName, listQueuedJobIds, updateEmojiJobStatus } from "../db/emojiJobs";
+import { deleteObject, getObjectAsBuffer, putObject } from "../storage";
+import {
+  getEmoji,
+  getEmojiJob,
+  getLatestEmojiJobIdByName,
+  insertEmoji,
+  listQueuedJobIds,
+  updateEmojiJobStatus,
+} from "../db";
 import { broadcastCustomEmojisUpdate, broadcastEmojiQueueUpdate } from "../socket";
 import { processEmojiToOptimizedImage } from "../utils/emojiProcessing";
 
@@ -49,11 +55,7 @@ export function startEmojiQueueWorker(): void {
         return;
       }
 
-      const obj = await getObject({ bucket, key: job.raw_s3_key });
-      const body = obj.Body;
-      if (!body) throw new Error("raw_s3_body_missing");
-      const bytes = await body.transformToByteArray();
-      const rawBuffer = Buffer.from(bytes);
+      const rawBuffer = await getObjectAsBuffer({ bucket, key: job.raw_s3_key });
 
       const { processed, ext, contentType } = await processEmojiToOptimizedImage(rawBuffer, job.raw_content_type.toLowerCase());
 

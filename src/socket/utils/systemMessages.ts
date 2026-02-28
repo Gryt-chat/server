@@ -1,7 +1,7 @@
 import consola from "consola";
 import { Server } from "socket.io";
 
-import { getServerConfig, insertMessage, listServerChannels } from "../../db/scylla";
+import { getServerConfig, insertMessage, listServerChannels } from "../../db";
 import type { Clients } from "../../types";
 
 const SYSTEM_SENDER_ID = "system";

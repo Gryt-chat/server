@@ -219,6 +219,19 @@ docker buildx build \
   --push .
 ok "Pushed ${IMAGE}:${NEW_VERSION} (${PLATFORMS})"
 
+# ── Self-hosted Windows bundle ────────────────────────────────────────
+echo ""
+info "Building self-hosted Windows bundle..."
+bash "$PKG_DIR/build-selfhosted.sh" windows-x64 \
+  --version "$NEW_VERSION" \
+  --skip-tsc
+SELFHOSTED_ZIP="$PKG_DIR/dist-selfhosted/gryt-server-windows-x64-v${NEW_VERSION}.zip"
+if [ -f "$SELFHOSTED_ZIP" ]; then
+  ok "Built $(basename "$SELFHOSTED_ZIP") ($(du -sh "$SELFHOSTED_ZIP" | cut -f1))"
+else
+  warn "Self-hosted zip was not created — skipping upload later"
+fi
+
 # ── Git commit & push (before GH release so the tag lands on this commit) ──
 if [ "$RERELEASE" = false ]; then
   echo ""
@@ -263,10 +276,26 @@ gh release create "v${NEW_VERSION}" \
   $RELEASE_FLAGS
 ok "GitHub release created"
 
+# ── Upload self-hosted zip to monorepo release ────────────────────────
+if [ -f "${SELFHOSTED_ZIP:-}" ]; then
+  echo ""
+  info "Uploading self-hosted bundle to monorepo release…"
+  MONO_TAG="server-v${NEW_VERSION}"
+  gh release upload "$MONO_TAG" "$SELFHOSTED_ZIP" \
+    --repo "Gryt-chat/gryt" --clobber 2>/dev/null || \
+  gh release create "$MONO_TAG" "$SELFHOSTED_ZIP" \
+    --repo "Gryt-chat/gryt" --title "Server v${NEW_VERSION}" \
+    --prerelease --generate-notes
+  ok "Uploaded $(basename "$SELFHOSTED_ZIP") to Gryt-chat/gryt release ${BOLD}${MONO_TAG}${RESET}"
+fi
+
 echo ""
 ok "Release ${BOLD}v${NEW_VERSION}${RESET} complete"
 echo ""
-echo -e "  ${CYAN}Image:${RESET}   ${IMAGE}:${NEW_VERSION}"
-echo -e "  ${CYAN}Release:${RESET} https://github.com/${OWNER}/${REPO}/releases/tag/v${NEW_VERSION}"
+echo -e "  ${CYAN}Image:${RESET}     ${IMAGE}:${NEW_VERSION}"
+echo -e "  ${CYAN}Release:${RESET}   https://github.com/${OWNER}/${REPO}/releases/tag/v${NEW_VERSION}"
+if [ -f "${SELFHOSTED_ZIP:-}" ]; then
+  echo -e "  ${CYAN}Self-host:${RESET} https://github.com/Gryt-chat/gryt/releases/tag/server-v${NEW_VERSION}"
+fi
 
 echo ""

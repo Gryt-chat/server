@@ -1,6 +1,6 @@
 import { Socket } from "socket.io";
 import { verifyAccessToken, TokenPayload } from "../../utils/jwt";
-import { getServerConfig, getServerRole } from "../../db/scylla";
+import { getServerConfig, getServerRole } from "../../db";
 
 export type Role = "owner" | "admin" | "mod" | "member";
 

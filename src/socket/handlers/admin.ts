@@ -23,7 +23,7 @@ import {
   banUser,
   unbanUser,
   listBans,
-} from "../../db/scylla";
+} from "../../db";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 import { registerAdminChannelHandlers } from "./adminChannels";
 
@@ -378,7 +378,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         }
         if (!targetGrytUserId) {
           // Fallback: look up from DB
-          const { getUserByServerId } = await import("../../db/users");
+          const { getUserByServerId } = await import("../../db");
           const user = await getUserByServerId(targetId);
           targetGrytUserId = user?.gryt_user_id;
         }
@@ -557,7 +557,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        const { replaceUserIdentity } = await import("../../db/users");
+        const { replaceUserIdentity } = await import("../../db");
         const result = await replaceUserIdentity(targetId, newGrytId);
 
         insertServerAudit({

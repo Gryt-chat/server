@@ -8,8 +8,6 @@ dist
 docker-compose.yml
 eslint.config.mjs
 example.env
-migrate-add-is-active.js
-wipe-scylla.js
 tsconfig.tsbuildinfo
 package-lock.json
 yarn.lock

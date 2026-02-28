@@ -2,17 +2,17 @@ import consola from "consola";
 import { Server, Socket } from "socket.io";
 import { Clients } from "../../types";
 import { syncAllClients, broadcastMemberList } from "./clients";
-import { listEmojiJobs } from "../../db/emojiJobs";
 import {
+  DEFAULT_AVATAR_MAX_BYTES,
+  DEFAULT_UPLOAD_MAX_BYTES,
   ensureDefaultChannels,
   ensureDefaultSidebarItems,
   getServerConfig,
   getServerRole,
-  DEFAULT_AVATAR_MAX_BYTES,
-  DEFAULT_UPLOAD_MAX_BYTES,
+  listEmojiJobs,
   listServerChannels,
   listServerSidebarItems,
-} from "../../db/scylla";
+} from "../../db";
 
 // Module-level references set by socketHandler so REST routes can trigger broadcasts
 let _io: Server | null = null;

@@ -3,7 +3,7 @@ import type { HandlerContext, EventHandlerMap } from "./types";
 import { requireAuth } from "../middleware/auth";
 import { syncAllClients, broadcastMemberList } from "../utils/clients";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
-import { insertServerAudit } from "../../db/scylla";
+import { insertServerAudit } from "../../db";
 
 const RL_REQUEST_ROOM: RateLimitRule = { limit: 10, windowMs: 60_000, scorePerAction: 1, maxScore: 8, scoreDecayMs: 5000 };
 const RL_JOINED_CHANNEL: RateLimitRule = { limit: 10, windowMs: 60_000, scorePerAction: 0.5, maxScore: 6, scoreDecayMs: 3000 };

@@ -1,9 +1,8 @@
 import consola from "consola";
 import type { HandlerContext, EventHandlerMap } from "./types";
 import type { Clients } from "../../types";
-import { getAllRegisteredUsers, listServerRoles } from "../../db/scylla";
+import { getAllRegisteredUsers, getUserByServerId, listServerRoles, updateUserNickname } from "../../db";
 import { syncAllClients, broadcastMemberList } from "../utils/clients";
-import { updateUserNickname, getUserByServerId } from "../../db/users";
 
 export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
   const { io, socket, clientId, serverId, clientsInfo } = ctx;
@@ -39,6 +38,7 @@ export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
               role: roleMap.get(user.server_user_id) || "member",
               status,
               lastSeen: user.last_seen,
+              createdAt: user.created_at,
               isMuted: onlineClient?.isMuted || false,
               isDeafened: onlineClient?.isDeafened || false,
               isServerMuted: onlineClient?.isServerMuted || false,

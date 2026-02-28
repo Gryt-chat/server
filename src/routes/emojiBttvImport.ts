@@ -3,12 +3,17 @@ import express from "express";
 import type { Router, Request, Response, NextFunction } from "express";
 import { v4 as uuidv4 } from "uuid";
 
-import { putObject, deleteObject } from "../storage/s3";
-import { insertEmoji, getEmoji, listEmojis } from "../db/emojis";
+import { putObject, deleteObject } from "../storage";
 import { requireBearerToken } from "../middleware/requireBearerToken";
-import { getServerRole } from "../db/servers";
 import { broadcastCustomEmojisUpdate } from "../socket";
-import { DEFAULT_EMOJI_MAX_BYTES, getServerConfig } from "../db/scylla";
+import {
+  DEFAULT_EMOJI_MAX_BYTES,
+  getEmoji,
+  getServerConfig,
+  getServerRole,
+  insertEmoji,
+  listEmojis,
+} from "../db";
 import { processEmojiToOptimizedImage } from "../utils/emojiProcessing";
 import { EMOJI_NAME_RE } from "./emojiShared";
 

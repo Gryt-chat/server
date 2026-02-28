@@ -1,17 +1,17 @@
 import consola from "consola";
 import express from "express";
 import type { Request, Response, NextFunction } from "express";
+import { imageSize } from "image-size";
 import multer from "multer";
 import { v4 as uuidv4 } from "uuid";
 import mime from "mime-types";
 import sharp from "sharp";
-import { Readable } from "stream";
 import { execFile } from "child_process";
 import { writeFile, unlink, readFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
-import { deleteObject, putObject, getObject } from "../storage/s3";
-import { insertFile, getFile, updateFileRecord, updateUserAvatar, setUserAvatar, getServerConfig, DEFAULT_AVATAR_MAX_BYTES, DEFAULT_UPLOAD_MAX_BYTES } from "../db/scylla";
+import { deleteObject, putObject, getObject } from "../storage";
+import { insertFile, insertImageJob, getFile, updateFileRecord, updateUserAvatar, setUserAvatar, getServerConfig, DEFAULT_AVATAR_MAX_BYTES, DEFAULT_UPLOAD_MAX_BYTES } from "../db";
 import { requireBearerToken } from "../middleware/requireBearerToken";
 import { validateImage } from "../utils/imageValidation";
 
@@ -46,6 +46,14 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 200
 
 export const uploadsRouter = express.Router();
 
+function parseDimField(val: unknown): number | null {
+  if (typeof val === "string") {
+    const n = Number(val);
+    if (Number.isFinite(n) && n > 0) return Math.round(n);
+  }
+  return null;
+}
+
 uploadsRouter.post(
   "/",
   requireBearerToken,
@@ -66,10 +74,6 @@ uploadsRouter.post(
     const fileMime = (file.mimetype || "").toLowerCase();
     const isImage = fileMime.startsWith("image/");
     const isVideo = fileMime.startsWith("video/");
-    const isGif = fileMime === "image/gif";
-    const isWebp = fileMime === "image/webp";
-    const isAvif = fileMime === "image/avif";
-    const isPotentiallyAnimatedImage = isGif || isWebp;
 
     Promise.resolve()
       .then(async () => {
@@ -85,70 +89,30 @@ uploadsRouter.post(
           return;
         }
 
-        let key = `uploads/${fileId}.${mime.extension(file.mimetype || "") || "bin"}`;
-        let storedBody: Buffer = file.buffer;
-        let storedMime: string = file.mimetype || "application/octet-stream";
-        let storedSize: number = file.size;
+        const key = `uploads/${fileId}.${mime.extension(file.mimetype || "") || "bin"}`;
+        const storedMime: string = file.mimetype || "application/octet-stream";
         let thumbKey: string | null = null;
         let width: number | null = null;
         let height: number | null = null;
 
         if (isImage) {
-          const validation = await validateImage(file.buffer, { animated: isPotentiallyAnimatedImage });
-          if (!validation.valid) {
-            res.status(400).json({ error: "invalid_file", message: validation.reason });
-            return;
-          }
-          width = validation.width;
-          height = validation.height;
+          width = parseDimField(req.body?.width);
+          height = parseDimField(req.body?.height);
 
-          const isAnimated = isPotentiallyAnimatedImage && typeof validation.pages === "number" && validation.pages > 1;
-          const shouldStoreOriginal = isGif || isAvif || (isWebp && isAnimated);
-
-          if (shouldStoreOriginal) {
-            if (hasLimit && file.size > maxBytes) {
-              res.status(413).json({
-                error: "file_too_large",
-                message: `File too large. Max ${(maxBytes / (1024 * 1024)).toFixed(1)}MB.`,
-              });
-              return;
-            }
-          } else if (hasLimit && file.size > maxBytes) {
-            let avifBuf: Buffer;
+          if (!width || !height) {
             try {
-              avifBuf = await sharp(file.buffer, { failOn: "error" }).avif().toBuffer();
+              const dims = imageSize(file.buffer);
+              if (dims.width && dims.height) {
+                width = dims.width;
+                height = dims.height;
+              }
             } catch {
-              res.status(400).json({ error: "invalid_file", message: "Could not process image." });
-              return;
+              consola.debug("image-size fallback failed for", fileId);
             }
-            if (avifBuf.length > maxBytes) {
-              res.status(413).json({
-                error: "file_too_large",
-                message: `File too large even after compression. Max ${(maxBytes / (1024 * 1024)).toFixed(1)}MB.`,
-              });
-              return;
-            }
-            key = `uploads/${fileId}.avif`;
-            storedBody = avifBuf;
-            storedMime = "image/avif";
-            storedSize = avifBuf.length;
-          }
-
-          const thumbPipeline = isPotentiallyAnimatedImage
-            ? sharp(file.buffer, { pages: 1, failOn: "error" })
-            : sharp(file.buffer, { failOn: "error" });
-          const thumb = await thumbPipeline
-            .resize({ width: 320, withoutEnlargement: true })
-            .avif({ quality: 50 })
-            .toBuffer()
-            .catch(() => null);
-          if (thumb) {
-            thumbKey = `thumbnails/${fileId}.avif`;
-            await putObject({ bucket, key: thumbKey, body: thumb, contentType: "image/avif" });
           }
         }
 
-        await putObject({ bucket, key, body: storedBody, contentType: storedMime });
+        await putObject({ bucket, key, body: file.buffer, contentType: storedMime });
 
         if (isVideo) {
           const thumb = await extractVideoThumbnail(file.buffer, fileId);
@@ -162,13 +126,25 @@ uploadsRouter.post(
           file_id: fileId,
           s3_key: key,
           mime: storedMime,
-          size: storedSize,
+          size: file.size,
           width,
           height,
           thumbnail_key: thumbKey,
           original_name: file.originalname || null,
           created_at: new Date(),
         });
+
+        if (isImage) {
+          const jobId = uuidv4();
+          await insertImageJob({
+            job_id: jobId,
+            file_id: fileId,
+            raw_s3_key: key,
+            raw_content_type: storedMime,
+            raw_bytes: file.size,
+          }).catch((e: unknown) => consola.warn("Failed to queue image job", e));
+        }
+
         res.status(201).json({ fileId, key, thumbnailKey: thumbKey });
       })
       .catch(next);
@@ -428,8 +404,7 @@ uploadsRouter.get(
           res.setHeader("Content-Disposition", `attachment; filename="${fileName.replace(/"/g, '\\"')}"`);
         }
 
-        const isPartial = obj.ContentRange || obj.$metadata?.httpStatusCode === 206;
-        if (isPartial && obj.ContentRange) {
+        if (obj.ContentRange) {
           res.status(206);
           res.setHeader("Content-Range", obj.ContentRange);
         } else if (totalSize != null) {
@@ -440,13 +415,7 @@ uploadsRouter.get(
           res.setHeader("Content-Length", String(obj.ContentLength));
         }
 
-        if (body instanceof Readable) {
-          body.pipe(res);
-          return;
-        }
-
-        const bytes = await body.transformToByteArray();
-        res.end(Buffer.from(bytes));
+        body.pipe(res);
       })
       .catch(next);
   },

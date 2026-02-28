@@ -4,12 +4,19 @@ import type { Request, Response, NextFunction } from "express";
 import { v4 as uuidv4 } from "uuid";
 import { unzipSync } from "fflate";
 
-import { putObject, deleteObject, getObject } from "../storage/s3";
-import { insertEmoji, getEmoji, listEmojis, deleteEmoji, renameEmoji } from "../db/emojis";
+import { putObject, deleteObject, getObject } from "../storage";
 import { requireBearerToken } from "../middleware/requireBearerToken";
-import { getServerRole } from "../db/servers";
 import { broadcastCustomEmojisUpdate } from "../socket";
-import { DEFAULT_EMOJI_MAX_BYTES, getServerConfig } from "../db/scylla";
+import {
+  DEFAULT_EMOJI_MAX_BYTES,
+  deleteEmoji,
+  getEmoji,
+  getServerConfig,
+  getServerRole,
+  insertEmoji,
+  listEmojis,
+  renameEmoji,
+} from "../db";
 import { processEmojiToOptimizedImage } from "../utils/emojiProcessing";
 import {
   upload,
@@ -237,8 +244,7 @@ emojisRouter.get(
           : "image/png";
         res.setHeader("Content-Type", imgContentType);
 
-        const bytes = await body.transformToByteArray();
-        res.end(Buffer.from(bytes));
+        body.pipe(res);
       })
       .catch(next);
   },

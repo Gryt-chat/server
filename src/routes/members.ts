@@ -1,6 +1,6 @@
 import express from "express";
 import type { Request, Response, NextFunction } from "express";
-import { getAllRegisteredUsers } from "../db/scylla";
+import { getAllRegisteredUsers } from "../db";
 import { requireBearerToken } from "../middleware/requireBearerToken";
 
 export const membersRouter = express.Router();

@@ -5,7 +5,7 @@ import { colors } from "../utils/colors";
 import { SFUClient } from "../sfu/client";
 import type { SFUPeerEvent, SFUSyncRoom } from "../sfu/client";
 import { verifyAccessToken } from "../utils/jwt";
-import { getUserByServerId, getServerConfig } from "../db/scylla";
+import { getUserByServerId, getServerConfig } from "../db";
 import { syncAllClients, verifyClient, broadcastMemberList, countOtherSessions } from "./utils/clients";
 import { sendInfo, sendServerDetails, setSocketRefs, broadcastCustomEmojisUpdate, broadcastEmojiQueueUpdate, broadcastServerUiUpdate } from "./utils/server";
 import { getServerIdFromEnv } from "../utils/serverId";
