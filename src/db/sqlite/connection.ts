@@ -22,6 +22,7 @@ export async function initSqlite(): Promise<void> {
   db.pragma("foreign_keys = ON");
 
   createSchema(db);
+  runMigrations(db);
 }
 
 function createSchema(d: Database.Database): void {
@@ -215,6 +216,23 @@ function createSchema(d: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_image_jobs_status ON image_jobs(status, created_at);
   `);
+}
+
+function runMigrations(d: Database.Database): void {
+  const cols = d.prepare("PRAGMA table_info(users)").all() as { name: string }[];
+  const colNames = new Set(cols.map((c) => c.name));
+
+  if (!colNames.has("created_at")) {
+    d.exec("ALTER TABLE users ADD COLUMN created_at TEXT DEFAULT ''");
+    d.exec("UPDATE users SET created_at = last_seen WHERE created_at = '' OR created_at IS NULL");
+  } else {
+    const needsBackfill = d.prepare(
+      "SELECT COUNT(*) AS cnt FROM users WHERE created_at = '' OR created_at IS NULL",
+    ).get() as { cnt: number };
+    if (needsBackfill.cnt > 0) {
+      d.exec("UPDATE users SET created_at = last_seen WHERE created_at = '' OR created_at IS NULL");
+    }
+  }
 }
 
 export function toIso(d: Date): string {

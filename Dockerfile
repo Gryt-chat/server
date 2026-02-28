@@ -3,7 +3,6 @@ RUN apk add --no-cache python3 make g++
 WORKDIR /app
 
 COPY package.json bun.lockb* ./
-COPY node_modules ./node_modules
 RUN bun install
 
 COPY . .
@@ -13,7 +12,6 @@ FROM oven/bun:1-alpine AS deps
 RUN apk add --no-cache python3 make g++
 WORKDIR /app
 COPY package.json bun.lockb* ./
-COPY node_modules ./node_modules
 RUN bun install --production
 
 FROM oven/bun:1-alpine
