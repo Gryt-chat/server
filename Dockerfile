@@ -10,8 +10,8 @@ RUN yarn build && yarn bundle
 FROM node:22-alpine AS deps
 RUN apk add --no-cache python3 make g++
 WORKDIR /app
-RUN npm init -y > /dev/null 2>&1 \
-  && npm install better-sqlite3 sharp
+COPY package.json yarn.lock ./
+RUN yarn install --production --ignore-engines
 
 FROM node:22-alpine
 
