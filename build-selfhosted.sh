@@ -80,12 +80,12 @@ cp dist-selfhosted/start.bat "$OUTDIR/"
 # Create server launcher scripts
 cat > "$OUTDIR/gryt_server.bat" <<'EOF'
 @echo off
-node server\index.js %*
+node server\dist\index.js %*
 EOF
 
 cat > "$OUTDIR/gryt_server.sh" <<'SHEOF'
 #!/bin/sh
-node "$(dirname "$0")/server/index.js" "$@"
+node "$(dirname "$0")/server/dist/index.js" "$@"
 SHEOF
 chmod +x "$OUTDIR/gryt_server.sh" 2>/dev/null || true
 
@@ -112,12 +112,12 @@ if [ -d "$IMAGE_WORKER_DIR/dist" ]; then
 
   cat > "$OUTDIR/gryt_image_worker.bat" <<'EOF'
 @echo off
-node image-worker\index.js %*
+node image-worker\dist\index.js %*
 EOF
 
   cat > "$OUTDIR/gryt_image_worker.sh" <<'SHEOF'
 #!/bin/sh
-node "$(dirname "$0")/image-worker/index.js" "$@"
+node "$(dirname "$0")/image-worker/dist/index.js" "$@"
 SHEOF
   chmod +x "$OUTDIR/gryt_image_worker.sh" 2>/dev/null || true
 else

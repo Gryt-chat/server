@@ -12,12 +12,12 @@ REM Create data directory if it doesn't exist
 if not exist data mkdir data
 
 echo Starting Gryt Image Worker...
-start "" /B node image-worker\index.js
+start "" /B node image-worker\dist\index.js
 
 echo Starting Gryt SFU...
 start "" /B gryt_sfu.exe
 
 echo Starting Gryt Server...
-gryt_server.exe
+call gryt_server.bat
 
 pause
