@@ -83,8 +83,6 @@ export async function consumeServerInvite(code: string): Promise<{ ok: boolean; 
   }
 }
 
-const AUDIT_BUCKET = "default";
-
 export async function insertServerAudit(entry: {
   actorServerUserId?: string | null; action: string; target?: string | null; meta?: Record<string, unknown>; createdAt?: Date;
 }): Promise<ServerAuditRecord> {

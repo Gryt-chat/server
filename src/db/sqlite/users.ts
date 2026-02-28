@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 
 import type { UserRecord } from "../interfaces";
-import { boolToInt, fromIso, getSqliteDb, intToBool, toIso } from "./connection";
+import { fromIso, getSqliteDb, intToBool, toIso } from "./connection";
 import { getServerConfig, setServerOwner } from "./servers";
 import { revokeUserRefreshTokens } from "./tokens";
 
