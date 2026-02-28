@@ -27,11 +27,8 @@ import { startMediaSweep } from "./jobs/mediaSweep";
 import { startEmojiQueueWorker } from "./jobs/emojiQueueWorker";
 import { startImageQueueWorker } from "./jobs/imageQueueWorker";
 import { metricsMiddleware, register, socketConnectionsActive } from "./metrics";
-import { readFileSync } from "fs";
-import { join } from "path";
 
-const pkg = JSON.parse(readFileSync(join(__dirname, "..", "package.json"), "utf-8"));
-const VERSION = process.env.SERVER_VERSION || pkg.version || "0.0.0";
+const VERSION = process.env.SERVER_VERSION || "0.0.0";
 
 const app = express(); // Create an Express app
 
