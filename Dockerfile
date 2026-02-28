@@ -1,4 +1,5 @@
 FROM oven/bun:1-alpine AS builder
+RUN apk add --no-cache python3 make g++
 WORKDIR /app
 
 COPY package.json bun.lockb* ./
@@ -8,6 +9,7 @@ COPY . .
 RUN bun run build
 
 FROM oven/bun:1-alpine AS deps
+RUN apk add --no-cache python3 make g++
 WORKDIR /app
 COPY package.json bun.lockb* ./
 RUN bun install --production
