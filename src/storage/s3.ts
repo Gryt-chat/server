@@ -24,8 +24,8 @@ export function initS3(): void {
     forcePathStyle,
     credentials: accessKeyId && secretAccessKey ? { accessKeyId, secretAccessKey } : undefined,
     requestHandler: new NodeHttpHandler({
-      httpAgent: new HttpAgent({ maxSockets: 200, keepAlive: true }),
-      httpsAgent: new HttpsAgent({ maxSockets: 200, keepAlive: true }),
+      httpAgent: new HttpAgent({ maxSockets: 5000, keepAlive: true }),
+      httpsAgent: new HttpsAgent({ maxSockets: 5000, keepAlive: true }),
       socketAcquisitionWarningTimeout: 10_000,
     }),
   });
