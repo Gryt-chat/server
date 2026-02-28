@@ -25,7 +25,6 @@ import { oEmbedRouter } from "./routes/oembed";
 import { mediaMetadataRouter } from "./routes/mediaMetadata";
 import { startMediaSweep } from "./jobs/mediaSweep";
 import { startEmojiQueueWorker } from "./jobs/emojiQueueWorker";
-import { startImageQueueWorker } from "./jobs/imageQueueWorker";
 import { metricsMiddleware, register, socketConnectionsActive } from "./metrics";
 
 const VERSION = process.env.SERVER_VERSION || "0.0.0";
@@ -138,7 +137,6 @@ initSqlite()
 		if (!disableS3) startMediaSweep();
 		if (!disableS3 && (process.env.S3_BUCKET || "").trim()) {
 			startEmojiQueueWorker();
-			startImageQueueWorker();
 		}
 	})
 	.catch((e) => consola.error("SQLite initialization failed", e));
