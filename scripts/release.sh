@@ -90,8 +90,10 @@ case "$VERSION_CHOICE" in
 esac
 
 # ── Channel ───────────────────────────────────────────────────────────────
-CHANNEL="beta"
-if [ "$RERELEASE" = false ]; then
+if [ -n "${CHANNEL:-}" ]; then
+  info "Channel inherited: ${BOLD}${CHANNEL}${RESET}"
+elif [ "$RERELEASE" = false ]; then
+  CHANNEL="beta"
   echo ""
   info "Release channel:"
   echo "   1) Beta    — prerelease, deploys to beta  (default)"
@@ -104,6 +106,8 @@ if [ "$RERELEASE" = false ]; then
     2) CHANNEL="latest" ;;
     *) err "Invalid choice"; exit 1 ;;
   esac
+else
+  CHANNEL="beta"
 fi
 
 cd "$PKG_DIR"
