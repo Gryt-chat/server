@@ -363,7 +363,7 @@ uploadsRouter.delete(
 uploadsRouter.get(
   "/files/:fileId",
   (req: Request, res: Response, next: NextFunction): void => {
-    const { fileId } = req.params;
+    const fileId = String(req.params.fileId);
     if (!fileId) { res.status(400).json({ error: "fileId is required" }); return; }
 
     const disableS3 = (process.env.DISABLE_S3 || "").toLowerCase() === "true";

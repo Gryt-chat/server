@@ -18,9 +18,9 @@ Browse tags at [ghcr.io/gryt-chat/server](https://github.com/Gryt-chat/server/pk
 ## Quick Start (development)
 
 ```bash
-bun install
+yarn install
 cp example.env .env
-bun dev
+yarn dev
 ```
 
 Starts on **http://localhost:5000**.

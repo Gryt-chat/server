@@ -10,7 +10,6 @@ eslint.config.mjs
 example.env
 tsconfig.tsbuildinfo
 package-lock.json
-yarn.lock
 *.log
 *.md
 LICENSE

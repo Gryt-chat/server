@@ -1,18 +1,17 @@
-FROM --platform=$BUILDPLATFORM oven/bun:1-alpine AS builder
+FROM --platform=$BUILDPLATFORM node:22-alpine AS builder
 WORKDIR /app
 
-COPY package.json bun.lockb* ./
-RUN bun install --ignore-scripts
+COPY package.json yarn.lock ./
+RUN yarn install --frozen-lockfile --ignore-scripts --ignore-engines
 
 COPY . .
-RUN bun run build && bun run bundle
+RUN yarn build && yarn bundle
 
 FROM node:22-alpine AS deps
 RUN apk add --no-cache python3 make g++
 WORKDIR /app
 RUN npm init -y > /dev/null 2>&1 \
-  && npm install better-sqlite3 sharp \
-  && rm -f package.json package-lock.json
+  && npm install better-sqlite3 sharp
 
 FROM node:22-alpine
 

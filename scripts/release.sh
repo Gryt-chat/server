@@ -208,7 +208,7 @@ fi
 echo ""
 info "Syncing dependencies…"
 cd "$PKG_DIR"
-bun install
+yarn install --frozen-lockfile --ignore-engines
 ok "Lockfile up to date"
 
 # ── Docker build & push (multi-arch) ─────────────────────────────────────

@@ -31,7 +31,7 @@ export function registerBttvRoutes(router: Router): void {
   router.get(
     "/bttv/file/:emoteId",
     (req: Request, res: Response, next: NextFunction): void => {
-      const { emoteId } = req.params;
+      const emoteId = String(req.params.emoteId);
       if (!emoteId || !/^[a-f0-9]{20,30}$/.test(emoteId)) {
         res.status(400).json({ error: "invalid_emote_id" });
         return;
@@ -77,7 +77,7 @@ export function registerBttvRoutes(router: Router): void {
   router.get(
     "/bttv/emote/:emoteId",
     (req: Request, res: Response, next: NextFunction): void => {
-      const { emoteId } = req.params;
+      const emoteId = String(req.params.emoteId);
       if (!emoteId || !/^[a-f0-9]{20,30}$/.test(emoteId)) {
         res.status(400).json({ error: "invalid_emote_id" });
         return;
@@ -131,7 +131,7 @@ export function registerBttvRoutes(router: Router): void {
   router.get(
     "/bttv/user/:userId",
     (_req: Request, res: Response, next: NextFunction): void => {
-      const { userId } = _req.params;
+      const userId = String(_req.params.userId);
       if (!userId || !/^[a-f0-9]{20,30}$/.test(userId)) {
         res.status(400).json({ error: "invalid_user_id" });
         return;

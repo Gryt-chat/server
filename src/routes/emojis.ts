@@ -219,7 +219,7 @@ emojisRouter.post(
 emojisRouter.get(
   "/img/:name",
   (req: Request, res: Response, next: NextFunction): void => {
-    const { name } = req.params;
+    const name = String(req.params.name);
     if (!name) { res.status(400).json({ error: "name_required" }); return; }
 
     const bucket = process.env.S3_BUCKET as string;
@@ -255,7 +255,7 @@ emojisRouter.patch(
   requireBearerToken,
   express.json(),
   (req: Request, res: Response, next: NextFunction): void => {
-    const oldName = req.params.name;
+    const oldName = String(req.params.name);
     const newName = typeof req.body?.name === "string" ? req.body.name.trim() : "";
 
     if (!oldName) { res.status(400).json({ error: "name_required" }); return; }
@@ -343,7 +343,7 @@ emojisRouter.delete(
   "/:name",
   requireBearerToken,
   (req: Request, res: Response, next: NextFunction): void => {
-    const name = req.params.name;
+    const name = String(req.params.name);
     if (!name) { res.status(400).json({ error: "name_required" }); return; }
 
     const serverUserId = req.tokenPayload?.serverUserId;
