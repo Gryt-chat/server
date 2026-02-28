@@ -204,6 +204,13 @@ else
   fi
 fi
 
+# ── Install dependencies (so Docker can COPY node_modules) ────────────────
+echo ""
+info "Installing dependencies…"
+cd "$PKG_DIR"
+bun install
+ok "Dependencies installed"
+
 # ── Docker build & push (multi-arch) ─────────────────────────────────────
 echo ""
 PLATFORMS="linux/amd64,linux/arm64"
