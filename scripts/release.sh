@@ -219,6 +219,8 @@ info "Building & pushing multi-arch Docker image (${PLATFORMS})…"
 docker buildx build \
   --platform "$PLATFORMS" \
   --build-arg VERSION="${NEW_VERSION}" \
+  --cache-from type=registry,ref=${IMAGE}:buildcache \
+  --cache-to type=registry,ref=${IMAGE}:buildcache,mode=max \
   -t "${IMAGE}:${NEW_VERSION}" \
   -t "${IMAGE}:${V_MAJOR}.${V_MINOR}" \
   -t "${IMAGE}:${V_MAJOR}" \
