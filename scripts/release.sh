@@ -289,6 +289,21 @@ if [ -f "${SELFHOSTED_ZIP:-}" ]; then
   ok "Uploaded $(basename "$SELFHOSTED_ZIP") to Gryt-chat/gryt release ${BOLD}${MONO_TAG}${RESET}"
 fi
 
+# ── Deploy to beta ────────────────────────────────────────────────
+echo ""
+REPO_ROOT="$(cd "$PKG_DIR/.." && git rev-parse --show-toplevel 2>/dev/null || echo "")"
+read -rp "$(echo -e "${CYAN}?${RESET}  Deploy to beta (pull & restart beta containers)? ${YELLOW}[Y/n]${RESET}: ")" DEPLOY_BETA
+DEPLOY_BETA="${DEPLOY_BETA:-Y}"
+if [[ "$DEPLOY_BETA" =~ ^[Yy]$ ]]; then
+  if [ -n "$REPO_ROOT" ] && [ -f "$REPO_ROOT/scripts/update-beta.sh" ]; then
+    info "Running beta deployment…"
+    bash "$REPO_ROOT/scripts/update-beta.sh"
+    ok "Beta deployment complete"
+  else
+    warn "update-beta.sh not found"
+  fi
+fi
+
 echo ""
 ok "Release ${BOLD}v${NEW_VERSION}${RESET} complete"
 echo ""
