@@ -2,7 +2,7 @@ FROM --platform=$BUILDPLATFORM oven/bun:1-alpine AS builder
 WORKDIR /app
 
 COPY package.json bun.lockb* ./
-RUN bun install
+RUN bun install --ignore-scripts
 
 COPY . .
 RUN bun run build && bun run bundle

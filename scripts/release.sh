@@ -312,7 +312,7 @@ if [[ "$DEPLOY_BETA" =~ ^[Yy]$ ]]; then
     COMPOSE_ARGS+=(--env-file "$ENV_FILE")
     info "Pulling & restarting beta server…"
     docker compose "${COMPOSE_ARGS[@]}" pull server
-    docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate --remove-orphans server
+    docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate server
     ok "Beta server deployed"
   else
     warn "Beta compose files not found"
