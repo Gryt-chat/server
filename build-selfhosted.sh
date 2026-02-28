@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Ensure Go is on PATH (not always inherited in tmux / non-interactive shells)
+[[ -d /usr/local/go/bin ]] && export PATH="/usr/local/go/bin:$PATH"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
