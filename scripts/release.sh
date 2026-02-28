@@ -89,46 +89,21 @@ case "$VERSION_CHOICE" in
   *) err "Invalid choice"; exit 1 ;;
 esac
 
-# ── Beta / prerelease ────────────────────────────────────────────────────
-BETA_RELEASE=false
-RELEASE_TYPE="release"
-
+# ── Channel ───────────────────────────────────────────────────────────────
+CHANNEL="beta"
 if [ "$RERELEASE" = false ]; then
-  if [[ "$CURRENT_VERSION" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-beta(\.[0-9]+)?$ ]]; then
-    CUR_BASE="${BASH_REMATCH[1]}"
-    NEXT_BETA="$(bump_version "$CURRENT_VERSION" patch)-beta"
-    echo ""
-    info "Current version is beta (${BOLD}v${CURRENT_VERSION}${RESET}). Quick options:"
-    echo "   a) Next beta patch     → v${NEXT_BETA}  (default)"
-    echo "   b) Promote to stable   → v${CUR_BASE}"
-    echo "   c) Keep selected       → v${NEW_VERSION}"
-    echo ""
-    read -rp "$(echo -e "${CYAN}?${RESET}  Choice ${YELLOW}[a]${RESET}: ")" BETA_CHOICE
-    BETA_CHOICE="${BETA_CHOICE:-a}"
-    case "$BETA_CHOICE" in
-      a|A) NEW_VERSION="$NEXT_BETA"; BETA_RELEASE=true ;;
-      b|B) NEW_VERSION="$CUR_BASE" ;;
-      c|C) ;;
-      *) err "Invalid choice"; exit 1 ;;
-    esac
-  fi
-
-  if [[ "$NEW_VERSION" =~ -beta ]]; then
-    BETA_RELEASE=true
-  fi
-
-  if [ "$BETA_RELEASE" = false ] && [[ ! "$NEW_VERSION" =~ -beta ]]; then
-    read -rp "$(echo -e "${CYAN}?${RESET}  Release as beta? ${YELLOW}[Y/n]${RESET}: ")" BETA_ASK
-    BETA_ASK="${BETA_ASK:-Y}"
-    if [[ "$BETA_ASK" =~ ^[Yy]$ ]]; then
-      BETA_RELEASE=true
-      NEW_VERSION="${NEW_VERSION}-beta"
-    fi
-  fi
-
-  if [ "$BETA_RELEASE" = true ]; then
-    RELEASE_TYPE="prerelease"
-  fi
+  echo ""
+  info "Release channel:"
+  echo "   1) Beta    — prerelease, deploys to beta  (default)"
+  echo "   2) Latest  — stable, deploys to beta + production"
+  echo ""
+  read -rp "$(echo -e "${CYAN}?${RESET}  Channel ${YELLOW}[1]${RESET}: ")" CHANNEL_CHOICE
+  CHANNEL_CHOICE="${CHANNEL_CHOICE:-1}"
+  case "$CHANNEL_CHOICE" in
+    1) CHANNEL="beta" ;;
+    2) CHANNEL="latest" ;;
+    *) err "Invalid choice"; exit 1 ;;
+  esac
 fi
 
 cd "$PKG_DIR"
@@ -152,14 +127,13 @@ echo ""
 echo -e "${BOLD}── Summary ──────────────────────────────${RESET}"
 if [ "$RERELEASE" = true ]; then
   echo -e "  Version:   ${YELLOW}v${NEW_VERSION} (re-release)${RESET}"
-elif [ "$BETA_RELEASE" = true ]; then
-  echo -e "  Version:   ${YELLOW}v${NEW_VERSION} (beta)${RESET}"
-else
+elif [ "$CHANNEL" = "latest" ]; then
   echo -e "  Version:   ${GREEN}v${NEW_VERSION}${RESET}"
+else
+  echo -e "  Version:   ${YELLOW}v${NEW_VERSION} (beta)${RESET}"
 fi
-echo -e "  Release:   ${GREEN}${RELEASE_TYPE}${RESET}"
+echo -e "  Channel:   ${GREEN}${CHANNEL}${RESET}"
 echo -e "  Image:     ${GREEN}${IMAGE}:${NEW_VERSION}${RESET}"
-echo -e "  Tags:      ${GREEN}${NEW_VERSION}, ${V_MAJOR}.${V_MINOR}, ${V_MAJOR}, latest-beta${RESET}"
 echo -e "  Repo:      ${GREEN}${OWNER}/${REPO}${RESET}"
 echo -e "${BOLD}─────────────────────────────────────────${RESET}"
 echo ""
@@ -216,15 +190,22 @@ echo ""
 PLATFORMS="linux/amd64,linux/arm64"
 info "Building & pushing multi-arch Docker image (${PLATFORMS})…"
 
+DOCKER_TAGS=(
+  -t "${IMAGE}:${NEW_VERSION}"
+  -t "${IMAGE}:${V_MAJOR}.${V_MINOR}"
+  -t "${IMAGE}:${V_MAJOR}"
+  -t "${IMAGE}:latest-beta"
+)
+if [ "$CHANNEL" = "latest" ]; then
+  DOCKER_TAGS+=(-t "${IMAGE}:latest")
+fi
+
 docker buildx build \
   --platform "$PLATFORMS" \
   --build-arg VERSION="${NEW_VERSION}" \
   --cache-from type=registry,ref=${IMAGE}:buildcache \
   --cache-to type=registry,ref=${IMAGE}:buildcache,mode=max \
-  -t "${IMAGE}:${NEW_VERSION}" \
-  -t "${IMAGE}:${V_MAJOR}.${V_MINOR}" \
-  -t "${IMAGE}:${V_MAJOR}" \
-  -t "${IMAGE}:latest-beta" \
+  "${DOCKER_TAGS[@]}" \
   --push .
 ok "Pushed ${IMAGE}:${NEW_VERSION} (${PLATFORMS})"
 
@@ -246,21 +227,16 @@ if [ "$RERELEASE" = false ]; then
   echo ""
   info "Committing version bump…"
 
-  COMMIT_SUFFIX=""
-  if [ "$BETA_RELEASE" = true ]; then
-    COMMIT_SUFFIX=" (beta)"
-  fi
-
   cd "$PKG_DIR"
   git add package.json
-  git commit -m "release: v${NEW_VERSION}${COMMIT_SUFFIX}"
+  git commit -m "release: v${NEW_VERSION} (${CHANNEL})"
   git push
 
   REPO_ROOT="$(cd "$PKG_DIR/.." && git rev-parse --show-toplevel 2>/dev/null || echo "")"
   if [ -n "$REPO_ROOT" ] && [ -f "$REPO_ROOT/.gitmodules" ]; then
     cd "$REPO_ROOT"
     git add packages/server
-    git commit -m "release: server v${NEW_VERSION}${COMMIT_SUFFIX}"
+    git commit -m "release: server v${NEW_VERSION} (${CHANNEL})"
     git tag "server-v${NEW_VERSION}"
     git push
     git push origin "server-v${NEW_VERSION}"
@@ -275,8 +251,12 @@ fi
 echo ""
 info "Creating GitHub release…"
 
-# All releases are prerelease until promoted via promote-beta.sh
-RELEASE_FLAGS="--prerelease"
+RELEASE_FLAGS=""
+if [ "$CHANNEL" = "beta" ]; then
+  RELEASE_FLAGS="--prerelease"
+else
+  RELEASE_FLAGS="--latest"
+fi
 
 UPLOAD_ASSETS=()
 if [ -f "${SELFHOSTED_ZIP:-}" ]; then
@@ -294,26 +274,48 @@ if [ ${#UPLOAD_ASSETS[@]} -gt 0 ]; then
   ok "Attached $(basename "$SELFHOSTED_ZIP") to ${OWNER}/${REPO} release"
 fi
 
-# ── Deploy server to beta ─────────────────────────────────────────
+# ── Deploy server ─────────────────────────────────────────────────
 echo ""
 REPO_ROOT="$(cd "$PKG_DIR/.." && git rev-parse --show-toplevel 2>/dev/null || echo "")"
+COMPOSE_DIR="$REPO_ROOT/ops/deploy/compose"
+
 read -rp "$(echo -e "${CYAN}?${RESET}  Deploy server to beta? ${YELLOW}[Y/n]${RESET}: ")" DEPLOY_BETA
 DEPLOY_BETA="${DEPLOY_BETA:-Y}"
 if [[ "$DEPLOY_BETA" =~ ^[Yy]$ ]]; then
-  COMPOSE_DIR="$REPO_ROOT/ops/deploy/compose"
-  COMPOSE_FILE="$COMPOSE_DIR/beta.yml"
-  ENV_FILE="$COMPOSE_DIR/.env.beta"
-  LOCAL_FILE="$COMPOSE_DIR/beta.local.yml"
-  if [ -n "$REPO_ROOT" ] && [ -f "$COMPOSE_FILE" ] && [ -f "$ENV_FILE" ]; then
-    COMPOSE_ARGS=(-f "$COMPOSE_FILE")
-    [[ -f "$LOCAL_FILE" ]] && COMPOSE_ARGS+=(-f "$LOCAL_FILE")
-    COMPOSE_ARGS+=(--env-file "$ENV_FILE")
+  BETA_COMPOSE="$COMPOSE_DIR/beta.yml"
+  BETA_ENV="$COMPOSE_DIR/.env.beta"
+  BETA_LOCAL="$COMPOSE_DIR/beta.local.yml"
+  if [ -n "$REPO_ROOT" ] && [ -f "$BETA_COMPOSE" ] && [ -f "$BETA_ENV" ]; then
+    COMPOSE_ARGS=(-f "$BETA_COMPOSE")
+    [[ -f "$BETA_LOCAL" ]] && COMPOSE_ARGS+=(-f "$BETA_LOCAL")
+    COMPOSE_ARGS+=(--env-file "$BETA_ENV")
     info "Pulling & restarting beta server…"
     docker compose "${COMPOSE_ARGS[@]}" pull server
-    docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate server
+    docker compose "${COMPOSE_ARGS[@]}" up -d server
     ok "Beta server deployed"
   else
     warn "Beta compose files not found"
+  fi
+fi
+
+if [ "$CHANNEL" = "latest" ]; then
+  read -rp "$(echo -e "${CYAN}?${RESET}  Deploy server to production? ${YELLOW}[Y/n]${RESET}: ")" DEPLOY_PROD
+  DEPLOY_PROD="${DEPLOY_PROD:-Y}"
+  if [[ "$DEPLOY_PROD" =~ ^[Yy]$ ]]; then
+    PROD_COMPOSE="$COMPOSE_DIR/prod.yml"
+    PROD_ENV="$COMPOSE_DIR/.env.prod"
+    PROD_LOCAL="$COMPOSE_DIR/prod.local.yml"
+    if [ -n "$REPO_ROOT" ] && [ -f "$PROD_COMPOSE" ] && [ -f "$PROD_ENV" ]; then
+      COMPOSE_ARGS=(-f "$PROD_COMPOSE")
+      [[ -f "$PROD_LOCAL" ]] && COMPOSE_ARGS+=(-f "$PROD_LOCAL")
+      COMPOSE_ARGS+=(--env-file "$PROD_ENV")
+      info "Pulling & restarting production server…"
+      docker compose "${COMPOSE_ARGS[@]}" pull server
+      docker compose "${COMPOSE_ARGS[@]}" up -d server
+      ok "Production server deployed"
+    else
+      warn "Production compose files not found"
+    fi
   fi
 fi
 
