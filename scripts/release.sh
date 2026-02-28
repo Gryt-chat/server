@@ -278,24 +278,20 @@ info "Creating GitHub release…"
 # All releases are prerelease until promoted via promote-beta.sh
 RELEASE_FLAGS="--prerelease"
 
+UPLOAD_ASSETS=()
+if [ -f "${SELFHOSTED_ZIP:-}" ]; then
+  UPLOAD_ASSETS+=("$SELFHOSTED_ZIP")
+fi
+
 gh release create "v${NEW_VERSION}" \
   --repo "${OWNER}/${REPO}" \
   --title "v${NEW_VERSION}" \
   --generate-notes \
-  $RELEASE_FLAGS
+  $RELEASE_FLAGS \
+  "${UPLOAD_ASSETS[@]}"
 ok "GitHub release created"
-
-# ── Upload self-hosted zip to monorepo release ────────────────────────
-if [ -f "${SELFHOSTED_ZIP:-}" ]; then
-  echo ""
-  info "Uploading self-hosted bundle to monorepo release…"
-  MONO_TAG="server-v${NEW_VERSION}"
-  gh release upload "$MONO_TAG" "$SELFHOSTED_ZIP" \
-    --repo "Gryt-chat/gryt" --clobber 2>/dev/null || \
-  gh release create "$MONO_TAG" "$SELFHOSTED_ZIP" \
-    --repo "Gryt-chat/gryt" --title "Server v${NEW_VERSION}" \
-    --prerelease --generate-notes
-  ok "Uploaded $(basename "$SELFHOSTED_ZIP") to Gryt-chat/gryt release ${BOLD}${MONO_TAG}${RESET}"
+if [ ${#UPLOAD_ASSETS[@]} -gt 0 ]; then
+  ok "Attached $(basename "$SELFHOSTED_ZIP") to ${OWNER}/${REPO} release"
 fi
 
 # ── Deploy server to beta ─────────────────────────────────────────
@@ -326,8 +322,5 @@ ok "Release ${BOLD}v${NEW_VERSION}${RESET} complete"
 echo ""
 echo -e "  ${CYAN}Image:${RESET}     ${IMAGE}:${NEW_VERSION}"
 echo -e "  ${CYAN}Release:${RESET}   https://github.com/${OWNER}/${REPO}/releases/tag/v${NEW_VERSION}"
-if [ -f "${SELFHOSTED_ZIP:-}" ]; then
-  echo -e "  ${CYAN}Self-host:${RESET} https://github.com/Gryt-chat/gryt/releases/tag/server-v${NEW_VERSION}"
-fi
 
 echo ""

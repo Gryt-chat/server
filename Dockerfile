@@ -7,7 +7,7 @@ RUN yarn install --frozen-lockfile --ignore-scripts --ignore-engines
 COPY . .
 RUN yarn build && yarn bundle
 
-FROM node:22-bookworm-slim AS deps
+FROM --platform=$TARGETPLATFORM node:22-bookworm-slim AS deps
 WORKDIR /app
 COPY package.json yarn.lock ./
 RUN yarn install --production --ignore-engines --network-timeout 600000
@@ -23,10 +23,12 @@ ENV NODE_ENV=production SERVER_VERSION=${VERSION}
 COPY --from=deps --chown=gryt:gryt /app/node_modules ./node_modules
 COPY --from=builder --chown=gryt:gryt /app/dist/bundle.js ./bundle.js
 
+RUN mkdir -p /data && chown -R gryt:gryt /data
+
 USER gryt
 EXPOSE 5000
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD wget -qO- http://localhost:5000/health || exit 1
+  CMD node -e "fetch('http://localhost:5000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 CMD ["node", "bundle.js"]
