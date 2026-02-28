@@ -204,6 +204,13 @@ else
   fi
 fi
 
+# ── Ensure lockfile is up to date ─────────────────────────────────────────
+echo ""
+info "Syncing dependencies…"
+cd "$PKG_DIR"
+bun install
+ok "Lockfile up to date"
+
 # ── Docker build & push (multi-arch) ─────────────────────────────────────
 echo ""
 PLATFORMS="linux/amd64,linux/arm64"
