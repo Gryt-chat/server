@@ -1,6 +1,6 @@
 {
   "name": "server",
-  "version": "1.0.52-beta",
+  "version": "1.0.53-beta",
   "main": "dist/index.js",
   "license": "AGPL-3.0-or-later",
   "dependencies": {
