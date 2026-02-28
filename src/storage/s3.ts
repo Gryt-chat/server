@@ -1,5 +1,8 @@
 import { S3Client, S3ServiceException, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, HeadBucketCommand, CreateBucketCommand } from "@aws-sdk/client-s3";
+import { NodeHttpHandler } from "@smithy/node-http-handler";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { Agent as HttpAgent } from "http";
+import { Agent as HttpsAgent } from "https";
 
 let s3: S3Client | null = null;
 
@@ -20,6 +23,11 @@ export function initS3(): void {
     endpoint,
     forcePathStyle,
     credentials: accessKeyId && secretAccessKey ? { accessKeyId, secretAccessKey } : undefined,
+    requestHandler: new NodeHttpHandler({
+      httpAgent: new HttpAgent({ maxSockets: 200, keepAlive: true }),
+      httpsAgent: new HttpsAgent({ maxSockets: 200, keepAlive: true }),
+      socketAcquisitionWarningTimeout: 10_000,
+    }),
   });
 }
 
