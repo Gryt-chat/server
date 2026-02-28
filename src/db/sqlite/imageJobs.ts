@@ -61,6 +61,15 @@ export async function updateImageJobStatus(input: {
   return getImageJob(input.job_id);
 }
 
+export async function listQueuedImageJobIds(limit: number): Promise<Array<{ job_id: string; created_at: Date }>> {
+  const db = getSqliteDb();
+  const safeLimit = Math.max(1, Math.min(200, Math.floor(limit)));
+  const rows = db.prepare(
+    "SELECT job_id, created_at FROM image_jobs WHERE status = 'queued' ORDER BY created_at ASC LIMIT ?"
+  ).all(safeLimit) as Array<{ job_id: string; created_at: string }>;
+  return rows.map((r) => ({ job_id: r.job_id, created_at: fromIso(r.created_at) }));
+}
+
 function mapRow(row: Record<string, unknown>): ImageJobRecord {
   return {
     job_id: row.job_id as string,
