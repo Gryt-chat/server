@@ -120,7 +120,10 @@ function scheduleEmojiQueueStateBroadcast(): void {
 const sfuHostsRaw = process.env.SFU_PUBLIC_HOST || process.env.SFU_WS_HOST || "";
 const sfuHosts = sfuHostsRaw.split(",").map(h => h.trim()).filter(Boolean);
 const sfuHost = sfuHosts[0] || undefined;
-const stunHosts = process.env.STUN_SERVERS?.split(",") || [];
+const disableStun = process.env.DISABLE_STUN?.toLowerCase() === "true";
+const stunHosts = disableStun
+  ? []
+  : (process.env.STUN_SERVERS?.split(",").filter(Boolean) || []);
 const voiceSeatLimit = (() => {
   const explicit = parseInt(process.env.VOICE_MAX_USERS || "0", 10);
   if (explicit > 0) return explicit;
@@ -134,7 +137,7 @@ const voiceSeatLimit = (() => {
 if (!sfuHost) {
   consola.error("Missing SFU WebSocket Host! Voice functionality will not work.");
 }
-if (stunHosts.length === 0) {
+if (stunHosts.length === 0 && !disableStun) {
   consola.error("Missing STUN servers! SFU may not reach all clients.");
 }
 

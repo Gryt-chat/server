@@ -1,9 +1,6 @@
 @echo off
 title Gryt Server
 
-REM Create .env from config.env so all services can load it
-if exist config.env copy /Y config.env .env >nul
-
 REM Create data directory if it doesn't exist
 if not exist data mkdir data
 
@@ -19,7 +16,7 @@ if not exist .setup_done (
 )
 
 echo Starting Gryt Image Worker...
-start "" /B node --env-file=.env image-worker\dist\index.js
+start "" /B node --env-file=config.env image-worker\dist\index.js
 
 echo Starting Gryt SFU...
 start "" /B gryt_sfu.exe

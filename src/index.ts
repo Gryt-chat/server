@@ -1,5 +1,6 @@
 import { config } from "dotenv";
-config({ override: false }); // Load environment variables from .env file
+config({ path: "config.env", override: false });
+config({ override: false });
 import { consola } from "consola";
 import { socketHandler, setupSFUSync } from "./socket";
 import { createServer } from "http";
@@ -102,12 +103,13 @@ try {
 		consola.warn("S3 disabled via DISABLE_S3=true");
 	} else {
 		initStorage();
-		consola.success("S3 client initialized");
+		const storageBackend = (process.env.STORAGE_BACKEND || "s3").toLowerCase();
+		consola.success(`Storage initialized (${storageBackend})`);
 		const bucket = (process.env.S3_BUCKET || "").trim();
 		if (bucket) {
 			ensureBucket(bucket)
-				.then(() => consola.success(`S3 bucket "${bucket}" ready`))
-				.catch((e) => consola.error(`Failed to ensure S3 bucket "${bucket}"`, e));
+				.then(() => consola.success(`Storage bucket "${bucket}" ready`))
+				.catch((e) => consola.error(`Failed to ensure storage bucket "${bucket}"`, e));
 		}
 	}
 } catch (e) {

@@ -86,14 +86,16 @@ cp dist-selfhosted/config.env "$OUTDIR/"
 cp dist-selfhosted/start.bat "$OUTDIR/"
 
 # Create server launcher scripts
-cat > "$OUTDIR/gryt_server.bat" <<'EOF'
+cat > "$OUTDIR/gryt_server.bat" <<EOF
 @echo off
-node server\dist\index.js %*
+set "SERVER_VERSION=$VERSION"
+node --env-file=config.env server\\dist\\index.js %*
 EOF
 
-cat > "$OUTDIR/gryt_server.sh" <<'SHEOF'
+cat > "$OUTDIR/gryt_server.sh" <<SHEOF
 #!/bin/sh
-node "$(dirname "$0")/server/dist/index.js" "$@"
+export SERVER_VERSION="$VERSION"
+node --env-file=config.env "\$(dirname "\$0")/server/dist/index.js" "\$@"
 SHEOF
 chmod +x "$OUTDIR/gryt_server.sh" 2>/dev/null || true
 
