@@ -39,6 +39,7 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
       const enabled = typeof payload === 'object' ? Boolean(payload?.enabled) : Boolean(payload);
       const videoStreamId = typeof payload === 'object' ? (payload.videoStreamId || "") : "";
       const audioStreamId = typeof payload === 'object' ? (payload.audioStreamId || "") : "";
+      consola.info(`[ScreenShare] voice:screen:state from=${clientId} enabled=${enabled} videoStreamId=${videoStreamId} audioStreamId=${audioStreamId}`);
       clientsInfo[clientId].screenShareEnabled = enabled;
       clientsInfo[clientId].screenShareVideoStreamID = enabled ? videoStreamId : "";
       clientsInfo[clientId].screenShareAudioStreamID = enabled ? audioStreamId : "";
