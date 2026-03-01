@@ -87,7 +87,9 @@ export class SFUClient {
           
           this.roomManager.reregisterRooms()
             .then(() => {
-              this.roomManager.requestSync();
+              if (this.roomManager.registeredRooms.size > 0) {
+                this.roomManager.requestSync();
+              }
             })
             .catch(error => {
               consola.error('[SFU-Client] Failed to re-register rooms after reconnection:', error);
@@ -186,7 +188,7 @@ export class SFUClient {
     }, 15000);
 
     this.syncInterval = setInterval(() => {
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN && this.roomManager.registeredRooms.size > 0) {
         this.roomManager.requestSync();
       }
     }, 60_000);
