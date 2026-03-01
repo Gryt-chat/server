@@ -25,7 +25,7 @@ export function advertiseMdns(port: number): void {
 export function stopMdns(): void {
 	if (published) {
 		try {
-			published.stop();
+			published.stop?.();
 		} catch {
 			// best-effort
 		}
