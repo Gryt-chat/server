@@ -17,6 +17,7 @@ import {
   createRefreshToken,
   isUserBanned,
 } from "../../db";
+import { isPrivateIp } from "../../utils/isPrivateIp";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 import {
   registerJoinHelpers,
@@ -213,6 +214,9 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
               return;
             }
             usedInviteCode = inviteCode;
+            clearInviteCooldown(inviteKey);
+            clearInviteIpCooldown(ip);
+          } else if (cfg?.lan_open && isPrivateIp(ip)) {
             clearInviteCooldown(inviteKey);
             clearInviteIpCooldown(ip);
           } else {

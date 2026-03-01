@@ -47,6 +47,7 @@ function rowToConfig(r: Record<string, unknown>): ServerConfigRecord {
     profanity_mode: normalizeProfanityMode(r.profanity_mode),
     profanity_censor_style: normalizeCensorStyle(r.profanity_censor_style),
     system_channel_id: (r.system_channel_id as string) ?? null,
+    lan_open: (r.lan_open as number) === 1,
     is_configured: (r.is_configured as number) === 1,
     created_at: fromIso(r.created_at as string),
     updated_at: fromIso(r.updated_at as string),
@@ -72,8 +73,8 @@ export async function createServerConfigIfNotExists(seed?: {
   if (existing) return { applied: false, config: existing };
 
   db.prepare(
-    `INSERT OR IGNORE INTO server_config (id, owner_gryt_user_id, token_version, display_name, description, icon_url, avatar_max_bytes, upload_max_bytes, emoji_max_bytes, voice_max_bitrate_bps, profanity_mode, profanity_censor_style, is_configured, created_at, updated_at)
-     VALUES (?, NULL, 0, ?, ?, ?, ?, ?, ?, ?, 'censor', 'emoji', 0, ?, ?)`
+    `INSERT OR IGNORE INTO server_config (id, owner_gryt_user_id, token_version, display_name, description, icon_url, avatar_max_bytes, upload_max_bytes, emoji_max_bytes, voice_max_bitrate_bps, profanity_mode, profanity_censor_style, lan_open, is_configured, created_at, updated_at)
+     VALUES (?, NULL, 0, ?, ?, ?, ?, ?, ?, ?, 'censor', 'emoji', 0, 0, ?, ?)`
   ).run(SERVER_CONFIG_ID, seed?.displayName ?? null, seed?.description ?? null, seed?.iconUrl ?? null, DEFAULT_AVATAR_MAX_BYTES, DEFAULT_UPLOAD_MAX_BYTES, DEFAULT_EMOJI_MAX_BYTES, DEFAULT_VOICE_MAX_BITRATE_BPS, toIso(now), toIso(now));
 
   const config = (await getServerConfig())!;
@@ -172,6 +173,7 @@ export async function updateServerConfig(patch: {
   profanityMode?: ProfanityMode;
   profanityCensorStyle?: CensorStyle;
   systemChannelId?: string | null;
+  lanOpen?: boolean;
   isConfigured?: boolean;
 }): Promise<ServerConfigRecord> {
   const db = getSqliteDb();
@@ -192,6 +194,7 @@ export async function updateServerConfig(patch: {
     profanityMode: { col: "profanity_mode", transform: (v) => normalizeProfanityMode(v) },
     profanityCensorStyle: { col: "profanity_censor_style", transform: (v) => normalizeCensorStyle(v as string) },
     systemChannelId: { col: "system_channel_id" },
+    lanOpen: { col: "lan_open", transform: (v) => v ? 1 : 0 },
     isConfigured: { col: "is_configured", transform: (v) => v ? 1 : 0 },
   };
 

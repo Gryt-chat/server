@@ -174,10 +174,12 @@ app.get("/info", async (_req, res) => {
 
 	let displayName = process.env.SERVER_NAME || "Unknown Server";
 	let description = process.env.SERVER_DESCRIPTION || "A Gryt server";
+	let lanOpen = false;
 	try {
 		const cfg = await getServerConfig();
 		if (cfg?.display_name) displayName = cfg.display_name;
 		if (cfg?.description) description = cfg.description;
+		if (cfg?.lan_open) lanOpen = true;
 	} catch {
 		// fall back to env
 	}
@@ -189,6 +191,7 @@ app.get("/info", async (_req, res) => {
 		description,
 		members: memberCount.toString(),
 		version: process.env.SERVER_VERSION || "1.0.0",
+		lanOpen,
 	});
 });
 

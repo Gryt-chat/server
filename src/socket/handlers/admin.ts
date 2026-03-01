@@ -74,6 +74,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           profanityMode: cfg.profanity_mode ?? "censor",
           profanityCensorStyle: cfg.profanity_censor_style ?? "emoji",
           systemChannelId: cfg.system_channel_id ?? null,
+          lanOpen: !!cfg.lan_open,
         });
       } catch (e) {
         consola.error("server:settings:get failed", e);
@@ -103,6 +104,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       profanityMode?: string;
       profanityCensorStyle?: string;
       systemChannelId?: string | null;
+      lanOpen?: boolean;
     }) => {
       try {
         const rl = rlCheck("server:settings:update", ctx, RL_SETTINGS);
@@ -142,6 +144,9 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
             : typeof payload.systemChannelId === "string" ? payload.systemChannelId.trim().slice(0, 64) || null
               : undefined;
 
+        const lanOpen: boolean | undefined =
+          typeof payload.lanOpen === "boolean" ? payload.lanOpen : undefined;
+
         const updated = await updateServerConfig({
           displayName: displayName === undefined ? undefined : (displayName!.length > 0 ? displayName : null),
           description: description === undefined ? undefined : (description!.length > 0 ? description : null),
@@ -153,6 +158,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           profanityMode,
           profanityCensorStyle,
           systemChannelId,
+          lanOpen,
         });
 
         if (systemChannelId !== undefined) invalidateSystemChannelCache();
@@ -180,6 +186,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           profanityMode: updated.profanity_mode ?? "censor",
           profanityCensorStyle: updated.profanity_censor_style ?? "emoji",
           systemChannelId: updated.system_channel_id ?? null,
+          lanOpen: !!updated.lan_open,
         });
         broadcastServerUiUpdate("settings");
       } catch (e) {

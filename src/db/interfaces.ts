@@ -90,6 +90,7 @@ export interface ServerConfigRecord {
   profanity_mode: ProfanityMode;
   profanity_censor_style: CensorStyle;
   system_channel_id: string | null;
+  lan_open: boolean;
   is_configured: boolean;
   created_at: Date;
   updated_at: Date;

@@ -44,6 +44,7 @@ function createSchema(d: Database.Database): void {
       profanity_mode TEXT NOT NULL DEFAULT 'censor',
       profanity_censor_style TEXT NOT NULL DEFAULT 'emoji',
       system_channel_id TEXT,
+      lan_open INTEGER NOT NULL DEFAULT 0,
       is_configured INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -218,6 +219,11 @@ function createSchema(d: Database.Database): void {
   `);
 }
 
+function hasColumn(d: Database.Database, table: string, column: string): boolean {
+  const cols = d.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  return cols.some((c) => c.name === column);
+}
+
 function runMigrations(d: Database.Database): void {
   const cols = d.prepare("PRAGMA table_info(users)").all() as { name: string }[];
   const colNames = new Set(cols.map((c) => c.name));
@@ -232,6 +238,10 @@ function runMigrations(d: Database.Database): void {
     if (needsBackfill.cnt > 0) {
       d.exec("UPDATE users SET created_at = last_seen WHERE created_at = '' OR created_at IS NULL");
     }
+  }
+
+  if (!hasColumn(d, "server_config", "lan_open")) {
+    d.exec("ALTER TABLE server_config ADD COLUMN lan_open INTEGER NOT NULL DEFAULT 0");
   }
 }
 
