@@ -81,6 +81,15 @@ else
   (cd "$OUTDIR/server" && npm install --omit=dev --ignore-scripts 2>/dev/null) || true
 fi
 
+if [ -d "$OUTDIR/server/node_modules/better-sqlite3" ]; then
+  echo "    Fetching better-sqlite3 prebuilt binary (${NPM_OS:-native}/${NPM_CPU:-native})..."
+  PREBUILD_ARGS=()
+  [ -n "$NPM_OS" ]  && PREBUILD_ARGS+=(--platform "$NPM_OS")
+  [ -n "$NPM_CPU" ] && PREBUILD_ARGS+=(--arch "$NPM_CPU")
+  (cd "$OUTDIR/server/node_modules/better-sqlite3" && npx --yes prebuild-install "${PREBUILD_ARGS[@]}") || \
+    echo "    Warning: prebuild-install failed for better-sqlite3 (server)"
+fi
+
 # Copy launcher and config
 cp dist-selfhosted/config.env "$OUTDIR/"
 cp dist-selfhosted/start.bat "$OUTDIR/"
@@ -119,6 +128,15 @@ if [ -d "$IMAGE_WORKER_DIR/dist" ]; then
     (cd "$OUTDIR/image-worker" && npm install --omit=dev --ignore-scripts --os="$NPM_OS" --cpu="$NPM_CPU" 2>/dev/null) || true
   else
     (cd "$OUTDIR/image-worker" && npm install --omit=dev --ignore-scripts 2>/dev/null) || true
+  fi
+
+  if [ -d "$OUTDIR/image-worker/node_modules/better-sqlite3" ]; then
+    echo "    Fetching better-sqlite3 prebuilt binary (${NPM_OS:-native}/${NPM_CPU:-native})..."
+    PREBUILD_ARGS=()
+    [ -n "$NPM_OS" ]  && PREBUILD_ARGS+=(--platform "$NPM_OS")
+    [ -n "$NPM_CPU" ] && PREBUILD_ARGS+=(--arch "$NPM_CPU")
+    (cd "$OUTDIR/image-worker/node_modules/better-sqlite3" && npx --yes prebuild-install "${PREBUILD_ARGS[@]}") || \
+      echo "    Warning: prebuild-install failed for better-sqlite3 (image-worker)"
   fi
 
   cat > "$OUTDIR/gryt_image_worker.bat" <<'EOF'

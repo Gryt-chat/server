@@ -162,9 +162,16 @@ info "Running pre-flight checks…"
 
 cd "$PKG_DIR"
 
-info "Type-checking…"
+info "Type-checking server…"
 npx tsc -b
-ok "Type-check passed"
+ok "Server type-check passed"
+
+IMAGE_WORKER_DIR="$PKG_DIR/../image-worker"
+if [ -d "$IMAGE_WORKER_DIR" ]; then
+  info "Compiling image-worker…"
+  (cd "$IMAGE_WORKER_DIR" && npx tsc)
+  ok "Image-worker compiled"
+fi
 
 info "Linting…"
 LINT_OUTPUT=$(npx eslint src/ 2>&1) || true
