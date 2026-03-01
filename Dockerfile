@@ -27,6 +27,7 @@ ENV NODE_ENV=production SERVER_VERSION=${VERSION}
 
 COPY --from=deps --chown=gryt:gryt /app/node_modules ./node_modules
 COPY --from=builder --chown=gryt:gryt /app/dist/bundle.js ./bundle.js
+COPY --from=builder --chown=gryt:gryt /app/dist/admin-setOwner.js ./admin-setOwner.js
 
 RUN mkdir -p /data && chown -R gryt:gryt /data
 

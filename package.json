@@ -41,7 +41,7 @@
   "scripts": {
     "admin:set-owner": "node dist/admin/setOwner.js",
     "build": "tsc",
-    "bundle": "esbuild dist/index.js --bundle --platform=node --target=node22 --format=cjs --outfile=dist/bundle.js --external:better-sqlite3 --external:sharp",
+    "bundle": "esbuild dist/index.js --bundle --platform=node --target=node22 --format=cjs --outfile=dist/bundle.js --external:better-sqlite3 --external:sharp && esbuild dist/admin/setOwner.js --bundle --platform=node --target=node22 --format=cjs --outfile=dist/admin-setOwner.js --external:better-sqlite3",
     "build:selfhosted": "bash build-selfhosted.sh",
     "build:selfhosted:windows": "bash build-selfhosted.sh windows-x64",
     "build:selfhosted:linux": "bash build-selfhosted.sh linux-x64",
