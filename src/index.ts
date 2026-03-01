@@ -2,6 +2,7 @@ import { config } from "dotenv";
 config({ path: "config.env", override: false });
 config({ override: false });
 import { consola } from "consola";
+import { advertiseMdns, stopMdns } from "./mdns";
 import { socketHandler, setupSFUSync } from "./socket";
 import { createServer } from "http";
 import { Server } from "socket.io";
@@ -303,4 +304,10 @@ httpServer.listen(PORT, () => {
 		corsOrigin: allowedCorsOrigins,
 		ready: true
 	});
+
+	advertiseMdns(Number(PORT));
 });
+
+const shutdownMdns = () => { stopMdns(); process.exit(0); };
+process.on("SIGTERM", shutdownMdns);
+process.on("SIGINT", shutdownMdns);
