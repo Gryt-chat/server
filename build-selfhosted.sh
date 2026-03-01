@@ -26,6 +26,13 @@ if [ -z "$VERSION" ]; then
   VERSION=$(node -p "require('./package.json').version")
 fi
 
+# Map target to npm --os/--cpu values for platform-specific native modules (sharp)
+case "$TARGET" in
+  windows-x64) NPM_OS="win32";  NPM_CPU="x64" ;;
+  linux-x64)   NPM_OS="linux";  NPM_CPU="x64" ;;
+  *)           NPM_OS="";       NPM_CPU="" ;;
+esac
+
 OUTDIR="$SCRIPT_DIR/dist-selfhosted/gryt-server-${TARGET}"
 ZIP_NAME="gryt-server-${TARGET}-v${VERSION}.zip"
 ZIP_PATH="$SCRIPT_DIR/dist-selfhosted/${ZIP_NAME}"
@@ -68,10 +75,11 @@ node -e "
 cp package-lock.json "$OUTDIR/server/" 2>/dev/null || true
 
 echo "    Installing production dependencies (server)..."
-(cd "$OUTDIR/server" && npm install --omit=dev --ignore-scripts 2>/dev/null) || true
-
-# Rebuild native modules if needed
-(cd "$OUTDIR/server" && npx --yes node-gyp-build 2>/dev/null) || true
+if [ -n "$NPM_OS" ]; then
+  (cd "$OUTDIR/server" && npm install --omit=dev --ignore-scripts --os="$NPM_OS" --cpu="$NPM_CPU" 2>/dev/null) || true
+else
+  (cd "$OUTDIR/server" && npm install --omit=dev --ignore-scripts 2>/dev/null) || true
+fi
 
 # Copy launcher and config
 cp dist-selfhosted/config.env "$OUTDIR/"
@@ -107,8 +115,11 @@ if [ -d "$IMAGE_WORKER_DIR/dist" ]; then
   cp "$IMAGE_WORKER_DIR/yarn.lock" "$OUTDIR/image-worker/" 2>/dev/null || true
 
   echo "    Installing production dependencies (image-worker)..."
-  (cd "$OUTDIR/image-worker" && npm install --omit=dev --ignore-scripts 2>/dev/null) || true
-  (cd "$OUTDIR/image-worker" && npx --yes node-gyp-build 2>/dev/null) || true
+  if [ -n "$NPM_OS" ]; then
+    (cd "$OUTDIR/image-worker" && npm install --omit=dev --ignore-scripts --os="$NPM_OS" --cpu="$NPM_CPU" 2>/dev/null) || true
+  else
+    (cd "$OUTDIR/image-worker" && npm install --omit=dev --ignore-scripts 2>/dev/null) || true
+  fi
 
   cat > "$OUTDIR/gryt_image_worker.bat" <<'EOF'
 @echo off
