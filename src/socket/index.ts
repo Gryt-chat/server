@@ -19,6 +19,7 @@ import { registerMemberHandlers } from "./handlers/members";
 import { registerDiagnosticsHandlers } from "./handlers/diagnostics";
 import { registerVoiceLatencyHandlers } from "./handlers/voiceLatency";
 import { registerReportHandlers } from "./handlers/reports";
+import { registerTypingHandlers } from "./handlers/typing";
 
 export { broadcastCustomEmojisUpdate, broadcastEmojiQueueUpdate, broadcastServerUiUpdate };
 
@@ -250,6 +251,7 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
     ...registerReportHandlers(ctx),
     ...registerDiagnosticsHandlers(ctx),
     ...registerVoiceLatencyHandlers(ctx),
+    ...registerTypingHandlers(ctx),
   };
 
   // ── Base socket events ───────────────────────────────────────
