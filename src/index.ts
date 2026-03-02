@@ -270,6 +270,9 @@ const io = new Server(httpServer, {
 			return callback(new Error(`CORS origin not allowed: ${origin}`));
 		},
 	},
+	pingInterval: 15_000,
+	pingTimeout: 10_000,
+	perMessageDeflate: false,
 });
 
 if (sfuClient) {

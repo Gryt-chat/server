@@ -28,6 +28,28 @@ function voiceRoomName(serverId: string, channelId: string): string {
   return `voice:${serverId}:${channelId}`;
 }
 
+// Grace period for voice state during transient Socket.IO disconnects (e.g.
+// Cloudflare Tunnel WebSocket resets). Instead of immediately tearing down
+// voice state, we stash it for VOICE_GRACE_MS and restore it if the same user
+// reconnects within the window.
+const VOICE_GRACE_MS = 15_000;
+
+interface PendingVoiceCleanup {
+  timer: ReturnType<typeof setTimeout>;
+  voiceChannelId: string;
+  streamID: string;
+  nickname: string;
+  screenShareEnabled: boolean;
+  screenShareVideoStreamID: string;
+  screenShareAudioStreamID: string;
+  cameraEnabled: boolean;
+  cameraStreamID: string;
+  isMuted: boolean;
+  isDeafened: boolean;
+}
+
+const pendingVoiceCleanup = new Map<string, PendingVoiceCleanup>();
+
 /**
  * Wire SFU peer_joined / peer_left / sync_response callbacks so the server
  * stays in 1:1 sync with the SFU about who is connected.
@@ -239,10 +261,62 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
   socket.on("disconnect", (reason) => {
     consola.info(`Client disconnected: ${clientId} (${reason})`);
     const clientInfo = clientsInfo[clientId];
-    if (clientInfo?.serverUserId && sfuClient) {
-      sfuClient.untrackUserConnection(clientInfo.serverUserId);
+    const serverUserId = clientInfo?.serverUserId ?? "";
+    const wasRegistered = serverUserId && !serverUserId.startsWith("temp_");
+    const hadVoice = clientInfo?.hasJoinedChannel ?? false;
+
+    // On transient transport drops (typical for Cloudflare Tunnel), defer voice
+    // cleanup so the user can reconnect without a full SFU teardown.
+    if (reason === "transport close" && hadVoice && wasRegistered) {
+      consola.info(`[Voice:Grace] Stashing voice state for ${serverUserId} (${VOICE_GRACE_MS}ms grace)`);
+
+      const timer = setTimeout(() => {
+        pendingVoiceCleanup.delete(serverUserId);
+        consola.info(`[Voice:Grace] Grace expired for ${serverUserId} — cleaning up`);
+
+        if (sfuClient) sfuClient.untrackUserConnection(serverUserId);
+
+        const channelId = clientInfo.voiceChannelId || "";
+        const roomName = channelId ? voiceRoomName(serverId, channelId) : "";
+        if (roomName) {
+          io.to(roomName).emit("voice:peer:left", {
+            clientId,
+            nickname: clientInfo.nickname,
+            channelId,
+          });
+        }
+
+        syncAllClients(io, clientsInfo);
+        broadcastMemberList(io, clientsInfo, serverId);
+      }, VOICE_GRACE_MS);
+
+      pendingVoiceCleanup.set(serverUserId, {
+        timer,
+        voiceChannelId: clientInfo.voiceChannelId || "",
+        streamID: clientInfo.streamID || "",
+        nickname: clientInfo.nickname,
+        screenShareEnabled: clientInfo.screenShareEnabled,
+        screenShareVideoStreamID: clientInfo.screenShareVideoStreamID,
+        screenShareAudioStreamID: clientInfo.screenShareAudioStreamID,
+        cameraEnabled: clientInfo.cameraEnabled,
+        cameraStreamID: clientInfo.cameraStreamID,
+        isMuted: clientInfo.isMuted,
+        isDeafened: clientInfo.isDeafened,
+      });
+
+      delete clientsInfo[clientId];
+      if (wasRegistered) {
+        syncAllClients(io, clientsInfo);
+        broadcastMemberList(io, clientsInfo, serverId);
+      }
+      return;
     }
-    if (clientInfo?.hasJoinedChannel) {
+
+    // Immediate cleanup for intentional disconnects and other reasons
+    if (serverUserId && sfuClient) {
+      sfuClient.untrackUserConnection(serverUserId);
+    }
+    if (hadVoice) {
       const channelId = clientInfo.voiceChannelId || "";
       const roomName = channelId ? voiceRoomName(serverId, channelId) : "";
       if (roomName) {
@@ -253,7 +327,6 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
         });
       }
     }
-    const wasRegistered = clientInfo?.serverUserId && !clientInfo.serverUserId.startsWith("temp_");
     delete clientsInfo[clientId];
     if (wasRegistered) {
       syncAllClients(io, clientsInfo);
@@ -288,6 +361,37 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
             clientsInfo[clientId].grytUserId = tokenPayload.grytUserId;
             clientsInfo[clientId].serverUserId = tokenPayload.serverUserId;
             clientsInfo[clientId].nickname = tokenPayload.nickname;
+
+            // Restore voice state if the user reconnected within the grace period
+            const pending = pendingVoiceCleanup.get(tokenPayload.serverUserId);
+            if (pending) {
+              clearTimeout(pending.timer);
+              pendingVoiceCleanup.delete(tokenPayload.serverUserId);
+              consola.info(`[Voice:Grace] Restored voice state for ${tokenPayload.nickname} (${tokenPayload.serverUserId})`);
+
+              clientsInfo[clientId].hasJoinedChannel = true;
+              clientsInfo[clientId].voiceChannelId = pending.voiceChannelId;
+              clientsInfo[clientId].streamID = pending.streamID;
+              clientsInfo[clientId].isConnectedToVoice = true;
+              clientsInfo[clientId].screenShareEnabled = pending.screenShareEnabled;
+              clientsInfo[clientId].screenShareVideoStreamID = pending.screenShareVideoStreamID;
+              clientsInfo[clientId].screenShareAudioStreamID = pending.screenShareAudioStreamID;
+              clientsInfo[clientId].cameraEnabled = pending.cameraEnabled;
+              clientsInfo[clientId].cameraStreamID = pending.cameraStreamID;
+              clientsInfo[clientId].isMuted = pending.isMuted;
+              clientsInfo[clientId].isDeafened = pending.isDeafened;
+
+              const roomName = pending.voiceChannelId
+                ? voiceRoomName(serverId, pending.voiceChannelId)
+                : "";
+              if (roomName) socket.join(roomName);
+
+              socket.emit("voice:state:restored", {
+                channelId: pending.voiceChannelId,
+                streamID: pending.streamID,
+              });
+            }
+
             const otherCount = countOtherSessions(clientsInfo, clientId, tokenPayload.grytUserId);
             consola.info(
               `Restored session: ${tokenPayload.nickname} (${tokenPayload.serverUserId})` +
