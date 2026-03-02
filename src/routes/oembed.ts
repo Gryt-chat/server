@@ -48,7 +48,7 @@ function pickOEmbedFields(json: unknown, url: string): OEmbedOut | null {
   };
 }
 
-function getOEmbedEndpoint(url: string): string | null {
+function getOEmbedEndpoint(url: string, theme?: string): string | null {
   const u = new URL(url);
   const host = u.hostname.replace(/^www\./, "").toLowerCase();
 
@@ -57,6 +57,9 @@ function getOEmbedEndpoint(url: string): string | null {
     endpoint.searchParams.set("url", url);
     endpoint.searchParams.set("dnt", "true");
     endpoint.searchParams.set("omit_script", "true");
+    if (theme === "dark" || theme === "light") {
+      endpoint.searchParams.set("theme", theme);
+    }
     return endpoint.toString();
   }
 
@@ -127,7 +130,8 @@ router.get("/", requireBearerToken, async (req, res) => {
     return;
   }
 
-  const endpoint = getOEmbedEndpoint(url);
+  const theme = typeof req.query.theme === "string" ? req.query.theme : undefined;
+  const endpoint = getOEmbedEndpoint(url, theme);
   if (!endpoint) {
     res.status(400).json({ error: "unsupported_url", message: "No oEmbed provider for this URL" });
     return;
