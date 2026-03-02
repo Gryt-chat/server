@@ -15,6 +15,7 @@ import {
 	initSqlite,
 } from "./db";
 import { getIssuer, getJwksResponse, initBuiltinIdentity } from "./auth/builtinIdentity";
+import { verifyAccessToken } from "./utils/jwt";
 
 import { initStorage, ensureBucket, getObject } from "./storage";
 import { serverRouter } from "./routes/server";
@@ -177,6 +178,22 @@ app.get("/info", async (_req, res) => {
 	let lanOpen = false;
 	try {
 		const cfg = await getServerConfig();
+		if (cfg && cfg.discoverable === false) {
+			const authHeader = _req.headers["authorization"];
+			const match = typeof authHeader === "string" ? authHeader.match(/^Bearer\s+(.+)$/i) : null;
+			const token = match?.[1]?.trim();
+			const payload = token ? verifyAccessToken(token, { ignoreExpiration: true }) : null;
+			const host = _req.headers.host || "unknown";
+			const isMember = !!(
+				payload &&
+				payload.serverHost === host &&
+				(payload.tokenVersion ?? 0) === (cfg.token_version ?? 0)
+			);
+			if (!isMember) {
+				res.status(404).json({ error: "not_found" });
+				return;
+			}
+		}
 		if (cfg?.display_name) displayName = cfg.display_name;
 		if (cfg?.description) description = cfg.description;
 		if (cfg?.lan_open) lanOpen = true;

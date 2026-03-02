@@ -75,6 +75,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           profanityCensorStyle: cfg.profanity_censor_style ?? "emoji",
           systemChannelId: cfg.system_channel_id ?? null,
           lanOpen: !!cfg.lan_open,
+          discoverable: cfg.discoverable !== false,
         });
       } catch (e) {
         consola.error("server:settings:get failed", e);
@@ -105,6 +106,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       profanityCensorStyle?: string;
       systemChannelId?: string | null;
       lanOpen?: boolean;
+      discoverable?: boolean;
     }) => {
       try {
         const rl = rlCheck("server:settings:update", ctx, RL_SETTINGS);
@@ -147,6 +149,9 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         const lanOpen: boolean | undefined =
           typeof payload.lanOpen === "boolean" ? payload.lanOpen : undefined;
 
+        const discoverable: boolean | undefined =
+          typeof payload.discoverable === "boolean" ? payload.discoverable : undefined;
+
         const updated = await updateServerConfig({
           displayName: displayName === undefined ? undefined : (displayName!.length > 0 ? displayName : null),
           description: description === undefined ? undefined : (description!.length > 0 ? description : null),
@@ -159,6 +164,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           profanityCensorStyle,
           systemChannelId,
           lanOpen,
+          discoverable,
         });
 
         if (systemChannelId !== undefined) invalidateSystemChannelCache();
@@ -187,6 +193,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           profanityCensorStyle: updated.profanity_censor_style ?? "emoji",
           systemChannelId: updated.system_channel_id ?? null,
           lanOpen: !!updated.lan_open,
+          discoverable: updated.discoverable !== false,
         });
         broadcastServerUiUpdate("settings");
       } catch (e) {

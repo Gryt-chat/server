@@ -21,9 +21,9 @@ export function generateAccessToken(payload: TokenPayload): string {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRY });
 }
 
-export function verifyAccessToken(token: string): TokenPayload | null {
+export function verifyAccessToken(token: string, opts?: { ignoreExpiration?: boolean }): TokenPayload | null {
   try {
-    return jwt.verify(token, JWT_SECRET) as TokenPayload;
+    return jwt.verify(token, JWT_SECRET, { ignoreExpiration: opts?.ignoreExpiration }) as TokenPayload;
   } catch {
     return null;
   }

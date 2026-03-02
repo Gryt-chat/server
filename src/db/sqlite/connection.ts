@@ -45,6 +45,7 @@ function createSchema(d: Database.Database): void {
       profanity_censor_style TEXT NOT NULL DEFAULT 'emoji',
       system_channel_id TEXT,
       lan_open INTEGER NOT NULL DEFAULT 0,
+      discoverable INTEGER NOT NULL DEFAULT 1,
       is_configured INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -242,6 +243,10 @@ function runMigrations(d: Database.Database): void {
 
   if (!hasColumn(d, "server_config", "lan_open")) {
     d.exec("ALTER TABLE server_config ADD COLUMN lan_open INTEGER NOT NULL DEFAULT 0");
+  }
+
+  if (!hasColumn(d, "server_config", "discoverable")) {
+    d.exec("ALTER TABLE server_config ADD COLUMN discoverable INTEGER NOT NULL DEFAULT 1");
   }
 }
 
