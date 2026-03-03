@@ -205,6 +205,18 @@ function createSchema(d: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status, created_at);
 
+    CREATE TABLE IF NOT EXISTS webhooks (
+      webhook_id TEXT PRIMARY KEY,
+      token TEXT NOT NULL,
+      channel_id TEXT NOT NULL,
+      display_name TEXT NOT NULL DEFAULT 'Webhook',
+      avatar_file_id TEXT,
+      created_by_server_user_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_webhooks_channel ON webhooks(channel_id);
+
     CREATE TABLE IF NOT EXISTS image_jobs (
       job_id TEXT PRIMARY KEY,
       file_id TEXT NOT NULL,

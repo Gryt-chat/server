@@ -17,6 +17,7 @@ import {
   updateMessageText,
   getFilesByIds,
   getServerConfig,
+  getWebhooksByIds,
   DEFAULT_UPLOAD_MAX_BYTES,
 } from "../../db";
 import { processProfanity, type CensorStyle, type ProfanityMode } from "../../utils/profanityFilter";
@@ -83,11 +84,32 @@ async function isTextInVoiceEnabled(channelId: string): Promise<boolean> {
   return channelTextCache.channels.get(channelId) === true;
 }
 
+const WEBHOOK_PREFIX = "webhook:";
+
 async function enrichMessages(messages: MessageRecord[]): Promise<MessageRecord[]> {
   const senderIds = [...new Set(messages.map(m => m.sender_server_id).filter(Boolean))];
   if (senderIds.length === 0) return messages;
-  const userMap = await getUsersByServerIds(senderIds);
+
+  const webhookIds = senderIds
+    .filter(id => id.startsWith(WEBHOOK_PREFIX))
+    .map(id => id.slice(WEBHOOK_PREFIX.length));
+  const userIds = senderIds.filter(id => !id.startsWith(WEBHOOK_PREFIX));
+
+  const [userMap, webhookMap] = await Promise.all([
+    userIds.length > 0 ? getUsersByServerIds(userIds) : Promise.resolve(new Map()),
+    webhookIds.length > 0 ? getWebhooksByIds(webhookIds) : Promise.resolve(new Map()),
+  ]);
+
   return messages.map(m => {
+    if (m.sender_server_id.startsWith(WEBHOOK_PREFIX)) {
+      const whId = m.sender_server_id.slice(WEBHOOK_PREFIX.length);
+      const wh = webhookMap.get(whId);
+      return {
+        ...m,
+        sender_nickname: m.sender_nickname ?? wh?.display_name ?? "Webhook",
+        sender_avatar_file_id: m.sender_avatar_file_id ?? wh?.avatar_file_id ?? undefined,
+      };
+    }
     const info = userMap.get(m.sender_server_id);
     return {
       ...m,

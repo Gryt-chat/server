@@ -247,6 +247,19 @@ export interface ReportRecord {
   resolved_at: Date | null;
 }
 
+// ── Webhook types ────────────────────────────────────────────────
+
+export interface WebhookRecord {
+  webhook_id: string;
+  token: string;
+  channel_id: string;
+  display_name: string;
+  avatar_file_id: string | null;
+  created_by_server_user_id: string;
+  created_at: Date;
+  updated_at: Date;
+}
+
 // ── Pure utility functions (no DB dependency) ────────────────────
 
 export async function hashServerPassword(password: string): Promise<{ saltB64: string; hashB64: string; algo: string }> {

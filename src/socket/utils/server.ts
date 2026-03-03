@@ -38,6 +38,13 @@ export function broadcastServerUiUpdate(reason: "settings" | "icon" | "other" = 
   broadcastMemberList(_io, _clientsInfo, _serverId);
 }
 
+export function broadcastChatNew(message: Record<string, unknown>): void {
+  if (!_io) return;
+  for (const [, s] of _io.sockets.sockets) {
+    s.emit("chat:new", message);
+  }
+}
+
 export function broadcastCustomEmojisUpdate(): void {
   if (!_io) return;
   consola.info("Broadcasting custom emojis update");

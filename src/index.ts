@@ -26,6 +26,7 @@ import { emojisRouter } from "./routes/emojis";
 import { linkPreviewRouter } from "./routes/linkPreview";
 import { oEmbedRouter } from "./routes/oembed";
 import { mediaMetadataRouter } from "./routes/mediaMetadata";
+import { webhooksRouter } from "./routes/webhooks";
 import { startMediaSweep } from "./jobs/mediaSweep";
 import { startEmojiQueueWorker } from "./jobs/emojiQueueWorker";
 import { metricsMiddleware, register, socketConnectionsActive } from "./metrics";
@@ -249,6 +250,7 @@ app.use("/api/emojis", emojisRouter);
 app.use("/api/link-preview", linkPreviewRouter);
 app.use("/api/oembed", oEmbedRouter);
 app.use("/api/media/metadata", mediaMetadataRouter);
+app.use("/api/webhooks", webhooksRouter);
 
 // Basic error handler
 app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
