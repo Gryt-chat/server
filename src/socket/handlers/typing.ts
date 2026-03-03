@@ -12,7 +12,7 @@ function timerKey(serverUserId: string, conversationId: string): string {
 }
 
 export function registerTypingHandlers(ctx: HandlerContext): EventHandlerMap {
-	const { io, socket: _socket, clientId, clientsInfo, getClientIp } = ctx;
+	const { io, clientId, clientsInfo, getClientIp } = ctx;
 
 	function broadcastStopTyping(serverUserId: string, conversationId: string) {
 		const key = timerKey(serverUserId, conversationId);
