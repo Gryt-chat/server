@@ -7,16 +7,18 @@ let published: Service | null = null;
 export function advertiseMdns(port: number): void {
 	const name = process.env.SERVER_NAME || "Gryt Server";
 	const version = process.env.SERVER_VERSION || "1.0.0";
+	const iface = process.env.MDNS_INTERFACE;
 
 	try {
-		bonjour = new Bonjour();
+		bonjour = new Bonjour(iface ? { interface: iface } : undefined);
 		published = bonjour.publish({
 			name,
 			type: "gryt",
 			port,
 			txt: { version },
 		});
-		consola.success(`mDNS: advertising "${name}" as _gryt._tcp on port ${port}`);
+		const ifaceMsg = iface ? ` on interface ${iface}` : "";
+		consola.success(`mDNS: advertising "${name}" as _gryt._tcp on port ${port}${ifaceMsg}`);
 	} catch (err) {
 		consola.warn("mDNS: failed to advertise service", err);
 	}
