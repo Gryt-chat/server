@@ -16,7 +16,7 @@ interface ComponentVersionInfo {
 
 export interface VersionStatus {
 	server: ComponentVersionInfo;
-	sfu: (ComponentVersionInfo & { current: string | null }) | null;
+	sfu: (Omit<ComponentVersionInfo, "current"> & { current: string | null }) | null;
 }
 
 interface CacheEntry {
@@ -126,10 +126,19 @@ export async function getVersionStatus(): Promise<VersionStatus> {
 
 	let sfu: VersionStatus["sfu"] = null;
 	if (sfuVersions) {
-		const sfuInfo = sfuCurrent
-			? buildComponentInfo(sfuCurrent, sfuVersions)
-			: { current: null as string | null, latest: sfuVersions.stable, latestStable: sfuVersions.stable, latestBeta: sfuVersions.beta, updateAvailable: false, channel: "stable" as const };
-		sfu = { ...sfuInfo, current: sfuCurrent };
+		if (sfuCurrent) {
+			const info = buildComponentInfo(sfuCurrent, sfuVersions);
+			sfu = { ...info, current: sfuCurrent };
+		} else {
+			sfu = {
+				current: null,
+				latest: sfuVersions.stable,
+				latestStable: sfuVersions.stable,
+				latestBeta: sfuVersions.beta,
+				updateAvailable: false,
+				channel: "stable",
+			};
+		}
 	}
 
 	return { server, sfu };
