@@ -3,8 +3,10 @@ import { consola } from "consola";
 
 declare module "bonjour-service" {
 	interface ServiceConfig {
-		/** Passed through to multicast-dns; binds mDNS to a specific network interface IP. */
+		/** Passed through to multicast-dns; joins the multicast group on this interface IP. */
 		interface?: string;
+		/** Passed through to multicast-dns; address to bind the UDP socket to. */
+		bind?: string;
 	}
 }
 
@@ -17,7 +19,9 @@ export function advertiseMdns(port: number): void {
 	const iface = process.env.MDNS_INTERFACE;
 
 	try {
-		bonjour = new Bonjour(iface ? { interface: iface } : undefined);
+		bonjour = new Bonjour(
+			iface ? { interface: iface, bind: "0.0.0.0" } : undefined,
+		);
 		published = bonjour.publish({
 			name,
 			type: "gryt",
