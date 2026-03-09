@@ -25,6 +25,7 @@ import {
   listBans,
 } from "../../db";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
+import { getVersionStatus } from "../../versionCheck";
 import { registerAdminChannelHandlers } from "./adminChannels";
 
 const RL_SETTINGS: RateLimitRule = { limit: 30, windowMs: 60_000, scorePerAction: 1, maxScore: 20, scoreDecayMs: 3_000 };
@@ -614,6 +615,19 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       } catch (e) {
         consola.error("server:audit:list failed", e);
         socket.emit("server:error", { error: "audit_failed", message: "Failed to load audit log." });
+      }
+    },
+
+    // ── Version check ─────────────────────────────────────────────
+
+    'server:version:check': async (payload: { accessToken: string }) => {
+      try {
+        const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
+        if (!auth) return;
+        const status = await getVersionStatus();
+        socket.emit("server:version:status", status);
+      } catch (e) {
+        consola.error("server:version:check failed", e);
       }
     },
 
