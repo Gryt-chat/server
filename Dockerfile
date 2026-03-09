@@ -7,12 +7,8 @@ RUN yarn install --frozen-lockfile --ignore-scripts --ignore-engines
 COPY . .
 RUN yarn build && yarn bundle
 
-FROM --platform=$TARGETPLATFORM node:22-bookworm-slim AS deps
+FROM --platform=$TARGETPLATFORM node:22-bookworm AS deps
 WORKDIR /app
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 make g++ \
-  && rm -rf /var/lib/apt/lists/*
 
 COPY package.json yarn.lock ./
 RUN yarn install --production --ignore-engines --network-timeout 600000
