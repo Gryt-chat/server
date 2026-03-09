@@ -1,6 +1,13 @@
 import { existsSync, unlinkSync, writeFileSync } from "fs";
 import { consola } from "consola";
 
+declare module "bonjour-service" {
+	interface ServiceConfig {
+		interface?: string;
+		bind?: string;
+	}
+}
+
 const AVAHI_SERVICE_PATH = "/etc/avahi/services/gryt.service";
 
 let usingAvahi = false;
@@ -49,10 +56,10 @@ function tryAvahiServiceFile(name: string, port: number, version: string): boole
 	}
 }
 
-function tryBonjour(name: string, port: number, version: string): void {
+async function tryBonjour(name: string, port: number, version: string): Promise<void> {
 	const iface = process.env.MDNS_INTERFACE;
 	try {
-		const Bonjour = require("bonjour-service").Bonjour;
+		const { Bonjour } = await import("bonjour-service");
 		const bonjour = new Bonjour(
 			iface ? { interface: iface, bind: "0.0.0.0" } : undefined,
 		);
