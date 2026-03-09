@@ -1,6 +1,13 @@
 import Bonjour, { type Service } from "bonjour-service";
 import { consola } from "consola";
 
+declare module "bonjour-service" {
+	interface ServiceConfig {
+		/** Passed through to multicast-dns; binds mDNS to a specific network interface IP. */
+		interface?: string;
+	}
+}
+
 let bonjour: InstanceType<typeof Bonjour> | null = null;
 let published: Service | null = null;
 
