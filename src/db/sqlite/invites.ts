@@ -25,8 +25,10 @@ function generateInviteCode(): string {
   catch { return randomBytes(9).toString("base64").replace(/[+/=]/g, "").slice(0, 12).toLowerCase(); }
 }
 
+const CUSTOM_CODE_RE = /^[a-z0-9][a-z0-9_-]{1,30}[a-z0-9]$/;
+
 export async function createServerInvite(createdByServerUserId: string | null, opts?: {
-  expiresAt?: Date | null; infinite?: boolean; maxUses?: number; note?: string | null;
+  expiresAt?: Date | null; infinite?: boolean; maxUses?: number; note?: string | null; customCode?: string | null;
 }): Promise<ServerInviteRecord> {
   const db = getSqliteDb();
   const now = new Date();
@@ -35,6 +37,17 @@ export async function createServerInvite(createdByServerUserId: string | null, o
   const expiresAt = opts?.expiresAt ?? null;
   const note = (opts?.note ?? null) ? String(opts?.note).slice(0, 200) : null;
   const usesRemaining = infinite ? -1 : maxUses;
+
+  const rawCustom = opts?.customCode ? String(opts.customCode).trim().toLowerCase() : null;
+  if (rawCustom) {
+    if (!CUSTOM_CODE_RE.test(rawCustom))
+      throw new Error("Custom code must be 3–32 chars, lowercase alphanumeric / hyphens / underscores.");
+    const existing = db.prepare(`SELECT 1 FROM invites WHERE code = ?`).get(rawCustom);
+    if (existing) throw new Error("That invite code already exists.");
+    db.prepare(`INSERT INTO invites (code, created_by_server_user_id, expires_at, max_uses, uses_remaining, uses_consumed, revoked, note, created_at) VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)`).run(
+      rawCustom, createdByServerUserId, expiresAt ? toIso(expiresAt) : null, maxUses, usesRemaining, note, toIso(now));
+    return { code: rawCustom, created_at: now, created_by_server_user_id: createdByServerUserId, expires_at: expiresAt, max_uses: maxUses, uses_remaining: usesRemaining, uses_consumed: 0, revoked: false, note };
+  }
 
   for (let i = 0; i < 5; i++) {
     const code = generateInviteCode();

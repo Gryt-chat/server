@@ -222,7 +222,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    'server:invites:create': async (payload: { accessToken: string; infinite?: boolean; maxUses?: number; expiresInHours?: number; note?: string | null }) => {
+    'server:invites:create': async (payload: { accessToken: string; infinite?: boolean; maxUses?: number; expiresInHours?: number; note?: string | null; customCode?: string | null }) => {
       try {
         const rl = rlCheck("server:invites:create", ctx, RL_INVITE);
         if (!rl.allowed) { emitRateLimited(ctx, rl); return; }
@@ -235,8 +235,9 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         const expiresAt = typeof expiresInHours === "number" && expiresInHours > 0
           ? new Date(Date.now() + Math.min(expiresInHours, 24 * 365) * 3_600_000)
           : null;
+        const customCode = typeof payload.customCode === "string" ? payload.customCode.trim() : null;
 
-        const created = await createServerInvite(auth.tokenPayload.serverUserId, { infinite, maxUses, expiresAt, note: payload.note ?? null });
+        const created = await createServerInvite(auth.tokenPayload.serverUserId, { infinite, maxUses, expiresAt, note: payload.note ?? null, customCode: customCode || null });
         insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "invite_create", target: created.code, meta: { infinite, maxUses: created.max_uses, expiresAt: created.expires_at } }).catch((e) => consola.warn("audit log write failed", e));
 
         socket.emit("server:invite:created", {
