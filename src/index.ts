@@ -215,6 +215,8 @@ app.get("/info", async (_req, res) => {
   let displayName = process.env.SERVER_NAME || "Unknown Server";
   let description = process.env.SERVER_DESCRIPTION || "A Gryt server";
   let lanOpen = false;
+  let serverId: string | null = null;
+
   try {
     const cfg = await getServerConfig();
     if (cfg && cfg.discoverable === false) {
@@ -238,16 +240,26 @@ app.get("/info", async (_req, res) => {
         return;
       }
     }
+
     if (cfg?.display_name) displayName = cfg.display_name;
     if (cfg?.description) description = cfg.description;
     if (cfg?.lan_open) lanOpen = true;
+
+    if ((cfg as { server_id?: string | null })?.server_id) {
+      serverId = (cfg as { server_id?: string }).server_id!;
+    }
   } catch {
     // fall back to env
+  }
+
+  if (!serverId) {
+    serverId = process.env.SERVER_INSTANCE_ID || null;
   }
 
   const memberCount = await getRegisteredUserCount().catch(() => 0);
 
   res.json({
+    serverId,
     name: displayName,
     description,
     members: memberCount.toString(),
