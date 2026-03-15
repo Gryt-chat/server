@@ -1,73 +1,113 @@
 import { randomBytes } from "crypto";
-import { createRemoteJWKSet, importJWK, jwtVerify, type JWTPayload } from "jose";
+import {
+  createRemoteJWKSet,
+  importJWK,
+  jwtVerify,
+  type JWTPayload,
+} from "jose";
 
-// ── Configuration ────────────────────────────────────────────────────
+// ── Trusted certificate issuers ─────────────────────────────────────
 
-const DEFAULT_IDENTITY_JWKS_URL = "https://id.gryt.chat/.well-known/jwks.json";
-const DEFAULT_IDENTITY_ISSUER = "https://id.gryt.chat";
+const DEFAULT_TRUSTED_CERT_ISSUERS = ["https://id.gryt.chat"];
 
-function getIdentityJwksUrl(): string {
-  return process.env.GRYT_IDENTITY_JWKS_URL || DEFAULT_IDENTITY_JWKS_URL;
+function normalizeUrl(value: string): string {
+  return value.replace(/\/+$/, "").trim();
 }
 
-function getIdentityIssuer(): string {
-  const issuer = process.env.GRYT_IDENTITY_ISSUER;
-  if (issuer) return issuer.replace(/\/+$/, "");
+function getTrustedCertificateIssuers(): string[] {
+  const raw = process.env.GRYT_TRUSTED_CERT_ISSUERS || "";
+  const configured = raw
+    .split(",")
+    .map((s) => normalizeUrl(s))
+    .filter(Boolean);
 
-  const jwksUrl = getIdentityJwksUrl();
-  try {
-    const url = new URL(jwksUrl);
-    return `${url.protocol}//${url.host}`;
-  } catch {
-    return DEFAULT_IDENTITY_ISSUER;
-  }
+  return configured.length > 0 ? configured : DEFAULT_TRUSTED_CERT_ISSUERS;
 }
 
-// ── JWKS for Identity Service CA ─────────────────────────────────────
-
-let identityJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
-
-function getIdentityJwks() {
-  if (identityJwks) return identityJwks;
-  identityJwks = createRemoteJWKSet(new URL(getIdentityJwksUrl()));
-  return identityJwks;
+function getJwksUrlForIssuer(issuer: string): string {
+  return `${normalizeUrl(issuer)}/.well-known/jwks.json`;
 }
 
-// ── Certificate verification ─────────────────────────────────────────
+// ── JWKS cache per issuer ───────────────────────────────────────────
+
+const jwksCache = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
+
+function getIdentityJwksForIssuer(issuer: string) {
+  const normalizedIssuer = normalizeUrl(issuer);
+  const cached = jwksCache.get(normalizedIssuer);
+  if (cached) return cached;
+
+  const jwks = createRemoteJWKSet(
+    new URL(getJwksUrlForIssuer(normalizedIssuer))
+  );
+  jwksCache.set(normalizedIssuer, jwks);
+  return jwks;
+}
+
+// ── Certificate verification ────────────────────────────────────────
 
 export interface VerifiedCertificate {
   sub: string;
   preferredUsername?: string;
   jwk: JsonWebKey;
+  issuer: string;
 }
 
-export async function verifyCertificate(certJwt: string): Promise<VerifiedCertificate> {
-  const issuer = getIdentityIssuer();
-  const { payload } = await jwtVerify(certJwt, getIdentityJwks(), { issuer });
+export async function verifyCertificate(
+  certJwt: string
+): Promise<VerifiedCertificate> {
+  const issuers = getTrustedCertificateIssuers();
+  const errors: string[] = [];
 
-  if (!payload.sub || typeof payload.sub !== "string") {
-    throw new Error("Certificate missing sub claim");
+  for (const issuer of issuers) {
+    try {
+      const { payload } = await jwtVerify(
+        certJwt,
+        getIdentityJwksForIssuer(issuer),
+        { issuer }
+      );
+
+      if (!payload.sub || typeof payload.sub !== "string") {
+        throw new Error("Certificate missing sub claim");
+      }
+
+      const jwk = (payload as JWTPayload & { jwk?: JsonWebKey }).jwk;
+      if (!jwk || typeof jwk !== "object" || jwk.kty !== "EC") {
+        throw new Error("Certificate missing or invalid jwk claim");
+      }
+
+      const preferredUsername =
+        typeof payload["preferred_username"] === "string"
+          ? payload["preferred_username"]
+          : undefined;
+
+      return {
+        sub: payload.sub,
+        preferredUsername,
+        jwk,
+        issuer,
+      };
+    } catch (err) {
+      errors.push(
+        `${issuer}: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
   }
 
-  const jwk = (payload as JWTPayload & { jwk?: JsonWebKey }).jwk;
-  if (!jwk || typeof jwk !== "object" || jwk.kty !== "EC") {
-    throw new Error("Certificate missing or invalid jwk claim");
-  }
-
-  const preferredUsername = typeof payload["preferred_username"] === "string"
-    ? payload["preferred_username"]
-    : undefined;
-
-  return { sub: payload.sub, preferredUsername, jwk };
+  throw new Error(
+    `Certificate verification failed for all trusted issuers: ${errors.join(
+      " | "
+    )}`
+  );
 }
 
-// ── Assertion verification ───────────────────────────────────────────
+// ── Assertion verification ──────────────────────────────────────────
 
 export async function verifyAssertion(
   assertionJwt: string,
   expectedJwk: JsonWebKey,
   expectedAud: string,
-  expectedNonce: string,
+  expectedNonce: string
 ): Promise<{ sub: string }> {
   const publicKey = await importJWK(expectedJwk, "ES256");
 
@@ -75,8 +115,15 @@ export async function verifyAssertion(
     audience: expectedAud,
   });
 
-  if (!payload.iss || typeof payload.iss !== "string") {
-    throw new Error("Assertion missing iss (subject) claim");
+  const sub =
+    typeof payload.sub === "string"
+      ? payload.sub
+      : typeof payload.iss === "string"
+      ? payload.iss
+      : null;
+
+  if (!sub) {
+    throw new Error("Assertion missing sub/iss claim");
   }
 
   const nonce = (payload as JWTPayload & { nonce?: string }).nonce;
@@ -84,10 +131,10 @@ export async function verifyAssertion(
     throw new Error("Assertion nonce mismatch");
   }
 
-  return { sub: payload.iss };
+  return { sub };
 }
 
-// ── Nonce manager ────────────────────────────────────────────────────
+// ── Nonce manager ───────────────────────────────────────────────────
 
 const NONCE_TTL_MS = 60_000;
 
@@ -114,7 +161,7 @@ export function createChallenge(
   socketId: string,
   serverHost: string,
   nickname: string,
-  inviteCode?: string,
+  inviteCode?: string
 ): { nonce: string; serverHost: string } {
   const nonce = randomBytes(32).toString("base64url");
   pendingChallenges.set(socketId, {

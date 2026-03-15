@@ -16,8 +16,14 @@ import { broadcastServerUiUpdate } from "../socket";
 import { validateImage } from "../utils/imageValidation";
 import { verifyAccessToken } from "../utils/jwt";
 
-const iconMaxMbRaw = (process.env.GRYT_SERVER_ICON_MAX_MB || process.env.SERVER_ICON_MAX_MB || "25").trim();
-const iconMaxMb = Number.isFinite(Number(iconMaxMbRaw)) ? Math.max(1, Number(iconMaxMbRaw)) : 25;
+const iconMaxMbRaw = (
+  process.env.GRYT_SERVER_ICON_MAX_MB ||
+  process.env.SERVER_ICON_MAX_MB ||
+  "25"
+).trim();
+const iconMaxMb = Number.isFinite(Number(iconMaxMbRaw))
+  ? Math.max(1, Number(iconMaxMbRaw))
+  : 25;
 const iconMaxBytes = Math.floor(iconMaxMb * 1024 * 1024);
 
 const allowedIconMimes = new Set<string>([
@@ -33,7 +39,13 @@ const upload = multer({
   limits: { fileSize: iconMaxBytes },
   fileFilter: (_req, file, cb) => {
     if (allowedIconMimes.has(file.mimetype)) return cb(null, true);
-    cb(new Error(`Unsupported icon format (${file.mimetype || "unknown"}). Allowed: PNG, JPEG, WebP, GIF, AVIF.`));
+    cb(
+      new Error(
+        `Unsupported icon format (${
+          file.mimetype || "unknown"
+        }). Allowed: PNG, JPEG, WebP, GIF, AVIF.`
+      )
+    );
   },
 });
 
@@ -46,6 +58,13 @@ function getBearerToken(req: Request): string | null {
   return m?.[1]?.trim() || null;
 }
 
+function sanitizeStoragePathSegment(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]/g, "_");
+}
+
 serverRouter.post(
   "/icon",
   upload.single("file"),
@@ -53,84 +72,122 @@ serverRouter.post(
     try {
       const token = getBearerToken(req);
       if (!token) {
-        res.status(401).json({ error: "auth_required", message: "Missing Authorization bearer token" });
+        res.status(401).json({
+          error: "auth_required",
+          message: "Missing Authorization bearer token",
+        });
         return;
       }
 
       const decoded = verifyAccessToken(token);
       if (!decoded) {
-        res.status(401).json({ error: "token_invalid", message: "Invalid access token" });
+        res
+          .status(401)
+          .json({ error: "token_invalid", message: "Invalid access token" });
         return;
       }
 
       const host = req.headers.host || "unknown";
       if (decoded.serverHost !== host) {
-        res.status(403).json({ error: "forbidden", message: "Invalid token for this server" });
+        res.status(403).json({
+          error: "forbidden",
+          message: "Invalid token for this server",
+        });
         return;
       }
+
+      const safeHost = sanitizeStoragePathSegment(host);
 
       await createServerConfigIfNotExists();
       const cfg = await getServerConfig();
       if (!cfg?.owner_gryt_user_id) {
-        res.status(409).json({ error: "no_owner", message: "Server has no owner configured" });
+        res.status(409).json({
+          error: "no_owner",
+          message: "Server has no owner configured",
+        });
         return;
       }
       if (cfg.owner_gryt_user_id !== decoded.grytUserId) {
-        res.status(403).json({ error: "forbidden", message: "Only the server owner can change the icon" });
+        res.status(403).json({
+          error: "forbidden",
+          message: "Only the server owner can change the icon",
+        });
         return;
       }
 
       const file = req.file;
       if (!file) {
-        res.status(400).json({ error: "file_required", message: "file is required" });
+        res
+          .status(400)
+          .json({ error: "file_required", message: "file is required" });
         return;
       }
 
       const bucket = process.env.S3_BUCKET as string;
       const disableS3 = (process.env.DISABLE_S3 || "").toLowerCase() === "true";
       if (disableS3) {
-        res.status(503).json({ error: "s3_disabled", message: "S3 is disabled (DISABLE_S3=true). Icon upload is unavailable." });
+        res.status(503).json({
+          error: "s3_disabled",
+          message:
+            "S3 is disabled (DISABLE_S3=true). Icon upload is unavailable.",
+        });
         return;
       }
       if (!bucket) {
-        res.status(500).json({ error: "s3_not_configured", message: "S3_BUCKET not configured" });
+        res.status(500).json({
+          error: "s3_not_configured",
+          message: "S3_BUCKET not configured",
+        });
         return;
       }
 
       const iconMime = (file.mimetype || "").toLowerCase();
-      const isAnimated = iconMime === "image/gif" || iconMime === "image/webp" || iconMime === "image/avif";
+      const isAnimated =
+        iconMime === "image/gif" ||
+        iconMime === "image/webp" ||
+        iconMime === "image/avif";
 
-      const validation = await validateImage(file.buffer, { animated: isAnimated });
+      const validation = await validateImage(file.buffer, {
+        animated: isAnimated,
+      });
       if (!validation.valid) {
-        res.status(400).json({ error: "invalid_file", message: validation.reason });
+        res
+          .status(400)
+          .json({ error: "invalid_file", message: validation.reason });
         return;
       }
 
       let out: Buffer;
       try {
-        out = await sharp(file.buffer, { animated: isAnimated, failOn: "error" })
+        out = await sharp(file.buffer, {
+          animated: isAnimated,
+          failOn: "error",
+        })
           .resize(256, 256, { fit: "cover" })
           .avif()
           .toBuffer();
       } catch {
-        res.status(400).json({ error: "invalid_file", message: "Could not process image. Please upload a valid PNG/JPEG/WebP/GIF/AVIF under the size limit." });
+        res.status(400).json({
+          error: "invalid_file",
+          message:
+            "Could not process image. Please upload a valid PNG/JPEG/WebP/GIF/AVIF under the size limit.",
+        });
         return;
       }
 
-      const key = `server-icons/${host}/${uuidv4()}.avif`;
+      const key = `server-icons/${safeHost}/${uuidv4()}.avif`;
       try {
         await putObject({ bucket, key, body: out, contentType: "image/avif" });
       } catch (e) {
         const raw = e instanceof Error ? e.message : "";
         consola.error("icon upload s3 error", { bucket, key, message: raw });
-        const friendly =
-          /InvalidBucketName|NoSuchBucket|bucket/i.test(raw)
-            ? "File storage is misconfigured on this server. Please contact the server administrator."
-            : /AccessDenied|Forbidden/i.test(raw)
-              ? "File storage access denied. Please contact the server administrator."
-              : raw.trim().length > 0
-                ? `Icon upload failed: ${raw}`
-                : "Icon upload failed due to a storage error.";
+        const friendly = /InvalidBucketName|NoSuchBucket|bucket/i.test(raw)
+          ? "File storage is misconfigured on this server. Please contact the server administrator."
+          : /AccessDenied|Forbidden/i.test(raw)
+          ? "File storage access denied. Please contact the server administrator."
+          : raw.trim().length > 0
+          ? `Icon upload failed: ${raw}`
+          : "Icon upload failed due to a storage error.";
         res.status(502).json({ error: "s3_error", message: friendly });
         return;
       }
@@ -167,30 +224,44 @@ serverRouter.delete(
     try {
       const token = getBearerToken(req);
       if (!token) {
-        res.status(401).json({ error: "auth_required", message: "Missing Authorization bearer token" });
+        res.status(401).json({
+          error: "auth_required",
+          message: "Missing Authorization bearer token",
+        });
         return;
       }
 
       const decoded = verifyAccessToken(token);
       if (!decoded) {
-        res.status(401).json({ error: "token_invalid", message: "Invalid access token" });
+        res
+          .status(401)
+          .json({ error: "token_invalid", message: "Invalid access token" });
         return;
       }
 
       const host = req.headers.host || "unknown";
       if (decoded.serverHost !== host) {
-        res.status(403).json({ error: "forbidden", message: "Invalid token for this server" });
+        res.status(403).json({
+          error: "forbidden",
+          message: "Invalid token for this server",
+        });
         return;
       }
 
       await createServerConfigIfNotExists();
       const cfg = await getServerConfig();
       if (!cfg?.owner_gryt_user_id) {
-        res.status(409).json({ error: "no_owner", message: "Server has no owner configured" });
+        res.status(409).json({
+          error: "no_owner",
+          message: "Server has no owner configured",
+        });
         return;
       }
       if (cfg.owner_gryt_user_id !== decoded.grytUserId) {
-        res.status(403).json({ error: "forbidden", message: "Only the server owner can change the icon" });
+        res.status(403).json({
+          error: "forbidden",
+          message: "Only the server owner can change the icon",
+        });
         return;
       }
 
@@ -219,4 +290,3 @@ serverRouter.delete(
     }
   }
 );
-
