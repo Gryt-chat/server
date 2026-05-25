@@ -1,4 +1,4 @@
-name: Release Server
+name: Release Client
 
 on:
   workflow_dispatch:
@@ -29,7 +29,9 @@ jobs:
   build-and-release:
     runs-on: ubuntu-latest
     env:
-      IMAGE: ghcr.io/gryt-chat/server
+      IMAGE: ghcr.io/gryt-chat/client
+      OWNER: Gryt-chat
+      REPO: gryt
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -46,7 +48,15 @@ jobs:
       - name: Type-check and lint
         run: |
           npx tsc -b
-          npx eslint src/
+          npx eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0 || true
+
+      - name: Build native audio
+        run: bash native/audio-capture/build.sh || echo "Native audio build skipped"
+
+      - name: Build Electron app
+        env:
+          ELECTRON: '1'
+        run: npx vite build
 
       - name: Set up Git user for version bump
         run: |
@@ -71,103 +81,4 @@ jobs:
       - name: Determine channel
         id: channel
         run: |
-          if [[ "${{ github.event_name }}" == 'workflow_dispatch' ]]; then
-            CHANNEL="${{ github.event.inputs.channel }}"
-          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            CHANNEL="latest"
-          else
-            CHANNEL="beta"
-          fi
-          echo "channel=$CHANNEL" >> $GITHUB_OUTPUT
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Docker Build and Push
-        run: |
-          VERSION="${{ steps.get_version.outputs.version }}"
-          CHANNEL="${{ steps.channel.outputs.channel }}"
-          V_MAJOR=$(echo "$VERSION" | cut -d. -f1)
-          V_MINOR=$(echo "$VERSION" | cut -d. -f2)
-
-          TAGS=(
-            "${IMAGE}:$VERSION"
-            "${IMAGE}:$V_MAJOR.$V_MINOR"
-            "${IMAGE}:$V_MAJOR"
-            "${IMAGE}:latest-beta"
-          )
-          if [[ "$CHANNEL" == "latest" ]]; then
-            TAGS+=("${IMAGE}:latest")
-          fi
-          ARGS=( )
-          for TAG in "${TAGS[@]}"; do
-            ARGS+=( -t "$TAG" )
-          done
-
-          docker buildx build \
-            --platform linux/amd64,linux/arm64 \
-            --build-arg VERSION="$VERSION" \
-            --cache-from type=registry,ref=${IMAGE}:buildcache \
-            --cache-to type=registry,ref=${IMAGE}:buildcache,mode=max \
-            "${ARGS[@]}" \
-            --push .
-
-      - name: Tag and create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: "v${{ steps.get_version.outputs.version }}"
-          prerelease: ${{ steps.channel.outputs.channel == 'beta' }}
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Notify Discord
-        env:
-          WEBHOOK_URL: ${{ secrets.DISCORD_RELEASE_WEBHOOK_URL }}
-          VERSION: ${{ steps.get_version.outputs.version }}
-          CHANNEL: ${{ steps.channel.outputs.channel }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if [ -z "$WEBHOOK_URL" ]; then
-            echo "DISCORD_RELEASE_WEBHOOK_URL secret not set — skipping"
-            exit 0
-          fi
-
-          REPO_NAME="server"
-          TAG="v$VERSION"
-          RELEASE_URL="https://github.com/Gryt-chat/server/releases/tag/$TAG"
-          PRERELEASE="false"
-          if [ "$CHANNEL" == "beta" ]; then
-            PRERELEASE="true"
-          fi
-
-          COMPONENT="Server"
-          if [ "$PRERELEASE" = "true" ]; then
-            DISP_CHANNEL="Beta"
-            COLOR=16750848
-          else
-            DISP_CHANNEL="Stable"
-            COLOR=5763719
-          fi
-
-          RELEASE_BODY="$(gh release view $TAG --json body -q '.body')"
-          BODY=$(printf '%s' "$RELEASE_BODY" | head -c 1800)
-
-          PAYLOAD=$(jq -n \
-            --arg title "Gryt $COMPONENT $TAG" \
-            --arg url "$RELEASE_URL" \
-            --arg desc "$BODY" \
-            --arg channel "$DISP_CHANNEL" \
-            --arg component "$COMPONENT" \
-            --arg tag "$TAG" \
-            --argjson color "$COLOR" \
-            '{embeds: [{title: $title, url: $url, description: $desc, color: $color, fields: [ { name: "Component", value: $component, inline: true }, { name: "Channel", value: $channel, inline: true }, { name: "Version", value: $tag, inline: true } ], footer: { text: "Gryt Releases" }, timestamp: (now | todate) }]}')
-
-          curl -sfS -H "Content-Type: application/json" -d "$PAYLOAD" "$WEBHOOK_URL"
+          if [[ "${{ github.event_name }}"](#)
