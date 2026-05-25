@@ -127,3 +127,47 @@ jobs:
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Notify Discord
+        env:
+          WEBHOOK_URL: ${{ secrets.DISCORD_RELEASE_WEBHOOK_URL }}
+          VERSION: ${{ steps.get_version.outputs.version }}
+          CHANNEL: ${{ steps.channel.outputs.channel }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -z "$WEBHOOK_URL" ]; then
+            echo "DISCORD_RELEASE_WEBHOOK_URL secret not set — skipping"
+            exit 0
+          fi
+
+          REPO_NAME="server"
+          TAG="v$VERSION"
+          RELEASE_URL="https://github.com/Gryt-chat/server/releases/tag/$TAG"
+          PRERELEASE="false"
+          if [ "$CHANNEL" == "beta" ]; then
+            PRERELEASE="true"
+          fi
+
+          COMPONENT="Server"
+          if [ "$PRERELEASE" = "true" ]; then
+            DISP_CHANNEL="Beta"
+            COLOR=16750848
+          else
+            DISP_CHANNEL="Stable"
+            COLOR=5763719
+          fi
+
+          RELEASE_BODY="$(gh release view $TAG --json body -q '.body')"
+          BODY=$(printf '%s' "$RELEASE_BODY" | head -c 1800)
+
+          PAYLOAD=$(jq -n \
+            --arg title "Gryt $COMPONENT $TAG" \
+            --arg url "$RELEASE_URL" \
+            --arg desc "$BODY" \
+            --arg channel "$DISP_CHANNEL" \
+            --arg component "$COMPONENT" \
+            --arg tag "$TAG" \
+            --argjson color "$COLOR" \
+            '{embeds: [{title: $title, url: $url, description: $desc, color: $color, fields: [ { name: "Component", value: $component, inline: true }, { name: "Channel", value: $channel, inline: true }, { name: "Version", value: $tag, inline: true } ], footer: { text: "Gryt Releases" }, timestamp: (now | todate) }]}')
+
+          curl -sfS -H "Content-Type: application/json" -d "$PAYLOAD" "$WEBHOOK_URL"
