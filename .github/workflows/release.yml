@@ -25,11 +25,16 @@ on:
     tags:
       - 'v*.*.*'
 
+permissions:
+  contents: write
+  packages: write
+
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
     env:
       IMAGE: ghcr.io/gryt-chat/server
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -103,12 +108,14 @@ jobs:
             "${IMAGE}:$V_MAJOR"
             "${IMAGE}:latest-beta"
           )
+
           if [[ "$CHANNEL" == "latest" ]]; then
             TAGS+=("${IMAGE}:latest")
           fi
-          ARGS=( )
+
+          ARGS=()
           for TAG in "${TAGS[@]}"; do
-            ARGS+=( -t "$TAG" )
+            ARGS+=(-t "$TAG")
           done
 
           docker buildx build \
@@ -121,15 +128,35 @@ jobs:
 
       - name: Build self-hosted Windows bundle
         run: |
+          set -euo pipefail
           bash ./build-selfhosted.sh windows-x64 --version "${{ steps.get_version.outputs.version }}" --skip-tsc
 
-      - name: Tag, create GitHub Release, and upload Windows exe/zip
+      - name: Verify Windows bundle exists
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ steps.get_version.outputs.version }}"
+          ZIP_PATH="dist-selfhosted/gryt-server-windows-x64-v${VERSION}.zip"
+
+          if [[ ! -f "$ZIP_PATH" ]]; then
+            echo "Expected Windows server bundle was not created: $ZIP_PATH"
+            echo "dist-selfhosted contents:"
+            find dist-selfhosted -maxdepth 2 -type f -print | sort || true
+            exit 1
+          fi
+
+          echo "Windows server bundle ready: $ZIP_PATH"
+          ls -lh "$ZIP_PATH"
+
+      - name: Create GitHub Release and upload Windows server zip
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "v${{ steps.get_version.outputs.version }}"
           prerelease: ${{ steps.channel.outputs.channel == 'beta' }}
           generate_release_notes: true
-          files: dist-selfhosted/gryt-server-windows-x64-v${{ steps.get_version.outputs.version }}.zip
+          fail_on_unmatched_files: true
+          files: |
+            dist-selfhosted/gryt-server-windows-x64-v${{ steps.get_version.outputs.version }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -148,24 +175,23 @@ jobs:
           REPO_NAME="server"
           TAG="v$VERSION"
           RELEASE_URL="https://github.com/Gryt-chat/server/releases/tag/$TAG"
-          PRERELEASE="false"
+
           if [ "$CHANNEL" == "beta" ]; then
             PRERELEASE="true"
-          fi
-
-          COMPONENT="Server"
-          if [ "$PRERELEASE" = "true" ]; then
             DISP_CHANNEL="Beta"
             COLOR=16750848
           else
+            PRERELEASE="false"
             DISP_CHANNEL="Stable"
             COLOR=5763719
           fi
 
-          RELEASE_BODY="$(gh release view $TAG --json body -q '.body')"
-          BODY=$(printf '%s' "$RELEASE_BODY" | head -c 1800)
+          COMPONENT="Server"
 
-          PAYLOAD=$(jq -n \
+          RELEASE_BODY="$(gh release view "$TAG" --json body -q '.body')"
+          BODY="$(printf '%s' "$RELEASE_BODY" | head -c 1800)"
+
+          PAYLOAD="$(jq -n \
             --arg title "Gryt $COMPONENT $TAG" \
             --arg url "$RELEASE_URL" \
             --arg desc "$BODY" \
@@ -173,6 +199,24 @@ jobs:
             --arg component "$COMPONENT" \
             --arg tag "$TAG" \
             --argjson color "$COLOR" \
-            '{embeds: [{title: $title, url: $url, description: $desc, color: $color, fields: [ { name: "Component", value: $component, inline: true }, { name: "Channel", value: $channel, inline: true }, { name: "Version", value: $tag, inline: true } ], footer: { text: "Gryt Releases" }, timestamp: (now | todate) }]}')
+            '{
+              embeds: [{
+                title: $title,
+                url: $url,
+                description: $desc,
+                color: $color,
+                fields: [
+                  { name: "Component", value: $component, inline: true },
+                  { name: "Channel", value: $channel, inline: true },
+                  { name: "Version", value: $tag, inline: true }
+                ],
+                footer: { text: "Gryt Releases" },
+                timestamp: (now | todate)
+              }]
+            }'
+          )"
 
-          curl -sfS -H "Content-Type: application/json" -d "$PAYLOAD" "$WEBHOOK_URL"
+          curl -sfS \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$WEBHOOK_URL"
