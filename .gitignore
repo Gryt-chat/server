@@ -33,3 +33,7 @@ src/**/*.js.map
 
 # TypeScript build info
 *.tsbuildinfo
+
+# Local runtime data (DATA_DIR): SQLite database, uploads, identity keys.
+# start_dev.sh points ws1/ws2 at ./data/ws1 and ./data/ws2.
+data/
