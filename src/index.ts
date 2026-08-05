@@ -397,6 +397,15 @@ io.on("connection", (socket) => {
 const HOST = process.env.HOST || "127.0.0.1";
 const PORT = Number(process.env.PORT || 5000);
 
+function isLoopbackHost(host: string): boolean {
+  return (
+    host === "localhost" ||
+    host === "::1" ||
+    host === "[::1]" ||
+    /^127\.\d+\.\d+\.\d+$/.test(host)
+  );
+}
+
 httpServer.listen(PORT, HOST, () => {
   consola.box(`Gryt Server v${VERSION}`);
   consola.start(`Starting ${process.env.SERVER_NAME}...`);
@@ -410,6 +419,14 @@ httpServer.listen(PORT, HOST, () => {
     corsOrigin: allowedCorsOrigins,
     ready: true,
   });
+
+  if (isLoopbackHost(HOST)) {
+    consola.warn(
+      `Bound to ${HOST}, so only this machine can reach the server, but it is ` +
+        `still advertised over mDNS. Clients on the LAN will discover it and ` +
+        `then fail to connect. Set HOST=0.0.0.0 to accept LAN connections.`
+    );
+  }
 
   advertiseMdns(PORT);
 });
