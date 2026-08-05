@@ -43,13 +43,24 @@ const VERSION = process.env.SERVER_VERSION || "0.0.0";
 
 const app = express(); // Create an Express app
 
+const isProduction = (process.env.NODE_ENV || "").toLowerCase() === "production";
+
+// 3666 is the Vite dev port (packages/client/vite.config.ts). Origins are
+// matched exactly, so both spellings of loopback have to be listed. Added
+// outside production only — a production server has no reason to accept an
+// origin it can't reach. ops/start_dev.sh passes these explicitly too; this is
+// for servers started by hand, which otherwise reject the dev client with a
+// bare 400 on the socket.io handshake.
+const DEV_CORS_ORIGINS = ["http://localhost:3666", "http://127.0.0.1:3666"];
+
 const allowedCorsOrigins = (
   process.env.CORS_ORIGIN ||
   "http://127.0.0.1:15738,https://app.gryt.chat,https://beta.gryt.chat"
 )
   .split(",")
   .map((s) => s.trim())
-  .filter(Boolean);
+  .filter(Boolean)
+  .concat(isProduction ? [] : DEV_CORS_ORIGINS);
 
 // Electron production builds load from http://127.0.0.1:15738 or send Origin: "null" (file://).
 function isAllowedOrigin(origin: string): boolean {
@@ -380,9 +391,7 @@ io.on("connection", (socket) => {
   socketConnectionsActive.inc();
   socket.on("disconnect", () => socketConnectionsActive.dec());
 
-  const verboseLogs =
-    (process.env.NODE_ENV || "").toLowerCase() !== "production";
-  if (verboseLogs) {
+  if (!isProduction) {
     console.log(`🔌 MAIN SERVER: New WebSocket connection established`);
     console.log(`🔌 Connection details:`, {
       id: socket.id,
@@ -397,6 +406,15 @@ io.on("connection", (socket) => {
 const HOST = process.env.HOST || "127.0.0.1";
 const PORT = Number(process.env.PORT || 5000);
 
+function isLoopbackHost(host: string): boolean {
+  return (
+    host === "localhost" ||
+    host === "::1" ||
+    host === "[::1]" ||
+    /^127\.\d+\.\d+\.\d+$/.test(host)
+  );
+}
+
 httpServer.listen(PORT, HOST, () => {
   consola.box(`Gryt Server v${VERSION}`);
   consola.start(`Starting ${process.env.SERVER_NAME}...`);
@@ -410,6 +428,14 @@ httpServer.listen(PORT, HOST, () => {
     corsOrigin: allowedCorsOrigins,
     ready: true,
   });
+
+  if (isLoopbackHost(HOST)) {
+    consola.warn(
+      `Bound to ${HOST}, so only this machine can reach the server, but it is ` +
+        `still advertised over mDNS. Clients on the LAN will discover it and ` +
+        `then fail to connect. Set HOST=0.0.0.0 to accept LAN connections.`
+    );
+  }
 
   advertiseMdns(PORT);
 });
