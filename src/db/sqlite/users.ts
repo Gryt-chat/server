@@ -29,12 +29,22 @@ export async function upsertUser(
 
   if (existing) {
     const newAvatar = opts?.avatarFileId ?? existing.avatar_file_id ?? null;
+
+    // The stored nickname wins on a rejoin. `nickname` here is whatever the
+    // connecting client happens to hold, and a client with no nickname set
+    // sends the literal default "Unknown" — so overwriting meant signing in
+    // from a fresh install renamed you on every server you had ever joined.
+    // That is how live rows ended up reading "Unknown".
+    //
+    // Renaming yourself on a server stays an explicit act: `profile:update`
+    // from Settings, which is also what the "sync to all" button drives. The
+    // token reconnect path in joinHelpers.ts already read the name from here
+    // rather than from the client; this makes the two paths agree.
     db.prepare(
-      `UPDATE users SET nickname = ?, avatar_file_id = ?, last_seen = ?, is_active = 1 WHERE gryt_user_id = ?`
-    ).run(nickname, newAvatar, toIso(now), grytUserId);
+      `UPDATE users SET avatar_file_id = ?, last_seen = ?, is_active = 1 WHERE gryt_user_id = ?`
+    ).run(newAvatar, toIso(now), grytUserId);
     return {
       ...existing,
-      nickname,
       avatar_file_id: newAvatar || undefined,
       last_seen: now,
       is_active: true,
