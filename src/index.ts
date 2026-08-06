@@ -2,7 +2,7 @@ import { config } from "dotenv";
 config({ path: "config.env", override: false });
 config({ override: false });
 import { consola } from "consola";
-import { advertiseMdns, stopMdns } from "./mdns";
+import { stopMdns, syncMdnsAdvertising } from "./mdns";
 import { socketHandler, setupSFUSync } from "./socket";
 import { createServer } from "http";
 import { Server } from "socket.io";
@@ -184,6 +184,8 @@ initSqlite()
   .then(async () => {
     consola.success("SQLite initialized");
     await createServerConfigIfNotExists();
+    // Now that the config is readable, advertise if `discoverable` allows it.
+    await syncMdnsAdvertising(PORT);
   })
   .then(() => {
     if (!disableS3) startMediaSweep();
@@ -437,12 +439,16 @@ httpServer.listen(PORT, HOST, () => {
     );
   }
 
-  advertiseMdns(PORT);
+  // Advertising is not started here. It depends on the `discoverable` flag,
+  // which lives in the database, and that is not reliably open yet at this
+  // point — the SQLite init runs on its own promise chain. syncMdnsAdvertising
+  // is called from there instead, once the config is actually readable.
 });
 
 const shutdownMdns = () => {
-  stopMdns();
-  process.exit(0);
+  // Wait for the goodbye packets before exiting, otherwise the record outlives
+  // the process and clients keep listing a server that is gone.
+  void stopMdns().finally(() => process.exit(0));
 };
 process.on("SIGTERM", shutdownMdns);
 process.on("SIGINT", shutdownMdns);
