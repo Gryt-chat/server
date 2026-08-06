@@ -19,6 +19,7 @@ import {
   getJwksResponse,
   initBuiltinIdentity,
 } from "./auth/builtinIdentity";
+import { logServerIdentity } from "./auth/serverIdentity";
 import { verifyAccessToken } from "./utils/jwt";
 
 import { initStorage, ensureBucket, getObject } from "./storage";
@@ -145,6 +146,11 @@ try {
 } catch (e) {
   consola.error("S3 initialization failed", e);
 }
+
+// The server's own identity key, which clients pin on first join (GRYT-51).
+// Generated here so it exists before the first connection and any failure is
+// visible at boot; the module initializes itself on demand regardless.
+logServerIdentity();
 
 // Built-in identity provider (self-hosted mode)
 const identityMode = (process.env.IDENTITY_MODE || "").toLowerCase();
