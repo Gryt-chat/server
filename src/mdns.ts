@@ -1,6 +1,8 @@
 import { existsSync, unlinkSync, writeFileSync } from "fs";
 import { consola } from "consola";
 
+import { getServerConfig } from "./db";
+
 declare module "bonjour-service" {
   interface ServiceConfig {
     interface?: string;
@@ -11,17 +13,63 @@ declare module "bonjour-service" {
 const AVAHI_SERVICE_PATH = "/etc/avahi/services/gryt.service";
 
 let usingAvahi = false;
+let advertising = false;
+let advertisedPort: number | null = null;
 
 export function advertiseMdns(port: number): void {
+  if (advertising) return;
+
   const name = process.env.SERVER_NAME || "Gryt Server";
   const version = process.env.SERVER_VERSION || "1.0.0";
   const serverId = process.env.SERVER_INSTANCE_ID || "default";
+
+  advertising = true;
+  advertisedPort = port;
 
   if (tryAvahiServiceFile(name, port, version, serverId)) return;
   void tryBonjour(name, port, version, serverId);
 }
 
-let bonjourInstance: { destroy: (cb?: () => void) => void } | null = null;
+/**
+ * Advertise, or stop advertising, to match the server's `discoverable` setting.
+ *
+ * A server with `discoverable` off already withholds its details from strangers
+ * over /info. Broadcasting name, port and instance id to the whole LAN anyway
+ * made that setting mean very little, so mDNS follows the same flag.
+ *
+ * Pass the port once at startup; later calls reuse it, which lets the admin
+ * handler re-sync after the setting changes without knowing about the listener.
+ */
+export async function syncMdnsAdvertising(port?: number): Promise<void> {
+  if (typeof port === "number") advertisedPort = port;
+  if (advertisedPort == null) return;
+
+  let discoverable = true;
+  try {
+    const cfg = await getServerConfig();
+    // No config yet means a server that has not been set up. Those should still
+    // be findable, otherwise first-run setup over the LAN is impossible.
+    if (cfg && cfg.discoverable === false) discoverable = false;
+  } catch (err) {
+    consola.warn(
+      "mDNS: could not read the discoverable flag — leaving advertising unchanged",
+      err
+    );
+    return;
+  }
+
+  if (discoverable) {
+    advertiseMdns(advertisedPort);
+  } else if (advertising) {
+    consola.info("mDNS: discoverable is off — withdrawing the advertisement");
+    await stopMdns();
+  }
+}
+
+let bonjourInstance: {
+  destroy: (cb?: () => void) => void;
+  unpublishAll: (cb?: () => void) => void;
+} | null = null;
 
 function tryAvahiServiceFile(
   name: string,
@@ -89,7 +137,9 @@ async function tryBonjour(
   }
 }
 
-export function stopMdns(): void {
+export async function stopMdns(): Promise<void> {
+  advertising = false;
+
   if (usingAvahi) {
     try {
       if (existsSync(AVAHI_SERVICE_PATH)) unlinkSync(AVAHI_SERVICE_PATH);
@@ -98,13 +148,43 @@ export function stopMdns(): void {
     }
     usingAvahi = false;
   }
+
   if (bonjourInstance) {
+    const instance = bonjourInstance;
+    bonjourInstance = null;
+
+    // destroy() alone tears down the socket without telling anyone, so the
+    // record sits in every responder's cache until it times out — measured at
+    // over a minute, during which a server that has been made undiscoverable is
+    // still listed. unpublishAll() sends the goodbye packets that actually
+    // retract it, so wait for that before destroying.
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+
+      // Don't hang shutdown if the goodbye never comes back.
+      const timer = setTimeout(done, 2000);
+
+      try {
+        instance.unpublishAll(() => {
+          clearTimeout(timer);
+          done();
+        });
+      } catch {
+        clearTimeout(timer);
+        done();
+      }
+    });
+
     try {
-      bonjourInstance.destroy();
+      instance.destroy();
     } catch {
       // best-effort
     }
-    bonjourInstance = null;
   }
 }
 

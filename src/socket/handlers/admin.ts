@@ -4,6 +4,7 @@ import { requireAuth } from "../middleware/auth";
 import { broadcastServerUiUpdate, sendEmojiQueueStateToSocket } from "../utils/server";
 import { invalidateSystemChannelCache } from "../utils/systemMessages";
 import { VALID_CENSOR_STYLES, type CensorStyle } from "../../utils/profanityFilter";
+import { syncMdnsAdvertising } from "../../mdns";
 import { syncAllClients, broadcastMemberList } from "../utils/clients";
 import {
   getServerConfig,
@@ -169,6 +170,15 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         });
 
         if (systemChannelId !== undefined) invalidateSystemChannelCache();
+
+        // Take effect immediately rather than at the next restart: turning
+        // discoverability off should withdraw the LAN advertisement there and
+        // then, and turning it back on should re-publish it.
+        if (discoverable !== undefined) {
+          void syncMdnsAdvertising().catch((e) =>
+            consola.warn("mDNS: re-sync after a settings change failed", e)
+          );
+        }
 
         insertServerAudit({
           actorServerUserId: auth.tokenPayload.serverUserId,
