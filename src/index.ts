@@ -183,7 +183,13 @@ if (identityMode === "builtin") {
 initSqlite()
   .then(async () => {
     consola.success("SQLite initialized");
-    await createServerConfigIfNotExists();
+    // SERVER_DISCOVERABLE seeds the row on first run only, so the "Discoverable
+    // on LAN" choice made when creating a server actually lands somewhere. After
+    // that the config owns the setting and this is ignored — changing it is done
+    // through server settings, which takes effect without a restart.
+    await createServerConfigIfNotExists({
+      discoverable: (process.env.SERVER_DISCOVERABLE || "").toLowerCase() !== "false",
+    });
     // Now that the config is readable, advertise if `discoverable` allows it.
     await syncMdnsAdvertising(PORT);
   })

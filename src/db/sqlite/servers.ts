@@ -67,6 +67,9 @@ export async function createServerConfigIfNotExists(seed?: {
   displayName?: string;
   description?: string;
   iconUrl?: string;
+  // Initial value only. Once the row exists this is ignored — the setting is
+  // owned by the config from then on and changed through server settings.
+  discoverable?: boolean;
 }): Promise<{ applied: boolean; config: ServerConfigRecord }> {
   const db = getSqliteDb();
   const now = new Date();
@@ -75,8 +78,8 @@ export async function createServerConfigIfNotExists(seed?: {
 
   db.prepare(
     `INSERT OR IGNORE INTO server_config (id, owner_gryt_user_id, token_version, display_name, description, icon_url, avatar_max_bytes, upload_max_bytes, emoji_max_bytes, voice_max_bitrate_bps, profanity_mode, profanity_censor_style, lan_open, discoverable, is_configured, created_at, updated_at)
-     VALUES (?, NULL, 0, ?, ?, ?, ?, ?, ?, ?, 'censor', 'emoji', 0, 1, 0, ?, ?)`
-  ).run(SERVER_CONFIG_ID, seed?.displayName ?? null, seed?.description ?? null, seed?.iconUrl ?? null, DEFAULT_AVATAR_MAX_BYTES, DEFAULT_UPLOAD_MAX_BYTES, DEFAULT_EMOJI_MAX_BYTES, DEFAULT_VOICE_MAX_BITRATE_BPS, toIso(now), toIso(now));
+     VALUES (?, NULL, 0, ?, ?, ?, ?, ?, ?, ?, 'censor', 'emoji', 0, ?, 0, ?, ?)`
+  ).run(SERVER_CONFIG_ID, seed?.displayName ?? null, seed?.description ?? null, seed?.iconUrl ?? null, DEFAULT_AVATAR_MAX_BYTES, DEFAULT_UPLOAD_MAX_BYTES, DEFAULT_EMOJI_MAX_BYTES, DEFAULT_VOICE_MAX_BITRATE_BPS, seed?.discoverable === false ? 0 : 1, toIso(now), toIso(now));
 
   const config = (await getServerConfig())!;
   return { applied: true, config };
