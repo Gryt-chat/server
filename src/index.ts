@@ -229,10 +229,14 @@ app.get("/info", async (_req, res) => {
   let description = process.env.SERVER_DESCRIPTION || "A Gryt server";
   let lanOpen = false;
   let serverId: string | null = null;
+  let isMember = false;
 
   try {
     const cfg = await getServerConfig();
-    if (cfg && cfg.discoverable === false) {
+
+    // Identify the caller once. Two things depend on it: hiding an
+    // undiscoverable server entirely, and whether the version is disclosed.
+    if (cfg) {
       const authHeader = _req.headers["authorization"];
       const match =
         typeof authHeader === "string"
@@ -243,15 +247,16 @@ app.get("/info", async (_req, res) => {
         ? verifyAccessToken(token, { ignoreExpiration: true })
         : null;
       const host = _req.headers.host || "unknown";
-      const isMember = !!(
+      isMember = !!(
         payload &&
         payload.serverHost === host &&
         (payload.tokenVersion ?? 0) === (cfg.token_version ?? 0)
       );
-      if (!isMember) {
-        res.status(404).json({ error: "not_found" });
-        return;
-      }
+    }
+
+    if (cfg && cfg.discoverable === false && !isMember) {
+      res.status(404).json({ error: "not_found" });
+      return;
     }
 
     if (cfg?.display_name) displayName = cfg.display_name;
@@ -276,7 +281,11 @@ app.get("/info", async (_req, res) => {
     name: displayName,
     description,
     members: memberCount.toString(),
-    version: process.env.SERVER_VERSION || "1.0.0",
+    // Members only. A precise build number lets anyone on the network scan for
+    // hosts running a version with a known vulnerability, and /info has to stay
+    // reachable unauthenticated for the add-server flow, so the field is
+    // omitted rather than the endpoint being closed.
+    ...(isMember ? { version: process.env.SERVER_VERSION || "1.0.0" } : {}),
     lanOpen,
   });
 });
