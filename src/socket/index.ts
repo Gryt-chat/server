@@ -13,6 +13,7 @@ import { getServerIdFromEnv } from "../utils/serverId";
 import type { HandlerContext, EventHandlerMap } from "./handlers/types";
 import { registerJoinHandlers } from "./handlers/join";
 import { registerAdminHandlers } from "./handlers/admin";
+import { signServerProof } from "../auth/serverIdentity";
 import { registerChatHandlers } from "./handlers/chat";
 import { registerVoiceHandlers } from "./handlers/voice";
 import { registerMemberHandlers } from "./handlers/members";
@@ -50,6 +51,11 @@ interface PendingVoiceCleanup {
 }
 
 const pendingVoiceCleanup = new Map<string, PendingVoiceCleanup>();
+
+// The client's nonce is echoed into something this server signs, so it is
+// attacker-supplied input under our own signature. 256 is well clear of the
+// 32-byte base64url value a client actually sends.
+const MAX_CLIENT_NONCE_LENGTH = 256;
 
 /**
  * Wire SFU peer_joined / peer_left / sync_response callbacks so the server
@@ -260,6 +266,28 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
 
   socket.on("server:info", () => sendInfo(socket, clientsInfo, serverId));
 
+  // Prove this server's identity to the client (GRYT-51).
+  //
+  // Deliberately a connection-level exchange rather than part of the join
+  // handshake. A client that reconnects with a saved access token never joins,
+  // so a proof carried on join would leave that path — the common one — handing
+  // a bearer token to a server nobody has authenticated. Answering here means
+  // every path is covered without each one having to remember to ask.
+  socket.on("server:identify", async (payload: { clientNonce?: string }) => {
+    const clientNonce = typeof payload?.clientNonce === "string" ? payload.clientNonce : "";
+    if (!clientNonce || clientNonce.length > MAX_CLIENT_NONCE_LENGTH) {
+      socket.emit("server:identity", { error: "invalid_nonce" });
+      return;
+    }
+
+    try {
+      socket.emit("server:identity", { proof: await signServerProof(clientNonce) });
+    } catch (e) {
+      consola.error("Failed to sign server identity proof", e);
+      socket.emit("server:identity", { error: "identity_unavailable" });
+    }
+  });
+
   socket.on("disconnect", (reason) => {
     consola.info(`Client disconnected: ${clientId} (${reason})`);
     const clientInfo = clientsInfo[clientId];
@@ -345,8 +373,8 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
 
   sendInfo(socket, clientsInfo, serverId);
 
-  const clientAccessToken = socket.handshake.auth?.accessToken;
-  if (clientAccessToken) {
+  const restoreSession = (clientAccessToken: string | undefined) => {
+    if (!clientAccessToken) return;
     const tokenPayload = verifyAccessToken(clientAccessToken);
     if (tokenPayload && tokenPayload.serverHost === socket.handshake.headers.host) {
       (async () => {
@@ -428,6 +456,22 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
         }
       })();
     }
-  }
+  };
 
+  // Session restoration, two ways.
+  //
+  // Older clients put the access token in the socket.io handshake, which means
+  // it arrives before the client has had any chance to check who it is talking
+  // to. A server impersonating this one collects a working bearer token that
+  // it can replay here as that user — a client-impersonation hole reached
+  // through a spoofed server. Kept only so existing installs keep working.
+  //
+  // Current clients hold the token back until the server has proved its
+  // identity (GRYT-51) and then send it here.
+  restoreSession(socket.handshake.auth?.accessToken);
+
+  socket.on("session:restore", (payload: { accessToken?: string }) => {
+    if (clientsInfo[clientId]?.accessToken) return;   // already restored
+    restoreSession(typeof payload?.accessToken === "string" ? payload.accessToken : undefined);
+  });
 }
