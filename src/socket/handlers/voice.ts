@@ -3,6 +3,7 @@ import type { HandlerContext, EventHandlerMap } from "./types";
 import { requireAuth } from "../middleware/auth";
 import { syncAllClients, broadcastMemberList } from "../utils/clients";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
+import { getVoiceSeatLimit } from "../../utils/voiceSeats";
 import { insertServerAudit } from "../../db";
 
 const RL_REQUEST_ROOM: RateLimitRule = { limit: 10, windowMs: 60_000, scorePerAction: 1, maxScore: 8, scoreDecayMs: 5000 };
@@ -10,15 +11,6 @@ const RL_JOINED_CHANNEL: RateLimitRule = { limit: 10, windowMs: 60_000, scorePer
 
 function voiceRoomName(serverId: string, channelId: string): string {
   return `voice:${serverId}:${channelId}`;
-}
-
-function getVoiceSeatLimit(): number | null {
-  const explicit = parseInt(process.env.VOICE_MAX_USERS || "0", 10);
-  if (explicit > 0) return explicit;
-  const min = parseInt(process.env.SFU_UDP_PORT_MIN || "0", 10);
-  const max = parseInt(process.env.SFU_UDP_PORT_MAX || "0", 10);
-  if (min > 0 && max >= min) return max - min + 1;
-  return null;
 }
 
 export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {

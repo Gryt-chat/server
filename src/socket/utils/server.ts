@@ -1,6 +1,7 @@
 import consola from "consola";
 import { Server, Socket } from "socket.io";
 import { Clients } from "../../types";
+import { getVoiceSeatLimit } from "../../utils/voiceSeats";
 import { syncAllClients, broadcastMemberList } from "./clients";
 import {
   DEFAULT_AVATAR_MAX_BYTES,
@@ -131,14 +132,7 @@ const disableStun = process.env.DISABLE_STUN?.toLowerCase() === "true";
 const stunHosts = disableStun
   ? []
   : (process.env.STUN_SERVERS?.split(",").filter(Boolean) || []);
-const voiceSeatLimit = (() => {
-  const explicit = parseInt(process.env.VOICE_MAX_USERS || "0", 10);
-  if (explicit > 0) return explicit;
-  const min = parseInt(process.env.SFU_UDP_PORT_MIN || "0", 10);
-  const max = parseInt(process.env.SFU_UDP_PORT_MAX || "0", 10);
-  if (min > 0 && max >= min) return (max - min + 1);
-  return null;
-})();
+const voiceSeatLimit = getVoiceSeatLimit();
 
 // Validate configuration
 if (!sfuHost) {
