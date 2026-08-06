@@ -20,14 +20,18 @@ export function advertiseMdns(port: number): void {
   if (advertising) return;
 
   const name = process.env.SERVER_NAME || "Gryt Server";
-  const version = process.env.SERVER_VERSION || "1.0.0";
   const serverId = process.env.SERVER_INSTANCE_ID || "default";
 
   advertising = true;
   advertisedPort = port;
 
-  if (tryAvahiServiceFile(name, port, version, serverId)) return;
-  void tryBonjour(name, port, version, serverId);
+  // The version is deliberately not in the advertisement. mDNS is a broadcast
+  // with no requester to identify, so there is no authorised variant of it —
+  // publishing the build number here hands anyone on the network a list of
+  // hosts to match against known vulnerabilities. /info still reports it, to
+  // members. server_id stays: discovery needs it to dedupe.
+  if (tryAvahiServiceFile(name, port, serverId)) return;
+  void tryBonjour(name, port, serverId);
 }
 
 /**
@@ -74,7 +78,6 @@ let bonjourInstance: {
 function tryAvahiServiceFile(
   name: string,
   port: number,
-  version: string,
   serverId: string
 ): boolean {
   const xml = [
@@ -85,7 +88,6 @@ function tryAvahiServiceFile(
     "  <service>",
     "    <type>_gryt._tcp</type>",
     `    <port>${port}</port>`,
-    `    <txt-record>version=${escapeXml(version)}</txt-record>`,
     `    <txt-record>server_id=${escapeXml(serverId)}</txt-record>`,
     "  </service>",
     "</service-group>",
@@ -112,7 +114,6 @@ function tryAvahiServiceFile(
 async function tryBonjour(
   name: string,
   port: number,
-  version: string,
   serverId: string
 ): Promise<void> {
   const iface = process.env.MDNS_INTERFACE;
@@ -125,7 +126,7 @@ async function tryBonjour(
       name,
       type: "gryt",
       port,
-      txt: { version, server_id: serverId },
+      txt: { server_id: serverId },
     });
     bonjourInstance = bonjour;
     const ifaceMsg = iface ? ` on interface ${iface}` : "";
