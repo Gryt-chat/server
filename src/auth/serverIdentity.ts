@@ -23,9 +23,35 @@ interface ServerIdentity {
   privateKey: CryptoKey | Uint8Array;
   publicJwk: JWK;
   keyId: string;
+  /**
+   * Succession statements, oldest first. Each is a JWT signed by a key this
+   * server used to hold, naming the key that replaced it, so a client pinned to
+   * an older key can follow the chain forward instead of treating the change as
+   * an impersonation attempt (GRYT-54).
+   */
+  vouches: string[];
+}
+
+interface StoredIdentity {
+  publicJwk: JWK;
+  privateJwk: JWK;
+  vouches?: string[];
 }
 
 const PROOF_TTL_SECONDS = 60;
+
+/**
+ * How long a succession statement stays usable.
+ *
+ * Long, because its whole job is to let a client that was offline during the
+ * rotation catch up — a short window would send exactly those users to the
+ * manual unblock path this exists to avoid. Not unlimited, because it bounds
+ * how long a leaked old key can be used to redirect trust.
+ */
+const VOUCH_TTL = "180d";
+
+/** Guards against a malformed file turning into an unbounded walk. */
+const MAX_VOUCH_CHAIN = 16;
 
 // Everything in index.ts initializes fire-and-forget, so a join can arrive
 // before startup has finished. Memoizing the promise here means the first
@@ -46,13 +72,14 @@ async function load(): Promise<ServerIdentity> {
   let publicJwk: JWK;
   let privateKey: CryptoKey | Uint8Array;
 
+  let vouches: string[] = [];
+
   if (existsSync(kp)) {
-    const stored = JSON.parse(readFileSync(kp, "utf-8")) as {
-      publicJwk: JWK;
-      privateJwk: JWK;
-    };
+    const stored = JSON.parse(readFileSync(kp, "utf-8")) as StoredIdentity;
     publicJwk = stored.publicJwk;
     privateKey = await importJWK(stored.privateJwk, "ES256");
+    // Absent on files written before GRYT-54, which is why it is optional.
+    vouches = Array.isArray(stored.vouches) ? stored.vouches.slice(-MAX_VOUCH_CHAIN) : [];
   } else {
     const kp2 = await generateKeyPair("ES256", { extractable: true });
     privateKey = kp2.privateKey;
@@ -77,7 +104,57 @@ async function load(): Promise<ServerIdentity> {
   const keyId = await calculateJwkThumbprint(publicJwk, "sha256");
   publicJwk.kid = keyId;
 
-  return { privateKey, publicJwk, keyId };
+  return { privateKey, publicJwk, keyId, vouches };
+}
+
+/**
+ * Replace this server's identity key, leaving a statement signed by the outgoing
+ * key that names its replacement (GRYT-54).
+ *
+ * Deliberate rotation only. The statement is signed by the key being retired, so
+ * anyone who already holds that key can sign one too — rotating away from a key
+ * you believe is compromised does not lock the holder out, and clients pinned to
+ * it should be re-verified by hand instead. SSH's known_hosts has the same
+ * property.
+ */
+export async function rotateServerIdentity(): Promise<{ from: string; to: string }> {
+  const current = await initServerIdentity();
+
+  const next = await generateKeyPair("ES256", { extractable: true });
+  const nextPublicJwk = await exportJWK(next.publicKey);
+  nextPublicJwk.use = "sig";
+  nextPublicJwk.alg = "ES256";
+  const nextKeyId = await calculateJwkThumbprint(nextPublicJwk, "sha256");
+  nextPublicJwk.kid = nextKeyId;
+
+  // Signed by the OUTGOING key. That is what lets a client which only knows the
+  // old key decide the new one is legitimate.
+  const vouch = await new SignJWT({ prev: current.keyId, next: nextKeyId, jwk: nextPublicJwk })
+    .setProtectedHeader({ alg: "ES256", kid: current.keyId, jwk: current.publicJwk })
+    .setIssuer(current.keyId)
+    .setSubject(nextKeyId)
+    .setIssuedAt()
+    .setExpirationTime(VOUCH_TTL)
+    .sign(current.privateKey);
+
+  const vouches = [...current.vouches, vouch].slice(-MAX_VOUCH_CHAIN);
+  const privateJwk = await exportJWK(next.privateKey);
+
+  writeFileSync(
+    keyPath(),
+    JSON.stringify({ publicJwk: nextPublicJwk, privateJwk, vouches } satisfies StoredIdentity, null, 2),
+    { encoding: "utf-8", mode: 0o600 },
+  );
+
+  // Drop the memoized identity so the next caller picks up the new key.
+  identityPromise = null;
+
+  return { from: current.keyId, to: nextKeyId };
+}
+
+/** Succession statements to hand a client alongside the proof, oldest first. */
+export async function getVouchChain(): Promise<string[]> {
+  return (await initServerIdentity()).vouches;
 }
 
 export function initServerIdentity(): Promise<ServerIdentity> {

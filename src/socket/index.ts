@@ -13,7 +13,7 @@ import { getServerIdFromEnv } from "../utils/serverId";
 import type { HandlerContext, EventHandlerMap } from "./handlers/types";
 import { registerJoinHandlers } from "./handlers/join";
 import { registerAdminHandlers } from "./handlers/admin";
-import { signServerProof } from "../auth/serverIdentity";
+import { getVouchChain, signServerProof } from "../auth/serverIdentity";
 import { registerChatHandlers } from "./handlers/chat";
 import { registerVoiceHandlers } from "./handlers/voice";
 import { registerMemberHandlers } from "./handlers/members";
@@ -281,7 +281,13 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
     }
 
     try {
-      socket.emit("server:identity", { proof: await signServerProof(clientNonce) });
+      // The vouch chain lets a client pinned to a key this server used to hold
+      // follow the rotation forward rather than refusing (GRYT-54). Empty on a
+      // server that has never rotated, which is almost all of them.
+      socket.emit("server:identity", {
+        proof: await signServerProof(clientNonce),
+        vouches: await getVouchChain(),
+      });
     } catch (e) {
       consola.error("Failed to sign server identity proof", e);
       socket.emit("server:identity", { error: "identity_unavailable" });
