@@ -4,6 +4,7 @@ import { syncAllClients, broadcastMemberList, countOtherSessions, verifyClient }
 import { sendServerDetails } from "../utils/server";
 import { postSystemMessage, formatJoinMessage } from "../utils/systemMessages";
 import { createChallenge, consumeChallenge, verifyCertificate, verifyAssertion } from "../../auth/identity";
+import { signServerProof } from "../../auth/serverIdentity";
 import { generateAccessToken, TokenPayload } from "../../utils/jwt";
 import {
   getServerConfig,
@@ -37,6 +38,11 @@ const RL_JOIN: RateLimitRule = {
   scorePerAction: 0.5, maxScore: 10, scoreDecayMs: 5000,
 };
 
+// The client's nonce is echoed into a signed proof, so it is attacker-supplied
+// input the server puts its signature over. 256 chars is well clear of the
+// 32-byte base64url value the client sends.
+const MAX_CLIENT_NONCE_LENGTH = 256;
+
 // ── Handlers ────────────────────────────────────────────────────────
 
 export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
@@ -52,6 +58,7 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
     'server:join': async (payload: {
       nickname?: string;
       inviteCode?: string;
+      clientNonce?: string;
     }) => {
       try {
         const ip = getClientIp();
@@ -85,7 +92,24 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
         const inviteCode = typeof payload?.inviteCode === "string" ? payload.inviteCode.trim() : undefined;
 
         const challenge = createChallenge(socket.id, serverHost, nickname, inviteCode);
-        socket.emit("server:challenge", challenge);
+
+        // Prove to the client that this is the server it joined before
+        // (GRYT-51). Only sent when the client asks by supplying a nonce, so
+        // older clients are unaffected. Nothing enforces this yet — the client
+        // side pins and checks in a follow-up.
+        let serverProof: string | undefined;
+        const clientNonce = typeof payload?.clientNonce === "string" ? payload.clientNonce : "";
+        if (clientNonce && clientNonce.length <= MAX_CLIENT_NONCE_LENGTH) {
+          try {
+            serverProof = await signServerProof(clientNonce);
+          } catch (e) {
+            // Don't fail the join over this while it is unenforced. Once the
+            // client blocks on a missing proof, this log is where to look.
+            consola.error("Failed to sign server identity proof", e);
+          }
+        }
+
+        socket.emit("server:challenge", { ...challenge, serverProof });
       } catch (err) {
         consola.error("server:join failed", err);
         socket.emit("server:error", { error: "join_failed", message: "Failed to initiate join." });
