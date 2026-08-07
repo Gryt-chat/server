@@ -41,6 +41,23 @@ async function extractVideoThumbnail(buffer: Buffer, fileId: string): Promise<Bu
   }
 }
 
+/**
+ * The largest an avatar is stored at. Nothing displays one bigger — the voice
+ * tile is the most demanding at ~96 CSS px, which is 192 device px on a 2x
+ * screen — so anything above this is bytes nobody looks at.
+ */
+const AVATAR_MAX_PX = 256;
+
+/**
+ * The avatar thumbnail's size.
+ *
+ * 128 rather than 64 because of where it gets used. The small avatar sites
+ * render at 28–46 CSS px, which is 56–92 device px on a 2x screen, and a 64px
+ * source is soft at the top of that range — so the thumbnail existed but was
+ * not usable for most of the places that wanted it.
+ */
+const AVATAR_THUMB_PX = 128;
+
 // Absolute cap; server-configured limits apply per request.
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 200 * 1024 * 1024 } });
 
@@ -203,14 +220,22 @@ uploadsRouter.post(
         width = validation.width;
         height = validation.height;
 
-        if (isAnimated && file.size <= maxBytes) {
+        // Dimensions matter here as much as bytes. This used to test file.size
+        // alone, so a modestly-sized animated avatar with large dimensions was
+        // stored exactly as uploaded and served at full size to every viewer.
+        const withinBounds =
+          file.size <= maxBytes &&
+          (width ?? 0) <= AVATAR_MAX_PX &&
+          (height ?? 0) <= AVATAR_MAX_PX;
+
+        if (isAnimated && withinBounds) {
           key = `avatars/${fileId}.${animExt}`;
           storedBody = file.buffer;
           storedMime = inputMime;
           storedSize = file.size;
 
           const thumb = await sharp(file.buffer, { pages: 1, failOn: "error" })
-            .resize({ width: 64, height: 64, fit: "cover" })
+            .resize({ width: AVATAR_THUMB_PX, height: AVATAR_THUMB_PX, fit: "cover" })
             .avif({ quality: 50 })
             .toBuffer()
             .catch(() => null);
@@ -227,7 +252,7 @@ uploadsRouter.post(
           processing = true;
           try {
             storedBody = await sharp(file.buffer, { pages: 1, failOn: "error" })
-              .resize({ width: 256, height: 256, fit: "cover" })
+              .resize({ width: AVATAR_MAX_PX, height: AVATAR_MAX_PX, fit: "cover" })
               .avif()
               .toBuffer();
           } catch {
@@ -236,11 +261,16 @@ uploadsRouter.post(
           }
           storedMime = "image/avif";
           storedSize = storedBody.length;
+          // What was stored, not what was uploaded. `cover` with both axes set
+          // crops to exactly this box, and recording the original meant the row
+          // described a file that no longer existed.
+          width = AVATAR_MAX_PX;
+          height = AVATAR_MAX_PX;
         } else {
           key = `avatars/${fileId}.avif`;
           try {
             storedBody = await sharp(file.buffer, { failOn: "error" })
-              .resize({ width: 256, height: 256, fit: "cover" })
+              .resize({ width: AVATAR_MAX_PX, height: AVATAR_MAX_PX, fit: "cover" })
               .avif()
               .toBuffer();
           } catch {
@@ -249,9 +279,11 @@ uploadsRouter.post(
           }
           storedMime = "image/avif";
           storedSize = storedBody.length;
+          width = AVATAR_MAX_PX;
+          height = AVATAR_MAX_PX;
 
           const thumb = await sharp(file.buffer, { failOn: "error" })
-            .resize({ width: 64, height: 64, fit: "cover" })
+            .resize({ width: AVATAR_THUMB_PX, height: AVATAR_THUMB_PX, fit: "cover" })
             .avif({ quality: 50 })
             .toBuffer()
             .catch(() => null);
@@ -312,7 +344,7 @@ uploadsRouter.post(
                 const outputFormat = inputMime === "image/gif" ? "gif" : "webp";
                 const outputMime = `image/${outputFormat}`;
                 const pipeline = sharp(animBuf, { animated: true, failOn: "error" })
-                  .resize({ width: 256, height: 256, fit: "cover" });
+                  .resize({ width: AVATAR_MAX_PX, height: AVATAR_MAX_PX, fit: "cover" });
                 const resized = outputFormat === "gif"
                   ? await pipeline.gif().toBuffer()
                   : await pipeline.webp().toBuffer();
@@ -321,7 +353,7 @@ uploadsRouter.post(
                 await putObject({ bucket, key: animKey, body: resized, contentType: outputMime });
 
                 const thumbBuf = await sharp(resized, { pages: 1, failOn: "error" })
-                  .resize({ width: 64, height: 64, fit: "cover" })
+                  .resize({ width: AVATAR_THUMB_PX, height: AVATAR_THUMB_PX, fit: "cover" })
                   .avif({ quality: 50 })
                   .toBuffer()
                   .catch(() => null);
