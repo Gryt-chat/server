@@ -13,7 +13,7 @@ import { join } from "path";
 import { deleteObject, putObject, getObject } from "../storage";
 import { insertFile, insertImageJob, getFile, updateFileRecord, updateUserAvatar, setUserAvatar, getServerConfig, DEFAULT_AVATAR_MAX_BYTES, DEFAULT_UPLOAD_MAX_BYTES } from "../db";
 import { requireBearerToken } from "../middleware/requireBearerToken";
-import { validateImage } from "../utils/imageValidation";
+import { findDominantColor, validateImage } from "../utils/imageValidation";
 
 async function extractVideoThumbnail(buffer: Buffer, fileId: string): Promise<Buffer | null> {
   const inputPath = join(tmpdir(), `gryt-vid-${fileId}`);
@@ -282,6 +282,11 @@ uploadsRouter.post(
           return;
         }
 
+        // Taken from the original upload rather than from `storedBody`, which
+        // for an oversized animated avatar is a single-frame placeholder that
+        // gets replaced further down. The source image is the same either way.
+        const dominantColor = await findDominantColor(file.buffer, { animated: isAnimated });
+
         await insertFile({
           file_id: fileId,
           s3_key: key,
@@ -291,6 +296,7 @@ uploadsRouter.post(
           height,
           thumbnail_key: thumbKey,
           original_name: file.originalname || null,
+          dominant_color: dominantColor,
           created_at: new Date(),
         });
 
