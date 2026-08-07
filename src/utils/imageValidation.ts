@@ -1,10 +1,46 @@
 import sharp from "sharp";
 
 export type ImageValidationResult =
-  | { valid: true; width: number; height: number; pages: number | undefined }
+  | {
+      valid: true;
+      width: number;
+      height: number;
+      pages: number | undefined;
+      /** What the bytes actually are, not what the upload claimed. */
+      format: string;
+    }
   | { valid: false; reason: string };
 
 const MAX_INPUT_PIXELS = 100_000_000;
+
+/**
+ * Raster formats an upload is allowed to be.
+ *
+ * SVG is deliberately absent, and that is the point of the list. An SVG is a
+ * document: it can carry <script>, and a browser asked to render one as a
+ * document will run it. Ours were stored byte-for-byte and served back inline
+ * as image/svg+xml from the server's own origin, which is a stored-XSS
+ * primitive for anyone who can upload — the app renders attachments in <img>,
+ * where script does not run, but the URL is reachable directly and in an
+ * iframe, where it does.
+ *
+ * Sniffed rather than taken from the request. The mime came straight from the
+ * client, so it said nothing about the bytes behind it.
+ */
+const ALLOWED_IMAGE_FORMATS = new Set([
+  "jpeg",
+  "jpg",
+  "png",
+  "gif",
+  "webp",
+  "avif",
+  "heif",
+  "tiff",
+]);
+
+export function isAllowedImageFormat(format: string | undefined): boolean {
+  return !!format && ALLOWED_IMAGE_FORMATS.has(format.toLowerCase());
+}
 
 /**
  * Validates an image buffer by reading metadata and forcing a single-frame
@@ -27,12 +63,28 @@ export async function validateImage(
       return { valid: false, reason: "Could not determine image dimensions." };
     }
 
+    if (!isAllowedImageFormat(meta.format)) {
+      return {
+        valid: false,
+        reason:
+          meta.format === "svg"
+            ? "SVG images are not accepted. Please upload a PNG, JPEG, GIF, WebP or AVIF."
+            : "That image format is not supported.",
+      };
+    }
+
     await sharp(buffer, { failOn: "error", limitInputPixels: MAX_INPUT_PIXELS, pages: 1 })
       .resize(1, 1)
       .raw()
       .toBuffer();
 
-    return { valid: true, width: meta.width, height: meta.height, pages: meta.pages };
+    return {
+      valid: true,
+      width: meta.width,
+      height: meta.height,
+      pages: meta.pages,
+      format: meta.format ?? "unknown",
+    };
   } catch {
     return { valid: false, reason: "Image appears to be corrupt or unreadable." };
   }
