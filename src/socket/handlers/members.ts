@@ -1,7 +1,7 @@
 import consola from "consola";
 import type { HandlerContext, EventHandlerMap } from "./types";
 import type { Clients } from "../../types";
-import { getAllRegisteredUsers, getUserByServerId, listServerRoles, updateUserNickname } from "../../db";
+import { getAllRegisteredUsers, getFilesByIds, getUserByServerId, listServerRoles, updateUserNickname } from "../../db";
 import { syncAllClients, broadcastMemberList } from "../utils/clients";
 
 export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
@@ -13,6 +13,16 @@ export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
         const registeredUsers = await getAllRegisteredUsers();
         const roleRows = await listServerRoles();
         const roleMap = new Map(roleRows.map((r) => [r.server_user_id, r.role]));
+
+        // The dominant colour of each avatar, so clients can tint a voice tile
+        // to match the person rather than to a hash of their id. Null until
+        // the image worker has processed that avatar, and for anything
+        // uploaded before the column existed — the client falls back.
+        const avatarFiles = await getFilesByIds(
+          registeredUsers
+            .map((u) => u.avatar_file_id)
+            .filter((id): id is string => Boolean(id)),
+        );
 
         const onlineUsers = new Map<string, Clients[string]>();
         Object.values(clientsInfo).forEach((client) => {
@@ -35,6 +45,9 @@ export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
               serverUserId: user.server_user_id,
               nickname: user.nickname,
               avatarFileId: user.avatar_file_id || null,
+              avatarColor: user.avatar_file_id
+                ? avatarFiles.get(user.avatar_file_id)?.dominant_color ?? null
+                : null,
               role: roleMap.get(user.server_user_id) || "member",
               status,
               lastSeen: user.last_seen.toISOString(),
