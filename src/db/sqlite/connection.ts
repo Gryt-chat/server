@@ -127,6 +127,7 @@ function createSchema(d: Database.Database): void {
       height INTEGER,
       thumbnail_key TEXT,
       original_name TEXT,
+      dominant_color TEXT,
       created_at TEXT NOT NULL
     );
 
@@ -259,6 +260,14 @@ function runMigrations(d: Database.Database): void {
 
   if (!hasColumn(d, "server_config", "discoverable")) {
     d.exec("ALTER TABLE server_config ADD COLUMN discoverable INTEGER NOT NULL DEFAULT 1");
+  }
+
+  // The dominant colour of an uploaded image, as #rrggbb. Written by the image
+  // worker, which already decodes every upload to build a thumbnail. Null for
+  // everything uploaded before this column existed and for images the worker
+  // could not read — consumers fall back rather than backfilling.
+  if (!hasColumn(d, "files", "dominant_color")) {
+    d.exec("ALTER TABLE files ADD COLUMN dominant_color TEXT");
   }
 }
 

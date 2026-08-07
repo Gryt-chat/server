@@ -64,6 +64,8 @@ export interface FileRecord {
   height: number | null;
   thumbnail_key: string | null;
   original_name: string | null;
+  /** Dominant colour of the image as #rrggbb, or null if never computed. */
+  dominant_color: string | null;
   created_at: Date;
 }
 
