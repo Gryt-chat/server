@@ -1,6 +1,6 @@
 import { Server, Socket } from "socket.io";
 import { Clients } from "../../types";
-import { getAllRegisteredUsers, listServerRoles } from "../../db";
+import { getAllRegisteredUsers, getFilesByIds, listServerRoles } from "../../db";
 
 export function verifyClient(socket: Socket) {
   socket.join("verifiedClients");
@@ -87,6 +87,16 @@ async function emitMemberListNow(io: Server, clientsInfo: Clients): Promise<void
     const roleRows = await listServerRoles();
     const roleMap = new Map(roleRows.map((r) => [r.server_user_id, r.role]));
 
+    // Same avatar colours as the members:fetch handler builds. This payload has
+    // to carry them too: it is the one clients actually end up holding, because
+    // a broadcast follows almost every join and replaces the fetched list
+    // wholesale.
+    const avatarFiles = await getFilesByIds(
+      registeredUsers
+        .map((u) => u.avatar_file_id)
+        .filter((id): id is string => Boolean(id)),
+    );
+
     type ClientInfo = Clients[string];
     const onlineUsers = new Map<string, ClientInfo>();
 
@@ -122,6 +132,9 @@ async function emitMemberListNow(io: Server, clientsInfo: Clients): Promise<void
           serverUserId: user.server_user_id,
           nickname: user.nickname,
           avatarFileId: user.avatar_file_id || null,
+          avatarColor: user.avatar_file_id
+            ? avatarFiles.get(user.avatar_file_id)?.dominant_color ?? null
+            : null,
           role: roleMap.get(user.server_user_id) || 'member',
           status,
           lastSeen: user.last_seen.toISOString(),
@@ -145,6 +158,7 @@ async function emitMemberListNow(io: Server, clientsInfo: Clients): Promise<void
         serverUserId: m.serverUserId,
         nickname: m.nickname,
         avatarFileId: m.avatarFileId,
+        avatarColor: m.avatarColor,
         role: m.role,
         status: m.status,
         isConnectedToVoice: m.isConnectedToVoice,
