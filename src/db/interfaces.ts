@@ -63,6 +63,8 @@ export interface FileRecord {
   width: number | null;
   height: number | null;
   thumbnail_key: string | null;
+  /** Pixel size of the thumbnail, or null if it was made before this was recorded. */
+  thumbnail_px: number | null;
   original_name: string | null;
   /** Dominant colour of the image as #rrggbb, or null if never computed. */
   dominant_color: string | null;

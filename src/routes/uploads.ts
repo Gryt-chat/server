@@ -13,6 +13,7 @@ import { join } from "path";
 import { deleteObject, putObject, getObject } from "../storage";
 import { insertFile, insertImageJob, getFile, updateFileRecord, updateUserAvatar, setUserAvatar, getServerConfig, DEFAULT_AVATAR_MAX_BYTES, DEFAULT_UPLOAD_MAX_BYTES } from "../db";
 import { requireBearerToken } from "../middleware/requireBearerToken";
+import { AVATAR_MAX_PX, AVATAR_THUMB_PX } from "../constants/media";
 import { findDominantColor, validateImage } from "../utils/imageValidation";
 
 async function extractVideoThumbnail(buffer: Buffer, fileId: string): Promise<Buffer | null> {
@@ -40,23 +41,6 @@ async function extractVideoThumbnail(buffer: Buffer, fileId: string): Promise<Bu
     await unlink(outputPath).catch((e) => consola.warn("temp file cleanup failed", e));
   }
 }
-
-/**
- * The largest an avatar is stored at. Nothing displays one bigger — the voice
- * tile is the most demanding at ~96 CSS px, which is 192 device px on a 2x
- * screen — so anything above this is bytes nobody looks at.
- */
-const AVATAR_MAX_PX = 256;
-
-/**
- * The avatar thumbnail's size.
- *
- * 128 rather than 64 because of where it gets used. The small avatar sites
- * render at 28–46 CSS px, which is 56–92 device px on a 2x screen, and a 64px
- * source is soft at the top of that range — so the thumbnail existed but was
- * not usable for most of the places that wanted it.
- */
-const AVATAR_THUMB_PX = 128;
 
 // Absolute cap; server-configured limits apply per request.
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 200 * 1024 * 1024 } });
@@ -327,6 +311,7 @@ uploadsRouter.post(
           width,
           height,
           thumbnail_key: thumbKey,
+          thumbnail_px: thumbKey ? AVATAR_THUMB_PX : null,
           original_name: file.originalname || null,
           dominant_color: dominantColor,
           created_at: new Date(),
@@ -362,7 +347,7 @@ uploadsRouter.post(
                   await putObject({ bucket, key: newThumbKey, body: thumbBuf, contentType: "image/avif" }).catch(() => {});
                 }
 
-                await updateFileRecord(fileId, { s3_key: animKey, mime: outputMime, size: resized.length, thumbnail_key: newThumbKey });
+                await updateFileRecord(fileId, { s3_key: animKey, mime: outputMime, size: resized.length, thumbnail_key: newThumbKey, thumbnail_px: newThumbKey ? AVATAR_THUMB_PX : null });
 
                 if (animKey !== key) {
                   await deleteObject({ bucket, key }).catch(() => {});

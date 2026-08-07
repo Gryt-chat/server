@@ -71,20 +71,21 @@ export async function updateMessageText(conversationId: string, messageId: strin
 export async function insertFile(
   // dominant_color is written later by the image worker, so callers inserting
   // a fresh upload do not supply one.
-  record: Omit<FileRecord, "created_at" | "dominant_color"> & {
+  record: Omit<FileRecord, "created_at" | "dominant_color" | "thumbnail_px"> & {
     created_at?: Date;
     dominant_color?: string | null;
+    thumbnail_px?: number | null;
   },
 ): Promise<FileRecord> {
   const db = getSqliteDb();
   const created_at = record.created_at ?? new Date();
   db.prepare(
-    `INSERT INTO files (file_id, s3_key, mime, size, width, height, thumbnail_key, original_name, dominant_color, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(record.file_id, record.s3_key, record.mime ?? null, record.size ?? null, record.width ?? null, record.height ?? null, record.thumbnail_key ?? null, record.original_name ?? null, record.dominant_color ?? null, toIso(created_at));
-  return { dominant_color: null, ...record, created_at };
+    `INSERT INTO files (file_id, s3_key, mime, size, width, height, thumbnail_key, thumbnail_px, original_name, dominant_color, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(record.file_id, record.s3_key, record.mime ?? null, record.size ?? null, record.width ?? null, record.height ?? null, record.thumbnail_key ?? null, record.thumbnail_px ?? null, record.original_name ?? null, record.dominant_color ?? null, toIso(created_at));
+  return { dominant_color: null, thumbnail_px: null, ...record, created_at };
 }
 
-export async function updateFileRecord(fileId: string, updates: { s3_key?: string; mime?: string; size?: number; thumbnail_key?: string | null; dominant_color?: string | null }): Promise<void> {
+export async function updateFileRecord(fileId: string, updates: { s3_key?: string; mime?: string; size?: number; thumbnail_key?: string | null; thumbnail_px?: number | null; dominant_color?: string | null }): Promise<void> {
   const db = getSqliteDb();
   const sets: string[] = [];
   const vals: unknown[] = [];
@@ -92,6 +93,7 @@ export async function updateFileRecord(fileId: string, updates: { s3_key?: strin
   if (updates.mime !== undefined) { sets.push("mime = ?"); vals.push(updates.mime); }
   if (updates.size !== undefined) { sets.push("size = ?"); vals.push(updates.size); }
   if (updates.thumbnail_key !== undefined) { sets.push("thumbnail_key = ?"); vals.push(updates.thumbnail_key); }
+  if (updates.thumbnail_px !== undefined) { sets.push("thumbnail_px = ?"); vals.push(updates.thumbnail_px); }
   if (updates.dominant_color !== undefined) { sets.push("dominant_color = ?"); vals.push(updates.dominant_color); }
   if (sets.length === 0) return;
   vals.push(fileId);
@@ -110,6 +112,7 @@ export async function getFile(fileId: string): Promise<FileRecord | null> {
     width: r.width != null ? Number(r.width) : null,
     height: r.height != null ? Number(r.height) : null,
     thumbnail_key: (r.thumbnail_key as string) ?? null,
+    thumbnail_px: r.thumbnail_px != null ? Number(r.thumbnail_px) : null,
     original_name: (r.original_name as string) ?? null,
     dominant_color: (r.dominant_color as string) ?? null,
     created_at: fromIso(r.created_at as string),
@@ -138,6 +141,7 @@ export async function getAllFileRecords(): Promise<FileRecord[]> {
     width: r.width != null ? Number(r.width) : null,
     height: r.height != null ? Number(r.height) : null,
     thumbnail_key: (r.thumbnail_key as string) ?? null,
+    thumbnail_px: r.thumbnail_px != null ? Number(r.thumbnail_px) : null,
     original_name: (r.original_name as string) ?? null,
     dominant_color: (r.dominant_color as string) ?? null,
     created_at: fromIso(r.created_at as string),

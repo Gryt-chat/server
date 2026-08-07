@@ -2,6 +2,8 @@ import Database from "better-sqlite3";
 import { existsSync, mkdirSync } from "fs";
 import { dirname, join } from "path";
 
+import { AVATAR_THUMB_PX } from "../../constants/media";
+
 let db: Database.Database | null = null;
 
 export function getSqliteDb(): Database.Database {
@@ -44,6 +46,7 @@ function createSchema(d: Database.Database): void {
       profanity_mode TEXT NOT NULL DEFAULT 'censor',
       profanity_censor_style TEXT NOT NULL DEFAULT 'emoji',
       system_channel_id TEXT,
+      avatar_thumb_px INTEGER,
       lan_open INTEGER NOT NULL DEFAULT 0,
       discoverable INTEGER NOT NULL DEFAULT 1,
       is_configured INTEGER NOT NULL DEFAULT 0,
@@ -126,6 +129,7 @@ function createSchema(d: Database.Database): void {
       width INTEGER,
       height INTEGER,
       thumbnail_key TEXT,
+      thumbnail_px INTEGER,
       original_name TEXT,
       dominant_color TEXT,
       created_at TEXT NOT NULL
@@ -269,6 +273,24 @@ function runMigrations(d: Database.Database): void {
   if (!hasColumn(d, "files", "dominant_color")) {
     d.exec("ALTER TABLE files ADD COLUMN dominant_color TEXT");
   }
+
+  // How big a thumbnail actually is, so a consumer can tell whether it is still
+  // the size we would write today. Null for everything made before this column,
+  // which the image worker treats as "unknown, rebuild it".
+  if (!hasColumn(d, "files", "thumbnail_px")) {
+    d.exec("ALTER TABLE files ADD COLUMN thumbnail_px INTEGER");
+  }
+
+  // The avatar thumbnail size this server writes, published for the image
+  // worker. It runs from a separate repository with no package shared with this
+  // one, and the alternative was the same constant written down in both and
+  // kept in step by hand — where a disagreement makes the worker's rebuild pass
+  // either run forever or never. Written on every start so it tracks the
+  // constant rather than whatever was true when the row was created.
+  if (!hasColumn(d, "server_config", "avatar_thumb_px")) {
+    d.exec("ALTER TABLE server_config ADD COLUMN avatar_thumb_px INTEGER");
+  }
+  d.prepare("UPDATE server_config SET avatar_thumb_px = ?").run(AVATAR_THUMB_PX);
 }
 
 export function toIso(d: Date): string {
