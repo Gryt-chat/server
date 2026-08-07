@@ -41,6 +41,24 @@ async function extractVideoThumbnail(buffer: Buffer, fileId: string): Promise<Bu
   }
 }
 
+/**
+ * Types a browser may render straight from this endpoint.
+ *
+ * Everything else is sent as a download. The list is raster images, video and
+ * audio — formats a browser decodes as media and cannot execute. Notably not
+ * SVG, which is a document that can carry script and would run on this origin.
+ */
+function isInlineSafe(contentType: string | undefined): boolean {
+  if (!contentType) return false;
+  const type = contentType.split(";")[0].trim().toLowerCase();
+  if (type === "image/svg+xml") return false;
+  return (
+    type.startsWith("image/") ||
+    type.startsWith("video/") ||
+    type.startsWith("audio/")
+  );
+}
+
 // Absolute cap; server-configured limits apply per request.
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 200 * 1024 * 1024 } });
 
@@ -96,6 +114,16 @@ uploadsRouter.post(
         let height: number | null = null;
 
         if (isImage) {
+          // Anything claiming to be an image has to actually decode as one of
+          // the raster formats we allow. This route previously took the mime
+          // straight from the request and stored the bytes untouched, so an
+          // SVG carrying <script> was kept verbatim and served back inline.
+          const validation = await validateImage(file.buffer, { animated: true });
+          if (!validation.valid) {
+            res.status(400).json({ error: "invalid_file", message: validation.reason });
+            return;
+          }
+
           width = parseDimField(req.body?.width);
           height = parseDimField(req.body?.height);
 
@@ -405,7 +433,17 @@ uploadsRouter.get(
         res.setHeader("Cache-Control", "public, max-age=60");
         res.setHeader("Accept-Ranges", "bytes");
 
-        if (req.query.download === "1") {
+        // Defence in depth, on the assumption that something unwanted got past
+        // the upload checks anyway. nosniff stops a mislabelled file being
+        // re-interpreted as something executable; the CSP neuters scripts and
+        // subresources if it is rendered as a document regardless; and anything
+        // outside the inline allowlist is handed over as a download rather than
+        // rendered. Uploads are served from the API's own origin, so a document
+        // that runs here runs with the session.
+        res.setHeader("X-Content-Type-Options", "nosniff");
+        res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
+
+        if (req.query.download === "1" || !isInlineSafe(contentType)) {
           const fileName = fileMeta.original_name || `${fileId}.${mime.extension(fileMeta.mime || "") || "bin"}`;
           res.setHeader("Content-Disposition", `attachment; filename="${fileName.replace(/"/g, '\\"')}"`);
         }
