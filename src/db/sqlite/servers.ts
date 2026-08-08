@@ -13,7 +13,7 @@ import type {
   ServerRoleRecord,
 } from "../interfaces";
 import { normalizeCensorStyle } from "../../utils/profanityFilter";
-import { fromIso, getSqliteDb, toIso } from "./connection";
+import { fromIso, getSqliteDb, toIso, type SQLInputValue } from "./connection";
 import { getUserByGrytId } from "./users";
 
 const VALID_PROFANITY_MODES: ProfanityMode[] = ["off", "flag", "censor", "block"];
@@ -205,14 +205,17 @@ export async function updateServerConfig(patch: {
   };
 
   const setClauses: string[] = ["updated_at = ?"];
-  const params: unknown[] = [toIso(now)];
+  const params: SQLInputValue[] = [toIso(now)];
 
   for (const [key, { col, transform }] of Object.entries(FIELD_MAP)) {
     if (!Object.prototype.hasOwnProperty.call(patch, key)) continue;
     const raw = (patch as Record<string, unknown>)[key];
     if (raw === undefined) continue;
     setClauses.push(`${col} = ?`);
-    params.push(transform ? transform(raw) : (raw ?? null));
+    // FIELD_MAP only ever maps to scalar columns, and every transform above
+    // returns a string or a number, so this is always a bindable value — but
+    // `raw` comes out of an index signature typed unknown, so it needs saying.
+    params.push((transform ? transform(raw) : (raw ?? null)) as SQLInputValue);
   }
   params.push(SERVER_CONFIG_ID);
   db.prepare(`UPDATE server_config SET ${setClauses.join(", ")} WHERE id = ?`).run(...params);

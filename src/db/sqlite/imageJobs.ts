@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 
 import type { ImageJobRecord, ImageJobStatus } from "../interfaces";
-import { fromIso, getSqliteDb, toIso } from "./connection";
+import { fromIso, getSqliteDb, toIso, type SQLInputValue } from "./connection";
 
 export async function insertImageJob(input: {
   job_id?: string;
@@ -49,7 +49,7 @@ export async function updateImageJobStatus(input: {
   const now = toIso(new Date());
 
   const sets: string[] = ["status = ?", "updated_at = ?"];
-  const vals: unknown[] = [input.status, now];
+  const vals: SQLInputValue[] = [input.status, now];
 
   if (input.error_message !== undefined) {
     sets.push("error_message = ?");
