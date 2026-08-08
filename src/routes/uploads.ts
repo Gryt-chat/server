@@ -130,6 +130,37 @@ uploadsRouter.post(
         let width: number | null = null;
         let height: number | null = null;
 
+        // SVG is accepted here as the vector, sanitised, and deliberately never
+        // queued as an image job below — the worker would hand it to sharp, and
+        // sharp renders SVG through librsvg. Storing the vector is what keeps a
+        // memory-unsafe parser away from a stranger's bytes.
+        if (fileMime === "image/svg+xml") {
+          const svg = sanitizeSvg(file.buffer);
+          if (!svg.valid) {
+            res.status(400).json({ error: "invalid_file", message: svg.reason });
+            return;
+          }
+
+          const body = Buffer.from(svg.svg, "utf8");
+          const svgKey = `uploads/${fileId}.svg`;
+          await putObject({ bucket, key: svgKey, body, contentType: "image/svg+xml" });
+
+          await insertFile({
+            file_id: fileId,
+            s3_key: svgKey,
+            mime: "image/svg+xml",
+            size: body.length,
+            width: svg.width,
+            height: svg.height,
+            thumbnail_key: null,
+            original_name: file.originalname || null,
+            created_at: new Date(),
+          });
+
+          res.status(201).json({ fileId, key: svgKey, thumbnailKey: null });
+          return;
+        }
+
         if (isImage) {
           // Anything claiming to be an image has to actually decode as one of
           // the raster formats we allow. This route previously took the mime

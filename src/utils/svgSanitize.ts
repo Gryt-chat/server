@@ -111,6 +111,35 @@ export function sanitizeSvg(buffer: Buffer): SvgValidationResult {
     return { valid: false, reason: "That SVG could not be read." };
   }
 
+  // Refuse rather than quietly repair.
+  //
+  // Sanitising decides what is safe — an allowlist, so anything it has never
+  // heard of is dropped rather than waved through — but the answer to "we found
+  // something" should be to say so. Silently storing a modified file means an
+  // avatar the uploader did not choose, or an attachment a recipient believes
+  // is the sender's file and is not. And an SVG carrying <script> is not an
+  // innocent file that needs fixing.
+  //
+  // BODY is jsdom's wrapper and is removed from every parse, clean or not.
+  const removed = purify.removed
+    .map((r) => {
+      const el = (r as { element?: Node }).element;
+      const attr = (r as { attribute?: Attr }).attribute;
+      return el?.nodeName ?? attr?.name ?? "";
+    })
+    .filter((name) => name && name.toUpperCase() !== "BODY");
+
+  if (removed.length > 0) {
+    const unique = [...new Set(removed)].slice(0, 3).join(", ");
+    return {
+      valid: false,
+      reason:
+        `That SVG contains things that can run code or call out to other sites ` +
+        `(${unique}), so it was not accepted. Export it again without scripting ` +
+        `or interactivity, or upload a PNG.`,
+    };
+  }
+
   if (!clean.trim()) {
     return {
       valid: false,
