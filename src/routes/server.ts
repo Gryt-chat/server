@@ -5,7 +5,7 @@ import multer from "multer";
 import sharp from "sharp";
 import { v4 as uuidv4 } from "uuid";
 
-import { putObject } from "../storage";
+import { deleteObject, putObject } from "../storage";
 import {
   createServerConfigIfNotExists,
   getServerConfig,
@@ -50,6 +50,24 @@ const upload = multer({
     );
   },
 });
+
+/**
+ * Drop the object an icon used to live in.
+ *
+ * Best effort: the config has already been updated by the time this runs, so
+ * the icon is gone as far as anyone using the server is concerned. Failing to
+ * delete leaves a few kilobytes behind, which is not worth failing the request
+ * the owner actually made.
+ *
+ * Neither replacing nor clearing used to do this, so every icon a server had
+ * ever had stayed in the bucket for good.
+ */
+function deletePreviousIcon(bucket: string, key: string | null | undefined): void {
+  if (!key) return;
+  deleteObject({ bucket, key }).catch((e) =>
+    consola.warn("previous icon delete failed", { key, error: e }),
+  );
+}
 
 export const serverRouter = express.Router();
 
@@ -167,10 +185,12 @@ serverRouter.post(
           return;
         }
 
+        const previousSvgIcon = cfg?.icon_url ?? null;
         const updatedSvg = await updateServerConfig({
           iconUrl: svgKey,
           isConfigured: true,
         });
+        deletePreviousIcon(bucket, previousSvgIcon);
 
         insertServerAudit({
           actorServerUserId: decoded.serverUserId,
@@ -251,10 +271,12 @@ serverRouter.post(
         return;
       }
 
+      const previousIcon = cfg?.icon_url ?? null;
       const updated = await updateServerConfig({
         iconUrl: key, // stored as S3 key; GET /icon streams the object
         isConfigured: true,
       });
+      deletePreviousIcon(bucket, previousIcon);
 
       insertServerAudit({
         actorServerUserId: decoded.serverUserId,
@@ -334,6 +356,8 @@ serverRouter.delete(
         iconUrl: null,
         isConfigured: true,
       });
+
+      if (process.env.S3_BUCKET) deletePreviousIcon(process.env.S3_BUCKET, prev);
 
       insertServerAudit({
         actorServerUserId: decoded.serverUserId,
