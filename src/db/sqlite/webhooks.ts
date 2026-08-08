@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "crypto";
 
 import type { WebhookRecord } from "../interfaces";
-import { fromIso, getSqliteDb, toIso } from "./connection";
+import { fromIso, getSqliteDb, toIso, type SQLInputValue } from "./connection";
 
 function rowToWebhook(r: Record<string, unknown>): WebhookRecord {
   return {
@@ -86,7 +86,7 @@ export async function updateWebhook(
 ): Promise<WebhookRecord | null> {
   const db = getSqliteDb();
   const sets: string[] = [];
-  const vals: unknown[] = [];
+  const vals: SQLInputValue[] = [];
   if (updates.display_name !== undefined) { sets.push("display_name = ?"); vals.push(updates.display_name); }
   if (updates.channel_id !== undefined) { sets.push("channel_id = ?"); vals.push(updates.channel_id); }
   if (updates.avatar_file_id !== undefined) { sets.push("avatar_file_id = ?"); vals.push(updates.avatar_file_id); }

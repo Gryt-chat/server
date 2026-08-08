@@ -53,5 +53,8 @@ export async function revokeRefreshToken(tokenId: string): Promise<void> {
 export async function revokeUserRefreshTokens(grytUserId: string): Promise<{ revoked: number }> {
   const db = getSqliteDb();
   const result = db.prepare(`UPDATE refresh_tokens SET revoked = 1 WHERE gryt_user_id = ? AND revoked = 0`).run(grytUserId);
-  return { revoked: result.changes };
+  // node:sqlite types `changes` as number | bigint. It is only ever a bigint
+  // when a statement opts into reading big integers, which nothing here does,
+  // so this converts rather than widening the return type outwards.
+  return { revoked: Number(result.changes) };
 }

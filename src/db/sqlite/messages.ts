@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 
 import type { FileRecord, MessageRecord, Reaction } from "../interfaces";
-import { fromIso, fromIsoNullable, getSqliteDb, toIso } from "./connection";
+import { fromIso, fromIsoNullable, getSqliteDb, toIso, type SQLInputValue } from "./connection";
 
 function rowToMessage(r: Record<string, unknown>): MessageRecord {
   return {
@@ -88,7 +88,7 @@ export async function insertFile(
 export async function updateFileRecord(fileId: string, updates: { s3_key?: string; mime?: string; size?: number; thumbnail_key?: string | null; thumbnail_px?: number | null; dominant_color?: string | null }): Promise<void> {
   const db = getSqliteDb();
   const sets: string[] = [];
-  const vals: unknown[] = [];
+  const vals: SQLInputValue[] = [];
   if (updates.s3_key !== undefined) { sets.push("s3_key = ?"); vals.push(updates.s3_key); }
   if (updates.mime !== undefined) { sets.push("mime = ?"); vals.push(updates.mime); }
   if (updates.size !== undefined) { sets.push("size = ?"); vals.push(updates.size); }

@@ -1,5 +1,5 @@
 import type { EmojiJobListItem, EmojiJobRecord, EmojiJobStatus } from "../interfaces";
-import { fromIso, getSqliteDb, toIso } from "./connection";
+import { fromIso, getSqliteDb, toIso, type SQLInputValue } from "./connection";
 
 function statusFromDb(value: unknown): EmojiJobStatus {
   const v = typeof value === "string" ? value : "";
@@ -69,7 +69,7 @@ export async function updateEmojiJobStatus(input: {
   if (!existing) return null;
   const updated_at = new Date();
   const sets = ["status = ?", "updated_at = ?"];
-  const vals: unknown[] = [input.status, toIso(updated_at)];
+  const vals: SQLInputValue[] = [input.status, toIso(updated_at)];
   if (input.error_message !== undefined) { sets.push("error_message = ?"); vals.push(input.error_message); }
   if (input.out_s3_key !== undefined) { sets.push("out_s3_key = ?"); vals.push(input.out_s3_key); }
   if (input.out_content_type !== undefined) { sets.push("out_content_type = ?"); vals.push(input.out_content_type); }

@@ -1,12 +1,20 @@
-import Database from "better-sqlite3";
 import { existsSync, mkdirSync } from "fs";
+import { DatabaseSync } from "node:sqlite";
 import { dirname, join } from "path";
 
 import { AVATAR_THUMB_PX } from "../../constants/media";
 
-let db: Database.Database | null = null;
+/**
+ * Re-exported so the query modules can type their dynamic parameter arrays
+ * without importing the driver themselves. This file is the only one that knows
+ * which driver is in use, and it is worth keeping it that way — the move off
+ * better-sqlite3 touched one import because of it.
+ */
+export type { SQLInputValue } from "node:sqlite";
 
-export function getSqliteDb(): Database.Database {
+let db: DatabaseSync | null = null;
+
+export function getSqliteDb(): DatabaseSync {
   if (!db) throw new Error("SQLite not initialized. Call initSqlite() first.");
   return db;
 }
@@ -18,16 +26,21 @@ export async function initSqlite(): Promise<void> {
   const dir = dirname(dbPath);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
-  db = new Database(dbPath);
-  db.pragma("journal_mode = WAL");
-  db.pragma("busy_timeout = 5000");
-  db.pragma("foreign_keys = ON");
+  db = new DatabaseSync(dbPath);
+
+  // node:sqlite has no pragma() helper, so these go through exec(). Same
+  // statements as before, in the same order — and the order matters: WAL is
+  // what lets the image worker write to this file from its own process while
+  // the server holds it open.
+  db.exec("PRAGMA journal_mode = WAL");
+  db.exec("PRAGMA busy_timeout = 5000");
+  db.exec("PRAGMA foreign_keys = ON");
 
   createSchema(db);
   runMigrations(db);
 }
 
-function createSchema(d: Database.Database): void {
+function createSchema(d: DatabaseSync): void {
   d.exec(`
     CREATE TABLE IF NOT EXISTS server_config (
       id TEXT PRIMARY KEY DEFAULT 'config',
@@ -237,12 +250,14 @@ function createSchema(d: Database.Database): void {
   `);
 }
 
-function hasColumn(d: Database.Database, table: string, column: string): boolean {
-  const cols = d.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+function hasColumn(d: DatabaseSync, table: string, column: string): boolean {
+  const cols = d.prepare(`PRAGMA table_info(${table})`).all() as unknown as {
+    name: string;
+  }[];
   return cols.some((c) => c.name === column);
 }
 
-function runMigrations(d: Database.Database): void {
+function runMigrations(d: DatabaseSync): void {
   const cols = d.prepare("PRAGMA table_info(users)").all() as { name: string }[];
   const colNames = new Set(cols.map((c) => c.name));
 

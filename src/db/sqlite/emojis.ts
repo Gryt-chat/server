@@ -26,12 +26,20 @@ export async function renameEmoji(oldName: string, newName: string): Promise<boo
   const db = getSqliteDb();
   const existing = await getEmoji(oldName);
   if (!existing) return false;
-  const txn = db.transaction(() => {
+  // node:sqlite has no transaction() wrapper, so this is the same two statements
+  // bracketed by hand. Both have to land together: the insert writes the emoji
+  // under its new name and the delete removes the old one, and stopping between
+  // them leaves it present under both names.
+  db.exec("BEGIN");
+  try {
     db.prepare(`INSERT OR REPLACE INTO emojis (name, file_id, s3_key, uploaded_by_server_user_id, created_at) VALUES (?, ?, ?, ?, ?)`).run(
       newName, existing.file_id, existing.s3_key, existing.uploaded_by_server_user_id, toIso(existing.created_at));
     db.prepare(`DELETE FROM emojis WHERE name = ?`).run(oldName);
-  });
-  txn();
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
   return true;
 }
 
