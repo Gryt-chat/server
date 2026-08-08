@@ -74,7 +74,11 @@ export interface FileRecord {
 // ── Server config types ──────────────────────────────────────────
 
 export const DEFAULT_AVATAR_MAX_BYTES = 5 * 1024 * 1024;
-export const DEFAULT_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
+// 100MB, which is what Cloudflare allows through on Free and Pro. Anything
+// larger is refused at the edge before it reaches us, so a higher default would
+// only produce a confusing failure for anyone behind a tunnel — which is how
+// Gryt is normally reached. Raise it per server if you front it yourself.
+export const DEFAULT_UPLOAD_MAX_BYTES = 100 * 1024 * 1024;
 export const DEFAULT_EMOJI_MAX_BYTES = 5 * 1024 * 1024;
 export const DEFAULT_VOICE_MAX_BITRATE_BPS = 96_000;
 

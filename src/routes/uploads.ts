@@ -15,6 +15,7 @@ import { insertFile, insertImageJob, getFile, updateFileRecord, updateUserAvatar
 import { requireBearerToken } from "../middleware/requireBearerToken";
 import { AVATAR_MAX_PX, AVATAR_THUMB_PX } from "../constants/media";
 import { findDominantColor, validateImage } from "../utils/imageValidation";
+import { sanitizeSvg } from "../utils/svgSanitize";
 
 async function extractVideoThumbnail(buffer: Buffer, fileId: string): Promise<Buffer | null> {
   const inputPath = join(tmpdir(), `gryt-vid-${fileId}`);
@@ -46,13 +47,28 @@ async function extractVideoThumbnail(buffer: Buffer, fileId: string): Promise<Bu
  * Types a browser may render straight from this endpoint.
  *
  * Everything else is sent as a download. The list is raster images, video and
- * audio — formats a browser decodes as media and cannot execute. Notably not
- * SVG, which is a document that can carry script and would run on this origin.
+ * audio — formats a browser decodes as media and cannot execute.
+ *
+ * SVG is on the list now, and it is the one entry that needs justifying, since
+ * an SVG is a document rather than a picture. Three things have to hold, and do:
+ *
+ *   1. Everything stored as image/svg+xml has been through sanitizeSvg() —
+ *      script, event handlers, foreignObject and external references are gone
+ *      before it is written. An SVG that predates that, or arrives another way,
+ *      is not covered by this reasoning.
+ *   2. The client only ever draws these through <img>, where a browser does not
+ *      run script or fetch subresources. There is no dangerouslySetInnerHTML in
+ *      the client, so none of them is inlined into the DOM.
+ *   3. Opened directly as a document, the CSP two lines below applies: a sandbox
+ *      with no tokens blocks scripts. That header is what makes this safe rather
+ *      than merely usually-safe, so it is not optional.
+ *
+ * Serving it as a download instead would be safer still and would also stop
+ * avatars rendering, since an attachment cannot be an <img> source.
  */
 function isInlineSafe(contentType: string | undefined): boolean {
   if (!contentType) return false;
   const type = contentType.split(";")[0].trim().toLowerCase();
-  if (type === "image/svg+xml") return false;
   return (
     type.startsWith("image/") ||
     type.startsWith("video/") ||
@@ -100,7 +116,24 @@ uploadsRouter.post(
         const maxBytes = (typeof cfg?.upload_max_bytes === "number" ? cfg.upload_max_bytes : DEFAULT_UPLOAD_MAX_BYTES);
         const hasLimit = typeof maxBytes === "number" && maxBytes > 0;
 
-        if (!isImage && hasLimit && file.size > maxBytes) {
+        // Applies to everything, images included.
+        //
+        // Images used to be exempt, on the assumption that the image worker
+        // would shrink them afterwards. That was never a size limit, for two
+        // reasons: the worker only runs after the original has been written, so
+        // the full-size file lands on the host's disk regardless; and a server
+        // hosted from the desktop app had no worker at all until GRYT-68, so
+        // nothing ever shrank anything. Whoever hosted for their friends had an
+        // uncapped write channel into their own storage and no way to see it.
+        //
+        // The cost is that a photo above the limit is now refused rather than
+        // accepted and quietly resized. That is the honest behaviour: the limit
+        // is what the server says it is, and it says so before taking the file.
+        //
+        // Note the separate ceiling on multer above, which is a fixed backstop
+        // rather than this per-server setting. Configuring a limit above that
+        // will not lift it.
+        if (hasLimit && file.size > maxBytes) {
           res.status(413).json({
             error: "file_too_large",
             message: `File too large. Max ${(maxBytes / (1024 * 1024)).toFixed(1)}MB.`,
@@ -113,6 +146,37 @@ uploadsRouter.post(
         let thumbKey: string | null = null;
         let width: number | null = null;
         let height: number | null = null;
+
+        // SVG is accepted here as the vector, sanitised, and deliberately never
+        // queued as an image job below — the worker would hand it to sharp, and
+        // sharp renders SVG through librsvg. Storing the vector is what keeps a
+        // memory-unsafe parser away from a stranger's bytes.
+        if (fileMime === "image/svg+xml") {
+          const svg = sanitizeSvg(file.buffer);
+          if (!svg.valid) {
+            res.status(400).json({ error: "invalid_file", message: svg.reason });
+            return;
+          }
+
+          const body = Buffer.from(svg.svg, "utf8");
+          const svgKey = `uploads/${fileId}.svg`;
+          await putObject({ bucket, key: svgKey, body, contentType: "image/svg+xml" });
+
+          await insertFile({
+            file_id: fileId,
+            s3_key: svgKey,
+            mime: "image/svg+xml",
+            size: body.length,
+            width: svg.width,
+            height: svg.height,
+            thumbnail_key: null,
+            original_name: file.originalname || null,
+            created_at: new Date(),
+          });
+
+          res.status(201).json({ fileId, key: svgKey, thumbnailKey: null });
+          return;
+        }
 
         if (isImage) {
           // Anything claiming to be an image has to actually decode as one of
@@ -207,7 +271,10 @@ uploadsRouter.post(
         const cfg = await getServerConfig().catch(() => null);
         const maxBytes = (typeof cfg?.avatar_max_bytes === "number" ? cfg.avatar_max_bytes : DEFAULT_AVATAR_MAX_BYTES);
 
-        if (!isAnimated && typeof maxBytes === "number" && maxBytes > 0 && file.size > maxBytes) {
+        // Animated files used to be exempt here, and were accepted oversized on
+        // the understanding that the resize below would bring them down. The
+        // limit is the limit: a file over it is refused, whatever is in it.
+        if (typeof maxBytes === "number" && maxBytes > 0 && file.size > maxBytes) {
           res.status(413).json({
             error: "file_too_large",
             message: `Avatar too large. Max ${(maxBytes / (1024 * 1024)).toFixed(1)}MB.`,
@@ -224,6 +291,40 @@ uploadsRouter.post(
         let thumbKey: string | null = null;
         let processing = false;
 
+        // SVG takes its own path and never reaches sharp. It is stored as the
+        // vector it is — one small file that stays sharp at whatever size the
+        // UI asks for, where a raster needs a set of them — and sanitised on
+        // the way in. See svgSanitize.ts for why that is enough.
+        if ((file.mimetype || "").toLowerCase() === "image/svg+xml") {
+          const svg = sanitizeSvg(file.buffer);
+          if (!svg.valid) {
+            res.status(400).json({ error: "invalid_file", message: svg.reason });
+            return;
+          }
+
+          const body = Buffer.from(svg.svg, "utf8");
+          key = `avatars/${fileId}.svg`;
+          await putObject({ bucket, key, body, contentType: "image/svg+xml" });
+
+          // No thumbnail. A thumbnail exists to avoid sending a large raster
+          // where a small one will do, and a vector is already the small one.
+          // Consumers that ask for a thumb fall back to the file itself.
+          await insertFile({
+            file_id: fileId,
+            s3_key: key,
+            mime: "image/svg+xml",
+            size: body.length,
+            width: svg.width,
+            height: svg.height,
+            thumbnail_key: null,
+            original_name: file.originalname || null,
+          });
+
+          await setUserAvatar(serverUserId, fileId);
+          res.json({ fileId, processing: false });
+          return;
+        }
+
         const validation = await validateImage(file.buffer, { animated: isAnimated });
         if (!validation.valid) {
           res.status(400).json({ error: "invalid_file", message: validation.reason });
@@ -232,9 +333,13 @@ uploadsRouter.post(
         width = validation.width;
         height = validation.height;
 
-        // Dimensions matter here as much as bytes. This used to test file.size
-        // alone, so a modestly-sized animated avatar with large dimensions was
-        // stored exactly as uploaded and served at full size to every viewer.
+        // Dimensions, not bytes. Anything over the byte limit was refused above,
+        // so what is left to catch here is the modestly-sized animated avatar
+        // with large dimensions, which would otherwise be stored exactly as
+        // uploaded and served at full size to every viewer (GRYT-66).
+        //
+        // The byte comparison stays as a guard rather than a decision: it is
+        // redundant only for as long as the check above sits before this one.
         const withinBounds =
           file.size <= maxBytes &&
           (width ?? 0) <= AVATAR_MAX_PX &&
