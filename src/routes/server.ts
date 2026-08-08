@@ -157,15 +157,30 @@ serverRouter.post(
         return;
       }
 
+      // AVIF cannot hold more than one frame. sharp represents an animated
+      // image as its frames stacked into one tall strip, so encoding an
+      // animated input to AVIF writes the whole strip out as a single still —
+      // a 95-frame GIF became a 256x9728 image that the UI then squashed into
+      // the icon slot, showing every frame at once. Long enough animations
+      // failed outright with "heifsave: image too large".
+      //
+      // WebP holds animation, so animated input goes there instead. This is the
+      // same branch emojiProcessing.ts already makes; the icon route was the
+      // only place that read every frame and then chose a format that cannot
+      // store them.
+      const outMime = isAnimated ? "image/webp" : "image/avif";
+      const outExt = isAnimated ? "webp" : "avif";
+
       let out: Buffer;
       try {
-        out = await sharp(file.buffer, {
+        const pipeline = sharp(file.buffer, {
           animated: isAnimated,
           failOn: "error",
-        })
-          .resize(256, 256, { fit: "cover" })
-          .avif()
-          .toBuffer();
+        }).resize(256, 256, { fit: "cover" });
+
+        out = isAnimated
+          ? await pipeline.webp().toBuffer()
+          : await pipeline.avif().toBuffer();
       } catch {
         res.status(400).json({
           error: "invalid_file",
@@ -175,9 +190,9 @@ serverRouter.post(
         return;
       }
 
-      const key = `server-icons/${safeHost}/${uuidv4()}.avif`;
+      const key = `server-icons/${safeHost}/${uuidv4()}.${outExt}`;
       try {
-        await putObject({ bucket, key, body: out, contentType: "image/avif" });
+        await putObject({ bucket, key, body: out, contentType: outMime });
       } catch (e) {
         const raw = e instanceof Error ? e.message : "";
         consola.error("icon upload s3 error", { bucket, key, message: raw });
