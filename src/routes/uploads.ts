@@ -116,7 +116,24 @@ uploadsRouter.post(
         const maxBytes = (typeof cfg?.upload_max_bytes === "number" ? cfg.upload_max_bytes : DEFAULT_UPLOAD_MAX_BYTES);
         const hasLimit = typeof maxBytes === "number" && maxBytes > 0;
 
-        if (!isImage && hasLimit && file.size > maxBytes) {
+        // Applies to everything, images included.
+        //
+        // Images used to be exempt, on the assumption that the image worker
+        // would shrink them afterwards. That was never a size limit, for two
+        // reasons: the worker only runs after the original has been written, so
+        // the full-size file lands on the host's disk regardless; and a server
+        // hosted from the desktop app had no worker at all until GRYT-68, so
+        // nothing ever shrank anything. Whoever hosted for their friends had an
+        // uncapped write channel into their own storage and no way to see it.
+        //
+        // The cost is that a photo above the limit is now refused rather than
+        // accepted and quietly resized. That is the honest behaviour: the limit
+        // is what the server says it is, and it says so before taking the file.
+        //
+        // Note the separate ceiling on multer above, which is a fixed backstop
+        // rather than this per-server setting. Configuring a limit above that
+        // will not lift it.
+        if (hasLimit && file.size > maxBytes) {
           res.status(413).json({
             error: "file_too_large",
             message: `File too large. Max ${(maxBytes / (1024 * 1024)).toFixed(1)}MB.`,
