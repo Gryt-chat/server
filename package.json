@@ -3,6 +3,9 @@
   "version": "1.0.76",
   "main": "dist/index.js",
   "license": "AGPL-3.0-or-later",
+  "engines": {
+    "node": ">=22.13"
+  },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.994.0",
     "@aws-sdk/s3-request-presigner": "^3.994.0",
