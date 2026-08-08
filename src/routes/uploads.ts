@@ -15,6 +15,7 @@ import { insertFile, insertImageJob, getFile, updateFileRecord, updateUserAvatar
 import { requireBearerToken } from "../middleware/requireBearerToken";
 import { AVATAR_MAX_PX, AVATAR_THUMB_PX } from "../constants/media";
 import { findDominantColor, validateImage } from "../utils/imageValidation";
+import { sanitizeSvg } from "../utils/svgSanitize";
 
 async function extractVideoThumbnail(buffer: Buffer, fileId: string): Promise<Buffer | null> {
   const inputPath = join(tmpdir(), `gryt-vid-${fileId}`);
@@ -46,13 +47,28 @@ async function extractVideoThumbnail(buffer: Buffer, fileId: string): Promise<Bu
  * Types a browser may render straight from this endpoint.
  *
  * Everything else is sent as a download. The list is raster images, video and
- * audio — formats a browser decodes as media and cannot execute. Notably not
- * SVG, which is a document that can carry script and would run on this origin.
+ * audio — formats a browser decodes as media and cannot execute.
+ *
+ * SVG is on the list now, and it is the one entry that needs justifying, since
+ * an SVG is a document rather than a picture. Three things have to hold, and do:
+ *
+ *   1. Everything stored as image/svg+xml has been through sanitizeSvg() —
+ *      script, event handlers, foreignObject and external references are gone
+ *      before it is written. An SVG that predates that, or arrives another way,
+ *      is not covered by this reasoning.
+ *   2. The client only ever draws these through <img>, where a browser does not
+ *      run script or fetch subresources. There is no dangerouslySetInnerHTML in
+ *      the client, so none of them is inlined into the DOM.
+ *   3. Opened directly as a document, the CSP two lines below applies: a sandbox
+ *      with no tokens blocks scripts. That header is what makes this safe rather
+ *      than merely usually-safe, so it is not optional.
+ *
+ * Serving it as a download instead would be safer still and would also stop
+ * avatars rendering, since an attachment cannot be an <img> source.
  */
 function isInlineSafe(contentType: string | undefined): boolean {
   if (!contentType) return false;
   const type = contentType.split(";")[0].trim().toLowerCase();
-  if (type === "image/svg+xml") return false;
   return (
     type.startsWith("image/") ||
     type.startsWith("video/") ||
@@ -223,6 +239,40 @@ uploadsRouter.post(
         let height: number | null = null;
         let thumbKey: string | null = null;
         let processing = false;
+
+        // SVG takes its own path and never reaches sharp. It is stored as the
+        // vector it is — one small file that stays sharp at whatever size the
+        // UI asks for, where a raster needs a set of them — and sanitised on
+        // the way in. See svgSanitize.ts for why that is enough.
+        if ((file.mimetype || "").toLowerCase() === "image/svg+xml") {
+          const svg = sanitizeSvg(file.buffer);
+          if (!svg.valid) {
+            res.status(400).json({ error: "invalid_file", message: svg.reason });
+            return;
+          }
+
+          const body = Buffer.from(svg.svg, "utf8");
+          key = `avatars/${fileId}.svg`;
+          await putObject({ bucket, key, body, contentType: "image/svg+xml" });
+
+          // No thumbnail. A thumbnail exists to avoid sending a large raster
+          // where a small one will do, and a vector is already the small one.
+          // Consumers that ask for a thumb fall back to the file itself.
+          await insertFile({
+            file_id: fileId,
+            s3_key: key,
+            mime: "image/svg+xml",
+            size: body.length,
+            width: svg.width,
+            height: svg.height,
+            thumbnail_key: null,
+            original_name: file.originalname || null,
+          });
+
+          await setUserAvatar(serverUserId, fileId);
+          res.json({ fileId, processing: false });
+          return;
+        }
 
         const validation = await validateImage(file.buffer, { animated: isAnimated });
         if (!validation.valid) {

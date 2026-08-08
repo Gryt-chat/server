@@ -14,6 +14,7 @@ import {
 } from "../db";
 import { broadcastServerUiUpdate } from "../socket";
 import { validateImage } from "../utils/imageValidation";
+import { sanitizeSvg } from "../utils/svgSanitize";
 import { verifyAccessToken } from "../utils/jwt";
 
 const iconMaxMbRaw = (
@@ -32,6 +33,7 @@ const allowedIconMimes = new Set<string>([
   "image/webp",
   "image/gif",
   "image/avif",
+  "image/svg+xml",
 ]);
 
 const upload = multer({
@@ -142,6 +144,48 @@ serverRouter.post(
       }
 
       const iconMime = (file.mimetype || "").toLowerCase();
+
+      // SVG is stored as the vector it is rather than rendered to a raster.
+      // An icon is drawn at a handful of sizes and a vector is correct at all
+      // of them, in one file of a couple of kilobytes. It never reaches sharp,
+      // so librsvg never parses a stranger's bytes — see utils/svgSanitize.ts.
+      if (iconMime === "image/svg+xml") {
+        const svg = sanitizeSvg(file.buffer);
+        if (!svg.valid) {
+          res.status(400).json({ error: "invalid_file", message: svg.reason });
+          return;
+        }
+
+        const body = Buffer.from(svg.svg, "utf8");
+        const svgKey = `server-icons/${safeHost}/${uuidv4()}.svg`;
+        try {
+          await putObject({ bucket, key: svgKey, body, contentType: "image/svg+xml" });
+        } catch (e) {
+          const raw = e instanceof Error ? e.message : "";
+          consola.error("icon upload s3 error", { bucket, key: svgKey, message: raw });
+          res.status(502).json({ error: "s3_error", message: "Icon upload failed due to a storage error." });
+          return;
+        }
+
+        const updatedSvg = await updateServerConfig({
+          iconUrl: svgKey,
+          isConfigured: true,
+        });
+
+        insertServerAudit({
+          actorServerUserId: decoded.serverUserId,
+          action: "icon_update",
+          target: svgKey,
+        }).catch((e) => consola.warn("audit log write failed", e));
+
+        res.status(201).json({
+          ok: true,
+          iconKey: svgKey,
+          iconUrl: updatedSvg.icon_url,
+        });
+        return;
+      }
+
       const isAnimated =
         iconMime === "image/gif" ||
         iconMime === "image/webp" ||
