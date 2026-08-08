@@ -306,7 +306,7 @@ app.get("/info", async (_req, res) => {
 // Streams through the API instead of redirecting to presigned URLs, because in
 // dev/self-hosted setups the S3 endpoint is often an internal address (e.g.
 // http://minio:9000 or 127.0.0.1:9000) that browsers cannot reach.
-app.get("/icon", async (_req, res) => {
+app.get("/icon", async (req, res) => {
   try {
     const cfg = await getServerConfig();
     const iconKey = cfg?.icon_url;
@@ -329,7 +329,20 @@ app.get("/icon", async (_req, res) => {
       return;
     }
 
-    res.setHeader("Cache-Control", "public, max-age=60");
+    // Revalidate rather than cache blind. This used to be max-age=60, which
+    // meant clearing an icon left every client showing the old one for up to a
+    // minute — a reload does not bypass a fresh cache entry, so it looked like
+    // the server was still serving it. The key is a fresh uuid per upload, so
+    // it doubles as an ETag: unchanged icons still cost one 304 rather than a
+    // transfer, and a cleared one is noticed immediately.
+    const etag = `"${iconKey}"`;
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("ETag", etag);
+    if (req.headers["if-none-match"] === etag) {
+      res.status(304).end();
+      return;
+    }
+
     if (obj.ContentType) res.setHeader("Content-Type", obj.ContentType);
     body.pipe(res);
   } catch {
