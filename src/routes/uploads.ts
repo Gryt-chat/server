@@ -271,7 +271,10 @@ uploadsRouter.post(
         const cfg = await getServerConfig().catch(() => null);
         const maxBytes = (typeof cfg?.avatar_max_bytes === "number" ? cfg.avatar_max_bytes : DEFAULT_AVATAR_MAX_BYTES);
 
-        if (!isAnimated && typeof maxBytes === "number" && maxBytes > 0 && file.size > maxBytes) {
+        // Animated files used to be exempt here, and were accepted oversized on
+        // the understanding that the resize below would bring them down. The
+        // limit is the limit: a file over it is refused, whatever is in it.
+        if (typeof maxBytes === "number" && maxBytes > 0 && file.size > maxBytes) {
           res.status(413).json({
             error: "file_too_large",
             message: `Avatar too large. Max ${(maxBytes / (1024 * 1024)).toFixed(1)}MB.`,
@@ -330,9 +333,13 @@ uploadsRouter.post(
         width = validation.width;
         height = validation.height;
 
-        // Dimensions matter here as much as bytes. This used to test file.size
-        // alone, so a modestly-sized animated avatar with large dimensions was
-        // stored exactly as uploaded and served at full size to every viewer.
+        // Dimensions, not bytes. Anything over the byte limit was refused above,
+        // so what is left to catch here is the modestly-sized animated avatar
+        // with large dimensions, which would otherwise be stored exactly as
+        // uploaded and served at full size to every viewer (GRYT-66).
+        //
+        // The byte comparison stays as a guard rather than a decision: it is
+        // redundant only for as long as the check above sits before this one.
         const withinBounds =
           file.size <= maxBytes &&
           (width ?? 0) <= AVATAR_MAX_PX &&
