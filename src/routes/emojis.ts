@@ -28,11 +28,13 @@ import {
 } from "./emojiShared";
 import { registerStagingRoutes } from "./emojiStaging";
 import { registerBttvRoutes } from "./emojiBttvImport";
+import { registerEmojiGgRoutes } from "./emojiEmojiGgImport";
 
 export const emojisRouter = express.Router();
 
 registerStagingRoutes(emojisRouter);
 registerBttvRoutes(emojisRouter);
+registerEmojiGgRoutes(emojisRouter);
 
 emojisRouter.get(
   "/",
