@@ -14,9 +14,17 @@ interface ComponentVersionInfo {
 	channel: "stable" | "beta";
 }
 
+type ReportedComponent = Omit<ComponentVersionInfo, "current"> & { current: string | null };
+
 export interface VersionStatus {
 	server: ComponentVersionInfo;
-	sfu: (Omit<ComponentVersionInfo, "current"> & { current: string | null }) | null;
+	sfu: ReportedComponent | null;
+	/**
+	 * Null when there is no worker to ask — either none is configured, or the
+	 * one configured did not answer. Both mean "cannot say", which is different
+	 * from a worker that answered and is out of date.
+	 */
+	worker: ReportedComponent | null;
 }
 
 interface CacheEntry {
@@ -26,7 +34,11 @@ interface CacheEntry {
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const GH_API = "https://api.github.com/repos";
-const REPOS = { server: "Gryt-chat/server", sfu: "Gryt-chat/sfu" } as const;
+const REPOS = {
+	server: "Gryt-chat/server",
+	sfu: "Gryt-chat/sfu",
+	worker: "Gryt-chat/image-worker",
+} as const;
 
 const releaseCache = new Map<string, CacheEntry>();
 
@@ -105,10 +117,56 @@ async function fetchSfuCurrentVersion(): Promise<string | null> {
 	}
 }
 
+/**
+ * Ask the image worker what it is.
+ *
+ * The worker is a separate process — its own container under Docker, a forked
+ * process under the desktop app — so the server cannot know its version at
+ * build time and has to ask. Same shape as the SFU check above it.
+ *
+ * IMAGE_WORKER_URL is how it is found. Unset means no answer rather than an
+ * error: plenty of deployments have no worker, and a server that shouted about
+ * it would be wrong more often than right.
+ */
+async function fetchWorkerCurrentVersion(): Promise<string | null> {
+	const url = process.env.IMAGE_WORKER_URL;
+	if (!url) return null;
+
+	try {
+		const res = await fetch(`${url.replace(/\/$/, "")}/version`, {
+			signal: AbortSignal.timeout(5_000),
+		});
+		if (!res.ok) return null;
+		const data = await res.json();
+		const version = (data as { version?: unknown }).version;
+		// A worker older than /version answers health here, which has no version
+		// field — so this reads as "cannot say" rather than as a wrong number.
+		return typeof version === "string" && version !== "unknown" ? version : null;
+	} catch {
+		return null;
+	}
+}
+
+/** Shared by the SFU and the worker: both are asked, and both may not answer. */
+function buildReportedComponent(
+	current: string | null,
+	versions: { stable: string; beta: string | null },
+): ReportedComponent {
+	if (current) return { ...buildComponentInfo(current, versions), current };
+	return {
+		current: null,
+		latest: versions.stable,
+		latestStable: versions.stable,
+		latestBeta: versions.beta,
+		updateAvailable: false,
+		channel: "stable",
+	};
+}
+
 export async function getVersionStatus(): Promise<VersionStatus> {
 	const serverVersion = process.env.SERVER_VERSION || "0.0.0";
 
-	const [serverVersions, sfuVersions, sfuCurrent] = await Promise.all([
+	const [serverVersions, sfuVersions, sfuCurrent, workerCurrent] = await Promise.all([
 		fetchLatestVersions(REPOS.server).catch((err) => {
 			consola.warn("Version check: failed to fetch server releases", err.message);
 			return { stable: "0.0.0", beta: null };
@@ -120,26 +178,23 @@ export async function getVersionStatus(): Promise<VersionStatus> {
 			})
 			: null,
 		fetchSfuCurrentVersion(),
+		fetchWorkerCurrentVersion(),
 	]);
 
 	const server = buildComponentInfo(serverVersion, serverVersions);
 
-	let sfu: VersionStatus["sfu"] = null;
-	if (sfuVersions) {
-		if (sfuCurrent) {
-			const info = buildComponentInfo(sfuCurrent, sfuVersions);
-			sfu = { ...info, current: sfuCurrent };
-		} else {
-			sfu = {
-				current: null,
-				latest: sfuVersions.stable,
-				latestStable: sfuVersions.stable,
-				latestBeta: sfuVersions.beta,
-				updateAvailable: false,
-				channel: "stable",
-			};
-		}
+	const sfu = sfuVersions ? buildReportedComponent(sfuCurrent, sfuVersions) : null;
+
+	// Only asked about when there is a worker answering. A release list for a
+	// component nobody is running is noise.
+	let worker: VersionStatus["worker"] = null;
+	if (workerCurrent) {
+		const workerVersions = await fetchLatestVersions(REPOS.worker).catch((err) => {
+			consola.warn("Version check: failed to fetch image worker releases", err.message);
+			return { stable: "0.0.0", beta: null };
+		});
+		worker = buildReportedComponent(workerCurrent, workerVersions);
 	}
 
-	return { server, sfu };
+	return { server, sfu, worker };
 }
