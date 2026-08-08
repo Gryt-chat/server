@@ -53,6 +53,35 @@ export interface VerifiedCertificate {
   issuer: string;
 }
 
+/**
+ * Which half of the exchange failed.
+ *
+ * Sent to the client so it can decide whether to repair itself. Nothing here
+ * tells a caller anything they could not already work out: they supplied both
+ * the certificate and the assertion, so they can tell which one is bad by
+ * changing one and trying again. What it does buy is a client that renews a
+ * stale certificate on its own instead of showing "please sign in again" to
+ * someone for whom signing in again cannot help — see GRYT-78.
+ *
+ * The reason stays coarse on purpose. The exact message goes to the server log,
+ * where it is useful, and not over the wire, where it only invites reading the
+ * verifier's internals.
+ */
+export type IdentityFailureReason =
+  | "certificate_rejected"
+  | "assertion_rejected"
+  | "nonce_mismatch";
+
+export class IdentityVerificationError extends Error {
+  readonly reason: IdentityFailureReason;
+
+  constructor(reason: IdentityFailureReason, message: string) {
+    super(message);
+    this.name = "IdentityVerificationError";
+    this.reason = reason;
+  }
+}
+
 export async function verifyCertificate(
   certJwt: string
 ): Promise<VerifiedCertificate> {
@@ -94,7 +123,8 @@ export async function verifyCertificate(
     }
   }
 
-  throw new Error(
+  throw new IdentityVerificationError(
+    "certificate_rejected",
     `Certificate verification failed for all trusted issuers: ${errors.join(
       " | "
     )}`
@@ -111,9 +141,21 @@ export async function verifyAssertion(
 ): Promise<{ sub: string }> {
   const publicKey = await importJWK(expectedJwk, "ES256");
 
-  const { payload } = await jwtVerify(assertionJwt, publicKey, {
-    audience: expectedAud,
-  });
+  let payload: JWTPayload;
+  try {
+    // The key comes from the certificate, so a failure here is usually the
+    // client signing with a key the certificate no longer describes — the two
+    // are stored separately on the client and can drift apart. Naming that is
+    // what lets the client renew instead of asking the user to sign in again.
+    ({ payload } = await jwtVerify(assertionJwt, publicKey, {
+      audience: expectedAud,
+    }));
+  } catch (err) {
+    throw new IdentityVerificationError(
+      "assertion_rejected",
+      err instanceof Error ? err.message : String(err)
+    );
+  }
 
   const sub =
     typeof payload.sub === "string"
@@ -123,12 +165,20 @@ export async function verifyAssertion(
       : null;
 
   if (!sub) {
-    throw new Error("Assertion missing sub/iss claim");
+    throw new IdentityVerificationError(
+      "assertion_rejected",
+      "Assertion missing sub/iss claim"
+    );
   }
 
   const nonce = (payload as JWTPayload & { nonce?: string }).nonce;
   if (nonce !== expectedNonce) {
-    throw new Error("Assertion nonce mismatch");
+    // Its own reason: a stale nonce means the challenge was reused or raced,
+    // and retrying the join fixes it. Renewing the certificate would not.
+    throw new IdentityVerificationError(
+      "nonce_mismatch",
+      "Assertion nonce mismatch"
+    );
   }
 
   return { sub };

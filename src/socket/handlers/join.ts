@@ -3,7 +3,7 @@ import type { HandlerContext, EventHandlerMap } from "./types";
 import { syncAllClients, broadcastMemberList, countOtherSessions, verifyClient } from "../utils/clients";
 import { sendServerDetails } from "../utils/server";
 import { postSystemMessage, formatJoinMessage } from "../utils/systemMessages";
-import { createChallenge, consumeChallenge, verifyCertificate, verifyAssertion } from "../../auth/identity";
+import { createChallenge, consumeChallenge, verifyCertificate, verifyAssertion, IdentityVerificationError } from "../../auth/identity";
 import { generateAccessToken, TokenPayload } from "../../utils/jwt";
 import {
   getServerConfig,
@@ -148,9 +148,22 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
           consola.warn(`Identity verification failed for ${clientId}:`, message);
+
+          // The detail stays in the log. What goes to the client is which half
+          // failed, which is enough for it to act: a rejected assertion usually
+          // means its certificate and signing key have drifted apart, and it can
+          // renew and retry without troubling anyone. Telling it only
+          // "sign in again" sent people to do the one thing that cannot help.
+          const reason =
+            e instanceof IdentityVerificationError ? e.reason : "unknown";
+
           socket.emit("server:error", {
             error: "identity_verification_failed",
-            message: "Identity verification failed. Please sign in again.",
+            reason,
+            message:
+              reason === "nonce_mismatch"
+                ? "This join attempt expired before it completed. Try again."
+                : "The server could not verify your identity.",
             canReapply: true,
           });
           return;
