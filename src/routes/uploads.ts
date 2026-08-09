@@ -7,21 +7,26 @@ import { v4 as uuidv4 } from "uuid";
 import mime from "mime-types";
 import sharp from "sharp";
 import { execFile } from "child_process";
-import { writeFile, unlink, readFile } from "fs/promises";
+import { unlink, readFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { deleteObject, putObject, getObject } from "../storage";
 import { insertFile, insertImageJob, getFile, updateFileRecord, updateUserAvatar, setUserAvatar, getServerConfig, DEFAULT_AVATAR_MAX_BYTES, DEFAULT_UPLOAD_MAX_BYTES } from "../db";
 import { requireBearerToken } from "../middleware/requireBearerToken";
 import { AVATAR_MAX_PX, AVATAR_THUMB_PX } from "../constants/media";
-import { findDominantColor, validateImage } from "../utils/imageValidation";
+import { findDominantColor, validateImage, MAX_INPUT_PIXELS } from "../utils/imageValidation";
 import { sanitizeSvg } from "../utils/svgSanitize";
 
-async function extractVideoThumbnail(buffer: Buffer, fileId: string): Promise<Buffer | null> {
-  const inputPath = join(tmpdir(), `gryt-vid-${fileId}`);
+/**
+ * Takes the path multer already wrote, rather than a buffer.
+ *
+ * It used to write the buffer back out to a temp file so ffmpeg had something
+ * to open. With the upload on disk from the start that round trip is gone, and
+ * with it the only reason a video had to fit in memory.
+ */
+async function extractVideoThumbnail(inputPath: string, fileId: string): Promise<Buffer | null> {
   const outputPath = join(tmpdir(), `gryt-thumb-${fileId}.jpg`);
   try {
-    await writeFile(inputPath, buffer);
     await new Promise<void>((resolve, reject) => {
       execFile("ffmpeg", [
         "-i", inputPath,
@@ -38,7 +43,7 @@ async function extractVideoThumbnail(buffer: Buffer, fileId: string): Promise<Bu
   } catch {
     return null;
   } finally {
-    await unlink(inputPath).catch((e) => consola.warn("temp file cleanup failed", e));
+    // Only the output. The input belongs to the caller, which cleans it up.
     await unlink(outputPath).catch((e) => consola.warn("temp file cleanup failed", e));
   }
 }
@@ -76,8 +81,57 @@ function isInlineSafe(contentType: string | undefined): boolean {
   );
 }
 
-// Absolute cap; server-configured limits apply per request.
+// Avatars and emoji stay in memory. Both are re-encoded through sharp
+// immediately and both carry their own small ceilings, so a temp file would be
+// written and deleted for no benefit.
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 200 * 1024 * 1024 } });
+
+/**
+ * An image has to be decoded to be validated, and decoding means holding it.
+ * Generic files and videos have no such requirement and are not subject to
+ * this — it is a validation ceiling, not an upload one. 64 MB is far past any
+ * real photograph and far below anything that threatens the process.
+ */
+const IMAGE_VALIDATION_MAX_BYTES = 64 * 1024 * 1024;
+
+/**
+ * multer for the general upload route, writing to disk and enforcing the
+ * server's own configured limit.
+ *
+ * There used to be two independent ceilings — a fixed 200 MB here and whatever
+ * the server was configured for — and the lower one silently won. An operator
+ * who set 500 MB got 200, with nothing saying so. Now there is one number, it
+ * is the operator's, and multer refuses the request as it streams rather than
+ * after a large file has already landed on disk.
+ *
+ * Zero means unlimited, which is what makes the unlimited branch in the
+ * enforcement code below reachable for the first time.
+ */
+function uploadToDisk(field: string) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    Promise.resolve()
+      .then(async () => {
+        const cfg = await getServerConfig().catch(() => null);
+        const maxBytes = typeof cfg?.upload_max_bytes === "number" ? cfg.upload_max_bytes : DEFAULT_UPLOAD_MAX_BYTES;
+        const limits = typeof maxBytes === "number" && maxBytes > 0 ? { fileSize: maxBytes } : undefined;
+        multer({ storage: multer.diskStorage({}), limits }).single(field)(req, res, next);
+      })
+      .catch(next);
+  };
+}
+
+/**
+ * Deletes the temp file multer wrote, on every exit path including the ones
+ * that threw. Without this an upload that fails validation leaves its bytes on
+ * the host's disk, which is the failure mode that turns a disk-backed upload
+ * route into a disk-filling one.
+ */
+async function discardTemp(file: Express.Multer.File | undefined): Promise<void> {
+  if (!file?.path) return;
+  await unlink(file.path).catch((e: NodeJS.ErrnoException) => {
+    if (e.code !== "ENOENT") consola.warn("upload temp cleanup failed", file.path, e);
+  });
+}
 
 export const uploadsRouter = express.Router();
 
@@ -92,7 +146,7 @@ function parseDimField(val: unknown): number | null {
 uploadsRouter.post(
   "/",
   requireBearerToken,
-  upload.single("file"),
+  uploadToDisk("file"),
   (req: Request, res: Response, next: NextFunction): void => {
     const file = req.file;
     if (!file) {
@@ -130,9 +184,10 @@ uploadsRouter.post(
         // accepted and quietly resized. That is the honest behaviour: the limit
         // is what the server says it is, and it says so before taking the file.
         //
-        // Note the separate ceiling on multer above, which is a fixed backstop
-        // rather than this per-server setting. Configuring a limit above that
-        // will not lift it.
+        // Belt and braces. multer already refused anything over the limit as
+        // it streamed, so reaching this with an oversized file means the
+        // setting changed between the two reads. Cheap to keep, and it is the
+        // only check if that ever stops being true.
         if (hasLimit && file.size > maxBytes) {
           res.status(413).json({
             error: "file_too_large",
@@ -152,7 +207,7 @@ uploadsRouter.post(
         // sharp renders SVG through librsvg. Storing the vector is what keeps a
         // memory-unsafe parser away from a stranger's bytes.
         if (fileMime === "image/svg+xml") {
-          const svg = sanitizeSvg(file.buffer);
+          const svg = sanitizeSvg(await readFile(file.path));
           if (!svg.valid) {
             res.status(400).json({ error: "invalid_file", message: svg.reason });
             return;
@@ -183,7 +238,21 @@ uploadsRouter.post(
           // the raster formats we allow. This route previously took the mime
           // straight from the request and stored the bytes untouched, so an
           // SVG carrying <script> was kept verbatim and served back inline.
-          const validation = await validateImage(file.buffer, { animated: true });
+          //
+          // Validating means decoding, and decoding means holding it, so this
+          // is the one path that still reads the whole file. Refusing an
+          // absurd "image" is better than handing it to sharp: a file this
+          // size claiming to be a PNG is not a photograph.
+          if (file.size > IMAGE_VALIDATION_MAX_BYTES) {
+            res.status(413).json({
+              error: "file_too_large",
+              message: `Images are capped at ${(IMAGE_VALIDATION_MAX_BYTES / (1024 * 1024)).toFixed(0)}MB so they can be checked before they are stored.`,
+            });
+            return;
+          }
+
+          const imageBytes = await readFile(file.path);
+          const validation = await validateImage(imageBytes, { animated: true });
           if (!validation.valid) {
             res.status(400).json({ error: "invalid_file", message: validation.reason });
             return;
@@ -194,7 +263,7 @@ uploadsRouter.post(
 
           if (!width || !height) {
             try {
-              const dims = imageSize(file.buffer);
+              const dims = imageSize(imageBytes);
               if (dims.width && dims.height) {
                 width = dims.width;
                 height = dims.height;
@@ -205,10 +274,12 @@ uploadsRouter.post(
           }
         }
 
-        await putObject({ bucket, key, body: file.buffer, contentType: storedMime });
+        // The whole point of the exercise: the bytes go from multer's temp file
+        // to storage without the process ever holding them.
+        await putObject({ bucket, key, sourcePath: file.path, contentType: storedMime });
 
         if (isVideo) {
-          const thumb = await extractVideoThumbnail(file.buffer, fileId);
+          const thumb = await extractVideoThumbnail(file.path, fileId);
           if (thumb) {
             thumbKey = `thumbnails/${fileId}.jpg`;
             await putObject({ bucket, key: thumbKey, body: thumb, contentType: "image/jpeg" }).catch(() => { thumbKey = null; });
@@ -240,6 +311,10 @@ uploadsRouter.post(
 
         res.status(201).json({ fileId, key, thumbnailKey: thumbKey });
       })
+      // Every exit path, including the early returns for a bad SVG, an oversized
+      // image, and anything that threw. multer's temp file is ours from the
+      // moment it exists and nothing else will remove it.
+      .finally(() => discardTemp(file))
       .catch(next);
   },
 );
@@ -351,7 +426,7 @@ uploadsRouter.post(
           storedMime = inputMime;
           storedSize = file.size;
 
-          const thumb = await sharp(file.buffer, { pages: 1, failOn: "error" })
+          const thumb = await sharp(file.buffer, { pages: 1, failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
             .resize({ width: AVATAR_THUMB_PX, height: AVATAR_THUMB_PX, fit: "cover" })
             .avif({ quality: 50 })
             .toBuffer()
@@ -368,7 +443,7 @@ uploadsRouter.post(
           key = `avatars/${fileId}.avif`;
           processing = true;
           try {
-            storedBody = await sharp(file.buffer, { pages: 1, failOn: "error" })
+            storedBody = await sharp(file.buffer, { pages: 1, failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
               .resize({ width: AVATAR_MAX_PX, height: AVATAR_MAX_PX, fit: "cover" })
               .avif()
               .toBuffer();
@@ -386,7 +461,7 @@ uploadsRouter.post(
         } else {
           key = `avatars/${fileId}.avif`;
           try {
-            storedBody = await sharp(file.buffer, { failOn: "error" })
+            storedBody = await sharp(file.buffer, { failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
               .resize({ width: AVATAR_MAX_PX, height: AVATAR_MAX_PX, fit: "cover" })
               .avif()
               .toBuffer();
@@ -399,7 +474,7 @@ uploadsRouter.post(
           width = AVATAR_MAX_PX;
           height = AVATAR_MAX_PX;
 
-          const thumb = await sharp(file.buffer, { failOn: "error" })
+          const thumb = await sharp(file.buffer, { failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
             .resize({ width: AVATAR_THUMB_PX, height: AVATAR_THUMB_PX, fit: "cover" })
             .avif({ quality: 50 })
             .toBuffer()

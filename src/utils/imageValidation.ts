@@ -11,7 +11,18 @@ export type ImageValidationResult =
     }
   | { valid: false; reason: string };
 
-const MAX_INPUT_PIXELS = 100_000_000;
+/**
+ * The real ceiling on how much memory an upload can cost.
+ *
+ * The byte limits an operator sets are about which files they will accept; this
+ * is what stops a small file with absurd dimensions from decoding into
+ * gigabytes. 100 MP is roughly a 10000x10000 image, which is far past anything
+ * anybody puts on a profile, and decodes to about 400 MB of raw bitmap.
+ *
+ * Exported because every sharp call that touches an untrusted upload has to
+ * carry it, not just the ones in this file.
+ */
+export const MAX_INPUT_PIXELS = 100_000_000;
 
 /**
  * Raster formats an upload is allowed to be.

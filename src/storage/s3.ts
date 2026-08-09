@@ -1,6 +1,9 @@
 import { S3Client, S3ServiceException, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, HeadBucketCommand, CreateBucketCommand } from "@aws-sdk/client-s3";
+import { Upload } from "@aws-sdk/lib-storage";
 import { NodeHttpHandler } from "@smithy/node-http-handler";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { createReadStream } from "fs";
+import { stat } from "fs/promises";
 import { Agent as HttpAgent } from "http";
 import { Agent as HttpsAgent } from "https";
 
@@ -49,7 +52,79 @@ export async function ensureBucket(bucket: string): Promise<void> {
   }
 }
 
-export async function putObject(params: { bucket: string; key: string; body: Buffer | Uint8Array | Blob | string; contentType?: string; aclPublicRead?: boolean; }): Promise<void> {
+// S3 multipart: at most 10,000 parts, and no part under 5 MB except the last.
+// The object ceiling is therefore part size times 10,000, which is why the part
+// size cannot be a constant if the upload limit is meant to be "none".
+const MAX_PARTS = 10_000;
+const PART_TARGET = Math.floor(MAX_PARTS * 0.95); // 5% headroom for rounding
+const MIN_PART_SIZE = 8 * 1024 * 1024;
+// queueSize * partSize is what is actually held in memory at once. Keep that
+// bounded rather than the part count, so a small upload stays cheap and a huge
+// one costs one part's worth of extra RAM rather than four.
+const MAX_IN_FLIGHT = 64 * 1024 * 1024;
+
+/**
+ * Part size and concurrency for a file of a known size.
+ *
+ * A fixed 8 MB part caps the object at 10,000 * 8 MB = 80 GB, which is a cap
+ * wearing a disguise. Sizing the part to the file removes it: 500 GB needs
+ * ~53 MB parts, 5 TB (S3's own object ceiling) needs ~550 MB.
+ */
+export function multipartPlan(size: number): { partSize: number; queueSize: number } {
+  const needed = Math.ceil(size / PART_TARGET);
+  const partSize = Math.max(MIN_PART_SIZE, Math.ceil(needed / (1024 * 1024)) * 1024 * 1024);
+  const queueSize = Math.max(1, Math.min(4, Math.floor(MAX_IN_FLIGHT / partSize)));
+  return { partSize, queueSize };
+}
+
+/**
+ * Streams a file from disk in multipart chunks.
+ *
+ * Not PutObjectCommand with a read stream, which would be the smaller change.
+ * Two reasons. A single PUT is capped at 5 GB by S3, so it cannot back an
+ * unlimited setting however much memory we save. And the SDK cannot retry a
+ * request whose body is a consumed stream, so one transient network error part
+ * way through a large upload would fail the whole thing with no second attempt.
+ * Upload splits into parts, retries them individually, and aborts the multipart
+ * upload on failure so no orphaned parts are left being billed for.
+ */
+async function putObjectFromPath(params: { bucket: string; key: string; sourcePath: string; contentType?: string; aclPublicRead?: boolean; }): Promise<void> {
+  const client = getS3();
+  const { size } = await stat(params.sourcePath);
+  console.log("[S3] putObject (streamed):", { bucket: params.bucket, key: params.key, contentType: params.contentType, bodySize: size });
+
+  const { partSize, queueSize } = multipartPlan(size);
+  const stream = createReadStream(params.sourcePath);
+  try {
+    const upload = new Upload({
+      client,
+      params: {
+        Bucket: params.bucket,
+        Key: params.key,
+        Body: stream,
+        ContentType: params.contentType,
+        ACL: params.aclPublicRead ? "public-read" : undefined,
+      },
+      queueSize,
+      partSize,
+      leavePartsOnError: false,
+    });
+    await upload.done();
+    console.log("[S3] putObject success:", params.key);
+  } catch (err) {
+    console.error("[S3] putObject failed:", params.key, err);
+    throw err;
+  } finally {
+    // Upload consumes the stream, but destroy it explicitly so a failure part
+    // way through does not leave the descriptor open until GC gets to it.
+    stream.destroy();
+  }
+}
+
+export async function putObject(params: { bucket: string; key: string; body?: Buffer | Uint8Array | Blob | string; sourcePath?: string; contentType?: string; aclPublicRead?: boolean; }): Promise<void> {
+  if (params.sourcePath) {
+    return putObjectFromPath({ ...params, sourcePath: params.sourcePath });
+  }
   const client = getS3();
   const bodySize = Buffer.isBuffer(params.body) || params.body instanceof Uint8Array ? params.body.length : typeof params.body === "string" ? params.body.length : "unknown";
   console.log("[S3] putObject:", { bucket: params.bucket, key: params.key, contentType: params.contentType, bodySize });
