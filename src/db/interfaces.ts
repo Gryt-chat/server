@@ -73,13 +73,19 @@ export interface FileRecord {
 
 // ── Server config types ──────────────────────────────────────────
 
-export const DEFAULT_AVATAR_MAX_BYTES = 5 * 1024 * 1024;
-// 100MB, which is what Cloudflare allows through on Free and Pro. Anything
-// larger is refused at the edge before it reaches us, so a higher default would
-// only produce a confusing failure for anyone behind a tunnel — which is how
-// Gryt is normally reached. Raise it per server if you front it yourself.
+// All three sit at 100MB, which is what Cloudflare allows through on Free and
+// Pro. Anything larger is refused at the edge before it reaches us, so a higher
+// default would only produce a confusing failure for anyone behind a tunnel —
+// which is how Gryt is normally reached. Raise them per server if you front it
+// yourself; uploads additionally accept 0, meaning no limit at all.
+//
+// Avatars and emoji were 5MB. They are re-encoded on the way in and only the
+// re-encoded result is stored, so the number governs which source files are
+// accepted rather than what is kept. What bounds the memory is MAX_INPUT_PIXELS
+// in utils/imageValidation, not these.
+export const DEFAULT_AVATAR_MAX_BYTES = 100 * 1024 * 1024;
 export const DEFAULT_UPLOAD_MAX_BYTES = 100 * 1024 * 1024;
-export const DEFAULT_EMOJI_MAX_BYTES = 5 * 1024 * 1024;
+export const DEFAULT_EMOJI_MAX_BYTES = 100 * 1024 * 1024;
 export const DEFAULT_VOICE_MAX_BITRATE_BPS = 96_000;
 
 export interface ServerConfigRecord {
