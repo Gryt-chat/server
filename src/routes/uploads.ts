@@ -14,7 +14,7 @@ import { deleteObject, putObject, getObject } from "../storage";
 import { insertFile, insertImageJob, getFile, updateFileRecord, updateUserAvatar, setUserAvatar, getServerConfig, DEFAULT_AVATAR_MAX_BYTES, DEFAULT_UPLOAD_MAX_BYTES } from "../db";
 import { requireBearerToken } from "../middleware/requireBearerToken";
 import { AVATAR_MAX_PX, AVATAR_THUMB_PX } from "../constants/media";
-import { findDominantColor, validateImage } from "../utils/imageValidation";
+import { findDominantColor, validateImage, MAX_INPUT_PIXELS } from "../utils/imageValidation";
 import { sanitizeSvg } from "../utils/svgSanitize";
 
 /**
@@ -426,7 +426,7 @@ uploadsRouter.post(
           storedMime = inputMime;
           storedSize = file.size;
 
-          const thumb = await sharp(file.buffer, { pages: 1, failOn: "error" })
+          const thumb = await sharp(file.buffer, { pages: 1, failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
             .resize({ width: AVATAR_THUMB_PX, height: AVATAR_THUMB_PX, fit: "cover" })
             .avif({ quality: 50 })
             .toBuffer()
@@ -443,7 +443,7 @@ uploadsRouter.post(
           key = `avatars/${fileId}.avif`;
           processing = true;
           try {
-            storedBody = await sharp(file.buffer, { pages: 1, failOn: "error" })
+            storedBody = await sharp(file.buffer, { pages: 1, failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
               .resize({ width: AVATAR_MAX_PX, height: AVATAR_MAX_PX, fit: "cover" })
               .avif()
               .toBuffer();
@@ -461,7 +461,7 @@ uploadsRouter.post(
         } else {
           key = `avatars/${fileId}.avif`;
           try {
-            storedBody = await sharp(file.buffer, { failOn: "error" })
+            storedBody = await sharp(file.buffer, { failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
               .resize({ width: AVATAR_MAX_PX, height: AVATAR_MAX_PX, fit: "cover" })
               .avif()
               .toBuffer();
@@ -474,7 +474,7 @@ uploadsRouter.post(
           width = AVATAR_MAX_PX;
           height = AVATAR_MAX_PX;
 
-          const thumb = await sharp(file.buffer, { failOn: "error" })
+          const thumb = await sharp(file.buffer, { failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
             .resize({ width: AVATAR_THUMB_PX, height: AVATAR_THUMB_PX, fit: "cover" })
             .avif({ quality: 50 })
             .toBuffer()

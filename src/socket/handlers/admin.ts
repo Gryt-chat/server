@@ -148,7 +148,13 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           return clampBytes(v, min, max);
         };
 
-        const avatarMaxBytes = clampBytes(payload.avatarMaxBytes, 256 * 1024, 50 * 1024 * 1024);
+        // 200 MB on both, matching uploads' old backstop. Generous on purpose:
+        // an avatar or emoji is re-encoded on the way in, so what an operator is
+        // really choosing is how large a source file they will accept, not how
+        // much they will store. What bounds the memory is MAX_INPUT_PIXELS in
+        // imageValidation, not this number — see the limitInputPixels on every
+        // sharp call in routes/uploads.ts.
+        const avatarMaxBytes = clampBytes(payload.avatarMaxBytes, 256 * 1024, 200 * 1024 * 1024);
         // No upper clamp: the operator's number is the operator's number, and
         // the ceiling that used to sit above it here and in multer is gone.
         const uploadMaxBytes = clampBytesAllowingZero(payload.uploadMaxBytes, 256 * 1024, Number.MAX_SAFE_INTEGER);
