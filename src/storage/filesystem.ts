@@ -1,5 +1,5 @@
 import { createReadStream, existsSync } from "fs";
-import { mkdir, readFile, stat, unlink, writeFile } from "fs/promises";
+import { copyFile, mkdir, readFile, stat, unlink, writeFile } from "fs/promises";
 import { dirname, join } from "path";
 import { Readable } from "stream";
 
@@ -26,12 +26,24 @@ export async function ensureBucket(bucket: string): Promise<void> {
 export async function putObject(params: {
   bucket: string;
   key: string;
-  body: Buffer | Uint8Array | Blob | string;
+  body?: Buffer | Uint8Array | Blob | string;
+  sourcePath?: string;
   contentType?: string;
   aclPublicRead?: boolean;
 }): Promise<void> {
   const filePath = resolvePath(params.bucket, params.key);
   await mkdir(dirname(filePath), { recursive: true });
+
+  // Already on disk: copy rather than read into memory and write back out.
+  // copyFile, not rename — the temp directory is frequently on a different
+  // filesystem from DATA_DIR, and rename fails across devices with EXDEV.
+  if (params.sourcePath) {
+    await copyFile(params.sourcePath, filePath);
+    if (params.contentType) {
+      await writeFile(filePath + ".meta", JSON.stringify({ contentType: params.contentType }));
+    }
+    return;
+  }
 
   let data: Buffer | Uint8Array;
   if (Buffer.isBuffer(params.body) || params.body instanceof Uint8Array) {
