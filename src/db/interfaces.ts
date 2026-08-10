@@ -19,6 +19,11 @@ export interface UserRecord {
   last_seen: Date;
   last_token_refresh?: Date;
   is_active: boolean;
+  /** Server mute and deafen, which belong to the user rather than the socket. */
+  is_server_muted: boolean;
+  is_server_deafened: boolean;
+  /** When a timed mute lifts. Null means it stays until removed. */
+  server_mute_expires_at: Date | null;
 }
 
 // ── Message types ────────────────────────────────────────────────

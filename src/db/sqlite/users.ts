@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 
 import type { UserRecord } from "../interfaces";
-import { fromIso, getSqliteDb, intToBool, toIso } from "./connection";
+import { fromIso, getSqliteDb, intToBool, toIso, type SQLInputValue } from "./connection";
 import { getServerConfig, setServerOwner } from "./servers";
 import { revokeUserRefreshTokens } from "./tokens";
 
@@ -15,7 +15,70 @@ function rowToUser(r: Record<string, unknown>): UserRecord {
     created_at: fromIso(r.created_at as string),
     last_seen: fromIso(r.last_seen as string),
     is_active: intToBool(r.is_active as number),
+    is_server_muted: intToBool(r.is_server_muted as number),
+    is_server_deafened: intToBool(r.is_server_deafened as number),
+    server_mute_expires_at: r.server_mute_expires_at
+      ? fromIso(r.server_mute_expires_at as string)
+      : null,
   };
+}
+
+/**
+ * The moderation state that should apply to this user right now.
+ *
+ * A mute with an expiry in the past reads as unmuted, the same way an expired
+ * ban reads as not banned. The row is left alone rather than cleaned up here —
+ * this is called on every admission, and a write on a read path is a good way
+ * to turn a reconnect storm into a write storm.
+ */
+export function effectiveModerationState(user: UserRecord): {
+  isServerMuted: boolean;
+  isServerDeafened: boolean;
+} {
+  const muteExpired =
+    !!user.server_mute_expires_at && user.server_mute_expires_at.getTime() <= Date.now();
+  return {
+    isServerMuted: user.is_server_muted && !muteExpired,
+    isServerDeafened: user.is_server_deafened,
+  };
+}
+
+/**
+ * Sets server mute or deafen, and optionally when the mute lifts.
+ *
+ * Only the fields passed are written, so muting does not silently clear a
+ * deafen. Passing `mutedUntil: null` alongside `muted: true` is an indefinite
+ * mute; a date makes it a timeout.
+ */
+export async function setUserModerationState(
+  serverUserId: string,
+  state: { muted?: boolean; deafened?: boolean; mutedUntil?: Date | null },
+): Promise<void> {
+  const db = getSqliteDb();
+  const sets: string[] = [];
+  const params: SQLInputValue[] = [];
+
+  if (state.muted !== undefined) {
+    sets.push("is_server_muted = ?");
+    params.push(state.muted ? 1 : 0);
+    // An unmute clears any timeout with it, so a later manual mute does not
+    // inherit an expiry the moderator never asked for.
+    sets.push("server_mute_expires_at = ?");
+    params.push(state.muted && state.mutedUntil ? toIso(state.mutedUntil) : null);
+  } else if (state.mutedUntil !== undefined) {
+    sets.push("server_mute_expires_at = ?");
+    params.push(state.mutedUntil ? toIso(state.mutedUntil) : null);
+  }
+
+  if (state.deafened !== undefined) {
+    sets.push("is_server_deafened = ?");
+    params.push(state.deafened ? 1 : 0);
+  }
+
+  if (sets.length === 0) return;
+
+  params.push(serverUserId);
+  db.prepare(`UPDATE users SET ${sets.join(", ")} WHERE server_user_id = ?`).run(...params);
 }
 
 export async function upsertUser(
@@ -65,6 +128,9 @@ export async function upsertUser(
     created_at: now,
     last_seen: now,
     is_active: true,
+    is_server_muted: false,
+    is_server_deafened: false,
+    server_mute_expires_at: null,
   };
 }
 

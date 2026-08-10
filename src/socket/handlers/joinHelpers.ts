@@ -10,6 +10,7 @@ import {
   setUserInactive,
   getRefreshToken,
   revokeUserRefreshTokens,
+  effectiveModerationState,
 } from "../../db";
 import { checkSessionAllowed } from "../../moderation/sessionGate";
 
@@ -211,6 +212,9 @@ export function registerJoinHelpers(ctx: HandlerContext): EventHandlerMap {
             clientsInfo[clientId].grytUserId = record.gryt_user_id;
             clientsInfo[clientId].serverUserId = record.server_user_id;
             clientsInfo[clientId].nickname = user.nickname;
+            const moderation = effectiveModerationState(user);
+            clientsInfo[clientId].isServerMuted = moderation.isServerMuted;
+            clientsInfo[clientId].isServerDeafened = moderation.isServerDeafened;
           }
           verifyClient(socket);
           syncAllClients(io, clientsInfo);

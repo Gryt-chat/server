@@ -24,6 +24,7 @@ import {
   unbanUser,
   listBans,
   getUserByServerId,
+  setUserModerationState,
 } from "../../db";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 import { evictUser, resolveGrytUserId } from "../../moderation/evict";
@@ -57,6 +58,48 @@ function resolveBanExpiry(expiresInMinutes?: number | null): Date | null {
   const minutes = Math.floor(Number(expiresInMinutes));
   if (!Number.isFinite(minutes) || minutes <= 0) return null;
   return new Date(Date.now() + Math.min(minutes, MAX_BAN_MINUTES) * 60_000);
+}
+
+/** A day, in minutes. A longer silence is what an indefinite mute is for. */
+const MAX_MUTE_MINUTES = 1440;
+
+/** When a timed mute lifts. Absent or unusable means indefinite. */
+function resolveMuteExpiry(expiresInMinutes?: number | null): Date | null {
+  if (expiresInMinutes === undefined || expiresInMinutes === null) return null;
+  const minutes = Math.floor(Number(expiresInMinutes));
+  if (!Number.isFinite(minutes) || minutes <= 0) return null;
+  return new Date(Date.now() + Math.min(minutes, MAX_MUTE_MINUTES) * 60_000);
+}
+
+/**
+ * Tells the SFU what this user's audio should be doing.
+ *
+ * Both arguments used to be wrong here. The room was built as
+ * `${serverUserId}:${streamID}`, which is not a room the SFU has ever heard
+ * of — the registered id is `${serverId}_${voiceChannelId}` (voice.ts, where
+ * the room is created) — and the user was the *socket id* rather than the
+ * server user id. So the call went out, matched nothing, and the only thing
+ * actually silencing anyone was their own client choosing to honour the
+ * `server:muted` event. A modified client simply kept talking.
+ *
+ * This mirrors the equivalent call in voice.ts on purpose: same room shape,
+ * same user id, same effective-state OR.
+ */
+function pushSfuAudioState(
+  sfuClient: HandlerContext["sfuClient"],
+  serverId: string,
+  ci: { serverUserId: string; hasJoinedChannel: boolean; voiceChannelId: string; isMuted: boolean; isDeafened: boolean; isServerMuted: boolean; isServerDeafened: boolean },
+): void {
+  if (!sfuClient || !ci.hasJoinedChannel || !ci.voiceChannelId) return;
+  const roomId = `${serverId}_${ci.voiceChannelId}`;
+  sfuClient
+    .updateUserAudioState(
+      roomId,
+      ci.serverUserId,
+      ci.isMuted || ci.isServerMuted,
+      ci.isDeafened || ci.isServerDeafened,
+    )
+    .catch((e) => consola.error("Failed to update SFU audio state:", e));
 }
 
 function emitRateLimited(ctx: HandlerContext, rl: { retryAfterMs?: number }) {
@@ -508,7 +551,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    'server:mute': async (payload: { accessToken: string; targetServerUserId: string; muted: boolean }) => {
+    'server:mute': async (payload: { accessToken: string; targetServerUserId: string; muted: boolean; expiresInMinutes?: number | null }) => {
       try {
         const rl = rlCheck("server:mute", ctx, RL_MODERATION);
         if (!rl.allowed) { emitRateLimited(ctx, rl); return; }
@@ -522,22 +565,22 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         const targetId = payload.targetServerUserId.trim();
         if (!(await requireOutranks(socket, auth, targetId, "server-mute"))) return;
 
+        // The row is the source of truth now. The in-memory flag below is a
+        // cache of it for the sockets that are already connected; without the
+        // write, reconnecting cleared the mute.
+        const mutedUntil = resolveMuteExpiry(payload.expiresInMinutes);
+        await setUserModerationState(targetId, { muted: payload.muted, mutedUntil });
+
         for (const [sid, s] of io.sockets.sockets) {
           const ci = clientsInfo[sid];
           if (ci?.serverUserId === targetId) {
             ci.isServerMuted = payload.muted;
-            s.emit("server:muted", { muted: payload.muted });
-
-            if (sfuClient && ci.hasJoinedChannel) {
-              const roomId = `${ci.serverUserId}:${ci.streamID}`;
-              sfuClient.updateUserAudioState(roomId, sid, ci.isMuted || ci.isServerMuted, ci.isDeafened || ci.isServerDeafened).catch((e) => {
-                consola.error("Failed to update SFU audio state after server mute:", e);
-              });
-            }
+            s.emit("server:muted", { muted: payload.muted, expiresAt: mutedUntil?.toISOString() ?? null });
+            pushSfuAudioState(sfuClient, serverId, ci);
           }
         }
 
-        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: payload.muted ? "server_mute" : "server_unmute", target: targetId }).catch((e) => consola.warn("audit log write failed", e));
+        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: payload.muted ? "server_mute" : "server_unmute", target: targetId, meta: { expiresAt: mutedUntil?.toISOString() ?? null } }).catch((e) => consola.warn("audit log write failed", e));
         socket.emit("server:mute:success", { targetServerUserId: targetId, muted: payload.muted });
         syncAllClients(io, clientsInfo);
         broadcastMemberList(io, clientsInfo, serverId);
@@ -561,18 +604,14 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         const targetId = payload.targetServerUserId.trim();
         if (!(await requireOutranks(socket, auth, targetId, "server-deafen"))) return;
 
+        await setUserModerationState(targetId, { deafened: payload.deafened });
+
         for (const [sid, s] of io.sockets.sockets) {
           const ci = clientsInfo[sid];
           if (ci?.serverUserId === targetId) {
             ci.isServerDeafened = payload.deafened;
             s.emit("server:deafened", { deafened: payload.deafened });
-
-            if (sfuClient && ci.hasJoinedChannel) {
-              const roomId = `${ci.serverUserId}:${ci.streamID}`;
-              sfuClient.updateUserAudioState(roomId, sid, ci.isMuted || ci.isServerMuted, ci.isDeafened || ci.isServerDeafened).catch((e) => {
-                consola.error("Failed to update SFU audio state after server deafen:", e);
-              });
-            }
+            pushSfuAudioState(sfuClient, serverId, ci);
           }
         }
 
