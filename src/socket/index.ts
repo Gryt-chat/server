@@ -1,3 +1,4 @@
+import { sfuRoomId, voiceRoomName } from "./utils/voiceRooms";
 import consola from "consola";
 import { Server, Socket } from "socket.io";
 import { Clients } from "../types";
@@ -26,10 +27,6 @@ import { registerTypingHandlers } from "./handlers/typing";
 export { broadcastChatNew, broadcastCustomEmojisUpdate, broadcastEmojiQueueUpdate, broadcastServerUiUpdate };
 
 const clientsInfo: Clients = {};
-
-function voiceRoomName(serverId: string, channelId: string): string {
-  return `voice:${serverId}:${channelId}`;
-}
 
 // Grace period for voice state during transient Socket.IO disconnects (e.g.
 // Cloudflare Tunnel WebSocket resets). Instead of immediately tearing down

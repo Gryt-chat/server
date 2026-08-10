@@ -22,7 +22,7 @@ const RL_REPORT: RateLimitRule = { limit: 10, windowMs: 60_000, scorePerAction: 
 const RL_REPORT_ADMIN: RateLimitRule = { limit: 30, windowMs: 60_000, scorePerAction: 1, maxScore: 15, scoreDecayMs: 3_000 };
 
 export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
-  const { io, socket, clientId, serverId, clientsInfo } = ctx;
+  const { io, socket, clientId, serverId, clientsInfo, sfuClient } = ctx;
 
   function rlCheck(event: string, rule: RateLimitRule) {
     const ip = ctx.getClientIp();
@@ -284,6 +284,8 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
             await evictUser({
               io,
               clientsInfo,
+              serverId,
+              sfuClient,
               targetServerUserId: payload.senderServerUserId,
               targetGrytUserId,
               action: "ban",

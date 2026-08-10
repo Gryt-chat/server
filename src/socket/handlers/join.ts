@@ -175,9 +175,20 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
 
         // Stays ahead of invite consumption so a banned user does not burn an
         // invite code on a join that was never going to succeed.
+        //
+        // The refusal is deliberately uninformative. Telling somebody they are
+        // banned confirms both that the ban exists and that this identity is
+        // known here, which is a moderation decision leaking to the person it
+        // was made about — and it invites arguing with the message rather than
+        // with a moderator. The real reason is in the audit log, and the
+        // moderator who acted already told them if they wanted to.
         const identity = await checkIdentityAllowed(grytUserId);
         if (!identity.ok) {
-          socket.emit("server:error", { error: identity.code, message: identity.message });
+          consola.info(`Join refused for ${grytUserId}: ${identity.code}`);
+          socket.emit("server:error", {
+            error: "join_refused",
+            message: "Sorry, you can't join this server.",
+          });
           return;
         }
 

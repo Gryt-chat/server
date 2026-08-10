@@ -1,3 +1,4 @@
+import { sfuRoomId, voiceRoomName } from "../utils/voiceRooms";
 import consola from "consola";
 import { randomUUID } from "crypto";
 import type { HandlerContext, EventHandlerMap } from "./types";
@@ -17,10 +18,6 @@ import {
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 
 const RL_SETTINGS: RateLimitRule = { limit: 30, windowMs: 60_000, scorePerAction: 1, maxScore: 20, scoreDecayMs: 3_000 };
-
-function voiceRoomName(serverId: string, channelId: string): string {
-  return `voice:${serverId}:${channelId}`;
-}
 
 function rlCheck(event: string, ctx: HandlerContext, rule: RateLimitRule) {
   const ip = ctx.getClientIp();

@@ -24,10 +24,12 @@ import {
   unbanUser,
   listBans,
   getUserByServerId,
+  purgeUserContent,
   setUserModerationState,
 } from "../../db";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 import { evictUser, resolveGrytUserId } from "../../moderation/evict";
+import { sfuRoomId } from "../utils/voiceRooms";
 import { getVersionStatus } from "../../versionCheck";
 import { registerAdminChannelHandlers } from "./adminChannels";
 
@@ -91,7 +93,7 @@ function pushSfuAudioState(
   ci: { serverUserId: string; hasJoinedChannel: boolean; voiceChannelId: string; isMuted: boolean; isDeafened: boolean; isServerMuted: boolean; isServerDeafened: boolean },
 ): void {
   if (!sfuClient || !ci.hasJoinedChannel || !ci.voiceChannelId) return;
-  const roomId = `${serverId}_${ci.voiceChannelId}`;
+  const roomId = sfuRoomId(serverId, ci.voiceChannelId);
   sfuClient
     .updateUserAudioState(
       roomId,
@@ -441,6 +443,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         await evictUser({
           io,
           clientsInfo,
+          serverId,
+          sfuClient,
           targetServerUserId: targetId,
           targetGrytUserId,
           action: "kick",
@@ -457,7 +461,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    'server:ban': async (payload: { accessToken: string; targetServerUserId: string; reason?: string; expiresInMinutes?: number | null }) => {
+    'server:ban': async (payload: { accessToken: string; targetServerUserId: string; reason?: string; expiresInMinutes?: number | null; deleteContent?: boolean }) => {
       try {
         const rl = rlCheck("server:ban", ctx, RL_MODERATION);
         if (!rl.allowed) { emitRateLimited(ctx, rl); return; }
@@ -485,13 +489,39 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         await evictUser({
           io,
           clientsInfo,
+          serverId,
+          sfuClient,
           targetServerUserId: targetId,
           targetGrytUserId,
           action: "ban",
           reason: payload.reason,
         });
 
-        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "ban", target: targetId, meta: { reason: payload.reason ?? null } }).catch((e) => consola.warn("audit log write failed", e));
+        // Erase what they wrote, if asked. Defaults to on, because a ban is
+        // usually about the content as much as the person — but it is a choice,
+        // since unban can restore access and cannot restore a thread. Replies
+        // to a deleted message lose their context for everybody, not just for
+        // the person banned.
+        const purge = payload.deleteContent !== false;
+        if (purge) {
+          const { deletedMessages, updatedReactions } = await purgeUserContent(targetId);
+
+          const affectedConversations = [...new Set(deletedMessages.map((d) => d.conversation_id))];
+          io.emit("chat:purge_user", {
+            sender_server_user_id: targetId,
+            affected_conversations: affectedConversations,
+          });
+          // No per-message broadcast for the reactions they left on other
+          // people's messages. The client already holds those messages and can
+          // strip the id itself from the purge event — emitting one
+          // chat:reaction each would mean hundreds of broadcasts for a
+          // prolific reactor, to say something the client can work out.
+          consola.info(
+            `Purged ${deletedMessages.length} messages and ${updatedReactions.length} reactions for ${targetId}`,
+          );
+        }
+
+        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "ban", target: targetId, meta: { reason: payload.reason ?? null, deletedContent: purge } }).catch((e) => consola.warn("audit log write failed", e));
         socket.emit("server:ban:success", { targetServerUserId: targetId });
         syncAllClients(io, clientsInfo);
         broadcastMemberList(io, clientsInfo, serverId);

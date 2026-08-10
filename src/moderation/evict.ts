@@ -1,7 +1,9 @@
+import consola from "consola";
 import type { Server as SocketIoServer } from "socket.io";
 
 import { getUserByServerId, setUserInactive, revokeUserRefreshTokens } from "../db";
 import type { Clients } from "../types";
+import { sfuRoomId, voiceRoomName } from "../socket/utils/voiceRooms";
 
 /**
  * The Gryt identity behind a server user, from a live session if there is one
@@ -46,12 +48,14 @@ export async function resolveGrytUserId(
 export async function evictUser(params: {
   io: SocketIoServer;
   clientsInfo: Clients;
+  serverId: string;
+  sfuClient: { disconnectUser(roomId: string, userId: string): Promise<void>; untrackUserConnection(userId: string): void } | null;
   targetServerUserId: string;
   targetGrytUserId: string;
   action: "kick" | "ban";
   reason?: string | null;
 }): Promise<void> {
-  const { io, clientsInfo, targetServerUserId, targetGrytUserId, action, reason } = params;
+  const { io, clientsInfo, serverId, sfuClient, targetServerUserId, targetGrytUserId, action, reason } = params;
 
   await setUserInactive(targetServerUserId);
   await revokeUserRefreshTokens(targetGrytUserId);
@@ -66,6 +70,42 @@ export async function evictUser(params: {
     const ci = clientsInfo[sid];
     if (!ci) continue;
     if (ci.serverUserId !== targetServerUserId && ci.grytUserId !== targetGrytUserId) continue;
+
+    // Take them out of voice before the socket goes.
+    //
+    // Disconnecting the socket does not touch the media path: socket.io and the
+    // SFU peer connection are separate, and the disconnect handler only calls
+    // untrackUserConnection, which deletes a local Map entry and tells the SFU
+    // nothing. So what actually stopped a kicked user talking was their own
+    // client honouring `server_voice_disconnect` and tearing itself down —
+    // exactly the honour system server mute was running on before GRYT-130. A
+    // client that ignores it keeps talking to everyone still in the room.
+    if (ci.hasJoinedChannel && ci.voiceChannelId) {
+      const roomId = sfuRoomId(serverId, ci.voiceChannelId);
+      if (sfuClient) {
+        await sfuClient
+          .disconnectUser(roomId, ci.serverUserId)
+          .catch((e) => consola.warn("SFU disconnect on eviction failed", e));
+        sfuClient.untrackUserConnection(ci.serverUserId);
+      }
+
+      // Tell the room, and tell them, rather than relying on the disconnect
+      // handler — which stashes voice state for a grace period on a transport
+      // drop, and this is deliberate rather than accidental.
+      s.to(voiceRoomName(serverId, ci.voiceChannelId)).emit("voice:peer:left", {
+        clientId: sid,
+        nickname: ci.nickname,
+        channelId: ci.voiceChannelId,
+      });
+      s.emit("voice:channel:joined", false);
+      s.emit("voice:stream:set", "");
+      s.emit("voice:room:leave");
+
+      ci.hasJoinedChannel = false;
+      ci.voiceChannelId = "";
+      ci.streamID = "";
+      ci.isConnectedToVoice = false;
+    }
 
     s.emit("server:kicked", {
       action,

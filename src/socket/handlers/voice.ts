@@ -1,3 +1,4 @@
+import { sfuRoomId, voiceRoomName } from "../utils/voiceRooms";
 import consola from "consola";
 import type { HandlerContext, EventHandlerMap } from "./types";
 import { requireAuth, requireOutranks } from "../middleware/auth";
@@ -8,10 +9,6 @@ import { insertServerAudit } from "../../db";
 
 const RL_REQUEST_ROOM: RateLimitRule = { limit: 10, windowMs: 60_000, scorePerAction: 1, maxScore: 8, scoreDecayMs: 5000 };
 const RL_JOINED_CHANNEL: RateLimitRule = { limit: 10, windowMs: 60_000, scorePerAction: 0.5, maxScore: 6, scoreDecayMs: 3000 };
-
-function voiceRoomName(serverId: string, channelId: string): string {
-  return `voice:${serverId}:${channelId}`;
-}
 
 export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
   const { io, socket, clientId, serverId, clientsInfo, sfuClient, getClientIp } = ctx;
@@ -47,10 +44,9 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
 
       if (sfuClient && clientsInfo[clientId].hasJoinedChannel) {
         const ci = clientsInfo[clientId];
-        const sfuRoomId = `${serverId}_${ci.voiceChannelId}`;
         const effectiveMuted = ci.isMuted || ci.isServerMuted;
         const effectiveDeafened = ci.isDeafened || ci.isServerDeafened;
-        sfuClient.updateUserAudioState(sfuRoomId, ci.serverUserId, effectiveMuted, effectiveDeafened).catch((e) => {
+        sfuClient.updateUserAudioState(sfuRoomId(serverId, ci.voiceChannelId), ci.serverUserId, effectiveMuted, effectiveDeafened).catch((e) => {
           consola.error("Failed to update SFU audio state:", e);
         });
       }
@@ -201,7 +197,7 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
           clientsInfo[clientId].voiceChannelId = roomId;
         }
 
-        const uniqueRoomId = `${serverId}_${roomId}`;
+        const uniqueRoomId = sfuRoomId(serverId, roomId);
         consola.info(`[Voice:Step 3] Registering room ${uniqueRoomId} with SFU…`);
         await sfuClient.registerRoom(uniqueRoomId);
         consola.info(`[Voice:Step 3] Room registered: ${uniqueRoomId}`);
@@ -333,7 +329,7 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
           // is `${serverId}_${voiceChannelId}` (see the join path above), so
           // this was addressing a room that does not exist and the forced
           // disconnect quietly did nothing.
-          const uniqueRoomId = `${serverId}_${targetClient.voiceChannelId}`;
+          const uniqueRoomId = sfuRoomId(serverId, targetClient.voiceChannelId);
           sfuClient.disconnectUser(uniqueRoomId, targetUserId).catch((e) => {
             consola.error("[Voice:kick] SFU disconnectUser failed:", e);
           });
