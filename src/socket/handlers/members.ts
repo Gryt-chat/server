@@ -16,7 +16,11 @@ export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
       try {
         const requester = clientsInfo[clientId];
         if (!requester?.grytUserId) {
-          socket.emit("server:error", { error: "join_required", message: "Please join the server first." });
+          // Refuse quietly. The client fetches this optimistically the moment a
+          // socket connects, before the session has been restored, so answering
+          // with server:error made every page load show "Failed to join server"
+          // — the gate is here to withhold the data, not to complain about a
+          // call the client is supposed to make. It asks again after joining.
           return;
         }
 
