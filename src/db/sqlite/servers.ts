@@ -250,11 +250,33 @@ export async function listServerRoles(): Promise<ServerRoleRecord[]> {
   }));
 }
 
-export async function banUser(grytUserId: string, bannedByServerUserId: string, reason?: string): Promise<void> {
+/**
+ * A ban is in force when it exists and has not expired.
+ *
+ * Expiry is a predicate rather than a background job on purpose: a sweeper is a
+ * second thing that can fail, and a ban that outlives its expiry because a
+ * timer did not fire is worse than one row of garbage. `listBans` clears the
+ * dead rows out as a side effect of the admin UI opening, which is often enough
+ * for a table that holds tens of rows.
+ */
+const ACTIVE_BAN_PREDICATE = `gryt_user_id = ? AND (expires_at IS NULL OR expires_at > ?)`;
+
+export async function banUser(
+  grytUserId: string,
+  bannedByServerUserId: string,
+  reason?: string,
+  expiresAt?: Date | null,
+): Promise<void> {
   const db = getSqliteDb();
   db.prepare(
-    `INSERT OR REPLACE INTO bans (gryt_user_id, banned_by_server_user_id, reason, created_at) VALUES (?, ?, ?, ?)`
-  ).run(grytUserId, bannedByServerUserId, reason ?? null, toIso(new Date()));
+    `INSERT OR REPLACE INTO bans (gryt_user_id, banned_by_server_user_id, reason, created_at, expires_at) VALUES (?, ?, ?, ?, ?)`
+  ).run(
+    grytUserId,
+    bannedByServerUserId,
+    reason ?? null,
+    toIso(new Date()),
+    expiresAt ? toIso(expiresAt) : null,
+  );
 }
 
 export async function unbanUser(grytUserId: string): Promise<void> {
@@ -262,19 +284,64 @@ export async function unbanUser(grytUserId: string): Promise<void> {
   db.prepare(`DELETE FROM bans WHERE gryt_user_id = ?`).run(grytUserId);
 }
 
+/**
+ * Stays a boolean deliberately. The session gate calls this on every admission
+ * path, and a function that returns a record invites `if (await getBan(id))` —
+ * which is true for an expired ban and would quietly make every temporary ban
+ * permanent. Callers that need the detail use `getActiveBan`.
+ */
 export async function isUserBanned(grytUserId: string): Promise<boolean> {
   const db = getSqliteDb();
-  const row = db.prepare(`SELECT 1 FROM bans WHERE gryt_user_id = ?`).get(grytUserId);
+  const row = db
+    .prepare(`SELECT 1 FROM bans WHERE ${ACTIVE_BAN_PREDICATE}`)
+    .get(grytUserId, toIso(new Date()));
   return !!row;
 }
 
-export async function listBans(): Promise<ServerBanRecord[]> {
+/** The ban in force for this user, or null. For telling them when it lifts. */
+export async function getActiveBan(grytUserId: string): Promise<ServerBanRecord | null> {
   const db = getSqliteDb();
-  const rows = db.prepare(`SELECT * FROM bans`).all() as Record<string, unknown>[];
-  return rows.map((r) => ({
+  const row = db
+    .prepare(`SELECT * FROM bans WHERE ${ACTIVE_BAN_PREDICATE}`)
+    .get(grytUserId, toIso(new Date())) as Record<string, unknown> | undefined;
+  return row ? rowToBan(row) : null;
+}
+
+function rowToBan(r: Record<string, unknown>): ServerBanRecord {
+  return {
     gryt_user_id: r.gryt_user_id as string,
     banned_by_server_user_id: (r.banned_by_server_user_id as string) ?? "",
     reason: (r.reason as string) ?? null,
     created_at: fromIso(r.created_at as string),
-  }));
+    expires_at: r.expires_at ? fromIso(r.expires_at as string) : null,
+    nickname: (r.nickname as string) ?? null,
+    banned_by_nickname: (r.banned_by_nickname as string) ?? null,
+  };
+}
+
+/**
+ * Bans in force, newest first, with names attached.
+ *
+ * The join is the point: without it this returns bare OIDC subject strings,
+ * which is unusable in a UI and most of why there was never a bans screen. The
+ * nicknames are LEFT JOINed because a banned user's row can be gone entirely.
+ */
+export async function listBans(): Promise<ServerBanRecord[]> {
+  const db = getSqliteDb();
+  const now = toIso(new Date());
+
+  db.prepare(`DELETE FROM bans WHERE expires_at IS NOT NULL AND expires_at <= ?`).run(now);
+
+  const rows = db.prepare(`
+    SELECT b.*,
+           u.nickname AS nickname,
+           a.nickname AS banned_by_nickname
+      FROM bans b
+      LEFT JOIN users u ON u.gryt_user_id = b.gryt_user_id
+      LEFT JOIN users a ON a.server_user_id = b.banned_by_server_user_id
+     WHERE b.expires_at IS NULL OR b.expires_at > ?
+     ORDER BY b.created_at DESC
+  `).all(now) as Record<string, unknown>[];
+
+  return rows.map(rowToBan);
 }

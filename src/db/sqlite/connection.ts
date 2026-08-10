@@ -91,7 +91,8 @@ function createSchema(d: DatabaseSync): void {
       gryt_user_id TEXT PRIMARY KEY,
       banned_by_server_user_id TEXT NOT NULL,
       reason TEXT,
-      created_at TEXT NOT NULL
+      created_at TEXT NOT NULL,
+      expires_at TEXT
     );
 
     CREATE TABLE IF NOT EXISTS channels (
@@ -304,6 +305,16 @@ function runMigrations(d: DatabaseSync): void {
   // constant rather than whatever was true when the row was created.
   if (!hasColumn(d, "server_config", "avatar_thumb_px")) {
     d.exec("ALTER TABLE server_config ADD COLUMN avatar_thumb_px INTEGER");
+  }
+
+  // When a ban lifts by itself, as ISO-8601. NULL means permanent, matching
+  // what NULL already means in invites.expires_at and refresh_tokens.expires_at.
+  //
+  // Nullable rather than NOT NULL because SQLite cannot add a NOT NULL column
+  // without a constant default, and there is no sensible constant here — every
+  // ban that predates this column is permanent, which is exactly NULL.
+  if (!hasColumn(d, "bans", "expires_at")) {
+    d.exec("ALTER TABLE bans ADD COLUMN expires_at TEXT");
   }
   d.prepare("UPDATE server_config SET avatar_thumb_px = ?").run(AVATAR_THUMB_PX);
 }
