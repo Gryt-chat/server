@@ -81,75 +81,86 @@ const lastMemberListEmitByIO = new WeakMap<Server, number>();
 const lastMemberListStateByIO = new WeakMap<Server, string>();
 const pendingMemberListByIO = new WeakMap<Server, ReturnType<typeof setTimeout>>();
 
+/**
+ * The member list, built once.
+ *
+ * There used to be two of these — this one and the `members:fetch` handler's —
+ * emitting the same event with the same 17 fields and disagreeing about which
+ * session wins when somebody has two clients open. This picked the most active
+ * one; the other took whichever it happened to see last. Since `isServerMuted`
+ * and `role` drive the moderation menu, the menu's contents depended on which
+ * builder had answered most recently.
+ */
+export async function buildMemberList(clientsInfo: Clients) {
+  const registeredUsers = await getAllRegisteredUsers();
+  const roleRows = await listServerRoles();
+  const roleMap = new Map(roleRows.map((r) => [r.server_user_id, r.role]));
+
+  // Avatar colours, so a client can tint a voice tile to match the person
+  // rather than to a hash of their id. Null until the image worker has
+  // processed that avatar — the client falls back.
+  const avatarFiles = await getFilesByIds(
+    registeredUsers
+      .map((u) => u.avatar_file_id)
+      .filter((id): id is string => Boolean(id)),
+  );
+
+  type ClientInfo = Clients[string];
+  const onlineUsers = new Map<string, ClientInfo>();
+
+  // Most active session wins. Two clients open should show you as being in
+  // voice, not as whichever socket was iterated last.
+  const activityRank = (c: ClientInfo): number =>
+    c.hasJoinedChannel ? 2 : c.isAFK ? 0 : 1;
+
+  Object.values(clientsInfo).forEach((client) => {
+    if (client.serverUserId && !client.serverUserId.startsWith('temp_')) {
+      const existing = onlineUsers.get(client.serverUserId);
+      if (!existing || activityRank(client) > activityRank(existing)) {
+        onlineUsers.set(client.serverUserId, client);
+      }
+    }
+  });
+
+  return registeredUsers
+    .filter((user) => user.is_active)
+    .map((user) => {
+      const onlineClient = onlineUsers.get(user.server_user_id);
+
+      let status: 'online' | 'in_voice' | 'afk' | 'offline' = 'offline';
+      if (onlineClient) {
+        if (onlineClient.isAFK) status = 'afk';
+        else if (onlineClient.hasJoinedChannel) status = 'in_voice';
+        else status = 'online';
+      }
+
+      return {
+        serverUserId: user.server_user_id,
+        nickname: user.nickname,
+        avatarFileId: user.avatar_file_id || null,
+        avatarColor: user.avatar_file_id
+          ? avatarFiles.get(user.avatar_file_id)?.dominant_color ?? null
+          : null,
+        role: roleMap.get(user.server_user_id) || 'member',
+        status,
+        lastSeen: user.last_seen.toISOString(),
+        createdAt: user.created_at.toISOString(),
+        isMuted: onlineClient?.isMuted || false,
+        isDeafened: onlineClient?.isDeafened || false,
+        isServerMuted: onlineClient?.isServerMuted || false,
+        isServerDeafened: onlineClient?.isServerDeafened || false,
+        color: onlineClient?.color || '#666666',
+        isConnectedToVoice: onlineClient?.isConnectedToVoice || false,
+        hasJoinedChannel: onlineClient?.hasJoinedChannel || false,
+        voiceChannelId: onlineClient?.voiceChannelId || '',
+        streamID: onlineClient?.streamID || '',
+      };
+    });
+}
+
 async function emitMemberListNow(io: Server, clientsInfo: Clients): Promise<void> {
   try {
-    const registeredUsers = await getAllRegisteredUsers();
-    const roleRows = await listServerRoles();
-    const roleMap = new Map(roleRows.map((r) => [r.server_user_id, r.role]));
-
-    // Same avatar colours as the members:fetch handler builds. This payload has
-    // to carry them too: it is the one clients actually end up holding, because
-    // a broadcast follows almost every join and replaces the fetched list
-    // wholesale.
-    const avatarFiles = await getFilesByIds(
-      registeredUsers
-        .map((u) => u.avatar_file_id)
-        .filter((id): id is string => Boolean(id)),
-    );
-
-    type ClientInfo = Clients[string];
-    const onlineUsers = new Map<string, ClientInfo>();
-
-    const activityRank = (c: ClientInfo): number =>
-      c.hasJoinedChannel ? 2 : c.isAFK ? 0 : 1;
-
-    Object.values(clientsInfo).forEach(client => {
-      if (client.serverUserId && !client.serverUserId.startsWith('temp_')) {
-        const existing = onlineUsers.get(client.serverUserId);
-        if (!existing || activityRank(client) > activityRank(existing)) {
-          onlineUsers.set(client.serverUserId, client);
-        }
-      }
-    });
-
-    const members = registeredUsers
-      .filter(user => user.is_active)
-      .map(user => {
-        const onlineClient = onlineUsers.get(user.server_user_id);
-
-        let status: 'online' | 'in_voice' | 'afk' | 'offline' = 'offline';
-        if (onlineClient) {
-          if (onlineClient.isAFK) {
-            status = 'afk';
-          } else if (onlineClient.hasJoinedChannel) {
-            status = 'in_voice';
-          } else {
-            status = 'online';
-          }
-        }
-
-        return {
-          serverUserId: user.server_user_id,
-          nickname: user.nickname,
-          avatarFileId: user.avatar_file_id || null,
-          avatarColor: user.avatar_file_id
-            ? avatarFiles.get(user.avatar_file_id)?.dominant_color ?? null
-            : null,
-          role: roleMap.get(user.server_user_id) || 'member',
-          status,
-          lastSeen: user.last_seen.toISOString(),
-          createdAt: user.created_at.toISOString(),
-          isMuted: onlineClient?.isMuted || false,
-          isDeafened: onlineClient?.isDeafened || false,
-          isServerMuted: onlineClient?.isServerMuted || false,
-          isServerDeafened: onlineClient?.isServerDeafened || false,
-          color: onlineClient?.color || '#666666',
-          isConnectedToVoice: onlineClient?.isConnectedToVoice || false,
-          hasJoinedChannel: onlineClient?.hasJoinedChannel || false,
-          voiceChannelId: onlineClient?.voiceChannelId || '',
-          streamID: onlineClient?.streamID || '',
-        };
-      });
+    const members = await buildMemberList(clientsInfo);
 
     // IMPORTANT: include fields that should trigger UI updates (e.g. avatar/nickname),
     // otherwise updates can get deduped away and clients won't refresh.

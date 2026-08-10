@@ -1,8 +1,7 @@
 import consola from "consola";
 import type { HandlerContext, EventHandlerMap } from "./types";
-import type { Clients } from "../../types";
-import { getAllRegisteredUsers, getFilesByIds, getUserByServerId, listServerRoles, updateUserNickname } from "../../db";
-import { syncAllClients, broadcastMemberList } from "../utils/clients";
+import { getUserByServerId, updateUserNickname } from "../../db";
+import { buildMemberList, syncAllClients, broadcastMemberList } from "../utils/clients";
 
 export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
   const { io, socket, clientId, serverId, clientsInfo } = ctx;
@@ -24,59 +23,7 @@ export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        const registeredUsers = await getAllRegisteredUsers();
-        const roleRows = await listServerRoles();
-        const roleMap = new Map(roleRows.map((r) => [r.server_user_id, r.role]));
-
-        // The dominant colour of each avatar, so clients can tint a voice tile
-        // to match the person rather than to a hash of their id. Null until
-        // the image worker has processed that avatar, and for anything
-        // uploaded before the column existed — the client falls back.
-        const avatarFiles = await getFilesByIds(
-          registeredUsers
-            .map((u) => u.avatar_file_id)
-            .filter((id): id is string => Boolean(id)),
-        );
-
-        const onlineUsers = new Map<string, Clients[string]>();
-        Object.values(clientsInfo).forEach((client) => {
-          if (client.serverUserId && !client.serverUserId.startsWith("temp_")) {
-            onlineUsers.set(client.serverUserId, client);
-          }
-        });
-
-        const members = registeredUsers
-          .filter((u) => u.is_active)
-          .map((user) => {
-            const onlineClient = onlineUsers.get(user.server_user_id);
-            let status: "online" | "in_voice" | "afk" | "offline" = "offline";
-            if (onlineClient) {
-              if (onlineClient.isAFK) status = "afk";
-              else if (onlineClient.hasJoinedChannel) status = "in_voice";
-              else status = "online";
-            }
-            return {
-              serverUserId: user.server_user_id,
-              nickname: user.nickname,
-              avatarFileId: user.avatar_file_id || null,
-              avatarColor: user.avatar_file_id
-                ? avatarFiles.get(user.avatar_file_id)?.dominant_color ?? null
-                : null,
-              role: roleMap.get(user.server_user_id) || "member",
-              status,
-              lastSeen: user.last_seen.toISOString(),
-              createdAt: user.created_at.toISOString(),
-              isMuted: onlineClient?.isMuted || false,
-              isDeafened: onlineClient?.isDeafened || false,
-              isServerMuted: onlineClient?.isServerMuted || false,
-              isServerDeafened: onlineClient?.isServerDeafened || false,
-              color: onlineClient?.color || "#666666",
-              isConnectedToVoice: onlineClient?.isConnectedToVoice || false,
-              hasJoinedChannel: onlineClient?.hasJoinedChannel || false,
-              voiceChannelId: onlineClient?.voiceChannelId || "",
-              streamID: onlineClient?.streamID || "",
-            };
-          });
+        const members = await buildMemberList(clientsInfo);
 
         socket.emit("members:list", members);
       } catch (err) {
