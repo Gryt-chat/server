@@ -1,6 +1,7 @@
 import { Socket } from "socket.io";
 import { verifyAccessToken, TokenPayload } from "../../utils/jwt";
 import { getServerConfig, getServerRole } from "../../db";
+import { checkSessionAllowed } from "../../moderation/sessionGate";
 
 export type Role = "owner" | "admin" | "mod" | "member";
 
@@ -83,6 +84,19 @@ export async function requireAuth(
       reason: "token_version_mismatch",
       message: "Your session token is stale. Please rejoin.",
     });
+    return null;
+  }
+
+  // Not redundant with the admission points. Those cover the ways a socket
+  // becomes somebody; this covers a socket that never restored a session at all
+  // and simply presents a still-valid token with each event. Without it a
+  // banned user keeps full access for the life of that token.
+  const gate = await checkSessionAllowed({
+    grytUserId: tokenPayload.grytUserId,
+    serverUserId: tokenPayload.serverUserId,
+  });
+  if (!gate.ok) {
+    socket.emit("server:error", { error: gate.code, message: gate.message });
     return null;
   }
 

@@ -15,9 +15,9 @@ import {
   getServerRole,
   setServerRole,
   createRefreshToken,
-  isUserBanned,
 } from "../../db";
 import { isPrivateIp } from "../../utils/isPrivateIp";
+import { checkIdentityAllowed } from "../../moderation/sessionGate";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 import {
   registerJoinHelpers,
@@ -172,9 +172,11 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
         const nickname = (challenge.nickname || suggestedNickname || "User").trim();
         let cfg = await getServerConfig().catch(() => null);
 
-        const banned = await isUserBanned(grytUserId);
-        if (banned) {
-          socket.emit("server:error", { error: "banned", message: "You are banned from this server." });
+        // Stays ahead of invite consumption so a banned user does not burn an
+        // invite code on a join that was never going to succeed.
+        const identity = await checkIdentityAllowed(grytUserId);
+        if (!identity.ok) {
+          socket.emit("server:error", { error: identity.code, message: identity.message });
           return;
         }
 

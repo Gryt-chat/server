@@ -1,6 +1,7 @@
 import consola from "consola";
 import type { HandlerContext, EventHandlerMap } from "./types";
 import { requireAuth } from "../middleware/auth";
+import { evictUser, resolveGrytUserId } from "../../moderation/evict";
 import { syncAllClients, broadcastMemberList } from "../utils/clients";
 import {
   getMessageById,
@@ -265,34 +266,25 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
             affected_conversations: affectedConversations,
           });
 
-          // Ban the user
-          let targetGrytUserId: string | undefined;
-          for (const ci of Object.values(clientsInfo)) {
-            if (ci.serverUserId === payload.senderServerUserId && ci.grytUserId) {
-              targetGrytUserId = ci.grytUserId;
-              break;
-            }
-          }
-          if (!targetGrytUserId) {
-            const senderUser = await getUserByServerId(payload.senderServerUserId);
-            targetGrytUserId = senderUser?.gryt_user_id;
-          }
+          // Same eviction as server:ban. This used to be its own inline copy of
+          // the ban-and-disconnect, which meant a ban issued from the reports
+          // panel skipped whatever the real one learned to do.
+          const targetGrytUserId = await resolveGrytUserId(
+            clientsInfo,
+            payload.senderServerUserId,
+          );
 
           if (targetGrytUserId) {
-            await banUser(
+            const banReason = "Banned via report review (all messages deleted)";
+            await banUser(targetGrytUserId, auth.tokenPayload.serverUserId, banReason);
+            await evictUser({
+              io,
+              clientsInfo,
+              targetServerUserId: payload.senderServerUserId,
               targetGrytUserId,
-              auth.tokenPayload.serverUserId,
-              "Banned via report review (all messages deleted)",
-            );
-
-            // Disconnect the banned user
-            for (const [sid, s] of io.sockets.sockets) {
-              const ci = clientsInfo[sid];
-              if (ci?.serverUserId === payload.senderServerUserId) {
-                s.emit("server:kicked", { reason: "You were banned from the server." });
-                s.disconnect(true);
-              }
-            }
+              action: "ban",
+              reason: banReason,
+            });
           }
 
           insertServerAudit({

@@ -11,6 +11,7 @@ import {
   getRefreshToken,
   revokeUserRefreshTokens,
 } from "../../db";
+import { checkSessionAllowed } from "../../moderation/sessionGate";
 
 // ── Password cooldown ──────────────────────────────────────────────
 //
@@ -187,11 +188,15 @@ export function registerJoinHelpers(ctx: HandlerContext): EventHandlerMap {
           const cfg = await getServerConfig();
           const currentVersion = cfg?.token_version ?? 0;
 
-          const user = await getUserByServerId(record.server_user_id);
-          if (!user || !user.is_active) {
-            socket.emit("token:error", { error: "membership_required", message: "You are no longer a member. Please rejoin." });
+          const gate = await checkSessionAllowed({
+            grytUserId: record.gryt_user_id,
+            serverUserId: record.server_user_id,
+          });
+          if (!gate.ok) {
+            socket.emit("token:error", { error: gate.code, message: gate.message });
             return;
           }
+          const user = gate.user;
 
           const newAccessToken = generateAccessToken({
             grytUserId: record.gryt_user_id,
@@ -230,6 +235,16 @@ export function registerJoinHelpers(ctx: HandlerContext): EventHandlerMap {
           }
 
           const { grytUserId, serverUserId, nickname, serverHost } = decoded;
+
+          // This branch used to re-mint purely from the old token's claims,
+          // touching the database not at all — so it renewed sessions for
+          // banned users and for users who were no longer members.
+          const gate = await checkSessionAllowed({ grytUserId, serverUserId });
+          if (!gate.ok) {
+            socket.emit("token:error", { error: gate.code, message: gate.message });
+            return;
+          }
+
           const newToken = generateAccessToken({ grytUserId, serverUserId, nickname, serverHost, tokenVersion: currentVersion });
           if (clientsInfo[clientId]) {
             clientsInfo[clientId].accessToken = newToken;

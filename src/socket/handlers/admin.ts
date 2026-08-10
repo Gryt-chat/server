@@ -26,6 +26,7 @@ import {
   listBans,
 } from "../../db";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
+import { evictUser, resolveGrytUserId } from "../../moderation/evict";
 import { getVersionStatus } from "../../versionCheck";
 import { registerAdminChannelHandlers } from "./adminChannels";
 
@@ -355,7 +356,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
 
     // ── Moderation ─────────────────────────────────────────────────
 
-    'server:kick': async (payload: { accessToken: string; targetServerUserId: string }) => {
+    'server:kick': async (payload: { accessToken: string; targetServerUserId: string; reason?: string }) => {
       try {
         const rl = rlCheck("server:kick", ctx, RL_MODERATION);
         if (!rl.allowed) { emitRateLimited(ctx, rl); return; }
@@ -379,15 +380,22 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        for (const [sid, s] of io.sockets.sockets) {
-          const ci = clientsInfo[sid];
-          if (ci?.serverUserId === targetId) {
-            s.emit("server:kicked", { reason: "You were kicked from the server by an admin." });
-            s.disconnect(true);
-          }
+        const targetGrytUserId = await resolveGrytUserId(clientsInfo, targetId);
+        if (!targetGrytUserId) {
+          socket.emit("server:error", { error: "not_found", message: "Could not resolve user to kick." });
+          return;
         }
 
-        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "kick", target: targetId }).catch((e) => consola.warn("audit log write failed", e));
+        await evictUser({
+          io,
+          clientsInfo,
+          targetServerUserId: targetId,
+          targetGrytUserId,
+          action: "kick",
+          reason: payload.reason,
+        });
+
+        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "kick", target: targetId, meta: { reason: payload.reason ?? null } }).catch((e) => consola.warn("audit log write failed", e));
         socket.emit("server:kick:success", { targetServerUserId: targetId });
         syncAllClients(io, clientsInfo);
         broadcastMemberList(io, clientsInfo, serverId);
@@ -421,34 +429,24 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        // Resolve the grytUserId for the target so we can store the ban
-        let targetGrytUserId: string | undefined;
-        for (const ci of Object.values(clientsInfo)) {
-          if (ci.serverUserId === targetId && ci.grytUserId) {
-            targetGrytUserId = ci.grytUserId;
-            break;
-          }
-        }
-        if (!targetGrytUserId) {
-          // Fallback: look up from DB
-          const { getUserByServerId } = await import("../../db");
-          const user = await getUserByServerId(targetId);
-          targetGrytUserId = user?.gryt_user_id;
-        }
+        const targetGrytUserId = await resolveGrytUserId(clientsInfo, targetId);
         if (!targetGrytUserId) {
           socket.emit("server:error", { error: "not_found", message: "Could not resolve user for ban." });
           return;
         }
 
+        // The ban row goes in first, so that the eviction below cannot race a
+        // reconnect into the window before the gate would refuse it.
         await banUser(targetGrytUserId, auth.tokenPayload.serverUserId, payload.reason);
 
-        for (const [sid, s] of io.sockets.sockets) {
-          const ci = clientsInfo[sid];
-          if (ci?.serverUserId === targetId) {
-            s.emit("server:kicked", { reason: "You were banned from the server." });
-            s.disconnect(true);
-          }
-        }
+        await evictUser({
+          io,
+          clientsInfo,
+          targetServerUserId: targetId,
+          targetGrytUserId,
+          action: "ban",
+          reason: payload.reason,
+        });
 
         insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "ban", target: targetId, meta: { reason: payload.reason ?? null } }).catch((e) => consola.warn("audit log write failed", e));
         socket.emit("server:ban:success", { targetServerUserId: targetId });

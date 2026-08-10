@@ -5,7 +5,8 @@ import { colors } from "../utils/colors";
 import { SFUClient } from "../sfu/client";
 import type { SFUPeerEvent, SFUSyncRoom } from "../sfu/client";
 import { verifyAccessToken } from "../utils/jwt";
-import { getUserByServerId, getServerConfig } from "../db";
+import { getServerConfig } from "../db";
+import { checkSessionAllowed } from "../moderation/sessionGate";
 import { syncAllClients, verifyClient, broadcastMemberList, countOtherSessions } from "./utils/clients";
 import { sendInfo, sendServerDetails, setSocketRefs, broadcastChatNew, broadcastCustomEmojisUpdate, broadcastEmojiQueueUpdate, broadcastServerUiUpdate } from "./utils/server";
 import { getServerIdFromEnv } from "../utils/serverId";
@@ -391,71 +392,81 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
             return;
           }
 
-          const userExists = await getUserByServerId(tokenPayload.serverUserId);
-          if (userExists && userExists.is_active) {
-            clientsInfo[clientId].accessToken = clientAccessToken;
-            clientsInfo[clientId].grytUserId = tokenPayload.grytUserId;
-            clientsInfo[clientId].serverUserId = tokenPayload.serverUserId;
-            clientsInfo[clientId].nickname = tokenPayload.nickname;
+          const gate = await checkSessionAllowed({
+            grytUserId: tokenPayload.grytUserId,
+            serverUserId: tokenPayload.serverUserId,
+          });
+          if (!gate.ok) {
+            // A banned user reconnecting with a live token used to be restored
+            // in full here, which is most of why a ban did not hold.
+            socket.emit("server:kicked", {
+              action: gate.code === "banned" ? "ban" : "kick",
+              reason: gate.message,
+            });
+            socket.disconnect(true);
+            return;
+          }
 
-            // Restore voice state if the user reconnected within the grace period
-            const pending = pendingVoiceCleanup.get(tokenPayload.serverUserId);
-            if (pending) {
-              clearTimeout(pending.timer);
-              pendingVoiceCleanup.delete(tokenPayload.serverUserId);
-              consola.info(`[Voice:Grace] Restored voice state for ${tokenPayload.nickname} (${tokenPayload.serverUserId})`);
+          clientsInfo[clientId].accessToken = clientAccessToken;
+          clientsInfo[clientId].grytUserId = tokenPayload.grytUserId;
+          clientsInfo[clientId].serverUserId = tokenPayload.serverUserId;
+          clientsInfo[clientId].nickname = tokenPayload.nickname;
 
-              clientsInfo[clientId].hasJoinedChannel = true;
-              clientsInfo[clientId].voiceChannelId = pending.voiceChannelId;
-              clientsInfo[clientId].streamID = pending.streamID;
-              clientsInfo[clientId].isConnectedToVoice = true;
-              clientsInfo[clientId].screenShareEnabled = pending.screenShareEnabled;
-              clientsInfo[clientId].screenShareVideoStreamID = pending.screenShareVideoStreamID;
-              clientsInfo[clientId].screenShareAudioStreamID = pending.screenShareAudioStreamID;
-              clientsInfo[clientId].cameraEnabled = pending.cameraEnabled;
-              clientsInfo[clientId].cameraStreamID = pending.cameraStreamID;
-              clientsInfo[clientId].isMuted = pending.isMuted;
-              clientsInfo[clientId].isDeafened = pending.isDeafened;
+          // Restore voice state if the user reconnected within the grace period
+          const pending = pendingVoiceCleanup.get(tokenPayload.serverUserId);
+          if (pending) {
+            clearTimeout(pending.timer);
+            pendingVoiceCleanup.delete(tokenPayload.serverUserId);
+            consola.info(`[Voice:Grace] Restored voice state for ${tokenPayload.nickname} (${tokenPayload.serverUserId})`);
 
-              const roomName = pending.voiceChannelId
-                ? voiceRoomName(serverId, pending.voiceChannelId)
-                : "";
-              if (roomName) socket.join(roomName);
+            clientsInfo[clientId].hasJoinedChannel = true;
+            clientsInfo[clientId].voiceChannelId = pending.voiceChannelId;
+            clientsInfo[clientId].streamID = pending.streamID;
+            clientsInfo[clientId].isConnectedToVoice = true;
+            clientsInfo[clientId].screenShareEnabled = pending.screenShareEnabled;
+            clientsInfo[clientId].screenShareVideoStreamID = pending.screenShareVideoStreamID;
+            clientsInfo[clientId].screenShareAudioStreamID = pending.screenShareAudioStreamID;
+            clientsInfo[clientId].cameraEnabled = pending.cameraEnabled;
+            clientsInfo[clientId].cameraStreamID = pending.cameraStreamID;
+            clientsInfo[clientId].isMuted = pending.isMuted;
+            clientsInfo[clientId].isDeafened = pending.isDeafened;
 
-              socket.emit("voice:state:restored", {
-                channelId: pending.voiceChannelId,
-                streamID: pending.streamID,
+            const roomName = pending.voiceChannelId
+              ? voiceRoomName(serverId, pending.voiceChannelId)
+              : "";
+            if (roomName) socket.join(roomName);
+
+            socket.emit("voice:state:restored", {
+              channelId: pending.voiceChannelId,
+              streamID: pending.streamID,
+            });
+          }
+
+          const otherCount = countOtherSessions(clientsInfo, clientId, tokenPayload.grytUserId);
+          consola.info(
+            `Restored session: ${tokenPayload.nickname} (${tokenPayload.serverUserId})` +
+            (otherCount > 0 ? ` — ${otherCount} other session(s) active` : ""),
+          );
+
+          verifyClient(socket);
+          syncAllClients(io, clientsInfo);
+          broadcastMemberList(io, clientsInfo, serverId);
+          sendServerDetails(socket, clientsInfo, serverId).catch((e) => consola.warn("sendServerDetails failed", e));
+
+          try {
+            const cfg = await getServerConfig();
+            if (cfg?.owner_gryt_user_id === tokenPayload.grytUserId && !cfg.is_configured) {
+              socket.emit("server:setup_required", {
+                serverId,
+                settings: {
+                  displayName: cfg.display_name || process.env.SERVER_NAME || "Unknown Server",
+                  description: cfg.description || process.env.SERVER_DESCRIPTION || "A Gryt server",
+                  iconUrl: cfg.icon_url || null,
+                  isConfigured: !!cfg.is_configured,
+                },
               });
             }
-
-            const otherCount = countOtherSessions(clientsInfo, clientId, tokenPayload.grytUserId);
-            consola.info(
-              `Restored session: ${tokenPayload.nickname} (${tokenPayload.serverUserId})` +
-              (otherCount > 0 ? ` — ${otherCount} other session(s) active` : ""),
-            );
-
-            verifyClient(socket);
-            syncAllClients(io, clientsInfo);
-            broadcastMemberList(io, clientsInfo, serverId);
-            sendServerDetails(socket, clientsInfo, serverId).catch((e) => consola.warn("sendServerDetails failed", e));
-
-            try {
-              const cfg = await getServerConfig();
-              if (cfg?.owner_gryt_user_id === tokenPayload.grytUserId && !cfg.is_configured) {
-                socket.emit("server:setup_required", {
-                  serverId,
-                  settings: {
-                    displayName: cfg.display_name || process.env.SERVER_NAME || "Unknown Server",
-                    description: cfg.description || process.env.SERVER_DESCRIPTION || "A Gryt server",
-                    iconUrl: cfg.icon_url || null,
-                    isConfigured: !!cfg.is_configured,
-                  },
-                });
-              }
-            } catch { /* ignore */ }
-          } else {
-            socket.emit("token:revoked", { reason: "membership_required", message: "Please rejoin." });
-          }
+          } catch { /* ignore */ }
         } catch (error) {
           consola.error(`Error restoring session for ${clientId}:`, error);
           socket.emit("token:invalid", "Database error. Please rejoin.");
