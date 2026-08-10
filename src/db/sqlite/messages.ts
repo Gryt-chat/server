@@ -206,3 +206,71 @@ export async function removeReactionFromMessage(conversationId: string, messageI
   const msg = rowToMessage(row);
   return { ...msg, reactions: newReactions.length > 0 ? newReactions : null };
 }
+
+/**
+ * Removes every trace of a user from the message history.
+ *
+ * Deleting their messages is the obvious half. The other half is the
+ * reactions they left on everybody else's, which live as JSON on each
+ * message rather than in a table of their own — so they cannot be removed
+ * with a DELETE and have to be rewritten row by row.
+ *
+ * A reaction whose last user was this person disappears entirely rather than
+ * lingering with a count of zero.
+ *
+ * Returns what changed so the callers can tell connected clients: deleted
+ * messages by id, and the messages whose reactions were rewritten.
+ */
+export async function purgeUserContent(senderServerUserId: string): Promise<{
+  deletedMessages: Array<{ conversation_id: string; message_id: string }>;
+  updatedReactions: Array<{ conversation_id: string; message_id: string; reactions: Reaction[] | null }>;
+}> {
+  const db = getSqliteDb();
+
+  const deletedMessages = db
+    .prepare(`SELECT conversation_id, message_id FROM messages WHERE sender_server_id = ?`)
+    .all(senderServerUserId) as Array<{ conversation_id: string; message_id: string }>;
+  db.prepare(`DELETE FROM messages WHERE sender_server_id = ?`).run(senderServerUserId);
+
+  // Only rows that mention them at all. The LIKE is a cheap prefilter over a
+  // JSON blob — the authoritative check is the parse below, because a
+  // substring match can hit an id that merely contains this one.
+  const candidates = db
+    .prepare(`SELECT conversation_id, message_id, reactions FROM messages WHERE reactions IS NOT NULL AND reactions LIKE ?`)
+    .all(`%${senderServerUserId}%`) as Array<{ conversation_id: string; message_id: string; reactions: string }>;
+
+  const updatedReactions: Array<{ conversation_id: string; message_id: string; reactions: Reaction[] | null }> = [];
+  const update = db.prepare(`UPDATE messages SET reactions = ? WHERE conversation_id = ? AND message_id = ?`);
+
+  for (const row of candidates) {
+    let parsed: Reaction[];
+    try {
+      parsed = JSON.parse(row.reactions) as Reaction[];
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(parsed)) continue;
+
+    let touched = false;
+    const next = parsed
+      .map((r) => {
+        if (!r.users?.includes(senderServerUserId)) return r;
+        touched = true;
+        const users = r.users.filter((u) => u !== senderServerUserId);
+        return { ...r, users, amount: users.length };
+      })
+      .filter((r) => r.users.length > 0);
+
+    if (!touched) continue;
+
+    const value = next.length > 0 ? JSON.stringify(next) : null;
+    update.run(value, row.conversation_id, row.message_id);
+    updatedReactions.push({
+      conversation_id: row.conversation_id,
+      message_id: row.message_id,
+      reactions: next.length > 0 ? next : null,
+    });
+  }
+
+  return { deletedMessages, updatedReactions };
+}

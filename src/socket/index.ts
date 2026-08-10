@@ -1,3 +1,4 @@
+import { sfuRoomId, voiceRoomName } from "./utils/voiceRooms";
 import consola from "consola";
 import { Server, Socket } from "socket.io";
 import { Clients } from "../types";
@@ -5,7 +6,8 @@ import { colors } from "../utils/colors";
 import { SFUClient } from "../sfu/client";
 import type { SFUPeerEvent, SFUSyncRoom } from "../sfu/client";
 import { verifyAccessToken } from "../utils/jwt";
-import { getUserByServerId, getServerConfig } from "../db";
+import { getServerConfig, effectiveModerationState } from "../db";
+import { checkSessionAllowed } from "../moderation/sessionGate";
 import { syncAllClients, verifyClient, broadcastMemberList, countOtherSessions } from "./utils/clients";
 import { sendInfo, sendServerDetails, setSocketRefs, broadcastChatNew, broadcastCustomEmojisUpdate, broadcastEmojiQueueUpdate, broadcastServerUiUpdate } from "./utils/server";
 import { getServerIdFromEnv } from "../utils/serverId";
@@ -25,10 +27,6 @@ import { registerTypingHandlers } from "./handlers/typing";
 export { broadcastChatNew, broadcastCustomEmojisUpdate, broadcastEmojiQueueUpdate, broadcastServerUiUpdate };
 
 const clientsInfo: Clients = {};
-
-function voiceRoomName(serverId: string, channelId: string): string {
-  return `voice:${serverId}:${channelId}`;
-}
 
 // Grace period for voice state during transient Socket.IO disconnects (e.g.
 // Cloudflare Tunnel WebSocket resets). Instead of immediately tearing down
@@ -391,71 +389,98 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
             return;
           }
 
-          const userExists = await getUserByServerId(tokenPayload.serverUserId);
-          if (userExists && userExists.is_active) {
-            clientsInfo[clientId].accessToken = clientAccessToken;
-            clientsInfo[clientId].grytUserId = tokenPayload.grytUserId;
-            clientsInfo[clientId].serverUserId = tokenPayload.serverUserId;
-            clientsInfo[clientId].nickname = tokenPayload.nickname;
+          const gate = await checkSessionAllowed({
+            grytUserId: tokenPayload.grytUserId,
+            serverUserId: tokenPayload.serverUserId,
+          });
+          if (!gate.ok) {
+            // A banned user reconnecting with a live token used to be restored
+            // in full here, which is most of why a ban did not hold.
+            //
+            // Only a ban says server:kicked, because the client takes the
+            // server out of the sidebar when it hears that. "You are not a
+            // member" reaching here is not necessarily moderation — a stale
+            // token against a rebuilt server looks identical — and deleting
+            // somebody's server entry over an ambiguous signal is not a
+            // recoverable mistake. token:revoked is what this path said before,
+            // and it stops the restore just as firmly.
+            if (gate.code === "banned") {
+              socket.emit("server:kicked", { action: "ban", reason: gate.message });
+              socket.disconnect(true);
+            } else {
+              socket.emit("token:revoked", { reason: gate.code, message: gate.message });
+            }
+            return;
+          }
 
-            // Restore voice state if the user reconnected within the grace period
-            const pending = pendingVoiceCleanup.get(tokenPayload.serverUserId);
-            if (pending) {
-              clearTimeout(pending.timer);
-              pendingVoiceCleanup.delete(tokenPayload.serverUserId);
-              consola.info(`[Voice:Grace] Restored voice state for ${tokenPayload.nickname} (${tokenPayload.serverUserId})`);
+          clientsInfo[clientId].accessToken = clientAccessToken;
+          clientsInfo[clientId].grytUserId = tokenPayload.grytUserId;
+          clientsInfo[clientId].serverUserId = tokenPayload.serverUserId;
+          clientsInfo[clientId].nickname = tokenPayload.nickname;
 
-              clientsInfo[clientId].hasJoinedChannel = true;
-              clientsInfo[clientId].voiceChannelId = pending.voiceChannelId;
-              clientsInfo[clientId].streamID = pending.streamID;
-              clientsInfo[clientId].isConnectedToVoice = true;
-              clientsInfo[clientId].screenShareEnabled = pending.screenShareEnabled;
-              clientsInfo[clientId].screenShareVideoStreamID = pending.screenShareVideoStreamID;
-              clientsInfo[clientId].screenShareAudioStreamID = pending.screenShareAudioStreamID;
-              clientsInfo[clientId].cameraEnabled = pending.cameraEnabled;
-              clientsInfo[clientId].cameraStreamID = pending.cameraStreamID;
-              clientsInfo[clientId].isMuted = pending.isMuted;
-              clientsInfo[clientId].isDeafened = pending.isDeafened;
+          // Server mute and deafen belong to the user, not to this socket.
+          // They were initialised to false when the socket connected, so a
+          // reconnect — or a second tab — used to clear them. `gate.user` is
+          // the row the session gate already read, so this costs no query.
+          const moderation = effectiveModerationState(gate.user);
+          clientsInfo[clientId].isServerMuted = moderation.isServerMuted;
+          clientsInfo[clientId].isServerDeafened = moderation.isServerDeafened;
 
-              const roomName = pending.voiceChannelId
-                ? voiceRoomName(serverId, pending.voiceChannelId)
-                : "";
-              if (roomName) socket.join(roomName);
+          // Restore voice state if the user reconnected within the grace period
+          const pending = pendingVoiceCleanup.get(tokenPayload.serverUserId);
+          if (pending) {
+            clearTimeout(pending.timer);
+            pendingVoiceCleanup.delete(tokenPayload.serverUserId);
+            consola.info(`[Voice:Grace] Restored voice state for ${tokenPayload.nickname} (${tokenPayload.serverUserId})`);
 
-              socket.emit("voice:state:restored", {
-                channelId: pending.voiceChannelId,
-                streamID: pending.streamID,
+            clientsInfo[clientId].hasJoinedChannel = true;
+            clientsInfo[clientId].voiceChannelId = pending.voiceChannelId;
+            clientsInfo[clientId].streamID = pending.streamID;
+            clientsInfo[clientId].isConnectedToVoice = true;
+            clientsInfo[clientId].screenShareEnabled = pending.screenShareEnabled;
+            clientsInfo[clientId].screenShareVideoStreamID = pending.screenShareVideoStreamID;
+            clientsInfo[clientId].screenShareAudioStreamID = pending.screenShareAudioStreamID;
+            clientsInfo[clientId].cameraEnabled = pending.cameraEnabled;
+            clientsInfo[clientId].cameraStreamID = pending.cameraStreamID;
+            clientsInfo[clientId].isMuted = pending.isMuted;
+            clientsInfo[clientId].isDeafened = pending.isDeafened;
+
+            const roomName = pending.voiceChannelId
+              ? voiceRoomName(serverId, pending.voiceChannelId)
+              : "";
+            if (roomName) socket.join(roomName);
+
+            socket.emit("voice:state:restored", {
+              channelId: pending.voiceChannelId,
+              streamID: pending.streamID,
+            });
+          }
+
+          const otherCount = countOtherSessions(clientsInfo, clientId, tokenPayload.grytUserId);
+          consola.info(
+            `Restored session: ${tokenPayload.nickname} (${tokenPayload.serverUserId})` +
+            (otherCount > 0 ? ` — ${otherCount} other session(s) active` : ""),
+          );
+
+          verifyClient(socket);
+          syncAllClients(io, clientsInfo);
+          broadcastMemberList(io, clientsInfo, serverId);
+          sendServerDetails(socket, clientsInfo, serverId).catch((e) => consola.warn("sendServerDetails failed", e));
+
+          try {
+            const cfg = await getServerConfig();
+            if (cfg?.owner_gryt_user_id === tokenPayload.grytUserId && !cfg.is_configured) {
+              socket.emit("server:setup_required", {
+                serverId,
+                settings: {
+                  displayName: cfg.display_name || process.env.SERVER_NAME || "Unknown Server",
+                  description: cfg.description || process.env.SERVER_DESCRIPTION || "A Gryt server",
+                  iconUrl: cfg.icon_url || null,
+                  isConfigured: !!cfg.is_configured,
+                },
               });
             }
-
-            const otherCount = countOtherSessions(clientsInfo, clientId, tokenPayload.grytUserId);
-            consola.info(
-              `Restored session: ${tokenPayload.nickname} (${tokenPayload.serverUserId})` +
-              (otherCount > 0 ? ` — ${otherCount} other session(s) active` : ""),
-            );
-
-            verifyClient(socket);
-            syncAllClients(io, clientsInfo);
-            broadcastMemberList(io, clientsInfo, serverId);
-            sendServerDetails(socket, clientsInfo, serverId).catch((e) => consola.warn("sendServerDetails failed", e));
-
-            try {
-              const cfg = await getServerConfig();
-              if (cfg?.owner_gryt_user_id === tokenPayload.grytUserId && !cfg.is_configured) {
-                socket.emit("server:setup_required", {
-                  serverId,
-                  settings: {
-                    displayName: cfg.display_name || process.env.SERVER_NAME || "Unknown Server",
-                    description: cfg.description || process.env.SERVER_DESCRIPTION || "A Gryt server",
-                    iconUrl: cfg.icon_url || null,
-                    isConfigured: !!cfg.is_configured,
-                  },
-                });
-              }
-            } catch { /* ignore */ }
-          } else {
-            socket.emit("token:revoked", { reason: "membership_required", message: "Please rejoin." });
-          }
+          } catch { /* ignore */ }
         } catch (error) {
           consola.error(`Error restoring session for ${clientId}:`, error);
           socket.emit("token:invalid", "Database error. Please rejoin.");

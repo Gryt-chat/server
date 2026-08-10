@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction } from "express";
 import { verifyAccessToken, TokenPayload } from "../utils/jwt";
 import { getServerConfig } from "../db";
+import { checkSessionAllowed } from "../moderation/sessionGate";
 
 declare module "express-serve-static-core" {
   interface Request {
@@ -48,6 +49,23 @@ export async function requireBearerToken(req: Request, res: Response, next: Next
     }
   } catch {
     // If DB is unavailable, let the request through (token is valid JWT)
+  }
+
+  // Deliberately *not* fail-open, unlike the token-version check above. A
+  // banned user holding a valid token is exactly the case this exists to stop,
+  // so a database we cannot read has to mean "no" rather than "yes".
+  try {
+    const gate = await checkSessionAllowed({
+      grytUserId: payload.grytUserId,
+      serverUserId: payload.serverUserId,
+    });
+    if (!gate.ok) {
+      res.status(403).json({ error: gate.code, message: gate.message });
+      return;
+    }
+  } catch {
+    res.status(503).json({ error: "unavailable", message: "Could not verify membership." });
+    return;
   }
 
   req.tokenPayload = payload;

@@ -1,6 +1,7 @@
 import consola from "consola";
 import type { HandlerContext, EventHandlerMap } from "./types";
-import { requireAuth } from "../middleware/auth";
+import { requireAuth, requireOutranks } from "../middleware/auth";
+import { evictUser, resolveGrytUserId } from "../../moderation/evict";
 import { syncAllClients, broadcastMemberList } from "../utils/clients";
 import {
   getMessageById,
@@ -21,7 +22,7 @@ const RL_REPORT: RateLimitRule = { limit: 10, windowMs: 60_000, scorePerAction: 
 const RL_REPORT_ADMIN: RateLimitRule = { limit: 30, windowMs: 60_000, scorePerAction: 1, maxScore: 15, scoreDecayMs: 3_000 };
 
 export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
-  const { io, socket, clientId, serverId, clientsInfo } = ctx;
+  const { io, socket, clientId, serverId, clientsInfo, sfuClient } = ctx;
 
   function rlCheck(event: string, rule: RateLimitRule) {
     const ip = ctx.getClientIp();
@@ -230,6 +231,10 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
             return;
           }
 
+          // This path had no hierarchy check, so the reports panel could ban
+          // the owner — through a different screen than the one that refuses.
+          if (!(await requireOutranks(socket, auth, payload.senderServerUserId, "ban"))) return;
+
           await resolveAllReportsForMessage(
             payload.messageId,
             "deleted",
@@ -265,34 +270,27 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
             affected_conversations: affectedConversations,
           });
 
-          // Ban the user
-          let targetGrytUserId: string | undefined;
-          for (const ci of Object.values(clientsInfo)) {
-            if (ci.serverUserId === payload.senderServerUserId && ci.grytUserId) {
-              targetGrytUserId = ci.grytUserId;
-              break;
-            }
-          }
-          if (!targetGrytUserId) {
-            const senderUser = await getUserByServerId(payload.senderServerUserId);
-            targetGrytUserId = senderUser?.gryt_user_id;
-          }
+          // Same eviction as server:ban. This used to be its own inline copy of
+          // the ban-and-disconnect, which meant a ban issued from the reports
+          // panel skipped whatever the real one learned to do.
+          const targetGrytUserId = await resolveGrytUserId(
+            clientsInfo,
+            payload.senderServerUserId,
+          );
 
           if (targetGrytUserId) {
-            await banUser(
+            const banReason = "Banned via report review (all messages deleted)";
+            await banUser(targetGrytUserId, auth.tokenPayload.serverUserId, banReason);
+            await evictUser({
+              io,
+              clientsInfo,
+              serverId,
+              sfuClient,
+              targetServerUserId: payload.senderServerUserId,
               targetGrytUserId,
-              auth.tokenPayload.serverUserId,
-              "Banned via report review (all messages deleted)",
-            );
-
-            // Disconnect the banned user
-            for (const [sid, s] of io.sockets.sockets) {
-              const ci = clientsInfo[sid];
-              if (ci?.serverUserId === payload.senderServerUserId) {
-                s.emit("server:kicked", { reason: "You were banned from the server." });
-                s.disconnect(true);
-              }
-            }
+              action: "ban",
+              reason: banReason,
+            });
           }
 
           insertServerAudit({

@@ -74,6 +74,9 @@ function createSchema(d: DatabaseSync): void {
       avatar_file_id TEXT,
       joined_with_invite_code TEXT,
       is_active INTEGER NOT NULL DEFAULT 1,
+      is_server_muted INTEGER NOT NULL DEFAULT 0,
+      is_server_deafened INTEGER NOT NULL DEFAULT 0,
+      server_mute_expires_at TEXT,
       created_at TEXT NOT NULL,
       last_seen TEXT NOT NULL
     );
@@ -91,7 +94,8 @@ function createSchema(d: DatabaseSync): void {
       gryt_user_id TEXT PRIMARY KEY,
       banned_by_server_user_id TEXT NOT NULL,
       reason TEXT,
-      created_at TEXT NOT NULL
+      created_at TEXT NOT NULL,
+      expires_at TEXT
     );
 
     CREATE TABLE IF NOT EXISTS channels (
@@ -304,6 +308,36 @@ function runMigrations(d: DatabaseSync): void {
   // constant rather than whatever was true when the row was created.
   if (!hasColumn(d, "server_config", "avatar_thumb_px")) {
     d.exec("ALTER TABLE server_config ADD COLUMN avatar_thumb_px INTEGER");
+  }
+
+  // When a ban lifts by itself, as ISO-8601. NULL means permanent, matching
+  // what NULL already means in invites.expires_at and refresh_tokens.expires_at.
+  //
+  // Nullable rather than NOT NULL because SQLite cannot add a NOT NULL column
+  // without a constant default, and there is no sensible constant here — every
+  // ban that predates this column is permanent, which is exactly NULL.
+  if (!hasColumn(d, "bans", "expires_at")) {
+    d.exec("ALTER TABLE bans ADD COLUMN expires_at TEXT");
+  }
+
+  // Server mute and deafen used to live only on the socket, and were reset to
+  // false on every connection — so reconnecting, or opening a second tab,
+  // cleared them. They belong to the user rather than to the connection.
+  //
+  // NOT NULL with a constant default is legal on ADD COLUMN, unlike a
+  // non-constant one, so these need no backfill: everyone starts unmuted.
+  if (!hasColumn(d, "users", "is_server_muted")) {
+    d.exec("ALTER TABLE users ADD COLUMN is_server_muted INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!hasColumn(d, "users", "is_server_deafened")) {
+    d.exec("ALTER TABLE users ADD COLUMN is_server_deafened INTEGER NOT NULL DEFAULT 0");
+  }
+
+  // A timeout is a mute that lifts by itself. Same shape as a temporary ban:
+  // nullable ISO-8601, NULL meaning "until somebody removes it", evaluated on
+  // read rather than swept by a job.
+  if (!hasColumn(d, "users", "server_mute_expires_at")) {
+    d.exec("ALTER TABLE users ADD COLUMN server_mute_expires_at TEXT");
   }
   d.prepare("UPDATE server_config SET avatar_thumb_px = ?").run(AVATAR_THUMB_PX);
 }

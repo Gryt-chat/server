@@ -15,9 +15,10 @@ import {
   getServerRole,
   setServerRole,
   createRefreshToken,
-  isUserBanned,
+  effectiveModerationState,
 } from "../../db";
 import { isPrivateIp } from "../../utils/isPrivateIp";
+import { checkIdentityAllowed } from "../../moderation/sessionGate";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 import {
   registerJoinHelpers,
@@ -172,9 +173,22 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
         const nickname = (challenge.nickname || suggestedNickname || "User").trim();
         let cfg = await getServerConfig().catch(() => null);
 
-        const banned = await isUserBanned(grytUserId);
-        if (banned) {
-          socket.emit("server:error", { error: "banned", message: "You are banned from this server." });
+        // Stays ahead of invite consumption so a banned user does not burn an
+        // invite code on a join that was never going to succeed.
+        //
+        // The refusal is deliberately uninformative. Telling somebody they are
+        // banned confirms both that the ban exists and that this identity is
+        // known here, which is a moderation decision leaking to the person it
+        // was made about — and it invites arguing with the message rather than
+        // with a moderator. The real reason is in the audit log, and the
+        // moderator who acted already told them if they wanted to.
+        const identity = await checkIdentityAllowed(grytUserId);
+        if (!identity.ok) {
+          consola.info(`Join refused for ${grytUserId}: ${identity.code}`);
+          socket.emit("server:error", {
+            error: "join_refused",
+            message: "Sorry, you can't join this server.",
+          });
           return;
         }
 
@@ -291,6 +305,12 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           clientsInfo[clientId].serverUserId = user.server_user_id;
           clientsInfo[clientId].nickname = user.nickname;
           clientsInfo[clientId].accessToken = accessToken;
+
+          // Carried on the user rather than the connection, so rejoining does
+          // not clear a server mute.
+          const moderation = effectiveModerationState(user);
+          clientsInfo[clientId].isServerMuted = moderation.isServerMuted;
+          clientsInfo[clientId].isServerDeafened = moderation.isServerDeafened;
         }
 
         verifyClient(socket);

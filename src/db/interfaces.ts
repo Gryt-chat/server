@@ -19,6 +19,11 @@ export interface UserRecord {
   last_seen: Date;
   last_token_refresh?: Date;
   is_active: boolean;
+  /** Server mute and deafen, which belong to the user rather than the socket. */
+  is_server_muted: boolean;
+  is_server_deafened: boolean;
+  /** When a timed mute lifts. Null means it stays until removed. */
+  server_mute_expires_at: Date | null;
 }
 
 // ── Message types ────────────────────────────────────────────────
@@ -125,6 +130,11 @@ export interface ServerBanRecord {
   banned_by_server_user_id: string;
   reason: string | null;
   created_at: Date;
+  /** When the ban lifts by itself. Null means permanent. */
+  expires_at: Date | null;
+  /** Both null when the user row is gone, so callers must fall back to the id. */
+  nickname: string | null;
+  banned_by_nickname: string | null;
 }
 
 // ── Channel types ────────────────────────────────────────────────

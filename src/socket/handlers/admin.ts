@@ -1,6 +1,6 @@
 import consola from "consola";
 import type { HandlerContext, EventHandlerMap } from "./types";
-import { requireAuth } from "../middleware/auth";
+import { requireAuth, requireOutranks } from "../middleware/auth";
 import { broadcastServerUiUpdate, sendEmojiQueueStateToSocket } from "../utils/server";
 import { invalidateSystemChannelCache } from "../utils/systemMessages";
 import { VALID_CENSOR_STYLES, type CensorStyle } from "../../utils/profanityFilter";
@@ -16,7 +16,6 @@ import {
   createServerInvite,
   listServerInvites,
   revokeServerInvite,
-  getServerRole,
   setServerRole,
   listServerRoles,
   insertServerAudit,
@@ -24,8 +23,13 @@ import {
   banUser,
   unbanUser,
   listBans,
+  getUserByServerId,
+  purgeUserContent,
+  setUserModerationState,
 } from "../../db";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
+import { evictUser, resolveGrytUserId } from "../../moderation/evict";
+import { sfuRoomId } from "../utils/voiceRooms";
 import { getVersionStatus } from "../../versionCheck";
 import { registerAdminChannelHandlers } from "./adminChannels";
 
@@ -37,6 +41,67 @@ function rlCheck(event: string, ctx: HandlerContext, rule: RateLimitRule) {
   const ip = ctx.getClientIp();
   const userId = ctx.clientsInfo[ctx.clientId]?.serverUserId;
   return checkRateLimit(event, userId, ip, rule);
+}
+
+/** A year, in minutes. Longer than this is what a permanent ban is for. */
+const MAX_BAN_MINUTES = 525_600;
+
+/**
+ * When a ban should lift, from a duration in minutes.
+ *
+ * Absent, null, or anything that is not a usable number means permanent, which
+ * keeps every existing caller — none of which send this field — behaving as it
+ * did. A garbled number is treated as permanent rather than rejected: refusing
+ * the whole ban because the duration was malformed would be the wrong way to
+ * fail for a moderation action someone is taking right now.
+ */
+function resolveBanExpiry(expiresInMinutes?: number | null): Date | null {
+  if (expiresInMinutes === undefined || expiresInMinutes === null) return null;
+  const minutes = Math.floor(Number(expiresInMinutes));
+  if (!Number.isFinite(minutes) || minutes <= 0) return null;
+  return new Date(Date.now() + Math.min(minutes, MAX_BAN_MINUTES) * 60_000);
+}
+
+/** A day, in minutes. A longer silence is what an indefinite mute is for. */
+const MAX_MUTE_MINUTES = 1440;
+
+/** When a timed mute lifts. Absent or unusable means indefinite. */
+function resolveMuteExpiry(expiresInMinutes?: number | null): Date | null {
+  if (expiresInMinutes === undefined || expiresInMinutes === null) return null;
+  const minutes = Math.floor(Number(expiresInMinutes));
+  if (!Number.isFinite(minutes) || minutes <= 0) return null;
+  return new Date(Date.now() + Math.min(minutes, MAX_MUTE_MINUTES) * 60_000);
+}
+
+/**
+ * Tells the SFU what this user's audio should be doing.
+ *
+ * Both arguments used to be wrong here. The room was built as
+ * `${serverUserId}:${streamID}`, which is not a room the SFU has ever heard
+ * of — the registered id is `${serverId}_${voiceChannelId}` (voice.ts, where
+ * the room is created) — and the user was the *socket id* rather than the
+ * server user id. So the call went out, matched nothing, and the only thing
+ * actually silencing anyone was their own client choosing to honour the
+ * `server:muted` event. A modified client simply kept talking.
+ *
+ * This mirrors the equivalent call in voice.ts on purpose: same room shape,
+ * same user id, same effective-state OR.
+ */
+function pushSfuAudioState(
+  sfuClient: HandlerContext["sfuClient"],
+  serverId: string,
+  ci: { serverUserId: string; hasJoinedChannel: boolean; voiceChannelId: string; isMuted: boolean; isDeafened: boolean; isServerMuted: boolean; isServerDeafened: boolean },
+): void {
+  if (!sfuClient || !ci.hasJoinedChannel || !ci.voiceChannelId) return;
+  const roomId = sfuRoomId(serverId, ci.voiceChannelId);
+  sfuClient
+    .updateUserAudioState(
+      roomId,
+      ci.serverUserId,
+      ci.isMuted || ci.isServerMuted,
+      ci.isDeafened || ci.isServerDeafened,
+    )
+    .catch((e) => consola.error("Failed to update SFU audio state:", e));
 }
 
 function emitRateLimited(ctx: HandlerContext, rl: { retryAfterMs?: number }) {
@@ -355,7 +420,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
 
     // ── Moderation ─────────────────────────────────────────────────
 
-    'server:kick': async (payload: { accessToken: string; targetServerUserId: string }) => {
+    'server:kick': async (payload: { accessToken: string; targetServerUserId: string; reason?: string }) => {
       try {
         const rl = rlCheck("server:kick", ctx, RL_MODERATION);
         if (!rl.allowed) { emitRateLimited(ctx, rl); return; }
@@ -363,31 +428,30 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           socket.emit("server:error", { error: "invalid_payload", message: "targetServerUserId required." });
           return;
         }
-        const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
+        const auth = await requireAuth(socket, payload, { requiredRole: "mod" });
         if (!auth) return;
 
         const targetId = payload.targetServerUserId.trim();
-        if (targetId === auth.tokenPayload.serverUserId) {
-          socket.emit("server:error", { error: "forbidden", message: "Cannot kick yourself." });
+        if (!(await requireOutranks(socket, auth, targetId, "kick"))) return;
+
+        const targetGrytUserId = await resolveGrytUserId(clientsInfo, targetId);
+        if (!targetGrytUserId) {
+          socket.emit("server:error", { error: "not_found", message: "Could not resolve user to kick." });
           return;
         }
 
-        const targetRole = await getServerRole(targetId);
-        const actorRole = await getServerRole(auth.tokenPayload.serverUserId);
-        if (targetRole === "owner" || (targetRole === "admin" && actorRole !== "owner")) {
-          socket.emit("server:error", { error: "forbidden", message: "Cannot kick a user with equal or higher role." });
-          return;
-        }
+        await evictUser({
+          io,
+          clientsInfo,
+          serverId,
+          sfuClient,
+          targetServerUserId: targetId,
+          targetGrytUserId,
+          action: "kick",
+          reason: payload.reason,
+        });
 
-        for (const [sid, s] of io.sockets.sockets) {
-          const ci = clientsInfo[sid];
-          if (ci?.serverUserId === targetId) {
-            s.emit("server:kicked", { reason: "You were kicked from the server by an admin." });
-            s.disconnect(true);
-          }
-        }
-
-        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "kick", target: targetId }).catch((e) => consola.warn("audit log write failed", e));
+        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "kick", target: targetId, meta: { reason: payload.reason ?? null } }).catch((e) => consola.warn("audit log write failed", e));
         socket.emit("server:kick:success", { targetServerUserId: targetId });
         syncAllClients(io, clientsInfo);
         broadcastMemberList(io, clientsInfo, serverId);
@@ -397,7 +461,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    'server:ban': async (payload: { accessToken: string; targetServerUserId: string; reason?: string }) => {
+    'server:ban': async (payload: { accessToken: string; targetServerUserId: string; reason?: string; expiresInMinutes?: number | null; deleteContent?: boolean }) => {
       try {
         const rl = rlCheck("server:ban", ctx, RL_MODERATION);
         if (!rl.allowed) { emitRateLimited(ctx, rl); return; }
@@ -409,48 +473,55 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         if (!auth) return;
 
         const targetId = payload.targetServerUserId.trim();
-        if (targetId === auth.tokenPayload.serverUserId) {
-          socket.emit("server:error", { error: "forbidden", message: "Cannot ban yourself." });
-          return;
-        }
+        if (!(await requireOutranks(socket, auth, targetId, "ban"))) return;
 
-        const targetRole = await getServerRole(targetId);
-        const actorRole = await getServerRole(auth.tokenPayload.serverUserId);
-        if (targetRole === "owner" || (targetRole === "admin" && actorRole !== "owner")) {
-          socket.emit("server:error", { error: "forbidden", message: "Cannot ban a user with equal or higher role." });
-          return;
-        }
-
-        // Resolve the grytUserId for the target so we can store the ban
-        let targetGrytUserId: string | undefined;
-        for (const ci of Object.values(clientsInfo)) {
-          if (ci.serverUserId === targetId && ci.grytUserId) {
-            targetGrytUserId = ci.grytUserId;
-            break;
-          }
-        }
-        if (!targetGrytUserId) {
-          // Fallback: look up from DB
-          const { getUserByServerId } = await import("../../db");
-          const user = await getUserByServerId(targetId);
-          targetGrytUserId = user?.gryt_user_id;
-        }
+        const targetGrytUserId = await resolveGrytUserId(clientsInfo, targetId);
         if (!targetGrytUserId) {
           socket.emit("server:error", { error: "not_found", message: "Could not resolve user for ban." });
           return;
         }
 
-        await banUser(targetGrytUserId, auth.tokenPayload.serverUserId, payload.reason);
+        // The ban row goes in first, so that the eviction below cannot race a
+        // reconnect into the window before the gate would refuse it.
+        const expiresAt = resolveBanExpiry(payload.expiresInMinutes);
+        await banUser(targetGrytUserId, auth.tokenPayload.serverUserId, payload.reason, expiresAt);
 
-        for (const [sid, s] of io.sockets.sockets) {
-          const ci = clientsInfo[sid];
-          if (ci?.serverUserId === targetId) {
-            s.emit("server:kicked", { reason: "You were banned from the server." });
-            s.disconnect(true);
-          }
+        await evictUser({
+          io,
+          clientsInfo,
+          serverId,
+          sfuClient,
+          targetServerUserId: targetId,
+          targetGrytUserId,
+          action: "ban",
+          reason: payload.reason,
+        });
+
+        // Erase what they wrote, if asked. Defaults to on, because a ban is
+        // usually about the content as much as the person — but it is a choice,
+        // since unban can restore access and cannot restore a thread. Replies
+        // to a deleted message lose their context for everybody, not just for
+        // the person banned.
+        const purge = payload.deleteContent !== false;
+        if (purge) {
+          const { deletedMessages, updatedReactions } = await purgeUserContent(targetId);
+
+          const affectedConversations = [...new Set(deletedMessages.map((d) => d.conversation_id))];
+          io.emit("chat:purge_user", {
+            sender_server_user_id: targetId,
+            affected_conversations: affectedConversations,
+          });
+          // No per-message broadcast for the reactions they left on other
+          // people's messages. The client already holds those messages and can
+          // strip the id itself from the purge event — emitting one
+          // chat:reaction each would mean hundreds of broadcasts for a
+          // prolific reactor, to say something the client can work out.
+          consola.info(
+            `Purged ${deletedMessages.length} messages and ${updatedReactions.length} reactions for ${targetId}`,
+          );
         }
 
-        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "ban", target: targetId, meta: { reason: payload.reason ?? null } }).catch((e) => consola.warn("audit log write failed", e));
+        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "ban", target: targetId, meta: { reason: payload.reason ?? null, deletedContent: purge } }).catch((e) => consola.warn("audit log write failed", e));
         socket.emit("server:ban:success", { targetServerUserId: targetId });
         syncAllClients(io, clientsInfo);
         broadcastMemberList(io, clientsInfo, serverId);
@@ -460,20 +531,38 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    'server:unban': async (payload: { accessToken: string; grytUserId: string }) => {
+    // Accepts either identifier. Ban speaks serverUserId and unban spoke
+    // grytUserId, so undoing a ban meant holding a different id from the one
+    // used to make it — and the bans list is the only place the grytUserId
+    // appears at all.
+    'server:unban': async (payload: { accessToken: string; grytUserId?: string; targetServerUserId?: string }) => {
       try {
         const rl = rlCheck("server:unban", ctx, RL_MODERATION);
         if (!rl.allowed) { emitRateLimited(ctx, rl); return; }
-        if (!payload || typeof payload.grytUserId !== "string") {
-          socket.emit("server:error", { error: "invalid_payload", message: "grytUserId required." });
+
+        const directId = typeof payload?.grytUserId === "string" ? payload.grytUserId.trim() : "";
+        const viaServerUserId = typeof payload?.targetServerUserId === "string" ? payload.targetServerUserId.trim() : "";
+        if (!directId && !viaServerUserId) {
+          socket.emit("server:error", { error: "invalid_payload", message: "grytUserId or targetServerUserId required." });
           return;
         }
+
         const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
         if (!auth) return;
 
-        await unbanUser(payload.grytUserId.trim());
-        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "unban", target: payload.grytUserId.trim() }).catch((e) => consola.warn("audit log write failed", e));
-        socket.emit("server:unban:success", { grytUserId: payload.grytUserId.trim() });
+        let grytUserId = directId;
+        if (!grytUserId) {
+          const user = await getUserByServerId(viaServerUserId);
+          grytUserId = user?.gryt_user_id ?? "";
+        }
+        if (!grytUserId) {
+          socket.emit("server:error", { error: "not_found", message: "Could not resolve user to unban." });
+          return;
+        }
+
+        await unbanUser(grytUserId);
+        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "unban", target: grytUserId }).catch((e) => consola.warn("audit log write failed", e));
+        socket.emit("server:unban:success", { grytUserId });
       } catch (e) {
         consola.error("server:unban failed", e);
         socket.emit("server:error", { error: "unban_failed", message: "Failed to unban user." });
@@ -492,7 +581,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    'server:mute': async (payload: { accessToken: string; targetServerUserId: string; muted: boolean }) => {
+    'server:mute': async (payload: { accessToken: string; targetServerUserId: string; muted: boolean; expiresInMinutes?: number | null }) => {
       try {
         const rl = rlCheck("server:mute", ctx, RL_MODERATION);
         if (!rl.allowed) { emitRateLimited(ctx, rl); return; }
@@ -500,38 +589,28 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           socket.emit("server:error", { error: "invalid_payload", message: "targetServerUserId and muted required." });
           return;
         }
-        const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
+        const auth = await requireAuth(socket, payload, { requiredRole: "mod" });
         if (!auth) return;
 
         const targetId = payload.targetServerUserId.trim();
-        if (targetId === auth.tokenPayload.serverUserId) {
-          socket.emit("server:error", { error: "forbidden", message: "Cannot server-mute yourself." });
-          return;
-        }
+        if (!(await requireOutranks(socket, auth, targetId, "server-mute"))) return;
 
-        const targetRole = await getServerRole(targetId);
-        const actorRole = await getServerRole(auth.tokenPayload.serverUserId);
-        if (targetRole === "owner" || (targetRole === "admin" && actorRole !== "owner")) {
-          socket.emit("server:error", { error: "forbidden", message: "Cannot server-mute a user with equal or higher role." });
-          return;
-        }
+        // The row is the source of truth now. The in-memory flag below is a
+        // cache of it for the sockets that are already connected; without the
+        // write, reconnecting cleared the mute.
+        const mutedUntil = resolveMuteExpiry(payload.expiresInMinutes);
+        await setUserModerationState(targetId, { muted: payload.muted, mutedUntil });
 
         for (const [sid, s] of io.sockets.sockets) {
           const ci = clientsInfo[sid];
           if (ci?.serverUserId === targetId) {
             ci.isServerMuted = payload.muted;
-            s.emit("server:muted", { muted: payload.muted });
-
-            if (sfuClient && ci.hasJoinedChannel) {
-              const roomId = `${ci.serverUserId}:${ci.streamID}`;
-              sfuClient.updateUserAudioState(roomId, sid, ci.isMuted || ci.isServerMuted, ci.isDeafened || ci.isServerDeafened).catch((e) => {
-                consola.error("Failed to update SFU audio state after server mute:", e);
-              });
-            }
+            s.emit("server:muted", { muted: payload.muted, expiresAt: mutedUntil?.toISOString() ?? null });
+            pushSfuAudioState(sfuClient, serverId, ci);
           }
         }
 
-        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: payload.muted ? "server_mute" : "server_unmute", target: targetId }).catch((e) => consola.warn("audit log write failed", e));
+        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: payload.muted ? "server_mute" : "server_unmute", target: targetId, meta: { expiresAt: mutedUntil?.toISOString() ?? null } }).catch((e) => consola.warn("audit log write failed", e));
         socket.emit("server:mute:success", { targetServerUserId: targetId, muted: payload.muted });
         syncAllClients(io, clientsInfo);
         broadcastMemberList(io, clientsInfo, serverId);
@@ -549,34 +628,20 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           socket.emit("server:error", { error: "invalid_payload", message: "targetServerUserId and deafened required." });
           return;
         }
-        const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
+        const auth = await requireAuth(socket, payload, { requiredRole: "mod" });
         if (!auth) return;
 
         const targetId = payload.targetServerUserId.trim();
-        if (targetId === auth.tokenPayload.serverUserId) {
-          socket.emit("server:error", { error: "forbidden", message: "Cannot server-deafen yourself." });
-          return;
-        }
+        if (!(await requireOutranks(socket, auth, targetId, "server-deafen"))) return;
 
-        const targetRole = await getServerRole(targetId);
-        const actorRole = await getServerRole(auth.tokenPayload.serverUserId);
-        if (targetRole === "owner" || (targetRole === "admin" && actorRole !== "owner")) {
-          socket.emit("server:error", { error: "forbidden", message: "Cannot server-deafen a user with equal or higher role." });
-          return;
-        }
+        await setUserModerationState(targetId, { deafened: payload.deafened });
 
         for (const [sid, s] of io.sockets.sockets) {
           const ci = clientsInfo[sid];
           if (ci?.serverUserId === targetId) {
             ci.isServerDeafened = payload.deafened;
             s.emit("server:deafened", { deafened: payload.deafened });
-
-            if (sfuClient && ci.hasJoinedChannel) {
-              const roomId = `${ci.serverUserId}:${ci.streamID}`;
-              sfuClient.updateUserAudioState(roomId, sid, ci.isMuted || ci.isServerMuted, ci.isDeafened || ci.isServerDeafened).catch((e) => {
-                consola.error("Failed to update SFU audio state after server deafen:", e);
-              });
-            }
+            pushSfuAudioState(sfuClient, serverId, ci);
           }
         }
 
