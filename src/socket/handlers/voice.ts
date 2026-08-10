@@ -56,6 +56,39 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
+    /**
+     * Where the sender's face sits in their own camera frame, so everyone
+     * else can move their crop to match.
+     *
+     * Deliberately not part of voice:state:update, which calls syncAllClients
+     * and rebuilds the whole member list. This arrives a few times a second
+     * per speaker with a camera on, so it is relayed as-is and nothing else
+     * happens: two numbers, straight out to the room.
+     *
+     * Not stored either. A client that joins mid-call sees a centred crop
+     * until the next update, which is at most a few seconds away, and that is
+     * cheaper than putting a field that changes this often into the member
+     * list.
+     */
+    'voice:framing:set': (framing: { x: number; y: number }) => {
+      const ci = clientsInfo[clientId];
+      if (!ci || !ci.hasJoinedChannel) return;
+
+      const clamp = (n: number) =>
+        Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0.5;
+
+      const roomName = ci.voiceChannelId
+        ? voiceRoomName(serverId, ci.voiceChannelId)
+        : "";
+      if (!roomName) return;
+
+      socket.to(roomName).emit('voice:framing', {
+        clientId,
+        x: clamp(framing?.x),
+        y: clamp(framing?.y),
+      });
+    },
+
     'voice:stream:set': (streamID: string) => {
       if (!clientsInfo[clientId]) return;
       const wasInChannel = clientsInfo[clientId].hasJoinedChannel;
