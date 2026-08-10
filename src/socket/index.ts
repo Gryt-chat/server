@@ -399,11 +399,20 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
           if (!gate.ok) {
             // A banned user reconnecting with a live token used to be restored
             // in full here, which is most of why a ban did not hold.
-            socket.emit("server:kicked", {
-              action: gate.code === "banned" ? "ban" : "kick",
-              reason: gate.message,
-            });
-            socket.disconnect(true);
+            //
+            // Only a ban says server:kicked, because the client takes the
+            // server out of the sidebar when it hears that. "You are not a
+            // member" reaching here is not necessarily moderation — a stale
+            // token against a rebuilt server looks identical — and deleting
+            // somebody's server entry over an ambiguous signal is not a
+            // recoverable mistake. token:revoked is what this path said before,
+            // and it stops the restore just as firmly.
+            if (gate.code === "banned") {
+              socket.emit("server:kicked", { action: "ban", reason: gate.message });
+              socket.disconnect(true);
+            } else {
+              socket.emit("token:revoked", { reason: gate.code, message: gate.message });
+            }
             return;
           }
 
