@@ -74,6 +74,9 @@ function createSchema(d: DatabaseSync): void {
       avatar_file_id TEXT,
       joined_with_invite_code TEXT,
       is_active INTEGER NOT NULL DEFAULT 1,
+      is_server_muted INTEGER NOT NULL DEFAULT 0,
+      is_server_deafened INTEGER NOT NULL DEFAULT 0,
+      server_mute_expires_at TEXT,
       created_at TEXT NOT NULL,
       last_seen TEXT NOT NULL
     );
@@ -304,6 +307,26 @@ function runMigrations(d: DatabaseSync): void {
   // constant rather than whatever was true when the row was created.
   if (!hasColumn(d, "server_config", "avatar_thumb_px")) {
     d.exec("ALTER TABLE server_config ADD COLUMN avatar_thumb_px INTEGER");
+  }
+
+  // Server mute and deafen used to live only on the socket, and were reset to
+  // false on every connection — so reconnecting, or opening a second tab,
+  // cleared them. They belong to the user rather than to the connection.
+  //
+  // NOT NULL with a constant default is legal on ADD COLUMN, unlike a
+  // non-constant one, so these need no backfill: everyone starts unmuted.
+  if (!hasColumn(d, "users", "is_server_muted")) {
+    d.exec("ALTER TABLE users ADD COLUMN is_server_muted INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!hasColumn(d, "users", "is_server_deafened")) {
+    d.exec("ALTER TABLE users ADD COLUMN is_server_deafened INTEGER NOT NULL DEFAULT 0");
+  }
+
+  // A timeout is a mute that lifts by itself. Same shape as a temporary ban:
+  // nullable ISO-8601, NULL meaning "until somebody removes it", evaluated on
+  // read rather than swept by a job.
+  if (!hasColumn(d, "users", "server_mute_expires_at")) {
+    d.exec("ALTER TABLE users ADD COLUMN server_mute_expires_at TEXT");
   }
   d.prepare("UPDATE server_config SET avatar_thumb_px = ?").run(AVATAR_THUMB_PX);
 }

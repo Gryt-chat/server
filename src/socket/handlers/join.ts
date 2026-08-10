@@ -15,6 +15,7 @@ import {
   getServerRole,
   setServerRole,
   createRefreshToken,
+  effectiveModerationState,
   isUserBanned,
 } from "../../db";
 import { isPrivateIp } from "../../utils/isPrivateIp";
@@ -291,6 +292,12 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           clientsInfo[clientId].serverUserId = user.server_user_id;
           clientsInfo[clientId].nickname = user.nickname;
           clientsInfo[clientId].accessToken = accessToken;
+
+          // Carried on the user rather than the connection, so rejoining does
+          // not clear a server mute.
+          const moderation = effectiveModerationState(user);
+          clientsInfo[clientId].isServerMuted = moderation.isServerMuted;
+          clientsInfo[clientId].isServerDeafened = moderation.isServerDeafened;
         }
 
         verifyClient(socket);

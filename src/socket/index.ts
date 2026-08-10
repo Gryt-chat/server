@@ -5,7 +5,7 @@ import { colors } from "../utils/colors";
 import { SFUClient } from "../sfu/client";
 import type { SFUPeerEvent, SFUSyncRoom } from "../sfu/client";
 import { verifyAccessToken } from "../utils/jwt";
-import { getUserByServerId, getServerConfig } from "../db";
+import { getUserByServerId, getServerConfig, effectiveModerationState } from "../db";
 import { syncAllClients, verifyClient, broadcastMemberList, countOtherSessions } from "./utils/clients";
 import { sendInfo, sendServerDetails, setSocketRefs, broadcastChatNew, broadcastCustomEmojisUpdate, broadcastEmojiQueueUpdate, broadcastServerUiUpdate } from "./utils/server";
 import { getServerIdFromEnv } from "../utils/serverId";
@@ -397,6 +397,13 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
             clientsInfo[clientId].grytUserId = tokenPayload.grytUserId;
             clientsInfo[clientId].serverUserId = tokenPayload.serverUserId;
             clientsInfo[clientId].nickname = tokenPayload.nickname;
+
+            // Server mute and deafen belong to the user, not to this socket.
+            // They were initialised to false above and left there, so a
+            // reconnect — or a second tab — used to clear them.
+            const moderation = effectiveModerationState(userExists);
+            clientsInfo[clientId].isServerMuted = moderation.isServerMuted;
+            clientsInfo[clientId].isServerDeafened = moderation.isServerDeafened;
 
             // Restore voice state if the user reconnected within the grace period
             const pending = pendingVoiceCleanup.get(tokenPayload.serverUserId);

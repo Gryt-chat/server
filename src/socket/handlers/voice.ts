@@ -329,7 +329,11 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
 
         // Tell the SFU to force-close the user's WebRTC connection
         if (sfuClient && targetClient.streamID) {
-          const uniqueRoomId = `${serverId}_${targetClient.streamID}`;
+          // The channel id, not the stream id. The room registered with the SFU
+          // is `${serverId}_${voiceChannelId}` (see the join path above), so
+          // this was addressing a room that does not exist and the forced
+          // disconnect quietly did nothing.
+          const uniqueRoomId = `${serverId}_${targetClient.voiceChannelId}`;
           sfuClient.disconnectUser(uniqueRoomId, targetUserId).catch((e) => {
             consola.error("[Voice:kick] SFU disconnectUser failed:", e);
           });
