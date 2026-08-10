@@ -125,6 +125,11 @@ export interface ServerBanRecord {
   banned_by_server_user_id: string;
   reason: string | null;
   created_at: Date;
+  /** When the ban lifts by itself. Null means permanent. */
+  expires_at: Date | null;
+  /** Both null when the user row is gone, so callers must fall back to the id. */
+  nickname: string | null;
+  banned_by_nickname: string | null;
 }
 
 // ── Channel types ────────────────────────────────────────────────

@@ -24,6 +24,7 @@ import {
   banUser,
   unbanUser,
   listBans,
+  getUserByServerId,
 } from "../../db";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 import { evictUser, resolveGrytUserId } from "../../moderation/evict";
@@ -38,6 +39,25 @@ function rlCheck(event: string, ctx: HandlerContext, rule: RateLimitRule) {
   const ip = ctx.getClientIp();
   const userId = ctx.clientsInfo[ctx.clientId]?.serverUserId;
   return checkRateLimit(event, userId, ip, rule);
+}
+
+/** A year, in minutes. Longer than this is what a permanent ban is for. */
+const MAX_BAN_MINUTES = 525_600;
+
+/**
+ * When a ban should lift, from a duration in minutes.
+ *
+ * Absent, null, or anything that is not a usable number means permanent, which
+ * keeps every existing caller — none of which send this field — behaving as it
+ * did. A garbled number is treated as permanent rather than rejected: refusing
+ * the whole ban because the duration was malformed would be the wrong way to
+ * fail for a moderation action someone is taking right now.
+ */
+function resolveBanExpiry(expiresInMinutes?: number | null): Date | null {
+  if (expiresInMinutes === undefined || expiresInMinutes === null) return null;
+  const minutes = Math.floor(Number(expiresInMinutes));
+  if (!Number.isFinite(minutes) || minutes <= 0) return null;
+  return new Date(Date.now() + Math.min(minutes, MAX_BAN_MINUTES) * 60_000);
 }
 
 function emitRateLimited(ctx: HandlerContext, rl: { retryAfterMs?: number }) {
@@ -405,7 +425,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    'server:ban': async (payload: { accessToken: string; targetServerUserId: string; reason?: string }) => {
+    'server:ban': async (payload: { accessToken: string; targetServerUserId: string; reason?: string; expiresInMinutes?: number | null }) => {
       try {
         const rl = rlCheck("server:ban", ctx, RL_MODERATION);
         if (!rl.allowed) { emitRateLimited(ctx, rl); return; }
@@ -437,7 +457,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
 
         // The ban row goes in first, so that the eviction below cannot race a
         // reconnect into the window before the gate would refuse it.
-        await banUser(targetGrytUserId, auth.tokenPayload.serverUserId, payload.reason);
+        const expiresAt = resolveBanExpiry(payload.expiresInMinutes);
+        await banUser(targetGrytUserId, auth.tokenPayload.serverUserId, payload.reason, expiresAt);
 
         await evictUser({
           io,
@@ -458,20 +479,38 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    'server:unban': async (payload: { accessToken: string; grytUserId: string }) => {
+    // Accepts either identifier. Ban speaks serverUserId and unban spoke
+    // grytUserId, so undoing a ban meant holding a different id from the one
+    // used to make it — and the bans list is the only place the grytUserId
+    // appears at all.
+    'server:unban': async (payload: { accessToken: string; grytUserId?: string; targetServerUserId?: string }) => {
       try {
         const rl = rlCheck("server:unban", ctx, RL_MODERATION);
         if (!rl.allowed) { emitRateLimited(ctx, rl); return; }
-        if (!payload || typeof payload.grytUserId !== "string") {
-          socket.emit("server:error", { error: "invalid_payload", message: "grytUserId required." });
+
+        const directId = typeof payload?.grytUserId === "string" ? payload.grytUserId.trim() : "";
+        const viaServerUserId = typeof payload?.targetServerUserId === "string" ? payload.targetServerUserId.trim() : "";
+        if (!directId && !viaServerUserId) {
+          socket.emit("server:error", { error: "invalid_payload", message: "grytUserId or targetServerUserId required." });
           return;
         }
+
         const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
         if (!auth) return;
 
-        await unbanUser(payload.grytUserId.trim());
-        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "unban", target: payload.grytUserId.trim() }).catch((e) => consola.warn("audit log write failed", e));
-        socket.emit("server:unban:success", { grytUserId: payload.grytUserId.trim() });
+        let grytUserId = directId;
+        if (!grytUserId) {
+          const user = await getUserByServerId(viaServerUserId);
+          grytUserId = user?.gryt_user_id ?? "";
+        }
+        if (!grytUserId) {
+          socket.emit("server:error", { error: "not_found", message: "Could not resolve user to unban." });
+          return;
+        }
+
+        await unbanUser(grytUserId);
+        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "unban", target: grytUserId }).catch((e) => consola.warn("audit log write failed", e));
+        socket.emit("server:unban:success", { grytUserId });
       } catch (e) {
         consola.error("server:unban failed", e);
         socket.emit("server:error", { error: "unban_failed", message: "Failed to unban user." });
