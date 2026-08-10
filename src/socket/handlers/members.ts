@@ -8,8 +8,18 @@ export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
   const { io, socket, clientId, serverId, clientsInfo } = ctx;
 
   return {
+    // Was open to any socket, authenticated or not — the full member list,
+    // nicknames and roles included, for anyone who could reach the port. It is
+    // gated on being a verified member rather than on a role, since that is
+    // what the broadcast copy of this list already assumes.
     'members:fetch': async () => {
       try {
+        const requester = clientsInfo[clientId];
+        if (!requester?.grytUserId) {
+          socket.emit("server:error", { error: "join_required", message: "Please join the server first." });
+          return;
+        }
+
         const registeredUsers = await getAllRegisteredUsers();
         const roleRows = await listServerRoles();
         const roleMap = new Map(roleRows.map((r) => [r.server_user_id, r.role]));
