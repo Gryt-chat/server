@@ -1,6 +1,6 @@
 import consola from "consola";
 import type { HandlerContext, EventHandlerMap } from "./types";
-import { requireAuth } from "../middleware/auth";
+import { requireAuth, requireOutranks } from "../middleware/auth";
 import { syncAllClients, broadcastMemberList } from "../utils/clients";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 import { getVoiceSeatLimit } from "../../utils/voiceSeats";
@@ -302,15 +302,15 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
+        const auth = await requireAuth(socket, payload, { requiredRole: "mod" });
         if (!auth) return;
 
         const targetUserId = payload.targetServerUserId.trim();
 
-        if (targetUserId === auth.tokenPayload.serverUserId) {
-          socket.emit("server:error", { error: "forbidden", message: "Cannot disconnect yourself." });
-          return;
-        }
+        // There was no target check here at all — only the self-check — so an
+        // admin could disconnect the owner from voice, which server:kick has
+        // always refused.
+        if (!(await requireOutranks(socket, auth, targetUserId, "disconnect"))) return;
 
         // Find the target user's socket(s)
         const targetEntry = Object.entries(clientsInfo).find(

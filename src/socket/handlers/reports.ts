@@ -1,6 +1,6 @@
 import consola from "consola";
 import type { HandlerContext, EventHandlerMap } from "./types";
-import { requireAuth } from "../middleware/auth";
+import { requireAuth, requireOutranks } from "../middleware/auth";
 import { evictUser, resolveGrytUserId } from "../../moderation/evict";
 import { syncAllClients, broadcastMemberList } from "../utils/clients";
 import {
@@ -230,6 +230,10 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
             socket.emit("server:error", { error: "invalid_payload", message: "senderServerUserId required for ban." });
             return;
           }
+
+          // This path had no hierarchy check, so the reports panel could ban
+          // the owner — through a different screen than the one that refuses.
+          if (!(await requireOutranks(socket, auth, payload.senderServerUserId, "ban"))) return;
 
           await resolveAllReportsForMessage(
             payload.messageId,

@@ -1,6 +1,6 @@
 import consola from "consola";
 import type { HandlerContext, EventHandlerMap } from "./types";
-import { requireAuth } from "../middleware/auth";
+import { requireAuth, requireOutranks } from "../middleware/auth";
 import { broadcastServerUiUpdate, sendEmojiQueueStateToSocket } from "../utils/server";
 import { invalidateSystemChannelCache } from "../utils/systemMessages";
 import { VALID_CENSOR_STYLES, type CensorStyle } from "../../utils/profanityFilter";
@@ -16,7 +16,6 @@ import {
   createServerInvite,
   listServerInvites,
   revokeServerInvite,
-  getServerRole,
   setServerRole,
   listServerRoles,
   insertServerAudit,
@@ -384,21 +383,11 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           socket.emit("server:error", { error: "invalid_payload", message: "targetServerUserId required." });
           return;
         }
-        const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
+        const auth = await requireAuth(socket, payload, { requiredRole: "mod" });
         if (!auth) return;
 
         const targetId = payload.targetServerUserId.trim();
-        if (targetId === auth.tokenPayload.serverUserId) {
-          socket.emit("server:error", { error: "forbidden", message: "Cannot kick yourself." });
-          return;
-        }
-
-        const targetRole = await getServerRole(targetId);
-        const actorRole = await getServerRole(auth.tokenPayload.serverUserId);
-        if (targetRole === "owner" || (targetRole === "admin" && actorRole !== "owner")) {
-          socket.emit("server:error", { error: "forbidden", message: "Cannot kick a user with equal or higher role." });
-          return;
-        }
+        if (!(await requireOutranks(socket, auth, targetId, "kick"))) return;
 
         const targetGrytUserId = await resolveGrytUserId(clientsInfo, targetId);
         if (!targetGrytUserId) {
@@ -437,17 +426,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         if (!auth) return;
 
         const targetId = payload.targetServerUserId.trim();
-        if (targetId === auth.tokenPayload.serverUserId) {
-          socket.emit("server:error", { error: "forbidden", message: "Cannot ban yourself." });
-          return;
-        }
-
-        const targetRole = await getServerRole(targetId);
-        const actorRole = await getServerRole(auth.tokenPayload.serverUserId);
-        if (targetRole === "owner" || (targetRole === "admin" && actorRole !== "owner")) {
-          socket.emit("server:error", { error: "forbidden", message: "Cannot ban a user with equal or higher role." });
-          return;
-        }
+        if (!(await requireOutranks(socket, auth, targetId, "ban"))) return;
 
         const targetGrytUserId = await resolveGrytUserId(clientsInfo, targetId);
         if (!targetGrytUserId) {
@@ -537,21 +516,11 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           socket.emit("server:error", { error: "invalid_payload", message: "targetServerUserId and muted required." });
           return;
         }
-        const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
+        const auth = await requireAuth(socket, payload, { requiredRole: "mod" });
         if (!auth) return;
 
         const targetId = payload.targetServerUserId.trim();
-        if (targetId === auth.tokenPayload.serverUserId) {
-          socket.emit("server:error", { error: "forbidden", message: "Cannot server-mute yourself." });
-          return;
-        }
-
-        const targetRole = await getServerRole(targetId);
-        const actorRole = await getServerRole(auth.tokenPayload.serverUserId);
-        if (targetRole === "owner" || (targetRole === "admin" && actorRole !== "owner")) {
-          socket.emit("server:error", { error: "forbidden", message: "Cannot server-mute a user with equal or higher role." });
-          return;
-        }
+        if (!(await requireOutranks(socket, auth, targetId, "server-mute"))) return;
 
         for (const [sid, s] of io.sockets.sockets) {
           const ci = clientsInfo[sid];
@@ -586,21 +555,11 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           socket.emit("server:error", { error: "invalid_payload", message: "targetServerUserId and deafened required." });
           return;
         }
-        const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
+        const auth = await requireAuth(socket, payload, { requiredRole: "mod" });
         if (!auth) return;
 
         const targetId = payload.targetServerUserId.trim();
-        if (targetId === auth.tokenPayload.serverUserId) {
-          socket.emit("server:error", { error: "forbidden", message: "Cannot server-deafen yourself." });
-          return;
-        }
-
-        const targetRole = await getServerRole(targetId);
-        const actorRole = await getServerRole(auth.tokenPayload.serverUserId);
-        if (targetRole === "owner" || (targetRole === "admin" && actorRole !== "owner")) {
-          socket.emit("server:error", { error: "forbidden", message: "Cannot server-deafen a user with equal or higher role." });
-          return;
-        }
+        if (!(await requireOutranks(socket, auth, targetId, "server-deafen"))) return;
 
         for (const [sid, s] of io.sockets.sockets) {
           const ci = clientsInfo[sid];
