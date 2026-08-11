@@ -227,6 +227,38 @@ export async function setUserInactive(serverUserId: string): Promise<void> {
   db.prepare(`UPDATE users SET is_active = 0 WHERE server_user_id = ?`).run(serverUserId);
 }
 
+/**
+ * Move a membership from a local identity to the account that proved it owns
+ * the key.
+ *
+ * Reuses `replaceUserIdentity`, which is the moderator-driven version of the
+ * same move — it carries ownership across and revokes the old refresh tokens,
+ * both of which are wanted here too.
+ *
+ * Returns false, rather than throwing, in the two cases that are ordinary
+ * rather than wrong:
+ *
+ * - **No membership under the old identity.** Somebody made an account before
+ *   ever joining this particular server. There is nothing to carry.
+ * - **The account is already a member here.** Two rows would have to become
+ *   one, and there is no correct way to reconcile two sets of roles and two
+ *   histories of messages. Both are left alone; they are already in as their
+ *   account, which is the identity they chose.
+ */
+export async function carryIdentityForward(
+  priorGrytUserId: string,
+  newGrytUserId: string,
+): Promise<boolean> {
+  const prior = await getUserByGrytId(priorGrytUserId);
+  if (!prior) return false;
+
+  const alreadyMember = await getUserByGrytId(newGrytUserId);
+  if (alreadyMember) return false;
+
+  await replaceUserIdentity(prior.server_user_id, newGrytUserId);
+  return true;
+}
+
 export async function replaceUserIdentity(
   serverUserId: string,
   newGrytUserId: string,
