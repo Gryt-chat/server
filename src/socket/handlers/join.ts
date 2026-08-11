@@ -3,7 +3,7 @@ import type { HandlerContext, EventHandlerMap } from "./types";
 import { syncAllClients, broadcastMemberList, countOtherSessions, verifyClient } from "../utils/clients";
 import { sendServerDetails } from "../utils/server";
 import { postSystemMessage, formatJoinMessage } from "../utils/systemMessages";
-import { createChallenge, consumeChallenge, verifyCertificate, verifyAssertion, IdentityVerificationError } from "../../auth/identity";
+import { createChallenge, consumeChallenge, verifyCertificate, verifyAssertion, identityTierAccepted, IdentityVerificationError, type IdentityTier } from "../../auth/identity";
 import { generateAccessToken, TokenPayload } from "../../utils/jwt";
 import {
   getServerConfig,
@@ -130,6 +130,7 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
 
         let grytUserId: string;
         let suggestedNickname: string | undefined;
+        let identityTier: IdentityTier;
 
         try {
           const cert = await verifyCertificate(payload.certificate);
@@ -146,6 +147,7 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
 
           grytUserId = cert.sub;
           suggestedNickname = cert.preferredUsername;
+          identityTier = cert.tier;
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
           consola.warn(`Identity verification failed for ${clientId}:`, message);
@@ -166,6 +168,24 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
                 ? "This join attempt expired before it completed. Try again."
                 : "The server could not verify your identity.",
             canReapply: true,
+          });
+          return;
+        }
+
+        // Real, and then wanted. The certificate verified, so this is genuinely
+        // whoever it says it is — this asks whether the operator admits that
+        // kind of identity at all.
+        //
+        // Unlike the ban refusal below, this one says exactly what is wrong.
+        // Nothing leaks: the accepted tiers are already advertised in
+        // `server:info` before anyone tries, and somebody turned away for
+        // having no account can only act on it if they are told so.
+        if (!identityTierAccepted(identityTier)) {
+          consola.info(`Join refused for ${grytUserId}: tier "${identityTier}" not accepted`);
+          socket.emit("server:error", {
+            error: "identity_tier_refused",
+            tier: identityTier,
+            message: "This server requires a Gryt account to join.",
           });
           return;
         }

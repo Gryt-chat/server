@@ -48,6 +48,7 @@
     "admin:set-owner": "node dist/admin/setOwner.js",
     "admin:rotate-identity": "node dist/admin/rotateIdentity.js",
     "build": "tsc",
+    "test": "node --test --require ts-node/register \"src/**/*.test.ts\"",
     "bundle": "esbuild dist/index.js --bundle --platform=node --target=node22 --format=cjs --outfile=dist/bundle.js --external:sharp --external:jsdom && esbuild dist/admin/setOwner.js --bundle --platform=node --target=node22 --format=cjs --outfile=dist/admin-setOwner.js && esbuild dist/admin/rotateIdentity.js --bundle --platform=node --target=node22 --format=cjs --outfile=dist/admin-rotateIdentity.js",
     "build:selfhosted": "bash build-selfhosted.sh",
     "build:selfhosted:windows": "bash build-selfhosted.sh windows-x64",
