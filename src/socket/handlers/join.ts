@@ -39,6 +39,31 @@ const RL_JOIN: RateLimitRule = {
   scorePerAction: 0.5, maxScore: 10, scoreDecayMs: 5000,
 };
 
+/**
+ * How many people one invite may bring in per hour.
+ *
+ * `RL_JOIN` above is keyed on IP, which bounds one machine and nothing else —
+ * measured at 19 arrivals in 47ms from a single address before it bit, and it
+ * scales straight up with the number of addresses. An invite link is meant to
+ * be shared, so once it is public the only thing left to limit is the invite
+ * itself.
+ *
+ * Sixty an hour, as a sliding window, so it is a burst allowance rather than a
+ * trickle: thirty people joining a LAN party in the same minute all get in,
+ * which is the case invites exist for. What it stops is the same link admitting
+ * thousands unattended.
+ *
+ * A server running an event bigger than this raises it. That is a better
+ * default than picking a number nobody can exceed, because the cost of being
+ * too tight is somebody's party not working and the cost of being too loose is
+ * a cleanup job.
+ */
+function inviteArrivalRule(): RateLimitRule {
+  const raw = parseInt(process.env.GRYT_INVITE_MAX_JOINS_PER_HOUR || "", 10);
+  const limit = Number.isFinite(raw) && raw > 0 ? raw : 60;
+  return { limit, windowMs: 3_600_000 };
+}
+
 // ── Handlers ────────────────────────────────────────────────────────
 
 export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
@@ -298,6 +323,22 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
 
           const inviteCode = challenge.inviteCode || "";
           if (inviteCode) {
+            // Checked before consuming, so a refused arrival does not spend a
+            // use of a limited invite. Keyed on the code rather than the
+            // caller, which is the point: the limit has to hold across every
+            // machine holding the same link.
+            const arrivals = checkRateLimit("invite:arrivals", inviteCode, undefined, inviteArrivalRule());
+            if (!arrivals.allowed) {
+              consola.warn(`Invite ${inviteCode} hit its hourly arrival limit`);
+              socket.emit("server:error", {
+                error: "invite_rate_limited",
+                message: "This invite has been used too many times recently. Try again later.",
+                retryAfterMs: arrivals.retryAfterMs,
+                canReapply: true,
+              });
+              return;
+            }
+
             const consumed = await consumeServerInvite(inviteCode);
             if (!consumed.ok) {
               const msg =
