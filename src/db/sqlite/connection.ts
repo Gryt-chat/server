@@ -292,6 +292,25 @@ function runMigrations(d: DatabaseSync): void {
   //
   // Defaults to 'invite', which is what every server did before the column
   // existed.
+  // How often somebody has renamed themselves here, and when they last did.
+  //
+  // A count and a timestamp rather than the old names. What answers "is this
+  // the person I think it is" is that the account became this name an hour ago,
+  // not what it used to be called — and past names are the part somebody may
+  // have had a good reason to leave behind. Anything that wants the names
+  // themselves should be gated on a role and is not this.
+  //
+  // Existing rows start at zero, which reads as "never renamed". That is wrong
+  // for anyone who has, and there is nothing to backfill from; a count that
+  // only starts now is worth more than no count at all.
+  if (!hasColumn(d, "users", "nickname_change_count")) {
+    d.exec("ALTER TABLE users ADD COLUMN nickname_change_count INTEGER NOT NULL DEFAULT 0");
+  }
+
+  if (!hasColumn(d, "users", "nickname_changed_at")) {
+    d.exec("ALTER TABLE users ADD COLUMN nickname_changed_at TEXT");
+  }
+
   if (!hasColumn(d, "server_config", "join_policy")) {
     d.exec("ALTER TABLE server_config ADD COLUMN join_policy TEXT NOT NULL DEFAULT 'invite'");
   }

@@ -20,6 +20,10 @@ function rowToUser(r: Record<string, unknown>): UserRecord {
     server_mute_expires_at: r.server_mute_expires_at
       ? fromIso(r.server_mute_expires_at as string)
       : null,
+    nickname_change_count: Number(r.nickname_change_count ?? 0),
+    nickname_changed_at: r.nickname_changed_at
+      ? fromIso(r.nickname_changed_at as string)
+      : null,
   };
 }
 
@@ -131,6 +135,8 @@ export async function upsertUser(
     is_server_muted: false,
     is_server_deafened: false,
     server_mute_expires_at: null,
+    nickname_change_count: 0,
+    nickname_changed_at: null,
   };
 }
 
@@ -164,9 +170,25 @@ export async function getRegisteredUserCount(): Promise<number> {
   return row.count;
 }
 
+/**
+ * Rename a member, counting it only when the name actually changes.
+ *
+ * The guard is the whole point. The client sends `profile:update` on things
+ * that are not renames — saving an unrelated setting, syncing a profile across
+ * servers — and counting those would make the number say "this person keeps
+ * changing who they are" about somebody who has never renamed once. A signal
+ * that fires without cause is worse than no signal, because the member list
+ * presents it as a reason for suspicion.
+ */
 export async function updateUserNickname(serverUserId: string, nickname: string): Promise<void> {
   const db = getSqliteDb();
-  db.prepare(`UPDATE users SET nickname = ? WHERE server_user_id = ?`).run(nickname, serverUserId);
+  db.prepare(
+    `UPDATE users
+        SET nickname = ?,
+            nickname_change_count = nickname_change_count + 1,
+            nickname_changed_at = ?
+      WHERE server_user_id = ? AND nickname <> ?`
+  ).run(nickname, toIso(new Date()), serverUserId, nickname);
 }
 
 export async function updateUserAvatar(serverUserId: string, avatarFileId: string): Promise<void> {

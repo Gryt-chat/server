@@ -147,6 +147,13 @@ export async function buildMemberList(clientsInfo: Clients) {
         status,
         lastSeen: user.last_seen.toISOString(),
         createdAt: user.created_at.toISOString(),
+        // A count and a time, never the old names. What tells you whether this
+        // is the person you think it is is that the account took this name an
+        // hour ago; what it used to be called is the part somebody may have had
+        // a good reason to leave behind, and it is not needed to answer the
+        // question.
+        nicknameChangeCount: user.nickname_change_count,
+        nicknameChangedAt: user.nickname_changed_at?.toISOString() ?? null,
         isMuted: onlineClient?.isMuted || false,
         isDeafened: onlineClient?.isDeafened || false,
         isServerMuted: onlineClient?.isServerMuted || false,
@@ -173,6 +180,10 @@ async function emitMemberListNow(io: Server, clientsInfo: Clients): Promise<void
         // Changes when an identity is replaced (`replaceUserIdentity`), which
         // is exactly when a member list showing the old one would be wrong.
         identityFingerprint: m.identityFingerprint,
+        // A rename changes the name above too, so this is redundant for the
+        // dedupe — kept so that a rename back to a previous name, which leaves
+        // `nickname` looking untouched, still reaches the client.
+        nicknameChangedAt: m.nicknameChangedAt,
         avatarFileId: m.avatarFileId,
         avatarColor: m.avatarColor,
         role: m.role,

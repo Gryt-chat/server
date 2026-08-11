@@ -39,6 +39,14 @@ export interface UserRecord {
   is_server_deafened: boolean;
   /** When a timed mute lifts. Null means it stays until removed. */
   server_mute_expires_at: Date | null;
+  /**
+   * How many times this member has renamed themselves here, and when they last
+   * did. Deliberately a count and a time rather than the names — see the
+   * migration in `connection.ts`. Null and zero mean "not since this was
+   * recorded", which for rows that predate it is not the same as "never".
+   */
+  nickname_change_count: number;
+  nickname_changed_at: Date | null;
 }
 
 // ── Message types ────────────────────────────────────────────────
