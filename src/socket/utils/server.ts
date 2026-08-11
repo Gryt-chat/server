@@ -1,6 +1,7 @@
 import consola from "consola";
 import { Server, Socket } from "socket.io";
 import { Clients } from "../../types";
+import type { JoinPolicy } from "../../db/interfaces";
 import { getAcceptedIdentityTiers } from "../../auth/identity";
 import { getVoiceSeatLimit } from "../../utils/voiceSeats";
 import { syncAllClients, broadcastMemberList } from "./clients";
@@ -150,10 +151,14 @@ export async function sendInfo(socket: Socket, clientsInfo: Clients | undefined,
   
   let displayName = process.env.SERVER_NAME || "Unknown Server";
   let description = process.env.SERVER_DESCRIPTION || "A Gryt server";
+  // Falls back to the stricter answer if the config cannot be read, so a
+  // database wobble never advertises a server as easier to get into than it is.
+  let joinPolicy: JoinPolicy = "invite";
   try {
     const cfg = await getServerConfig();
     if (cfg?.display_name) displayName = cfg.display_name;
     if (cfg?.description) description = cfg.description;
+    if (cfg?.join_policy) joinPolicy = cfg.join_policy;
   } catch {
     // ignore DB errors; fall back to env
   }
@@ -169,6 +174,11 @@ export async function sendInfo(socket: Socket, clientsInfo: Clients | undefined,
     // which is fine — it is the operator's own advertisement of their policy,
     // and knowing it tells you nothing you would not learn by trying.
     identityTiers: getAcceptedIdentityTiers(),
+    // Alongside the tiers because they answer different halves of the same
+    // question: which identities are accepted, and what is asked of one to get
+    // in. A client can only say "you don't need an account to join this
+    // server" when both are favourable.
+    joinPolicy,
   };
   
   socket.emit("server:info", serverInfo);

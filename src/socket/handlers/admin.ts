@@ -1,5 +1,6 @@
 import consola from "consola";
 import type { HandlerContext, EventHandlerMap } from "./types";
+import type { JoinPolicy } from "../../db/interfaces";
 import { requireAuth, requireOutranks } from "../middleware/auth";
 import { broadcastServerUiUpdate, sendEmojiQueueStateToSocket } from "../utils/server";
 import { invalidateSystemChannelCache } from "../utils/systemMessages";
@@ -142,6 +143,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           profanityCensorStyle: cfg.profanity_censor_style ?? "emoji",
           systemChannelId: cfg.system_channel_id ?? null,
           lanOpen: !!cfg.lan_open,
+          joinPolicy: cfg.join_policy ?? "invite",
           discoverable: cfg.discoverable !== false,
         });
       } catch (e) {
@@ -173,6 +175,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       profanityCensorStyle?: string;
       systemChannelId?: string | null;
       lanOpen?: boolean;
+      joinPolicy?: string;
       discoverable?: boolean;
     }) => {
       try {
@@ -243,6 +246,14 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         const lanOpen: boolean | undefined =
           typeof payload.lanOpen === "boolean" ? payload.lanOpen : undefined;
 
+        // Only the two values mean anything, and anything else is dropped
+        // rather than coerced — a typo should leave the policy alone, not
+        // silently reset it to the default.
+        const joinPolicy: JoinPolicy | undefined =
+          payload.joinPolicy === "open" || payload.joinPolicy === "invite"
+            ? payload.joinPolicy
+            : undefined;
+
         const discoverable: boolean | undefined =
           typeof payload.discoverable === "boolean" ? payload.discoverable : undefined;
 
@@ -258,6 +269,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           profanityCensorStyle,
           systemChannelId,
           lanOpen,
+          joinPolicy,
           discoverable,
         });
 
@@ -296,6 +308,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           profanityCensorStyle: updated.profanity_censor_style ?? "emoji",
           systemChannelId: updated.system_channel_id ?? null,
           lanOpen: !!updated.lan_open,
+          joinPolicy: updated.join_policy ?? "invite",
           discoverable: updated.discoverable !== false,
         });
         broadcastServerUiUpdate("settings");

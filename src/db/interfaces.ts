@@ -5,6 +5,21 @@ import type { CensorStyle, ProfanityMode } from "../utils/profanityFilter";
 
 export type { CensorStyle, ProfanityMode };
 
+/**
+ * What a server asks of somebody who is not already a member.
+ *
+ * `invite` is the default and was the only behaviour before this existed: an
+ * invite code, or a private IP when `lan_open` is set. `open` lets anyone the
+ * server already accepts walk in — which is what makes "you don't need an
+ * account to join this server" mean anything for a public server.
+ *
+ * Deliberately not about identity tiers. Which identities a server takes is
+ * `GRYT_IDENTITY_TIERS`; this is how hard it is to get in once you have one.
+ * Keeping them apart means "accounts walk in, guests need an invite" is a
+ * combination rather than a special case.
+ */
+export type JoinPolicy = "invite" | "open";
+
 const scrypt = promisify(scryptCb);
 
 // ── User types ───────────────────────────────────────────────────
@@ -110,6 +125,7 @@ export interface ServerConfigRecord {
   profanity_censor_style: CensorStyle;
   system_channel_id: string | null;
   lan_open: boolean;
+  join_policy: JoinPolicy;
   discoverable: boolean;
   is_configured: boolean;
   created_at: Date;

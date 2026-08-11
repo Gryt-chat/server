@@ -285,6 +285,17 @@ function runMigrations(d: DatabaseSync): void {
     d.exec("ALTER TABLE server_config ADD COLUMN discoverable INTEGER NOT NULL DEFAULT 1");
   }
 
+  // Whether somebody who is not already a member needs an invite. Text rather
+  // than a boolean because the third answer — hold them until a moderator says
+  // yes — is the one a busy public server actually wants, and adding it as a
+  // second flag later would leave two columns that can disagree.
+  //
+  // Defaults to 'invite', which is what every server did before the column
+  // existed.
+  if (!hasColumn(d, "server_config", "join_policy")) {
+    d.exec("ALTER TABLE server_config ADD COLUMN join_policy TEXT NOT NULL DEFAULT 'invite'");
+  }
+
   // The dominant colour of an uploaded image, as #rrggbb. Written by the image
   // worker, which already decodes every upload to build a thumbnail. Null for
   // everything uploaded before this column existed and for images the worker
