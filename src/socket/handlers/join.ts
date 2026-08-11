@@ -3,13 +3,14 @@ import type { HandlerContext, EventHandlerMap } from "./types";
 import { syncAllClients, broadcastMemberList, countOtherSessions, verifyClient } from "../utils/clients";
 import { sendServerDetails } from "../utils/server";
 import { postSystemMessage, formatJoinMessage } from "../utils/systemMessages";
-import { createChallenge, consumeChallenge, verifyCertificate, verifyAssertion, identityTierAccepted, IdentityVerificationError, type IdentityTier } from "../../auth/identity";
+import { createChallenge, consumeChallenge, verifyCertificate, verifyAssertion, verifyIdentityLink, identityTierAccepted, IdentityVerificationError, type IdentityTier } from "../../auth/identity";
 import { generateAccessToken, TokenPayload } from "../../utils/jwt";
 import {
   getServerConfig,
   createServerConfigIfNotExists,
   claimServerOwner,
   getUserByGrytId,
+  carryIdentityForward,
   upsertUser,
   consumeServerInvite,
   getServerRole,
@@ -98,6 +99,7 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
     'server:verify': async (payload: {
       certificate?: string;
       assertion?: string;
+      link?: string;
     }) => {
       try {
         const challenge = consumeChallenge(socket.id);
@@ -131,6 +133,9 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
         let grytUserId: string;
         let suggestedNickname: string | undefined;
         let identityTier: IdentityTier;
+        // The local identity this person used here before making an account,
+        // if they proved they still hold its key.
+        let priorSub: string | null = null;
 
         try {
           const cert = await verifyCertificate(payload.certificate);
@@ -148,6 +153,20 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           grytUserId = cert.sub;
           suggestedNickname = cert.preferredUsername;
           identityTier = cert.tier;
+
+          // Only an account can claim a prior identity, and only ever a local
+          // one. Letting a local identity claim another would make swapping
+          // between them a matter of holding two keys, which is not a thing
+          // anybody needs and is a way to shed a ban.
+          if (payload.link && cert.tier === "account") {
+            const link = await verifyIdentityLink(
+              payload.link,
+              challenge.serverHost,
+              challenge.nonce,
+              cert.sub,
+            );
+            priorSub = link.priorSub;
+          }
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
           consola.warn(`Identity verification failed for ${clientId}:`, message);
@@ -210,6 +229,44 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
             message: "Sorry, you can't join this server.",
           });
           return;
+        }
+
+        // A ban follows the identity being claimed, not just the one presented.
+        // Without this, making an account is the cheapest ban evasion there is:
+        // get banned without one, sign up, arrive with a clean sub and link the
+        // old identity back on afterwards.
+        if (priorSub) {
+          const prior = await checkIdentityAllowed(priorSub);
+          if (!prior.ok) {
+            consola.info(`Join refused for ${grytUserId}: linked identity ${priorSub} is ${prior.code}`);
+            socket.emit("server:error", {
+              error: "join_refused",
+              message: "Sorry, you can't join this server.",
+            });
+            return;
+          }
+        }
+
+        // Carry the old membership over before anything reads it, so the join
+        // continues as the member they already were — with their roles, and
+        // owning what they owned.
+        if (priorSub) {
+          try {
+            const carried = await carryIdentityForward(priorSub, grytUserId);
+            if (carried) {
+              consola.info(`Linked ${priorSub} to ${grytUserId} on join`);
+              // `cfg` was read before the carry-over, and the carry-over is the
+              // one thing in this handler that can change who owns the server.
+              // Leaving it stale sends `isOwner: false` to somebody who owns
+              // the server in the database — no owner UI until they rejoin,
+              // which is the exact case this feature exists to fix.
+              cfg = await getServerConfig().catch(() => cfg);
+            }
+          } catch (e) {
+            // Not fatal. The join is still legitimate on its own terms, and a
+            // failed carry-over leaves them a new member rather than shut out.
+            consola.warn("Identity carry-over failed:", e);
+          }
         }
 
         const existingMember = await getUserByGrytId(grytUserId);

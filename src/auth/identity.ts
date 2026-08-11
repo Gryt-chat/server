@@ -263,6 +263,81 @@ async function verifySelfSignedCertificate(
   };
 }
 
+/** The `iss` on a proof that one identity is claiming to become another. */
+const LINK_ISSUER = "gryt:link";
+
+/**
+ * Verify that whoever is joining also holds a local identity they used here
+ * before.
+ *
+ * Somebody who joined without an account and later makes one arrives with a
+ * different `sub` — a Keycloak id where there was a key thumbprint — and to the
+ * server is a stranger with a familiar nickname. This is how they say "that was
+ * me", in the only way worth accepting: by signing with the key that *was* the
+ * old identity.
+ *
+ * Deliberately proved to each server rather than carried in the certificate.
+ * Local keys are per-server, so a certificate naming prior identities would
+ * have to list every server the holder has joined — telling the CA and every
+ * server that reads it their whole server list, which is the opposite of what
+ * per-server keys are for.
+ *
+ * Bound to the same nonce and audience as the assertion, so a proof lifted from
+ * one join cannot be replayed into another, or at a different server.
+ */
+export async function verifyIdentityLink(
+  linkJwt: string,
+  expectedAud: string,
+  expectedNonce: string,
+  expectedTarget: string
+): Promise<{ priorSub: string }> {
+  let unverified: JWTPayload;
+  try {
+    unverified = decodeJwt(linkJwt);
+  } catch {
+    throw new IdentityVerificationError(
+      "assertion_rejected",
+      "Identity link is not a well-formed JWT"
+    );
+  }
+
+  const jwk = assertPublicP256Jwk(
+    (unverified as JWTPayload & { jwk?: unknown }).jwk
+  );
+
+  try {
+    const publicKey = await importJWK(jwk, "ES256");
+    const { payload } = await jwtVerify(linkJwt, publicKey, {
+      issuer: LINK_ISSUER,
+      audience: expectedAud,
+      algorithms: ["ES256"],
+    });
+
+    if (payload.nonce !== expectedNonce) {
+      throw new Error("Identity link nonce mismatch");
+    }
+
+    // Naming the identity being claimed is what stops a proof for one account
+    // being replayed to attach the same old identity to a different one.
+    if (payload["link_to"] !== expectedTarget) {
+      throw new Error("Identity link does not name this identity");
+    }
+  } catch (err) {
+    throw new IdentityVerificationError(
+      "assertion_rejected",
+      `Identity link rejected: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
+  }
+
+  // Derived, never read from the payload — the same rule that makes a
+  // self-signed certificate safe. A link that could name its own prior identity
+  // would be a way to claim somebody else's.
+  const thumbprint = await calculateJwkThumbprint(jwk, "sha256");
+  return { priorSub: `${LOCAL_SUB_PREFIX}${thumbprint}` };
+}
+
 export async function verifyCertificate(
   certJwt: string
 ): Promise<VerifiedCertificate> {

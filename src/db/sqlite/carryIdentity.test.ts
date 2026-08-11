@@ -1,0 +1,75 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { after, before, describe, it } from "node:test";
+
+import { initSqlite } from "./connection";
+import {
+  claimServerOwner,
+  getServerConfig,
+  setServerRole,
+  getServerRole,
+} from "./servers";
+import { carryIdentityForward, getUserByGrytId, upsertUser } from "./users";
+
+let dir: string;
+
+before(async () => {
+  dir = mkdtempSync(join(tmpdir(), "gryt-carry-"));
+  process.env.DATA_DIR = dir;
+  await initSqlite();
+});
+
+after(() => {
+  delete process.env.DATA_DIR;
+  rmSync(dir, { recursive: true, force: true });
+});
+
+describe("carrying an identity forward", () => {
+  it("moves the membership to the account", async () => {
+    const local = await upsertUser("key:aaa", "Ada");
+    await setServerRole(local.server_user_id, "admin");
+
+    const carried = await carryIdentityForward("key:aaa", "account-1");
+
+    assert.equal(carried, true);
+    assert.equal(await getUserByGrytId("key:aaa"), null);
+
+    const now = await getUserByGrytId("account-1");
+    assert.equal(now?.server_user_id, local.server_user_id, "same membership");
+    assert.equal(now?.nickname, "Ada");
+    assert.equal(await getServerRole(local.server_user_id), "admin", "role kept");
+  });
+
+  it("carries ownership with it", async () => {
+    // The case with nobody left to fix it by hand, and the reason this exists.
+    await upsertUser("key:owner", "Owner");
+    await claimServerOwner("key:owner");
+    assert.equal((await getServerConfig())?.owner_gryt_user_id, "key:owner");
+
+    assert.equal(await carryIdentityForward("key:owner", "account-owner"), true);
+
+    assert.equal(
+      (await getServerConfig())?.owner_gryt_user_id,
+      "account-owner",
+      "still owns the server",
+    );
+  });
+
+  it("does nothing when the old identity was never a member here", async () => {
+    assert.equal(await carryIdentityForward("key:never", "account-2"), false);
+  });
+
+  it("refuses to merge when the account is already a member", async () => {
+    // Two rows would have to become one, and there is no right way to
+    // reconcile two sets of roles and two histories. Both are left alone.
+    const local = await upsertUser("key:bbb", "Local");
+    const account = await upsertUser("account-3", "Account");
+
+    assert.equal(await carryIdentityForward("key:bbb", "account-3"), false);
+
+    assert.equal((await getUserByGrytId("key:bbb"))?.server_user_id, local.server_user_id);
+    assert.equal((await getUserByGrytId("account-3"))?.server_user_id, account.server_user_id);
+  });
+});
