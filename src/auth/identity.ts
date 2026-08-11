@@ -434,7 +434,7 @@ export function createChallenge(
   serverHost: string,
   nickname: string,
   inviteCode?: string
-): { nonce: string; serverHost: string } {
+): { nonce: string; serverHost: string; identityTiers: IdentityTier[] } {
   const nonce = randomBytes(32).toString("base64url");
   pendingChallenges.set(socketId, {
     nonce,
@@ -443,7 +443,12 @@ export function createChallenge(
     inviteCode,
     createdAt: Date.now(),
   });
-  return { nonce, serverHost };
+  // The accepted tiers ride along with the challenge because this is the moment
+  // the client has to choose which identity to sign with, and `server:info`
+  // cannot be relied on to have arrived: it is emitted on connect but awaits the
+  // config first, while this is emitted synchronously in reply to `server:join`.
+  // Sending it here means the client is never choosing blind.
+  return { nonce, serverHost, identityTiers: getAcceptedIdentityTiers() };
 }
 
 export function consumeChallenge(socketId: string): PendingChallenge | null {

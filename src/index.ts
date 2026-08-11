@@ -14,7 +14,9 @@ import {
   getServerConfig,
   initSqlite,
 } from "./db";
+import { getAcceptedIdentityTiers } from "./auth/identity";
 import { logServerIdentity } from "./auth/serverIdentity";
+import type { JoinPolicy } from "./db/interfaces";
 import { verifyAccessToken } from "./utils/jwt";
 
 import { initStorage, ensureBucket, getObject } from "./storage";
@@ -193,6 +195,9 @@ app.get("/info", async (_req, res) => {
   let displayName = process.env.SERVER_NAME || "Unknown Server";
   let description = process.env.SERVER_DESCRIPTION || "A Gryt server";
   let lanOpen = false;
+  // Falls back to the stricter answer if the config cannot be read, so a
+  // database wobble never advertises a server as easier to get into than it is.
+  let joinPolicy: JoinPolicy = "invite";
   let serverId: string | null = null;
   let isMember = false;
 
@@ -227,6 +232,7 @@ app.get("/info", async (_req, res) => {
     if (cfg?.display_name) displayName = cfg.display_name;
     if (cfg?.description) description = cfg.description;
     if (cfg?.lan_open) lanOpen = true;
+    if (cfg?.join_policy) joinPolicy = cfg.join_policy;
 
     if ((cfg as { server_id?: string | null })?.server_id) {
       serverId = (cfg as { server_id?: string }).server_id!;
@@ -252,6 +258,13 @@ app.get("/info", async (_req, res) => {
     // omitted rather than the endpoint being closed.
     ...(isMember ? { version: process.env.SERVER_VERSION || "1.0.0" } : {}),
     lanOpen,
+    // What this server asks of somebody who is not a member yet. Unauthenticated
+    // on purpose: the whole point is that a client can say "you don't need an
+    // account to join this one" before anybody tries. Neither field tells a
+    // caller anything they could not learn by attempting the join and reading
+    // the refusal.
+    identityTiers: getAcceptedIdentityTiers(),
+    joinPolicy,
   });
 });
 
