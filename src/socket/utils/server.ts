@@ -1,6 +1,7 @@
 import consola from "consola";
 import { Server, Socket } from "socket.io";
 import { Clients } from "../../types";
+import { getAcceptedIdentityTiers } from "../../auth/identity";
 import { getVoiceSeatLimit } from "../../utils/voiceSeats";
 import { syncAllClients, broadcastMemberList } from "./clients";
 import {
@@ -162,6 +163,12 @@ export async function sendInfo(socket: Socket, clientsInfo: Clients | undefined,
     description,
     members: activeMembers.toString(),
     version: process.env.SERVER_VERSION || "1.0.0",
+    // Sent before anyone joins, and deliberately so: a client should be able to
+    // say "this server doesn't need an account" on the way in, rather than
+    // after a join has already been refused. This handler is unauthenticated,
+    // which is fine — it is the operator's own advertisement of their policy,
+    // and knowing it tells you nothing you would not learn by trying.
+    identityTiers: getAcceptedIdentityTiers(),
   };
   
   socket.emit("server:info", serverInfo);
