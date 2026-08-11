@@ -267,9 +267,14 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
             clearInviteCooldown(inviteKey);
             clearInviteIpCooldown(ip);
           } else {
+            // The claim stays ahead of the policy check, and has to. It is what
+            // makes the first person through the door the owner, and on an open
+            // server that person arrives without an invite like everybody else
+            // — admitting them before claiming would leave the server ownerless
+            // and unconfigurable.
             const claimed = await claimServerOwner(grytUserId);
             claimedOwnerGrytUserId = claimed.owner;
-            if (claimedOwnerGrytUserId !== grytUserId) {
+            if (claimedOwnerGrytUserId !== grytUserId && cfg?.join_policy !== "open") {
               socket.emit("server:error", {
                 error: "invite_required",
                 message: "Invite required to join this server.",

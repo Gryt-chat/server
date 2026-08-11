@@ -6,6 +6,7 @@ import {
 } from "../interfaces";
 import type {
   CensorStyle,
+  JoinPolicy,
   ProfanityMode,
   ServerBanRecord,
   ServerConfigRecord,
@@ -22,6 +23,15 @@ function normalizeProfanityMode(v: unknown): ProfanityMode {
   const s = String(v || "").toLowerCase();
   if (VALID_PROFANITY_MODES.includes(s as ProfanityMode)) return s as ProfanityMode;
   return "censor";
+}
+
+/**
+ * Anything unrecognised reads as `invite`, so a value this build does not know
+ * about — a column written by a newer server, a hand-edited row — fails shut
+ * rather than throwing the doors open.
+ */
+export function normalizeJoinPolicy(v: unknown): JoinPolicy {
+  return String(v || "").toLowerCase() === "open" ? "open" : "invite";
 }
 
 function normalizeRole(role: unknown): ServerRole {
@@ -48,6 +58,7 @@ function rowToConfig(r: Record<string, unknown>): ServerConfigRecord {
     profanity_censor_style: normalizeCensorStyle(r.profanity_censor_style),
     system_channel_id: (r.system_channel_id as string) ?? null,
     lan_open: (r.lan_open as number) === 1,
+    join_policy: normalizeJoinPolicy(r.join_policy),
     discoverable: (r.discoverable as number) !== 0,
     is_configured: (r.is_configured as number) === 1,
     created_at: fromIso(r.created_at as string),
@@ -178,6 +189,7 @@ export async function updateServerConfig(patch: {
   profanityCensorStyle?: CensorStyle;
   systemChannelId?: string | null;
   lanOpen?: boolean;
+  joinPolicy?: JoinPolicy;
   discoverable?: boolean;
   isConfigured?: boolean;
 }): Promise<ServerConfigRecord> {
@@ -200,6 +212,7 @@ export async function updateServerConfig(patch: {
     profanityCensorStyle: { col: "profanity_censor_style", transform: (v) => normalizeCensorStyle(v as string) },
     systemChannelId: { col: "system_channel_id" },
     lanOpen: { col: "lan_open", transform: (v) => v ? 1 : 0 },
+    joinPolicy: { col: "join_policy", transform: (v) => normalizeJoinPolicy(v) },
     discoverable: { col: "discoverable", transform: (v) => v ? 1 : 0 },
     isConfigured: { col: "is_configured", transform: (v) => v ? 1 : 0 },
   };
