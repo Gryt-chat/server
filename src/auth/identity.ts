@@ -39,6 +39,15 @@ export type IdentityTier = "account" | "local";
 const SELF_ISSUER = "gryt:self";
 
 /**
+ * The `iss` on a certificate where one key vouches for another.
+ *
+ * The SSH shape: a key you keep signs a short statement that some device key is
+ * you, and the device signs the assertion with the key it actually holds. The
+ * key that is your identity never has to be on the device doing the talking.
+ */
+const DELEGATED_ISSUER = "gryt:delegated";
+
+/**
  * Prefix on the `sub` of every self-signed identity.
  *
  * Keeps the two tiers in separate namespaces for good. `gryt_user_id` is one
@@ -263,6 +272,78 @@ async function verifySelfSignedCertificate(
   };
 }
 
+/**
+ * Verify a certificate where a key you hold vouches for a key on a device.
+ *
+ * The identity is the *signing* key, not the one being vouched for. So the
+ * `sub` is derived from the key that signed the certificate, and the `jwk`
+ * handed back — the one the assertion is checked against — is the device key it
+ * names. One person can authorise as many devices as they like and every one of
+ * them is the same `sub`.
+ *
+ * There is deliberately nothing here for an operator to trust or pin. It would
+ * be natural to expect a delegated certificate to need an `authorized_keys`
+ * equivalent, but that is only true when the identity is something its holder
+ * writes down, like a username. Deriving `sub` from the signing key means a
+ * delegation can only ever claim the identity of the key that signed it — the
+ * same property that makes a self-signed certificate safe, one step removed.
+ *
+ * Revocation is expiry. There is no revocation list and no attempt at one; a
+ * delegation is good until its `exp`, so a short one is how you keep a lost
+ * device from being you for long.
+ */
+async function verifyDelegatedCertificate(
+  certJwt: string
+): Promise<VerifiedCertificate> {
+  let unverified: JWTPayload;
+  try {
+    unverified = decodeJwt(certJwt);
+  } catch (err) {
+    throw new Error(
+      `Certificate is not a well-formed JWT: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
+  }
+
+  const payload = unverified as JWTPayload & {
+    jwk?: unknown;
+    iss_jwk?: unknown;
+  };
+
+  // The key that signed this, carried so the signature can be checked at all.
+  const signingJwk = assertPublicP256Jwk(payload.iss_jwk);
+  // The key the device will actually sign assertions with.
+  const deviceJwk = assertPublicP256Jwk(payload.jwk);
+
+  const signingThumbprint = await calculateJwkThumbprint(signingJwk, "sha256");
+  const deviceThumbprint = await calculateJwkThumbprint(deviceJwk, "sha256");
+
+  // A delegation to itself is not a delegation. It would verify happily and
+  // amount to a self-signed certificate wearing a different issuer, which is a
+  // second way to say the same thing and a second thing to reason about.
+  if (signingThumbprint === deviceThumbprint) {
+    throw new Error("Delegated certificate names its own signing key");
+  }
+
+  const signingKey = await importJWK(signingJwk, "ES256");
+  await jwtVerify(certJwt, signingKey, {
+    issuer: DELEGATED_ISSUER,
+    algorithms: ["ES256"],
+  });
+
+  return {
+    sub: `${LOCAL_SUB_PREFIX}${signingThumbprint}`,
+    // Self-asserted, so worth nothing — same reasoning as the self-signed path.
+    preferredUsername: undefined,
+    // The device key, because that is what signs the assertion. Handing back
+    // the signing key here would reject every delegated join.
+    jwk: deviceJwk as JsonWebKey,
+    issuer: DELEGATED_ISSUER,
+    tier: "local",
+  };
+}
+
 /** The `iss` on a proof that one identity is claiming to become another. */
 const LINK_ISSUER = "gryt:link";
 
@@ -360,6 +441,19 @@ export async function verifyCertificate(
       throw new IdentityVerificationError(
         "certificate_rejected",
         `Self-signed certificate verification failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+    }
+  }
+
+  if (claimedIssuer === DELEGATED_ISSUER) {
+    try {
+      return await verifyDelegatedCertificate(certJwt);
+    } catch (err) {
+      throw new IdentityVerificationError(
+        "certificate_rejected",
+        `Delegated certificate verification failed: ${
           err instanceof Error ? err.message : String(err)
         }`
       );
