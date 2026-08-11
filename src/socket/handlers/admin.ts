@@ -16,6 +16,7 @@ import {
   DEFAULT_UPLOAD_MAX_BYTES,
   createServerInvite,
   listServerInvites,
+  getServerInvite,
   revokeServerInvite,
   setServerRole,
   listServerRoles,
@@ -474,7 +475,48 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    'server:ban': async (payload: { accessToken: string; targetServerUserId: string; reason?: string; expiresInMinutes?: number | null; deleteContent?: boolean }) => {
+    /**
+     * How a member got in, for the moderator about to remove them.
+     *
+     * Admin-gated and asked for by id rather than broadcast, because the
+     * member list goes to everybody and an invite code in it would be a way
+     * for any member to collect working codes.
+     *
+     * The answer is what makes GRYT-177's question worth asking: banning
+     * somebody who arrived on a still-live invite achieves little on its own,
+     * since an identity with no account costs nothing to replace.
+     */
+    'server:member:invite': async (payload: { accessToken: string; targetServerUserId?: string }) => {
+      try {
+        const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
+        if (!auth) return;
+
+        const targetId = typeof payload?.targetServerUserId === "string" ? payload.targetServerUserId.trim() : "";
+        if (!targetId) {
+          socket.emit("server:error", { error: "invalid_payload", message: "targetServerUserId required." });
+          return;
+        }
+
+        const target = await getUserByServerId(targetId);
+        const code = target?.joined_with_invite_code ?? null;
+        const invite = code ? await getServerInvite(code) : null;
+
+        socket.emit("server:member:invite", {
+          targetServerUserId: targetId,
+          code,
+          // Absent means they did not arrive on an invite at all — the first
+          // member claims the server, and a LAN or open join needs no code.
+          active: invite ? !invite.revoked : false,
+          usesConsumed: invite?.uses_consumed ?? 0,
+          maxUses: invite?.max_uses ?? 0,
+        });
+      } catch (e) {
+        consola.error("server:member:invite failed", e);
+        socket.emit("server:error", { error: "member_invite_failed", message: "Could not look that up." });
+      }
+    },
+
+    'server:ban': async (payload: { accessToken: string; targetServerUserId: string; reason?: string; expiresInMinutes?: number | null; deleteContent?: boolean; revokeInvite?: boolean }) => {
       try {
         const rl = rlCheck("server:ban", ctx, RL_MODERATION);
         if (!rl.allowed) { emitRateLimited(ctx, rl); return; }
@@ -534,8 +576,39 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           );
         }
 
-        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "ban", target: targetId, meta: { reason: payload.reason ?? null, deletedContent: purge } }).catch((e) => consola.warn("audit log write failed", e));
-        socket.emit("server:ban:success", { targetServerUserId: targetId });
+        // Close the door they came through, if asked.
+        //
+        // A ban is keyed on the identity, and an identity with no account
+        // behind it costs nothing to replace — so somebody banned can come
+        // straight back on a new key, presenting the same invite they used the
+        // first time. Verified against a live server: it takes seconds.
+        //
+        // This does not make the ban durable, nothing can. It closes the one
+        // case where a moderator's decision is undone by a link they had
+        // forgotten was still live.
+        let revokedInvite: string | null = null;
+        if (payload.revokeInvite) {
+          try {
+            const target = await getUserByServerId(targetId);
+            const code = target?.joined_with_invite_code;
+            if (code) {
+              const invite = await getServerInvite(code);
+              // Skipped rather than re-revoked, so the audit log does not claim
+              // an action that changed nothing.
+              if (invite && !invite.revoked) {
+                await revokeServerInvite(code);
+                revokedInvite = code;
+                io.to("verifiedClients").emit("server:invite:revoked", { serverId, code, revoked: true });
+              }
+            }
+          } catch (e) {
+            // The ban itself has already happened and is the important half.
+            consola.warn("Could not revoke the invite used by a banned user:", e);
+          }
+        }
+
+        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "ban", target: targetId, meta: { reason: payload.reason ?? null, deletedContent: purge, revokedInvite } }).catch((e) => consola.warn("audit log write failed", e));
+        socket.emit("server:ban:success", { targetServerUserId: targetId, revokedInvite });
         syncAllClients(io, clientsInfo);
         broadcastMemberList(io, clientsInfo, serverId);
       } catch (e) {

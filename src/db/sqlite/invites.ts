@@ -66,6 +66,16 @@ export async function listServerInvites(): Promise<ServerInviteRecord[]> {
   return rows.map(rowToInvite);
 }
 
+/**
+ * One invite by code, or null. For answering "how did this person get in, and
+ * is that door still open" without listing every invite on the server.
+ */
+export async function getServerInvite(code: string): Promise<ServerInviteRecord | null> {
+  const db = getSqliteDb();
+  const row = db.prepare(`SELECT * FROM invites WHERE code = ?`).get(code) as Record<string, unknown> | undefined;
+  return row ? rowToInvite(row) : null;
+}
+
 export async function revokeServerInvite(code: string, revoked = true): Promise<void> {
   const db = getSqliteDb();
   db.prepare(`UPDATE invites SET revoked = ? WHERE code = ?`).run(revoked ? 1 : 0, code);
