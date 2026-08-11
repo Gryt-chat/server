@@ -1,6 +1,7 @@
 import { Server, Socket } from "socket.io";
 import { Clients } from "../../types";
 import { getAllRegisteredUsers, getFilesByIds, listServerRoles } from "../../db";
+import { memberIdentity } from "./memberIdentity";
 
 export function verifyClient(socket: Socket) {
   socket.join("verifiedClients");
@@ -137,6 +138,7 @@ export async function buildMemberList(clientsInfo: Clients) {
       return {
         serverUserId: user.server_user_id,
         nickname: user.nickname,
+        ...memberIdentity(user.gryt_user_id),
         avatarFileId: user.avatar_file_id || null,
         avatarColor: user.avatar_file_id
           ? avatarFiles.get(user.avatar_file_id)?.dominant_color ?? null
@@ -168,6 +170,9 @@ async function emitMemberListNow(io: Server, clientsInfo: Clients): Promise<void
       members.map(m => ({
         serverUserId: m.serverUserId,
         nickname: m.nickname,
+        // Changes when an identity is replaced (`replaceUserIdentity`), which
+        // is exactly when a member list showing the old one would be wrong.
+        identityFingerprint: m.identityFingerprint,
         avatarFileId: m.avatarFileId,
         avatarColor: m.avatarColor,
         role: m.role,

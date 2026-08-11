@@ -50,6 +50,17 @@ const SELF_ISSUER = "gryt:self";
  */
 const LOCAL_SUB_PREFIX = "key:";
 
+/**
+ * Which tier a stored `gryt_user_id` belongs to.
+ *
+ * The prefix is why this needs nothing but the id itself — no lookup, no column
+ * and no backfill for rows written before tiers existed, since a `sub` without
+ * the prefix could only ever have come from a CA.
+ */
+export function identityTierOf(sub: string): IdentityTier {
+  return sub.startsWith(LOCAL_SUB_PREFIX) ? "local" : "account";
+}
+
 const DEFAULT_ACCEPTED_TIERS: IdentityTier[] = ["account"];
 
 function parseTier(value: string): IdentityTier | null {
