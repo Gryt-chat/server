@@ -14,11 +14,6 @@ import {
   getServerConfig,
   initSqlite,
 } from "./db";
-import {
-  getIssuer,
-  getJwksResponse,
-  initBuiltinIdentity,
-} from "./auth/builtinIdentity";
 import { logServerIdentity } from "./auth/serverIdentity";
 import { verifyAccessToken } from "./utils/jwt";
 
@@ -114,15 +109,6 @@ app.get("/health", (_req, res) => {
   });
 });
 
-// JWKS endpoint for built-in identity provider (self-hosted mode)
-app.get("/.well-known/jwks.json", (_req, res) => {
-  try {
-    res.json(getJwksResponse());
-  } catch {
-    res.status(503).json({ error: "identity_not_initialized" });
-  }
-});
-
 // Initialize storage and database
 const disableS3 = (process.env.DISABLE_S3 || "").toLowerCase() === "true";
 
@@ -151,39 +137,6 @@ try {
 // Generated here so it exists before the first connection and any failure is
 // visible at boot; the module initializes itself on demand regardless.
 logServerIdentity();
-
-// Built-in identity provider (self-hosted mode)
-const identityMode = (process.env.IDENTITY_MODE || "").toLowerCase();
-if (identityMode === "builtin") {
-  initBuiltinIdentity()
-    .then(() => {
-      const issuer = getIssuer();
-
-      process.env.GRYT_BUILTIN_IDENTITY_JWKS_URL = `${issuer}/.well-known/jwks.json`;
-      process.env.GRYT_BUILTIN_IDENTITY_ISSUER = issuer;
-
-      const trustedIssuers = new Set(
-        (process.env.GRYT_TRUSTED_CERT_ISSUERS || "")
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean)
-      );
-
-      trustedIssuers.add("https://id.gryt.chat");
-      trustedIssuers.add(issuer);
-
-      process.env.GRYT_TRUSTED_CERT_ISSUERS =
-        Array.from(trustedIssuers).join(",");
-
-      consola.success(
-        `Built-in identity provider initialized (issuer: ${issuer})`
-      );
-      consola.info(
-        `Trusted certificate issuers: ${process.env.GRYT_TRUSTED_CERT_ISSUERS}`
-      );
-    })
-    .catch((e) => consola.error("Built-in identity initialization failed", e));
-}
 
 // Database initialization (SQLite)
 initSqlite()

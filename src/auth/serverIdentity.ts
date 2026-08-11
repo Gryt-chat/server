@@ -12,9 +12,10 @@ import {
 } from "jose";
 
 // The server's long-lived identity, used to prove to a client that it is the
-// same server the client joined before (GRYT-51). Deliberately separate from
-// `builtinIdentity`, which is a certificate authority for *user* identity and
-// only exists when IDENTITY_MODE=builtin. This key always exists.
+// same server the client joined before (GRYT-51). This is the server proving
+// who *it* is, and has nothing to do with the certificates users present to
+// prove who *they* are — those are verified in `identity.ts` and this key never
+// signs one.
 //
 // It is also separate from `server_id`, which goes out unauthenticated over
 // mDNS and is a discovery hint, never a credential.
