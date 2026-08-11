@@ -299,10 +299,9 @@ export async function verifyCertificate(
       const { payload } = await jwtVerify(
         certJwt,
         getIdentityJwksForIssuer(issuer),
-        // ES256 is what both CAs sign with — the identity service's `CA_ALG`
-        // and `builtinIdentity`. Pinning it here means a CA that changed
-        // algorithm would fail loudly at verification rather than quietly
-        // widening what this accepts.
+        // ES256 is what the identity service signs with (`CA_ALG`). Pinning it
+        // here means a CA that changed algorithm would fail loudly at
+        // verification rather than quietly widening what this accepts.
         { issuer, algorithms: ["ES256"] }
       );
 
