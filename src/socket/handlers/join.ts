@@ -17,6 +17,9 @@ import {
   setServerRole,
   createRefreshToken,
   effectiveModerationState,
+  normalizeJoinPolicy,
+  createOrRefreshJoinRequest,
+  clearJoinRequest,
 } from "../../db";
 import { isPrivateIp } from "../../utils/isPrivateIp";
 import { checkIdentityAllowed } from "../../moderation/sessionGate";
@@ -37,6 +40,20 @@ import {
 const RL_JOIN: RateLimitRule = {
   limit: 20, windowMs: 60_000, banMs: 60_000,
   scorePerAction: 0.5, maxScore: 10, scoreDecayMs: 5000,
+};
+
+/**
+ * How often one address may ask to be let in.
+ *
+ * The queue is keyed on identity, so nobody builds a backlog on their own by
+ * asking twice. What that does not bound is a script minting a fresh local
+ * identity per attempt — those cost nothing to make, and each one is a new row
+ * and a new line in somebody's moderation queue. Ten an hour is far more than a
+ * person needs and far less than a queue-flooder wants.
+ */
+const RL_JOIN_REQUEST: RateLimitRule = {
+  limit: 10, windowMs: 60 * 60_000, banMs: 10 * 60_000,
+  scorePerAction: 1, maxScore: 10, scoreDecayMs: 60_000,
 };
 
 /**
@@ -121,12 +138,20 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
 
     // Step 2: Client responds to the challenge with a signed assertion
     // and an identity certificate. Server verifies both and completes the join.
+    // `note` rides here rather than on the challenge deliberately. The
+    // challenge binds what the client must not be able to change between the
+    // two steps — the nickname it will be admitted under, the invite it claimed.
+    // A note is a message to a moderator; nothing downstream trusts it, so
+    // binding it would mean widening the challenge for no property gained.
+    // The client knows to ask for one because `/info` publishes `joinPolicy`.
     'server:verify': async (payload: {
       certificate?: string;
       assertion?: string;
       link?: string;
+      note?: string;
     }) => {
       try {
+        const joinNote = typeof payload?.note === "string" ? payload.note : null;
         const challenge = consumeChallenge(socket.id);
         if (!challenge) {
           socket.emit("server:error", {
@@ -372,7 +397,47 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
             // and unconfigurable.
             const claimed = await claimServerOwner(grytUserId);
             claimedOwnerGrytUserId = claimed.owner;
-            if (claimedOwnerGrytUserId !== grytUserId && cfg?.join_policy !== "open") {
+            const policy = normalizeJoinPolicy(cfg?.join_policy);
+            const isClaimingOwner = claimedOwnerGrytUserId === grytUserId;
+
+            if (!isClaimingOwner && policy === "request") {
+              // Asking is rate limited per address, not per identity. The row is
+              // keyed on the identity, so one person cannot build a queue on
+              // their own — but a script making a fresh local identity each time
+              // can, and each one costs nothing to make.
+              const asks = checkRateLimit("join:requests", undefined, ip, RL_JOIN_REQUEST);
+              if (!asks.allowed) {
+                socket.emit("server:error", {
+                  error: "rate_limited",
+                  message: "Too many requests to join. Please wait.",
+                  retryAfterMs: asks.retryAfterMs,
+                  canReapply: true,
+                });
+                return;
+              }
+
+              const request = await createOrRefreshJoinRequest(grytUserId, nickname, joinNote);
+
+              if (request.status === "approved") {
+                // Let them through, and take the row with them. Leaving it would
+                // mean an approval readmits them forever, including after they
+                // leave or are removed.
+                await clearJoinRequest(grytUserId);
+                consola.info(`Approved join request used by ${grytUserId}`);
+              } else {
+                // A denial is told the same thing as a pending one. Saying "you
+                // were turned down" confirms a moderator looked and decided,
+                // which is the same leak the ban refusal above avoids — and it
+                // invites arguing with the message instead of with a person.
+                consola.info(`Join request ${request.status} for ${grytUserId}`);
+                socket.emit("server:error", {
+                  error: "approval_pending",
+                  message: "This server admits people by request. Yours is with the moderators.",
+                  canReapply: true,
+                });
+                return;
+              }
+            } else if (!isClaimingOwner && policy !== "open") {
               socket.emit("server:error", {
                 error: "invite_required",
                 message: "Invite required to join this server.",

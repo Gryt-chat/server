@@ -17,8 +17,32 @@ export type { CensorStyle, ProfanityMode };
  * `GRYT_IDENTITY_TIERS`; this is how hard it is to get in once you have one.
  * Keeping them apart means "accounts walk in, guests need an invite" is a
  * combination rather than a special case.
+ *
+ * `request` sits between the other two: anybody may ask, nobody gets in until
+ * an admin says so. It is the answer to a server that wants to be findable
+ * without being unattended — `open` lets anyone walk in, and `invite` makes a
+ * shareable link the whole security model.
  */
-export type JoinPolicy = "invite" | "open";
+export type JoinPolicy = "invite" | "open" | "request";
+
+/**
+ * Somebody asking to be let in, on a `request` server.
+ *
+ * One row per identity, so asking repeatedly does not build a queue. `status`
+ * is kept after the decision rather than deleting the row: an approval has to
+ * outlive the connection that asked for it, because the person is told to come
+ * back rather than held open, and a denial that vanished would let them ask
+ * again immediately.
+ */
+export interface ServerJoinRequestRecord {
+  gryt_user_id: string;
+  nickname: string;
+  note: string | null;
+  status: "pending" | "approved" | "denied";
+  created_at: Date;
+  decided_at: Date | null;
+  decided_by_server_user_id: string | null;
+}
 
 const scrypt = promisify(scryptCb);
 
