@@ -98,6 +98,16 @@ function createSchema(d: DatabaseSync): void {
       expires_at TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS join_requests (
+      gryt_user_id TEXT PRIMARY KEY,
+      nickname TEXT NOT NULL,
+      note TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT NOT NULL,
+      decided_at TEXT,
+      decided_by_server_user_id TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS channels (
       channel_id TEXT PRIMARY KEY,
       name TEXT NOT NULL,

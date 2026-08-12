@@ -4,6 +4,7 @@ export * from "./messages";
 export * from "./servers";
 export * from "./channels";
 export * from "./invites";
+export * from "./joinRequests";
 export * from "./emojis";
 export * from "./emojiJobs";
 export * from "./imageJobs";

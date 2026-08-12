@@ -31,7 +31,10 @@ function normalizeProfanityMode(v: unknown): ProfanityMode {
  * rather than throwing the doors open.
  */
 export function normalizeJoinPolicy(v: unknown): JoinPolicy {
-  return String(v || "").toLowerCase() === "open" ? "open" : "invite";
+  const s = String(v || "").toLowerCase();
+  if (s === "open") return "open";
+  if (s === "request") return "request";
+  return "invite";
 }
 
 function normalizeRole(role: unknown): ServerRole {

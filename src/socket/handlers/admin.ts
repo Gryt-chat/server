@@ -22,6 +22,8 @@ import {
   listServerRoles,
   insertServerAudit,
   listServerAudit,
+  listJoinRequests,
+  decideJoinRequest,
   banUser,
   unbanUser,
   listBans,
@@ -247,11 +249,11 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         const lanOpen: boolean | undefined =
           typeof payload.lanOpen === "boolean" ? payload.lanOpen : undefined;
 
-        // Only the two values mean anything, and anything else is dropped
+        // Only the known values mean anything, and anything else is dropped
         // rather than coerced — a typo should leave the policy alone, not
         // silently reset it to the default.
         const joinPolicy: JoinPolicy | undefined =
-          payload.joinPolicy === "open" || payload.joinPolicy === "invite"
+          payload.joinPolicy === "open" || payload.joinPolicy === "invite" || payload.joinPolicy === "request"
             ? payload.joinPolicy
             : undefined;
 
@@ -384,6 +386,77 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       } catch (e) {
         consola.error("server:invites:revoke failed", e);
         socket.emit("server:error", { error: "invite_revoke_failed", message: "Failed to revoke invite." });
+      }
+    },
+
+    // ── Join requests ────────────────────────────────────────────
+    //
+    // Only meaningful while join_policy is "request", but readable whatever it
+    // is: switching away from request should not hide a queue somebody is still
+    // owed a decision on.
+
+    'server:joinRequests:list': async (payload: { accessToken: string }) => {
+      try {
+        const rl = rlCheck("server:joinRequests:list", ctx, RL_INVITE);
+        if (!rl.allowed) { emitRateLimited(ctx, rl); return; }
+        const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
+        if (!auth) return;
+
+        const requests = await listJoinRequests("pending");
+        socket.emit("server:joinRequests", {
+          serverId,
+          requests: requests.map((r) => ({
+            grytUserId: r.gryt_user_id,
+            nickname: r.nickname,
+            note: r.note,
+            createdAt: r.created_at,
+          })),
+        });
+      } catch (e) {
+        consola.error("server:joinRequests:list failed", e);
+        socket.emit("server:error", { error: "join_requests_failed", message: "Failed to load join requests." });
+      }
+    },
+
+    'server:joinRequests:decide': async (payload: { accessToken: string; grytUserId: string; decision: string }) => {
+      try {
+        const rl = rlCheck("server:joinRequests:decide", ctx, RL_INVITE);
+        if (!rl.allowed) { emitRateLimited(ctx, rl); return; }
+
+        const decision = payload?.decision === "approved" || payload?.decision === "denied" ? payload.decision : null;
+        if (!payload || typeof payload.grytUserId !== "string" || !decision) {
+          socket.emit("server:error", { error: "invalid_payload", message: "grytUserId and decision are required." });
+          return;
+        }
+
+        const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
+        if (!auth) return;
+
+        const decided = await decideJoinRequest(payload.grytUserId.trim(), decision, auth.tokenPayload.serverUserId);
+        if (!decided) {
+          socket.emit("server:error", { error: "join_request_missing", message: "No such join request." });
+          return;
+        }
+
+        insertServerAudit({
+          actorServerUserId: auth.tokenPayload.serverUserId,
+          action: decision === "approved" ? "join_request_approve" : "join_request_deny",
+          target: decided.gryt_user_id,
+          meta: { nickname: decided.nickname },
+        }).catch((e) => consola.warn("audit log write failed", e));
+
+        // Everyone who can act on the queue sees it change, not just whoever
+        // clicked — two moderators looking at the same list should not both be
+        // deciding the same person.
+        broadcastServerUiUpdate();
+        socket.emit("server:joinRequest:decided", {
+          serverId,
+          grytUserId: decided.gryt_user_id,
+          decision,
+        });
+      } catch (e) {
+        consola.error("server:joinRequests:decide failed", e);
+        socket.emit("server:error", { error: "join_request_decide_failed", message: "Failed to decide join request." });
       }
     },
 
