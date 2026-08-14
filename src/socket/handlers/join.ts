@@ -4,6 +4,7 @@ import { syncAllClients, broadcastMemberList, countOtherSessions, verifyClient }
 import { sendServerDetails } from "../utils/server";
 import { postSystemMessage, formatJoinMessage } from "../utils/systemMessages";
 import { createChallenge, consumeChallenge, verifyCertificate, verifyAssertion, verifyIdentityLink, identityTierAccepted, IdentityVerificationError, type IdentityTier } from "../../auth/identity";
+import { readServiceState, serviceStateVarName } from "../../config/serviceState";
 import { generateAccessToken, TokenPayload } from "../../utils/jwt";
 import {
   getServerConfig,
@@ -109,13 +110,20 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        const authMode = (process.env.GRYT_AUTH_MODE || "required").toLowerCase();
-        if (authMode === "disabled") {
+        const service = readServiceState();
+        if (!service.inService) {
+          if ("misconfigured" in service) {
+            socket.emit("server:error", {
+              error: "auth_misconfigured",
+              message: `Unsupported ${serviceStateVarName()} "${service.misconfigured}".`,
+            });
+            return;
+          }
+          // Wording kept as it was rather than corrected to "out of service".
+          // The client matches on the `error` code, not the sentence, but this
+          // one reaches a person, and changing both the code and the copy in the
+          // same release would leave nothing recognisable in a bug report.
           socket.emit("server:error", { error: "auth_disabled", message: "This server has disabled authentication." });
-          return;
-        }
-        if (authMode !== "required") {
-          socket.emit("server:error", { error: "auth_misconfigured", message: `Unsupported GRYT_AUTH_MODE "${authMode}".` });
           return;
         }
 
