@@ -200,7 +200,13 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
             throw new Error("Assertion subject does not match certificate subject");
           }
 
-          grytUserId = cert.sub;
+          // `grytUserId`, not `sub`. The two differ for an account vouched for
+          // by anything other than the primary issuer, and this is the value
+          // every table keys on — so a CA that is trusted for its own users
+          // cannot name somebody else's (GRYT-267). The checks above and the
+          // link below stay on `sub`, which is what the client signed and the
+          // only value it knows.
+          grytUserId = cert.grytUserId;
           suggestedNickname = cert.preferredUsername;
           identityTier = cert.tier;
 

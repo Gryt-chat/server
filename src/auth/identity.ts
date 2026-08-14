@@ -134,6 +134,46 @@ function getTrustedCertificateIssuers(): string[] {
   return configured.length > 0 ? configured : DEFAULT_TRUSTED_CERT_ISSUERS;
 }
 
+/**
+ * The issuer whose users are stored under a bare `sub` (GRYT-267).
+ *
+ * Every other trusted issuer gets its name written into the id, so two CAs can
+ * never mean the same user. One of them has to own the unqualified namespace or
+ * every existing row would have to be rewritten, and that is a migration across
+ * `users`, `bans`, `server_config.owner_gryt_user_id` and `refresh_tokens` on
+ * live servers with no off-box backups. The first configured issuer owns it.
+ *
+ * **Reordering `GRYT_TRUSTED_CERT_ISSUERS` changes who that is**, which would
+ * silently re-point every account identity on the server. Add to the end of the
+ * list, never to the front.
+ */
+function getPrimaryCertificateIssuer(): string {
+  return getTrustedCertificateIssuers()[0];
+}
+
+/**
+ * Separates the issuer from the `sub` in a qualified id.
+ *
+ * Not valid in a URL host and not produced by Keycloak, which mints UUIDs. A
+ * `sub` containing it is refused outright rather than escaped: the only reason a
+ * CA would send one is to try to look like a different issuer, and there is no
+ * legitimate use to protect.
+ */
+const ISSUER_SEPARATOR = "|";
+
+/**
+ * What goes in `gryt_user_id` for a certificate the CA path verified.
+ *
+ * The issuer here is the one the signature was actually checked against, never
+ * the one the certificate claimed, so a CA cannot reach outside its own name by
+ * writing a different one down.
+ */
+function qualifiedAccountSub(issuer: string, sub: string): string {
+  return normalizeUrl(issuer) === normalizeUrl(getPrimaryCertificateIssuer())
+    ? sub
+    : `${normalizeUrl(issuer)}${ISSUER_SEPARATOR}${sub}`;
+}
+
 function getJwksUrlForIssuer(issuer: string): string {
   return `${normalizeUrl(issuer)}/.well-known/jwks.json`;
 }
@@ -157,7 +197,28 @@ function getIdentityJwksForIssuer(issuer: string) {
 // ── Certificate verification ────────────────────────────────────────
 
 export interface VerifiedCertificate {
+  /**
+   * The subject exactly as the certificate carries it.
+   *
+   * What the assertion has to claim, since the client signs with the value it
+   * read out of its own certificate and knows nothing about how this server
+   * files people. Not what to store — see `grytUserId`.
+   */
   sub: string;
+  /**
+   * What to store, and the only thing that should ever reach the database
+   * (GRYT-267).
+   *
+   * For the local and delegated tiers this is the `sub`, which is derived from a
+   * key and already cannot collide. For an account it carries the issuer that
+   * vouched for it, unless that issuer is the primary one.
+   *
+   * Kept separate from `sub` rather than replacing it because the two answer
+   * different questions, and a single field would have to be right for both at
+   * once — which is exactly the confusion that let a second CA name somebody
+   * else's user.
+   */
+  grytUserId: string;
   preferredUsername?: string;
   jwk: JsonWebKey;
   issuer: string;
@@ -261,6 +322,9 @@ async function verifySelfSignedCertificate(
 
   return {
     sub: `${LOCAL_SUB_PREFIX}${thumbprint}`,
+    // Derived from the key, so it is already impossible for anything else to
+    // name it. Nothing to qualify.
+    grytUserId: `${LOCAL_SUB_PREFIX}${thumbprint}`,
     // No `preferred_username`. A self-signed certificate can say anything, so
     // a name in one is worth nothing — and the join path already prefers the
     // nickname the client sent, with the certificate's name as a fallback. A
@@ -334,6 +398,7 @@ async function verifyDelegatedCertificate(
 
   return {
     sub: `${LOCAL_SUB_PREFIX}${signingThumbprint}`,
+    grytUserId: `${LOCAL_SUB_PREFIX}${signingThumbprint}`,
     // Self-asserted, so worth nothing — same reasoning as the self-signed path.
     preferredUsername: undefined,
     // The device key, because that is what signs the assertion. Handing back
@@ -460,63 +525,83 @@ export async function verifyCertificate(
     }
   }
 
-  const issuers = getTrustedCertificateIssuers();
-  const errors: string[] = [];
+  // Dispatched on the issuer the certificate names, matched against the trusted
+  // list, rather than tried against each in turn. One trusted issuer made the
+  // difference invisible; more than one makes the loop a liability. A rejected
+  // certificate used to cost a signature check per trusted issuer on a path
+  // anybody can reach before joining, and a single unreachable issuer early in
+  // the list added its JWKS fetch timeout to every join behind it.
+  const claimed = normalizeUrl(String(claimedIssuer ?? ""));
+  const issuer = getTrustedCertificateIssuers().find(
+    (candidate) => normalizeUrl(candidate) === claimed
+  );
 
-  for (const issuer of issuers) {
-    try {
-      const { payload } = await jwtVerify(
-        certJwt,
-        getIdentityJwksForIssuer(issuer),
-        // ES256 is what the identity service signs with (`CA_ALG`). Pinning it
-        // here means a CA that changed algorithm would fail loudly at
-        // verification rather than quietly widening what this accepts.
-        { issuer, algorithms: ["ES256"] }
-      );
-
-      if (!payload.sub || typeof payload.sub !== "string") {
-        throw new Error("Certificate missing sub claim");
-      }
-
-      const jwk = assertPublicP256Jwk(
-        (payload as JWTPayload & { jwk?: unknown }).jwk
-      );
-
-      if (payload.sub.startsWith(LOCAL_SUB_PREFIX)) {
-        // A CA has no business issuing into the self-signed namespace, and if
-        // one ever did it would hand out an id that a keyholder could also
-        // prove. Refusing here keeps the two namespaces disjoint from both
-        // ends rather than only from the side we control.
-        throw new Error(
-          `Certificate sub must not use the reserved "${LOCAL_SUB_PREFIX}" prefix`
-        );
-      }
-
-      const preferredUsername =
-        typeof payload["preferred_username"] === "string"
-          ? payload["preferred_username"]
-          : undefined;
-
-      return {
-        sub: payload.sub,
-        preferredUsername,
-        jwk: jwk as JsonWebKey,
-        issuer,
-        tier: "account",
-      };
-    } catch (err) {
-      errors.push(
-        `${issuer}: ${err instanceof Error ? err.message : String(err)}`
-      );
-    }
+  if (!issuer) {
+    throw new IdentityVerificationError(
+      "certificate_rejected",
+      `Certificate issuer is not trusted by this server: ${claimed || "(none)"}`
+    );
   }
 
-  throw new IdentityVerificationError(
-    "certificate_rejected",
-    `Certificate verification failed for all trusted issuers: ${errors.join(
-      " | "
-    )}`
-  );
+  try {
+    const { payload } = await jwtVerify(
+      certJwt,
+      getIdentityJwksForIssuer(issuer),
+      // ES256 is what the identity service signs with (`CA_ALG`). Pinning it
+      // here means a CA that changed algorithm would fail loudly at
+      // verification rather than quietly widening what this accepts.
+      { issuer, algorithms: ["ES256"] }
+    );
+
+    if (!payload.sub || typeof payload.sub !== "string") {
+      throw new Error("Certificate missing sub claim");
+    }
+
+    const jwk = assertPublicP256Jwk(
+      (payload as JWTPayload & { jwk?: unknown }).jwk
+    );
+
+    if (payload.sub.startsWith(LOCAL_SUB_PREFIX)) {
+      // A CA has no business issuing into the self-signed namespace, and if
+      // one ever did it would hand out an id that a keyholder could also
+      // prove. Refusing here keeps the two namespaces disjoint from both
+      // ends rather than only from the side we control.
+      throw new Error(
+        `Certificate sub must not use the reserved "${LOCAL_SUB_PREFIX}" prefix`
+      );
+    }
+
+    if (payload.sub.includes(ISSUER_SEPARATOR)) {
+      // Same argument one level up. The primary issuer's users are stored under
+      // a bare `sub`, so a primary-issued `sub` that already looked qualified
+      // would land on the id a different issuer's user gets. Nothing legitimate
+      // sends one — Keycloak mints UUIDs.
+      throw new Error(
+        `Certificate sub must not contain "${ISSUER_SEPARATOR}"`
+      );
+    }
+
+    const preferredUsername =
+      typeof payload["preferred_username"] === "string"
+        ? payload["preferred_username"]
+        : undefined;
+
+    return {
+      sub: payload.sub,
+      grytUserId: qualifiedAccountSub(issuer, payload.sub),
+      preferredUsername,
+      jwk: jwk as JsonWebKey,
+      issuer,
+      tier: "account",
+    };
+  } catch (err) {
+    throw new IdentityVerificationError(
+      "certificate_rejected",
+      `Certificate verification failed for ${issuer}: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
+  }
 }
 
 // ── Assertion verification ──────────────────────────────────────────

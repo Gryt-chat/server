@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { afterEach, describe, it } from "node:test";
 
 import {
@@ -153,7 +155,7 @@ describe("self-signed certificates", () => {
     process.env.GRYT_TRUSTED_CERT_ISSUERS = "http://127.0.0.1:1";
     try {
       const { jwt } = await makeSelfSignedCert({ issuer: "https://id.example" });
-      await assert.rejects(() => verifyCertificate(jwt), /trusted issuers/i);
+      await assert.rejects(() => verifyCertificate(jwt), /not trusted/i);
     } finally {
       delete process.env.GRYT_TRUSTED_CERT_ISSUERS;
     }
@@ -161,5 +163,162 @@ describe("self-signed certificates", () => {
 
   it("rejects a malformed certificate", async () => {
     await assert.rejects(() => verifyCertificate("not-a-jwt"), /well-formed/i);
+  });
+});
+
+// ── Issuer-qualified ids (GRYT-267) ─────────────────────────────────
+//
+// These stand up real JWKS endpoints on loopback rather than pointing at a
+// closed port, because the property under test only exists on the far side of a
+// successful CA verification: two trusted CAs, and whether one of them can name
+// the other's user.
+
+async function startJwksServer(publicJwk: JWK, kid: string) {
+  const server = createServer((req, res) => {
+    if (req.url === "/.well-known/jwks.json") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ keys: [{ ...publicJwk, kid, alg: "ES256", use: "sig" }] }));
+      return;
+    }
+    res.writeHead(404).end();
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
+
+  return {
+    origin: `http://127.0.0.1:${port}`,
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  };
+}
+
+/** A certificate authority: a signing key, a JWKS endpoint, and a way to issue. */
+async function startCa(kid: string) {
+  const { privateKey, publicKey } = await generateKeyPair("ES256", {
+    extractable: true,
+  });
+  const jwks = await startJwksServer(await exportJWK(publicKey), kid);
+
+  return {
+    origin: jwks.origin,
+    close: jwks.close,
+    async issue(sub: string, holderJwk: JWK) {
+      return new SignJWT({ jwk: holderJwk })
+        .setProtectedHeader({ alg: "ES256", typ: "JWT", kid })
+        .setIssuer(jwks.origin)
+        .setSubject(sub)
+        .setIssuedAt()
+        .setExpirationTime("24h")
+        .sign(privateKey);
+    },
+  };
+}
+
+describe("issuer-qualified ids", () => {
+  it("stores the primary issuer's users under a bare sub", async () => {
+    const ca = await startCa("primary");
+    const holder = await makeKeyPair();
+    process.env.GRYT_TRUSTED_CERT_ISSUERS = ca.origin;
+    try {
+      const jwt = await ca.issue("abc-123", holder.publicJwk);
+      const result = await verifyCertificate(jwt);
+
+      assert.equal(result.tier, "account");
+      assert.equal(result.sub, "abc-123");
+      assert.equal(result.grytUserId, "abc-123");
+    } finally {
+      delete process.env.GRYT_TRUSTED_CERT_ISSUERS;
+      await ca.close();
+    }
+  });
+
+  it("writes the issuer into the id for every other trusted issuer", async () => {
+    const primary = await startCa("primary");
+    const other = await startCa("other");
+    const holder = await makeKeyPair();
+    process.env.GRYT_TRUSTED_CERT_ISSUERS = `${primary.origin},${other.origin}`;
+    try {
+      const jwt = await other.issue("abc-123", holder.publicJwk);
+      const result = await verifyCertificate(jwt);
+
+      // The `sub` is untouched — it is what the client signed its assertion
+      // with and has to keep matching.
+      assert.equal(result.sub, "abc-123");
+      assert.equal(result.grytUserId, `${other.origin}|abc-123`);
+    } finally {
+      delete process.env.GRYT_TRUSTED_CERT_ISSUERS;
+      await Promise.all([primary.close(), other.close()]);
+    }
+  });
+
+  it("refuses to let a second CA name the first CA's user", async () => {
+    // The whole point. The `sub` is not a secret — it is handed to every server
+    // on every join — so an operator who runs a trusted CA already knows it and
+    // can put it in their own Keycloak. What must not follow is inheriting that
+    // user's roles, ownership and ban state, all of which key on the stored id.
+    const primary = await startCa("primary");
+    const hostile = await startCa("hostile");
+    const victim = await makeKeyPair();
+    const attacker = await makeKeyPair();
+    process.env.GRYT_TRUSTED_CERT_ISSUERS = `${primary.origin},${hostile.origin}`;
+    try {
+      const real = await verifyCertificate(
+        await primary.issue("abc-123", victim.publicJwk),
+      );
+      const impostor = await verifyCertificate(
+        await hostile.issue("abc-123", attacker.publicJwk),
+      );
+
+      assert.equal(real.sub, impostor.sub);
+      assert.notEqual(real.grytUserId, impostor.grytUserId);
+    } finally {
+      delete process.env.GRYT_TRUSTED_CERT_ISSUERS;
+      await Promise.all([primary.close(), hostile.close()]);
+    }
+  });
+
+  it("refuses a sub that already looks qualified", async () => {
+    // Otherwise the primary issuer, whose users are stored bare, could mint a
+    // sub that lands exactly on another issuer's user.
+    const primary = await startCa("primary");
+    const other = await startCa("other");
+    const holder = await makeKeyPair();
+    process.env.GRYT_TRUSTED_CERT_ISSUERS = `${primary.origin},${other.origin}`;
+    try {
+      const jwt = await primary.issue(`${other.origin}|abc-123`, holder.publicJwk);
+      await assert.rejects(() => verifyCertificate(jwt), /must not contain/i);
+    } finally {
+      delete process.env.GRYT_TRUSTED_CERT_ISSUERS;
+      await Promise.all([primary.close(), other.close()]);
+    }
+  });
+
+  it("refuses a CA sub in the self-signed namespace", async () => {
+    const ca = await startCa("primary");
+    const holder = await makeKeyPair();
+    process.env.GRYT_TRUSTED_CERT_ISSUERS = ca.origin;
+    try {
+      const jwt = await ca.issue("key:pretending", holder.publicJwk);
+      await assert.rejects(() => verifyCertificate(jwt), /reserved/i);
+    } finally {
+      delete process.env.GRYT_TRUSTED_CERT_ISSUERS;
+      await ca.close();
+    }
+  });
+
+  it("rejects an untrusted issuer without contacting it", async () => {
+    // Dispatching on the claimed issuer means an unknown one costs nothing:
+    // no signature check per trusted issuer, and no JWKS fetch. The unroutable
+    // address in the trusted list would hang if it were still being tried.
+    const rogue = await startCa("rogue");
+    const holder = await makeKeyPair();
+    process.env.GRYT_TRUSTED_CERT_ISSUERS = "http://192.0.2.1:1";
+    try {
+      const jwt = await rogue.issue("abc-123", holder.publicJwk);
+      await assert.rejects(() => verifyCertificate(jwt), /not trusted/i);
+    } finally {
+      delete process.env.GRYT_TRUSTED_CERT_ISSUERS;
+      await rogue.close();
+    }
   });
 });
