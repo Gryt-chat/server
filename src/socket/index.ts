@@ -504,21 +504,6 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
           syncAllClients(io, clientsInfo);
           broadcastMemberList(io, clientsInfo, serverId);
           sendServerDetails(socket, clientsInfo, serverId).catch((e) => consola.warn("sendServerDetails failed", e));
-
-          try {
-            const cfg = await getServerConfig();
-            if (cfg?.owner_gryt_user_id === tokenPayload.grytUserId && !cfg.is_configured) {
-              socket.emit("server:setup_required", {
-                serverId,
-                settings: {
-                  displayName: cfg.display_name || process.env.SERVER_NAME || "Unknown Server",
-                  description: cfg.description || process.env.SERVER_DESCRIPTION || "A Gryt server",
-                  iconUrl: cfg.icon_url || null,
-                  isConfigured: !!cfg.is_configured,
-                },
-              });
-            }
-          } catch { /* ignore */ }
         } catch (error) {
           consola.error(`Error restoring session for ${clientId}:`, error);
           socket.emit("token:invalid", "Database error. Please rejoin.");
