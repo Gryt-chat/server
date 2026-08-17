@@ -33,7 +33,7 @@ describe("carrying an identity forward", () => {
 
     const carried = await carryIdentityForward("key:aaa", "account-1");
 
-    assert.equal(carried, true);
+    assert.deepEqual(carried, { status: "carried" });
     assert.equal(await getUserByGrytId("key:aaa"), null);
 
     const now = await getUserByGrytId("account-1");
@@ -48,7 +48,9 @@ describe("carrying an identity forward", () => {
     await claimServerOwner("key:owner");
     assert.equal((await getServerConfig())?.owner_gryt_user_id, "key:owner");
 
-    assert.equal(await carryIdentityForward("key:owner", "account-owner"), true);
+    assert.deepEqual(await carryIdentityForward("key:owner", "account-owner"), {
+      status: "carried",
+    });
 
     assert.equal(
       (await getServerConfig())?.owner_gryt_user_id,
@@ -57,8 +59,10 @@ describe("carrying an identity forward", () => {
     );
   });
 
-  it("does nothing when the old identity was never a member here", async () => {
-    assert.equal(await carryIdentityForward("key:never", "account-2"), false);
+  it("says there was no prior membership when the old identity never joined", async () => {
+    assert.deepEqual(await carryIdentityForward("key:never", "account-2"), {
+      status: "no_prior_membership",
+    });
   });
 
   it("refuses to merge when the account is already a member", async () => {
@@ -67,9 +71,24 @@ describe("carrying an identity forward", () => {
     const local = await upsertUser("key:bbb", "Local");
     const account = await upsertUser("account-3", "Account");
 
-    assert.equal(await carryIdentityForward("key:bbb", "account-3"), false);
+    assert.deepEqual(await carryIdentityForward("key:bbb", "account-3"), {
+      status: "account_already_member",
+    });
 
     assert.equal((await getUserByGrytId("key:bbb"))?.server_user_id, local.server_user_id);
     assert.equal((await getUserByGrytId("account-3"))?.server_user_id, account.server_user_id);
+  });
+
+  it("tells the two refusals apart", async () => {
+    // The whole point of the typed result. Both used to be `false`, so a
+    // caller could not say "there was nothing to carry" rather than "you have
+    // two memberships here and one of them stayed behind".
+    await upsertUser("key:ccc", "Local");
+    await upsertUser("account-4", "Account");
+
+    const collision = await carryIdentityForward("key:ccc", "account-4");
+    const nothing = await carryIdentityForward("key:absent", "account-5");
+
+    assert.notEqual(collision.status, nothing.status);
   });
 });

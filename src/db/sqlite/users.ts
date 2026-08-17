@@ -228,6 +228,29 @@ export async function setUserInactive(serverUserId: string): Promise<void> {
 }
 
 /**
+ * What happened when a membership was asked to move (GRYT-285).
+ *
+ * This used to be a boolean, and the two ways of not carrying are not the same
+ * thing at all:
+ *
+ * - `no_prior_membership` is ordinary. Somebody made an account before ever
+ *   joining this particular server, so there was nothing to carry. Nothing is
+ *   wrong and nobody needs telling.
+ * - `account_already_member` is the collision. Both identities are already
+ *   members here, and the guest membership stays where it is — with its roles,
+ *   its history and anything it owns — while the person continues as their
+ *   account. Nothing is lost, but something is left behind, and a caller that
+ *   cannot tell this apart from "nothing to do" cannot say so.
+ *
+ * Naming them is what lets the join handler log the difference, and is the
+ * shape the per-server claim flow needs to report a result back to the client.
+ */
+export type CarryIdentityResult =
+  | { status: "carried" }
+  | { status: "no_prior_membership" }
+  | { status: "account_already_member" };
+
+/**
  * Move a membership from a local identity to the account that proved it owns
  * the key.
  *
@@ -235,28 +258,22 @@ export async function setUserInactive(serverUserId: string): Promise<void> {
  * same move — it carries ownership across and revokes the old refresh tokens,
  * both of which are wanted here too.
  *
- * Returns false, rather than throwing, in the two cases that are ordinary
- * rather than wrong:
- *
- * - **No membership under the old identity.** Somebody made an account before
- *   ever joining this particular server. There is nothing to carry.
- * - **The account is already a member here.** Two rows would have to become
- *   one, and there is no correct way to reconcile two sets of roles and two
- *   histories of messages. Both are left alone; they are already in as their
- *   account, which is the identity they chose.
+ * Never merges. Two rows would have to become one, and there is no correct way
+ * to reconcile two sets of roles and two histories of messages, so a collision
+ * is reported rather than resolved.
  */
 export async function carryIdentityForward(
   priorGrytUserId: string,
   newGrytUserId: string,
-): Promise<boolean> {
+): Promise<CarryIdentityResult> {
   const prior = await getUserByGrytId(priorGrytUserId);
-  if (!prior) return false;
+  if (!prior) return { status: "no_prior_membership" };
 
   const alreadyMember = await getUserByGrytId(newGrytUserId);
-  if (alreadyMember) return false;
+  if (alreadyMember) return { status: "account_already_member" };
 
   await replaceUserIdentity(prior.server_user_id, newGrytUserId);
-  return true;
+  return { status: "carried" };
 }
 
 export async function replaceUserIdentity(
