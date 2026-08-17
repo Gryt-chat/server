@@ -31,6 +31,7 @@ import {
   purgeUserContent,
   setUserModerationState,
 } from "../../db";
+import { deleteFilesNow } from "../../jobs/mediaSweep";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 import { evictUser, resolveGrytUserId } from "../../moderation/evict";
 import { sfuRoomId } from "../utils/voiceRooms";
@@ -632,7 +633,14 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         // the person banned.
         const purge = payload.deleteContent !== false;
         if (purge) {
-          const { deletedMessages, updatedReactions } = await purgeUserContent(targetId);
+          const { deletedMessages, updatedReactions, orphanedAttachmentIds } =
+            await purgeUserContent(targetId);
+
+          // Straight away rather than on the next sweep (GRYT-139). A ban with
+          // purge is usually reached for because of what somebody posted, and
+          // the sweep's grace period is measured from upload — so it protects
+          // the newest files, which are exactly the ones being removed.
+          const files = await deleteFilesNow(orphanedAttachmentIds);
 
           const affectedConversations = [...new Set(deletedMessages.map((d) => d.conversation_id))];
           io.emit("chat:purge_user", {
@@ -645,7 +653,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           // chat:reaction each would mean hundreds of broadcasts for a
           // prolific reactor, to say something the client can work out.
           consola.info(
-            `Purged ${deletedMessages.length} messages and ${updatedReactions.length} reactions for ${targetId}`,
+            `Purged ${deletedMessages.length} messages, ${updatedReactions.length} reactions and ${files.deleted} file(s) for ${targetId}`,
           );
         }
 

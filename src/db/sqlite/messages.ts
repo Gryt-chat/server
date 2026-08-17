@@ -219,17 +219,38 @@ export async function removeReactionFromMessage(conversationId: string, messageI
  * lingering with a count of zero.
  *
  * Returns what changed so the callers can tell connected clients: deleted
- * messages by id, and the messages whose reactions were rewritten.
+ * messages by id, and the messages whose reactions were rewritten. Also the
+ * files those messages carried, so the caller can take them out of storage
+ * without waiting for the sweep (GRYT-139).
  */
 export async function purgeUserContent(senderServerUserId: string): Promise<{
   deletedMessages: Array<{ conversation_id: string; message_id: string }>;
   updatedReactions: Array<{ conversation_id: string; message_id: string; reactions: Reaction[] | null }>;
+  orphanedAttachmentIds: string[];
 }> {
   const db = getSqliteDb();
 
-  const deletedMessages = db
-    .prepare(`SELECT conversation_id, message_id FROM messages WHERE sender_server_id = ?`)
-    .all(senderServerUserId) as Array<{ conversation_id: string; message_id: string }>;
+  const deletedRows = db
+    .prepare(`SELECT conversation_id, message_id, attachments FROM messages WHERE sender_server_id = ?`)
+    .all(senderServerUserId) as Array<{ conversation_id: string; message_id: string; attachments: string | null }>;
+  const deletedMessages = deletedRows.map(({ conversation_id, message_id }) => ({ conversation_id, message_id }));
+
+  // Read before the DELETE, because afterwards there is nothing left to say
+  // which files these messages carried.
+  const attachmentIds = new Set<string>();
+  for (const row of deletedRows) {
+    if (!row.attachments) continue;
+    try {
+      const parsed: unknown = JSON.parse(row.attachments);
+      if (Array.isArray(parsed)) {
+        for (const id of parsed) if (typeof id === "string") attachmentIds.add(id);
+      }
+    } catch {
+      // A row whose attachments will not parse is not a reason to abandon a
+      // ban. The sweep still finds the file later by the same orphan rule.
+    }
+  }
+
   db.prepare(`DELETE FROM messages WHERE sender_server_id = ?`).run(senderServerUserId);
 
   // Only rows that mention them at all. The LIKE is a cheap prefilter over a
@@ -272,5 +293,11 @@ export async function purgeUserContent(senderServerUserId: string): Promise<{
     });
   }
 
-  return { deletedMessages, updatedReactions };
+  // Only the ones nothing else points at any more. A file can be attached to
+  // more than one message, and the messages left behind belong to people who
+  // are not being banned.
+  const stillReferenced = await getAllReferencedAttachmentIds();
+  const orphanedAttachmentIds = [...attachmentIds].filter((id) => !stillReferenced.has(id));
+
+  return { deletedMessages, updatedReactions, orphanedAttachmentIds };
 }
