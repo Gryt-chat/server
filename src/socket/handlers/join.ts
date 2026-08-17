@@ -316,8 +316,8 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
         // owning what they owned.
         if (priorSub) {
           try {
-            const carried = await carryIdentityForward(priorSub, grytUserId);
-            if (carried) {
+            const carry = await carryIdentityForward(priorSub, grytUserId);
+            if (carry.status === "carried") {
               consola.info(`Linked ${priorSub} to ${grytUserId} on join`);
               // `cfg` was read before the carry-over, and the carry-over is the
               // one thing in this handler that can change who owns the server.
@@ -325,6 +325,16 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
               // the server in the database — no owner UI until they rejoin,
               // which is the exact case this feature exists to fix.
               cfg = await getServerConfig().catch(() => cfg);
+            } else if (carry.status === "account_already_member") {
+              // Both identities are members here, so nothing moves and the
+              // guest membership stays behind with whatever it holds. Worth a
+              // line: it is the one outcome where somebody asked to bring an
+              // identity across, was refused for a good reason, and is told
+              // nothing. Somebody reading the log after "where did my roles
+              // go" needs to find this.
+              consola.info(
+                `Not linking ${priorSub} to ${grytUserId}: both are members here, so the guest membership was left as it is`,
+              );
             }
           } catch (e) {
             // Not fatal. The join is still legitimate on its own terms, and a
