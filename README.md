@@ -1,7 +1,7 @@
 <div align="center">
   <img src="https://raw.githubusercontent.com/Gryt-chat/client/main/public/logo.svg" width="80" alt="Gryt logo" />
   <h1>Gryt Signaling Server</h1>
-  <p>Node.js signaling server for the <a href="https://github.com/Gryt-chat/gryt">Gryt</a> voice chat platform.<br />Manages WebRTC signaling, rooms, text chat, and file uploads.</p>
+  <p>Node.js signalling server for <a href="https://github.com/Gryt-chat/gryt">Gryt</a>, the voice, video and text chat platform.<br />Handles WebRTC signalling, rooms, text chat and file uploads.</p>
 </div>
 
 <br />
@@ -15,7 +15,7 @@ docker run -p 5000:5000 --env-file .env ghcr.io/gryt-chat/server:latest
 
 Browse tags at [ghcr.io/gryt-chat/server](https://github.com/Gryt-chat/server/pkgs/container/server).
 
-## Quick Start (development)
+## Quick start (development)
 
 ```bash
 yarn install
