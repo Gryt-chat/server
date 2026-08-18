@@ -70,19 +70,48 @@ async function fetchLatestVersions(repo: string): Promise<{ stable: string; beta
 	return data;
 }
 
-function compareSemver(a: string, b: string): number {
-	const pa = a.split(".").map(Number);
-	const pb = b.split(".").map(Number);
+/**
+ * The three numbers, or null if this is not a plain release version.
+ *
+ * `1.0.48-1-gafa06e4` is what `git describe` gives for a build that is not
+ * sitting exactly on a tag, and embedded builds produced exactly that for a
+ * while. The old parser split on "." and did `(part || 0)`, so
+ * Number("48-1-gafa06e4") became NaN, NaN is falsy, and the patch component
+ * quietly became 0. The whole version compared as 1.0.0 and every comparison
+ * said an update was available, whatever was installed. GRYT-306.
+ *
+ * Refusing to parse is the honest answer. A caller that cannot compare should
+ * say nothing rather than guess low.
+ */
+function parseSemver(v: string): [number, number, number] | null {
+	const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(v.trim());
+	if (!m) return null;
+	return [Number(m[1]), Number(m[2]), Number(m[3])];
+}
+
+/** Negative, zero or positive as usual, or null when either side is not a release version. */
+function compareSemver(a: string, b: string): number | null {
+	const pa = parseSemver(a);
+	const pb = parseSemver(b);
+	if (!pa || !pb) return null;
+
 	for (let i = 0; i < 3; i++) {
-		const diff = (pa[i] || 0) - (pb[i] || 0);
+		const diff = pa[i] - pb[i];
 		if (diff !== 0) return diff;
 	}
 	return 0;
 }
 
 function detectChannel(current: string, latestStable: string, latestBeta: string | null): "stable" | "beta" {
-	if (current === latestStable || compareSemver(current, latestStable) <= 0) return "stable";
-	if (latestBeta && compareSemver(current, latestStable) > 0) return "beta";
+	if (current === latestStable) return "stable";
+
+	const vsStable = compareSemver(current, latestStable);
+	// Unparseable means we cannot place it on either channel, so take the
+	// quieter of the two rather than inventing a beta.
+	if (vsStable === null) return "stable";
+
+	if (vsStable <= 0) return "stable";
+	if (latestBeta) return "beta";
 	return "stable";
 }
 
@@ -97,7 +126,9 @@ function buildComponentInfo(
 		latest,
 		latestStable: versions.stable,
 		latestBeta: versions.beta,
-		updateAvailable: compareSemver(latest, current) > 0,
+		// null when either side is not a plain release version, and an unknown
+		// comparison must not turn into a prompt to update.
+		updateAvailable: (compareSemver(latest, current) ?? 0) > 0,
 		channel,
 	};
 }
