@@ -30,10 +30,8 @@ jobs:
       # machine.
       - run: yarn build
 
-      # src/ rather than the whole repo. Two ad-hoc scripts under scripts/
-      # account for every lint error here — 39 no-undef and 8
-      # no-require-imports, all of them the flat config never declaring Node
-      # globals or allowing CJS for a .cjs file. src/ is clean. Widening this
-      # to `.` means fixing that config first, and a CI job that fails on
-      # arrival helps nobody. GRYT-309.
-      - run: npx eslint src/
+      # The whole repo, now that the flat config describes scripts/ too.
+      # This was scoped to src/ when CI arrived, because 47 no-undef and
+      # no-require-imports errors in two ad-hoc scripts would have failed the
+      # job on day one. GRYT-309 fixed the config rather than the scripts.
+      - run: npx eslint .
