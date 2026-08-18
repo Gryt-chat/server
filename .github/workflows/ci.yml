@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # 22, not the client's 24. The Dockerfile builds and runs on
+          # node:22-bookworm and Release Server sets up 22, so testing on
+          # anything newer would be testing something we do not ship.
+          node-version: "22"
+          cache: yarn
+      - run: yarn install --frozen-lockfile
+
+      # The reason this workflow exists. There are ten test files and 87 tests
+      # in here, and until now nothing ran them on a pull request: the repo had
+      # bump-gitlink, discord-ci-notify and vikunja-task-done and no CI at all.
+      # server#53 merged with no automated verification beyond a local run.
+      - run: yarn test
+
+      # `build` is tsc. Named that way in package.json, but it is the
+      # type check, and it is what stops a PR compiling only on the author's
+      # machine.
+      - run: yarn build
+
+      # src/ rather than the whole repo. Two ad-hoc scripts under scripts/
+      # account for every lint error here — 39 no-undef and 8
+      # no-require-imports, all of them the flat config never declaring Node
+      # globals or allowing CJS for a .cjs file. src/ is clean. Widening this
+      # to `.` means fixing that config first, and a CI job that fails on
+      # arrival helps nobody. GRYT-309.
+      - run: npx eslint src/
