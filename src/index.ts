@@ -1,4 +1,5 @@
 import { config } from "dotenv";
+import { isOriginAllowed, readAllowedOrigins } from "./config/cors";
 config({ path: "config.env", override: false });
 config({ override: false });
 import { consola } from "consola";
@@ -43,35 +44,17 @@ const app = express(); // Create an Express app
 
 const isProduction = (process.env.NODE_ENV || "").toLowerCase() === "production";
 
-// 3666 is the Vite dev port (packages/client/vite.config.ts). Origins are
-// matched exactly, so both spellings of loopback have to be listed. Added
-// outside production only — a production server has no reason to accept an
-// origin it can't reach. ops/start_dev.sh passes these explicitly too; this is
-// for servers started by hand, which otherwise reject the dev client with a
-// bare 400 on the socket.io handshake.
-const DEV_CORS_ORIGINS = ["http://localhost:3666", "http://127.0.0.1:3666"];
+const allowedCorsOrigins = readAllowedOrigins(process.env.CORS_ORIGIN, isProduction);
 
-const allowedCorsOrigins = (
-  process.env.CORS_ORIGIN ||
-  "http://127.0.0.1:15738,https://app.gryt.chat,https://beta.gryt.chat"
-)
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean)
-  .concat(isProduction ? [] : DEV_CORS_ORIGINS);
-
-// Electron production builds load from http://127.0.0.1:15738 or send Origin: "null" (file://).
-function isAllowedOrigin(origin: string): boolean {
-  if (allowedCorsOrigins.includes("*")) return true;
-  if (origin === "null") return true;
-  return allowedCorsOrigins.includes(origin);
+function isAllowedOrigin(origin: string, requestHost?: string): boolean {
+  return isOriginAllowed(origin, allowedCorsOrigins, requestHost);
 }
 
 // CORS for REST API (uploads, icons, etc.). Socket.IO has its own CORS config below.
 // Without this, browser requests like POST /api/server/icon will fail preflight and show "Failed to fetch".
 app.use((req, res, next) => {
   const origin = req.headers.origin as string | undefined;
-  if (origin && isAllowedOrigin(origin)) {
+  if (origin && isAllowedOrigin(origin, req.headers.host)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
     res.setHeader(
@@ -374,11 +357,25 @@ const httpServer = createServer(app); // Pass the Express app to createServer
 
 const io = new Server(httpServer, {
   cors: {
-    origin: (origin, callback) => {
-      if (!origin) return callback(null, true);
-      if (isAllowedOrigin(origin)) return callback(null, true);
-      return callback(new Error(`CORS origin not allowed: ${origin}`));
-    },
+    // Headers only. The decision is `allowRequest` below, which is the one
+    // place that can see the Host header and therefore tell a same-origin
+    // request from a cross-origin one. Reflecting here is safe because nothing
+    // reaches a socket without passing that.
+    origin: (_origin, callback) => callback(null, true),
+  },
+  // The single decision point for who may open a socket.
+  //
+  // It has to be here rather than in `cors.origin` because that callback is
+  // handed the origin and nothing else, and the question "is this origin the
+  // same host the request was sent to" cannot be answered without the request.
+  // That question is the whole of the native-client case.
+  allowRequest: (req, callback) => {
+    const origin = req.headers.origin;
+    // No origin at all is a non-browser client — curl, a bot, the SFU. Those
+    // were always allowed and this does not change that.
+    if (!origin) return callback(null, true);
+    if (isAllowedOrigin(origin, req.headers.host)) return callback(null, true);
+    return callback(`CORS origin not allowed: ${origin}`, false);
   },
   pingInterval: 15_000,
   pingTimeout: 10_000,
