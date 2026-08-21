@@ -544,7 +544,14 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
         let claimedOwnerGrytUserId: string | null | undefined;
         let usedInviteCode: string | undefined;
 
-        if (!isActiveMember) {
+        // Bots skip the invite and join-policy gate entirely, and have to.
+        //
+        // Their admission *is* the registration: an operator answered them by
+        // name and said what they may do. Making an approved bot also carry an
+        // invite means an approved bot cannot join a server whose policy is
+        // `invite`, which is the default — found by running one against exactly
+        // that and watching it be turned away with "Invite required".
+        if (!isActiveMember && !botRegistration) {
           const ip = getClientIp();
           const inviteKey = getInviteCooldownKey(ip, grytUserId);
           const now = Date.now();
