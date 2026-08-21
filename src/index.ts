@@ -6,6 +6,7 @@ import { consola } from "consola";
 import { stopMdns, syncMdnsAdvertising } from "./mdns";
 import { socketHandler, setupSFUSync } from "./socket";
 import { createServer } from "http";
+import { networkInterfaces } from "os";
 import { Server } from "socket.io";
 import express from "express"; // Import express
 import { managementRouter } from "./routes/management";
@@ -436,12 +437,59 @@ if (adminTokenConfigured()) {
   });
 }
 
+/**
+ * The addresses this server answers on, as something a person can act on.
+ *
+ * IPv4 in full with the interface name, IPv6 as a count. A host has a couple
+ * of IPv4 addresses and can easily have thirty IPv6 ones, nearly all
+ * link-local, and printing them all buries the two anybody is looking for.
+ *
+ * Loopback is kept deliberately. "127.0.0.1 and nothing else" is a real state
+ * and it is the one worth spotting, so filtering it would hide the diagnosis.
+ *
+ * A bind to one specific address rather than the wildcard is reported as
+ * exactly that, since in that case the list would be a lie.
+ */
+function reachableAddresses(port: number, host: string): string[] {
+  if (host !== "0.0.0.0" && host !== "::") {
+    return [`Bound to ${host}:${port} only, so nothing else can reach it.`];
+  }
+
+  const v4: string[] = [];
+  let v6 = 0;
+
+  for (const [name, addrs] of Object.entries(networkInterfaces())) {
+    for (const addr of addrs ?? []) {
+      if (addr.family === "IPv6") {
+        v6 += 1;
+        continue;
+      }
+      v4.push(`${addr.address}:${port} (${name})`);
+    }
+  }
+
+  v4.sort();
+
+  const suffix = v6 > 0 ? ` (and ${v6} IPv6)` : "";
+  if (v4.length === 0) {
+    return [`Reachable on: no IPv4${suffix}`];
+  }
+
+  return [`Reachable on: ${v4.join(", ")}${suffix}`];
+}
+
 httpServer.listen(PORT, HOST, () => {
   consola.box(`Gryt Server v${VERSION}`);
   consola.start(`Starting ${process.env.SERVER_NAME}...`);
   if (process.env.SFU_WS_HOST)
     consola.info("SFU host set to " + process.env.SFU_WS_HOST);
   consola.success(`Signaling server started at ${HOST}:${PORT}`);
+  // Where, not just what it was told to bind. `0.0.0.0:5000` is the bind spec,
+  // and nobody can type it into a browser or a router — so an address missing
+  // from the list below, a VPN adapter that came up after this process for
+  // instance, is invisible at exactly the moment somebody is trying to work
+  // out why a friend cannot reach them. GRYT-482.
+  for (const line of reachableAddresses(PORT, HOST)) consola.info(line);
   console.log(`🔌 WEBSOCKET SERVER READY:`, {
     host: HOST,
     port: PORT,
