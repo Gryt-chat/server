@@ -5,6 +5,7 @@ import {
   DEFAULT_VOICE_MAX_BITRATE_BPS,
 } from "../interfaces";
 import type {
+  BotJoinPolicy,
   CensorStyle,
   JoinPolicy,
   ProfanityMode,
@@ -48,6 +49,16 @@ export function normalizeJoinPolicy(v: unknown): JoinPolicy {
  * resolved to the fallback role where roles are *used* rather than where they
  * are read — see `resolveRole` in services/permissions.
  */
+/**
+ * Anything unrecognised reads as `disabled`, never as `request`.
+ *
+ * Same rule as the join policy above it: a value this build does not know
+ * about must leave the door shut rather than open.
+ */
+export function normalizeBotJoinPolicy(v: unknown): BotJoinPolicy {
+  return String(v || "").toLowerCase() === "request" ? "request" : "disabled";
+}
+
 function normalizeRoleId(role: unknown): ServerRole {
   const r = String(role || "").trim().toLowerCase();
   return isValidRoleId(r) ? r : FALLBACK_ROLE_ID;
@@ -72,6 +83,7 @@ function rowToConfig(r: Record<string, unknown>): ServerConfigRecord {
     system_channel_id: (r.system_channel_id as string) ?? null,
     lan_open: (r.lan_open as number) === 1,
     join_policy: normalizeJoinPolicy(r.join_policy),
+    bot_join_policy: normalizeBotJoinPolicy(r.bot_join_policy),
     default_role_account: normalizeRoleId(r.default_role_account ?? FALLBACK_ROLE_ID),
     default_role_local: normalizeRoleId(r.default_role_local ?? FALLBACK_ROLE_ID),
     discoverable: (r.discoverable as number) !== 0,
@@ -207,6 +219,7 @@ export async function updateServerConfig(patch: {
   joinPolicy?: JoinPolicy;
   defaultRoleAccount?: string;
   defaultRoleLocal?: string;
+  botJoinPolicy?: BotJoinPolicy;
   discoverable?: boolean;
   isConfigured?: boolean;
 }): Promise<ServerConfigRecord> {
@@ -230,6 +243,7 @@ export async function updateServerConfig(patch: {
     systemChannelId: { col: "system_channel_id" },
     lanOpen: { col: "lan_open", transform: (v) => v ? 1 : 0 },
     joinPolicy: { col: "join_policy", transform: (v) => normalizeJoinPolicy(v) },
+    botJoinPolicy: { col: "bot_join_policy", transform: (v) => normalizeBotJoinPolicy(v) },
     defaultRoleAccount: { col: "default_role_account", transform: (v) => normalizeRoleId(v) },
     defaultRoleLocal: { col: "default_role_local", transform: (v) => normalizeRoleId(v) },
     discoverable: { col: "discoverable", transform: (v) => v ? 1 : 0 },

@@ -214,6 +214,12 @@ const TOKEN_GATES: {
   { event: "server:audit:list", permission: "view_audit_log" },
   { event: "server:version:check", permission: "view_server_status", refusalOnly: true },
   { event: "server:member:invite", permission: "create_invite", payload: { targetServerUserId: "user_x" } },
+  { event: "server:bots:list", permission: "manage_bots" },
+  { event: "server:bots:decide", permission: "manage_bots", payload: { botId: "BOT_x", decision: "denied" } },
+  { event: "server:bots:register", permission: "manage_bots", payload: { nickname: "Probe" } },
+  { event: "server:bots:update", permission: "manage_bots", payload: { registrationId: "nope" } },
+  { event: "server:bots:revoke", permission: "manage_bots", payload: { registrationId: "nope" } },
+  { event: "server:bots:policy:set", permission: "manage_bots", payload: { policy: "disabled" } },
 ];
 
 describe("every gated event refuses a role without the permission", () => {

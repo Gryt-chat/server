@@ -2,6 +2,7 @@ import { Server, Socket } from "socket.io";
 import { Clients } from "../../types";
 import { getAllRegisteredUsers, getFilesByIds, listServerRoles } from "../../db";
 import { clientMayReceive, refreshClientPermissions } from "./standing";
+import { isBotIdentity } from "../../auth/identity";
 import { memberIdentity } from "./memberIdentity";
 
 /**
@@ -159,6 +160,11 @@ export async function buildMemberList(clientsInfo: Clients) {
           ? avatarFiles.get(user.avatar_file_id)?.dominant_color ?? null
           : null,
         role: roleMap.get(user.server_user_id) || 'member',
+        // Read off the id, so it cannot be wrong and cannot be spoofed by
+        // anything the member sends. Every surface that shows a name shows this
+        // beside it — the one question a reader needs answered instantly is
+        // whether they are talking to a person.
+        isBot: isBotIdentity(user.gryt_user_id),
         status,
         lastSeen: user.last_seen.toISOString(),
         createdAt: user.created_at.toISOString(),
@@ -202,6 +208,7 @@ async function emitMemberListNow(io: Server, clientsInfo: Clients): Promise<void
         avatarFileId: m.avatarFileId,
         avatarColor: m.avatarColor,
         role: m.role,
+        isBot: m.isBot,
         status: m.status,
         isConnectedToVoice: m.isConnectedToVoice,
         hasJoinedChannel: m.hasJoinedChannel,

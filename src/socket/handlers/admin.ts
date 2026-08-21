@@ -30,6 +30,15 @@ import {
   getUserByServerId,
   purgeUserContent,
   setUserModerationState,
+  listBots,
+  getBotByRegistrationId,
+  decideBot,
+  createBotRegistration,
+  updateBotGrant,
+  deleteBotRegistration,
+  normalizeBotName,
+  normalizeBotDescription,
+  getUserByGrytId,
 } from "../../db";
 import { deleteFilesNow } from "../../jobs/mediaSweep";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
@@ -183,6 +192,38 @@ async function roleEditorState() {
       account: config?.default_role_account ?? FALLBACK_ROLE_ID,
       local: config?.default_role_local ?? FALLBACK_ROLE_ID,
     },
+  };
+}
+
+/**
+ * The bots an operator can see, without the one thing they must not see twice.
+ *
+ * `claim_token` is deliberately absent. It is shown once, in the reply to
+ * `server:bots:register`, and never again — a token that can be re-read from a
+ * list is a token that lives as long as the list does.
+ */
+async function botsView() {
+  const [bots, cfg] = await Promise.all([listBots(), getServerConfig()]);
+  return {
+    // Whether a bot nobody has heard of may leave a knock. Sent with the list
+    // rather than with the server settings, because it is the setting this
+    // screen is about and an operator with `manage_bots` and nothing else
+    // should be able to change it.
+    policy: cfg?.bot_join_policy ?? "disabled",
+    bots: bots.map((b) => ({
+      registrationId: b.registration_id,
+      botId: b.bot_id,
+      nickname: b.nickname,
+      description: b.description,
+      requested: b.requested_permissions,
+      granted: b.granted_permissions,
+      rank: b.rank,
+      status: b.status,
+      // Whether it is still waiting for a bot to turn up and claim it.
+      awaitingClaim: b.bot_id === null,
+      createdAt: b.created_at,
+      decidedAt: b.decided_at,
+    })),
   };
 }
 
@@ -746,6 +787,297 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       } catch (e) {
         consola.error("server:roles:defaults:set failed", e);
         socket.emit("server:error", { error: "roles_update_failed", message: "Failed to set joining defaults." });
+      }
+    },
+
+    // ── Bots ─────────────────────────────────────────────────────
+    //
+    // All behind `manage_bots`, which by default only the owner has. Approving
+    // a bot grants permissions to something nobody in the room can vouch for.
+
+    'server:bots:list': async (payload: { accessToken: string }) => {
+      try {
+        const auth = await requireAuth(socket, payload, { permission: "manage_bots" });
+        if (!auth) return;
+        socket.emit("server:bots", await botsView());
+      } catch (e) {
+        consola.error("server:bots:list failed", e);
+        socket.emit("server:error", { error: "bots_failed", message: "Failed to load bots." });
+      }
+    },
+
+    /**
+     * Answer a bot that knocked.
+     *
+     * `permissions` is what the operator ticked, and the registry intersects it
+     * with what the bot asked for — an operator cannot grant something that was
+     * never requested, which is what stops "approve" from being a blank cheque
+     * on a screen somebody is clicking through quickly.
+     */
+    'server:bots:decide': async (payload: {
+      accessToken: string;
+      botId: string;
+      decision: string;
+      permissions?: string[];
+      rank?: number;
+    }) => {
+      try {
+        const rl = rlCheck("server:bots:decide", ctx, RL_SETTINGS);
+        if (!rl.allowed) { emitRateLimited(ctx, rl); return; }
+
+        const decision = payload?.decision === "approved" || payload?.decision === "denied"
+          ? payload.decision
+          : null;
+        if (!payload || typeof payload.botId !== "string" || !decision) {
+          socket.emit("server:error", { error: "invalid_payload", message: "botId and decision are required." });
+          return;
+        }
+
+        const auth = await requireAuth(socket, payload, { permission: "manage_bots" });
+        if (!auth) return;
+
+        const wanted = normalizePermissions(payload.permissions ?? []);
+        const overreach = wanted.filter((p) => !auth.permissions.has(p));
+        if (overreach.length > 0) {
+          // The same rule as role editing. Somebody delegated `manage_bots`
+          // must not be able to route around their own ceiling by approving a
+          // bot that asked for more than they hold.
+          socket.emit("server:error", {
+            error: "forbidden",
+            message: `Cannot grant permissions you do not have: ${overreach.join(", ")}`,
+          });
+          return;
+        }
+
+        const rank = Number.isFinite(payload.rank) ? Number(payload.rank) : 0;
+        if (rank >= auth.rank) {
+          socket.emit("server:error", {
+            error: "forbidden",
+            message: "Cannot give a bot your own rank or above.",
+          });
+          return;
+        }
+
+        const decided = await decideBot(payload.botId.trim(), decision, auth.tokenPayload.serverUserId, wanted, rank);
+        if (!decided) {
+          socket.emit("server:error", { error: "bot_missing", message: "No such bot." });
+          return;
+        }
+
+        insertServerAudit({
+          actorServerUserId: auth.tokenPayload.serverUserId,
+          action: decision === "approved" ? "bot_approve" : "bot_deny",
+          target: decided.bot_id,
+          meta: { nickname: decided.nickname, granted: decided.granted_permissions, rank: decided.rank },
+        }).catch((e) => consola.warn("audit log write failed", e));
+
+        io.to("verifiedClients").emit("server:bot:updated", { serverId, botId: decided.bot_id });
+        broadcastServerUiUpdate("other");
+        socket.emit("server:bots", await botsView());
+      } catch (e) {
+        consola.error("server:bots:decide failed", e);
+        socket.emit("server:error", { error: "bots_failed", message: "Failed to answer the bot." });
+      }
+    },
+
+    /**
+     * Write down what a bot may do before there is a bot.
+     *
+     * The unattended path: the operator decides everything up front and hands
+     * the token to whoever is deploying it. The token is shown once, here.
+     */
+    'server:bots:register': async (payload: {
+      accessToken: string;
+      nickname: string;
+      description?: string;
+      permissions?: string[];
+      rank?: number;
+    }) => {
+      try {
+        const rl = rlCheck("server:bots:register", ctx, RL_SETTINGS);
+        if (!rl.allowed) { emitRateLimited(ctx, rl); return; }
+
+        const auth = await requireAuth(socket, payload, { permission: "manage_bots" });
+        if (!auth) return;
+
+        const wanted = normalizePermissions(payload?.permissions ?? []);
+        const overreach = wanted.filter((p) => !auth.permissions.has(p));
+        if (overreach.length > 0) {
+          socket.emit("server:error", {
+            error: "forbidden",
+            message: `Cannot grant permissions you do not have: ${overreach.join(", ")}`,
+          });
+          return;
+        }
+
+        const rank = Number.isFinite(payload?.rank) ? Number(payload.rank) : 0;
+        if (rank >= auth.rank) {
+          socket.emit("server:error", { error: "forbidden", message: "Cannot give a bot your own rank or above." });
+          return;
+        }
+
+        const created = await createBotRegistration({
+          nickname: normalizeBotName(payload?.nickname),
+          description: normalizeBotDescription(payload?.description),
+          grantedPermissions: wanted,
+          rank,
+          createdByServerUserId: auth.tokenPayload.serverUserId,
+        });
+
+        insertServerAudit({
+          actorServerUserId: auth.tokenPayload.serverUserId,
+          action: "bot_register",
+          target: created.registration_id,
+          meta: { nickname: created.nickname, granted: created.granted_permissions, rank: created.rank },
+        }).catch((e) => consola.warn("audit log write failed", e));
+
+        // The only time the token is ever sent anywhere. `botsView` never
+        // includes it, so reopening the tab will not show it again.
+        socket.emit("server:bot:registered", {
+          serverId,
+          registrationId: created.registration_id,
+          nickname: created.nickname,
+          claimToken: created.claim_token,
+        });
+        socket.emit("server:bots", await botsView());
+      } catch (e) {
+        consola.error("server:bots:register failed", e);
+        socket.emit("server:error", { error: "bots_failed", message: "Failed to create the bot." });
+      }
+    },
+
+    'server:bots:update': async (payload: {
+      accessToken: string;
+      registrationId: string;
+      permissions?: string[];
+      rank?: number;
+    }) => {
+      try {
+        const rl = rlCheck("server:bots:update", ctx, RL_SETTINGS);
+        if (!rl.allowed) { emitRateLimited(ctx, rl); return; }
+
+        const auth = await requireAuth(socket, payload, { permission: "manage_bots" });
+        if (!auth) return;
+        if (typeof payload?.registrationId !== "string") {
+          socket.emit("server:error", { error: "invalid_payload", message: "registrationId is required." });
+          return;
+        }
+
+        const wanted = normalizePermissions(payload.permissions ?? []);
+        const overreach = wanted.filter((p) => !auth.permissions.has(p));
+        if (overreach.length > 0) {
+          socket.emit("server:error", {
+            error: "forbidden",
+            message: `Cannot grant permissions you do not have: ${overreach.join(", ")}`,
+          });
+          return;
+        }
+
+        const updated = await updateBotGrant(payload.registrationId.trim(), wanted, payload.rank);
+        if (!updated) {
+          socket.emit("server:error", { error: "bot_missing", message: "No such bot." });
+          return;
+        }
+
+        insertServerAudit({
+          actorServerUserId: auth.tokenPayload.serverUserId,
+          action: "bot_update",
+          target: updated.registration_id,
+          meta: { granted: updated.granted_permissions, rank: updated.rank },
+        }).catch((e) => consola.warn("audit log write failed", e));
+
+        broadcastServerUiUpdate("other");
+        socket.emit("server:bots", await botsView());
+      } catch (e) {
+        consola.error("server:bots:update failed", e);
+        socket.emit("server:error", { error: "bots_failed", message: "Failed to update the bot." });
+      }
+    },
+
+    /**
+     * Withdraw a bot's registration.
+     *
+     * Takes effect at the next thing it tries, because standing is resolved
+     * from the registry on every check — there is no cached grant to expire.
+     * The membership row is left alone; removing that is a kick or a ban, and
+     * revoking permission has to work whether or not it is connected.
+     */
+    'server:bots:revoke': async (payload: { accessToken: string; registrationId: string }) => {
+      try {
+        const rl = rlCheck("server:bots:revoke", ctx, RL_SETTINGS);
+        if (!rl.allowed) { emitRateLimited(ctx, rl); return; }
+
+        const auth = await requireAuth(socket, payload, { permission: "manage_bots" });
+        if (!auth) return;
+        if (typeof payload?.registrationId !== "string") {
+          socket.emit("server:error", { error: "invalid_payload", message: "registrationId is required." });
+          return;
+        }
+
+        const existing = await getBotByRegistrationId(payload.registrationId.trim());
+        const removed = await deleteBotRegistration(payload.registrationId.trim());
+        if (!removed) {
+          socket.emit("server:error", { error: "bot_missing", message: "No such bot." });
+          return;
+        }
+
+        insertServerAudit({
+          actorServerUserId: auth.tokenPayload.serverUserId,
+          action: "bot_revoke",
+          target: existing?.bot_id ?? payload.registrationId.trim(),
+          meta: { nickname: existing?.nickname ?? null },
+        }).catch((e) => consola.warn("audit log write failed", e));
+
+        // Withdrawing permission and removing the member are two things, and an
+        // operator clicking Revoke means both. The permission half already took
+        // effect the moment the row went — standing is read from the registry on
+        // every check, so there is no grant left to expire.
+        if (existing?.bot_id) {
+          const member = await getUserByGrytId(existing.bot_id).catch(() => null);
+          if (member) {
+            await evictUser({
+              io,
+              clientsInfo,
+              serverId,
+              sfuClient,
+              targetServerUserId: member.server_user_id,
+              targetGrytUserId: existing.bot_id,
+              action: "kick",
+              reason: "Bot registration withdrawn",
+            }).catch((e) => consola.warn("evicting revoked bot failed", e));
+          }
+        }
+
+        broadcastServerUiUpdate("other");
+        socket.emit("server:bots", await botsView());
+      } catch (e) {
+        consola.error("server:bots:revoke failed", e);
+        socket.emit("server:error", { error: "bots_failed", message: "Failed to revoke the bot." });
+      }
+    },
+
+    'server:bots:policy:set': async (payload: { accessToken: string; policy: string }) => {
+      try {
+        const rl = rlCheck("server:bots:policy:set", ctx, RL_SETTINGS);
+        if (!rl.allowed) { emitRateLimited(ctx, rl); return; }
+
+        const auth = await requireAuth(socket, payload, { permission: "manage_bots" });
+        if (!auth) return;
+
+        const policy = payload?.policy === "request" ? "request" : "disabled";
+        await updateServerConfig({ botJoinPolicy: policy });
+
+        insertServerAudit({
+          actorServerUserId: auth.tokenPayload.serverUserId,
+          action: "bot_policy_set",
+          target: null,
+          meta: { policy },
+        }).catch((e) => consola.warn("audit log write failed", e));
+
+        socket.emit("server:bots", await botsView());
+      } catch (e) {
+        consola.error("server:bots:policy:set failed", e);
+        socket.emit("server:error", { error: "bots_failed", message: "Failed to change the setting." });
       }
     },
 

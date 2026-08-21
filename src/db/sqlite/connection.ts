@@ -119,6 +119,35 @@ function createSchema(d: DatabaseSync): void {
       value TEXT NOT NULL
     );
 
+    -- Bots, and what an operator agreed to let each one do.
+    --
+    -- Deliberately not the roles table. A bot's permissions are frozen at the
+    -- moment somebody approved them and belong to the bot, not to a tier it
+    -- shares with others: editing a role must never be a way to widen what a
+    -- bot can do, and a bot must never be able to widen it by asking again.
+    --
+    -- bot_id is null until an identity claims the row, which is how a
+    -- pre-approved registration works: the operator writes down what a bot may
+    -- do before there is a bot, hands out claim_token, and the first identity to
+    -- present it becomes that registration. A knock arrives the other way round,
+    -- with the id known and no token.
+    CREATE TABLE IF NOT EXISTS bots (
+      registration_id TEXT PRIMARY KEY,
+      bot_id TEXT UNIQUE,
+      claim_token TEXT UNIQUE,
+      nickname TEXT NOT NULL,
+      description TEXT,
+      requested_permissions TEXT NOT NULL DEFAULT '[]',
+      granted_permissions TEXT NOT NULL DEFAULT '[]',
+      rank INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      decided_at TEXT,
+      decided_by_server_user_id TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_bots_status ON bots(status);
+
     CREATE TABLE IF NOT EXISTS role_definitions (
       role_id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -441,6 +470,20 @@ function runMigrations(d: DatabaseSync): void {
   }
   if (!hasColumn(d, "role_definitions", "auto_grant_after_messages")) {
     d.exec("ALTER TABLE role_definitions ADD COLUMN auto_grant_after_messages INTEGER");
+  }
+
+  // Whether a bot nobody has heard of may leave a knock at the door.
+  //
+  // `request` writes one pending row per bot identity and admits nothing; an
+  // operator still has to approve it. `disabled` refuses outright, for a server
+  // that only ever wants bots it set up itself with a claim token.
+  //
+  // Defaults to `request` rather than `disabled`, which is the one place this
+  // change widens anything. What it widens is a rate-limited row in a table that
+  // grants nothing — the same shape as a join request, which is already how a
+  // stranger asks to be let in.
+  if (!hasColumn(d, "server_config", "bot_join_policy")) {
+    d.exec("ALTER TABLE server_config ADD COLUMN bot_join_policy TEXT NOT NULL DEFAULT 'request'");
   }
 
   d.prepare("UPDATE server_config SET avatar_thumb_px = ?").run(AVATAR_THUMB_PX);

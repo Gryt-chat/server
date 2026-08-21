@@ -3,6 +3,7 @@ export * from "./users";
 export * from "./messages";
 export * from "./servers";
 export * from "./roleDefinitions";
+export * from "./bots";
 export * from "./channels";
 export * from "./invites";
 export * from "./joinRequests";

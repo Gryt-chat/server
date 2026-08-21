@@ -94,6 +94,8 @@ export interface MessageRecord {
   reply_to_message_id?: string | null;
   sender_nickname?: string;
   sender_avatar_file_id?: string;
+  /** Whether a bot wrote this. Derived from the sender's id, never stored. */
+  sender_is_bot?: boolean;
   profanity_matches?: { startIndex: number; endIndex: number }[];
   enriched_attachments?: EnrichedAttachment[];
 }
@@ -176,6 +178,7 @@ export interface ServerConfigRecord {
    */
   default_role_account: string;
   default_role_local: string;
+  bot_join_policy: BotJoinPolicy;
   discoverable: boolean;
   is_configured: boolean;
   created_at: Date;
@@ -242,6 +245,54 @@ export interface RoleDefinitionRecord {
   created_at: Date;
   updated_at: Date;
 }
+
+/** Where a bot stands with the operator. */
+export type BotStatus = "pending" | "approved" | "denied";
+
+/**
+ * A bot, and what an operator agreed to let it do.
+ *
+ * `requested_permissions` is what the bot said it wanted, written once when the
+ * row was created and never rewritten — a bot that comes back asking for more
+ * is asking a question that has already been answered. `granted_permissions` is
+ * the operator's answer, and it is the bot's entire permission set: bots do not
+ * hold roles, so no edit to a role can widen what one may do.
+ *
+ * `bot_id` is null on a registration created before the bot exists; `claim_token`
+ * is null on one that arrived by knocking, and is cleared the moment a
+ * registration is claimed.
+ */
+export interface BotRecord {
+  registration_id: string;
+  bot_id: string | null;
+  claim_token: string | null;
+  nickname: string;
+  description: string | null;
+  requested_permissions: Permission[];
+  granted_permissions: Permission[];
+  /**
+   * How high a bot sits for the checks about acting on people.
+   *
+   * Zero by default, and zero means it cannot kick, ban or mute anybody, since
+   * those all want a strictly higher rank than the target. A bot that only
+   * deletes spam does not need it — deleting a message is not acting on a
+   * person — so most bots should stay here.
+   */
+  rank: number;
+  status: BotStatus;
+  created_at: Date;
+  updated_at: Date;
+  decided_at: Date | null;
+  decided_by_server_user_id: string | null;
+}
+
+/**
+ * Whether a bot nobody has heard of may leave a knock.
+ *
+ * `request` records it and admits nothing. `disabled` refuses at the door, for
+ * a server that only wants bots it set up itself with a claim token.
+ */
+export type BotJoinPolicy = "request" | "disabled";
 
 export interface ServerBanRecord {
   gryt_user_id: string;

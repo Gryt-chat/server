@@ -4,8 +4,9 @@ import {
   PERMISSIONS,
   type Permission,
 } from "../constants/permissions";
-import { identityTierOf, type IdentityTier } from "../auth/identity";
+import { identityTierOf, isBotIdentity, type IdentityTier } from "../auth/identity";
 import {
+  getBotById,
   getRoleDefinition,
   getServerConfig,
   getServerRole,
@@ -39,6 +40,15 @@ export interface EffectiveStanding {
  * point — a hiccup that made every gate answer "yes" would be a far worse
  * outage than one where nobody can post for a minute.
  */
+/**
+ * What a bot's role reads as everywhere a role id is shown.
+ *
+ * Not a row in `role_definitions`, on purpose — there is nothing to edit and
+ * nothing to assign. It exists so the member list has something to render, and
+ * the client shows the BOT tag rather than this.
+ */
+export const BOT_ROLE_ID = "bot";
+
 const NO_STANDING: EffectiveStanding = {
   roleId: FALLBACK_ROLE_ID,
   rank: 0,
@@ -125,10 +135,36 @@ async function resolveRoleId(
  * off the access token — and it saves the user lookup the owner check would
  * otherwise need.
  */
+/**
+ * A bot's standing, which comes from the registry rather than from a role.
+ *
+ * The whole point of the separation: a bot holds exactly what an operator
+ * agreed to, so no edit to a role can widen it and no amount of asking can
+ * either. A bot whose registration has been revoked — or which somehow reaches
+ * a check without one — resolves to nothing.
+ */
+async function botStanding(grytUserId: string): Promise<EffectiveStanding> {
+  const bot = await getBotById(grytUserId);
+  if (!bot || bot.status !== "approved") return NO_STANDING;
+  return {
+    roleId: BOT_ROLE_ID,
+    rank: bot.rank,
+    permissions: new Set(bot.granted_permissions),
+    isOwner: false,
+  };
+}
+
 async function computeStanding(
   serverUserId: string,
   grytUserId?: string,
 ): Promise<EffectiveStanding> {
+  // Before anything else, and before the owner check: a bot is never the owner,
+  // never holds a role, and must never pick up the joining default for a tier
+  // it is not in.
+  const subject =
+    grytUserId ?? (await getUserByServerId(serverUserId))?.gryt_user_id ?? "";
+  if (isBotIdentity(subject)) return botStanding(subject);
+
   const config = await getServerConfig();
   const { roleId, isOwner } = await resolveRoleId(serverUserId, grytUserId, config);
 

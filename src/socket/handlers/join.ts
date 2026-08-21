@@ -3,8 +3,10 @@ import type { HandlerContext, EventHandlerMap } from "./types";
 import { syncAllClients, broadcastMemberList, countOtherSessions, verifyClient } from "../utils/clients";
 import { sendServerDetails } from "../utils/server";
 import { postSystemMessage, formatJoinMessage } from "../utils/systemMessages";
-import { createChallenge, consumeChallenge, verifyCertificate, verifyAssertion, verifyIdentityLink, identityTierAccepted, identityTierOf, IdentityVerificationError, type IdentityTier } from "../../auth/identity";
+import { createChallenge, consumeChallenge, verifyCertificate, verifyAssertion, verifyIdentityLink, identityTierAccepted, identityTierOf, IdentityVerificationError, type BotDeclaration, type IdentityTier, looksLikeABotName } from "../../auth/identity";
+import { normalizePermissions } from "../../constants/permissions";
 import { defaultRoleForTier } from "../../services/permissions";
+import { broadcastServerUiUpdate } from "../utils/server";
 import { applyAutoRoles } from "../../services/autoRoles";
 import { readServiceState, serviceStateVarName } from "../../config/serviceState";
 import { generateAccessToken, TokenPayload } from "../../utils/jwt";
@@ -23,7 +25,12 @@ import {
   normalizeJoinPolicy,
   createOrRefreshJoinRequest,
   clearJoinRequest,
+  getBotById,
+  claimBotRegistration,
+  recordBotKnock,
+  insertServerAudit,
 } from "../../db";
+import type { BotRecord } from "../../db";
 import { isPrivateIp } from "../../utils/isPrivateIp";
 import { checkIdentityAllowed } from "../../moderation/sessionGate";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
@@ -107,6 +114,111 @@ function warnLanOpenBehindProxy(ip: string): void {
 
 // ── Handlers ────────────────────────────────────────────────────────
 
+
+/**
+ * Sentinel for "this member is a bot, so there is no role to assign".
+ *
+ * A class rather than a flag because the role block it skips is already inside
+ * a try that swallows and logs, and an early return would have to be threaded
+ * back out through it. Caught by name so a real failure still gets logged.
+ */
+class BotHoldsNoRole extends Error {}
+
+/**
+ * Whether a bot is allowed in, and under which registration.
+ *
+ * Four ways this goes, and only one of them admits anybody:
+ *
+ * - **Approved already** — the ordinary case, every restart after the first.
+ *   Whatever the bot declared this time is ignored entirely. That is the whole
+ *   anti-escalation property: a bot whose image has been taken over cannot
+ *   change the question after it has been answered.
+ * - **Presenting a claim token** — a registration an operator wrote before the
+ *   bot existed. Binding is atomic, so two bots racing one token end with one
+ *   claimed and one refused.
+ * - **Never seen, and the server takes knocks** — its declaration is recorded
+ *   and it is turned away. Nothing is granted; an operator still has to answer.
+ * - **Pending, denied, or knocking at a server that does not take knocks** —
+ *   refused.
+ */
+async function admitBot(
+  botId: string,
+  declaration: BotDeclaration | undefined,
+  declaredName: string,
+): Promise<
+  | { ok: true; bot: BotRecord }
+  | { ok: false; error: string; message: string; canReapply: boolean }
+> {
+  const existing = await getBotById(botId);
+
+  if (existing) {
+    if (existing.status === "approved") return { ok: true, bot: existing };
+    if (existing.status === "denied") {
+      // Told the same thing as a pending bot, for the same reason the human
+      // join-request path gives: confirming that somebody looked and said no
+      // invites arguing with the message rather than with a person.
+      return {
+        ok: false,
+        error: "bot_not_approved",
+        message: "This bot is waiting to be approved by a server admin.",
+        canReapply: true,
+      };
+    }
+    return {
+      ok: false,
+      error: "bot_not_approved",
+      message: "This bot is waiting to be approved by a server admin.",
+      canReapply: true,
+    };
+  }
+
+  const claimToken = declaration?.claimToken?.trim();
+  if (claimToken) {
+    const claimed = await claimBotRegistration(claimToken, botId);
+    if (claimed) return { ok: true, bot: claimed };
+    return {
+      ok: false,
+      error: "bot_token_invalid",
+      message: "That bot token is not valid, or has already been used by another bot.",
+      canReapply: false,
+    };
+  }
+
+  const cfg = await getServerConfig().catch(() => null);
+  if (cfg?.bot_join_policy !== "request") {
+    return {
+      ok: false,
+      error: "bot_join_disabled",
+      message: "This server does not accept bots that have not been set up by an admin.",
+      canReapply: false,
+    };
+  }
+
+  const { bot, created } = await recordBotKnock({
+    botId,
+    nickname: declaredName,
+    description: declaration?.description ?? null,
+    requestedPermissions: normalizePermissions(declaration?.permissions ?? []),
+  });
+
+  if (created) {
+    insertServerAudit({
+      actorServerUserId: null,
+      action: "bot_knocked",
+      target: botId,
+      meta: { nickname: bot.nickname, requested: bot.requested_permissions },
+    }).catch((e: unknown) => consola.warn("audit log write failed", e));
+    broadcastServerUiUpdate();
+  }
+
+  return {
+    ok: false,
+    error: "bot_not_approved",
+    message: "This bot is waiting to be approved by a server admin.",
+    canReapply: true,
+  };
+}
+
 export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
   const { io, socket, clientId, serverId, clientsInfo, getClientIp, clientAddressIsOwn } = ctx;
 
@@ -120,6 +232,7 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
     'server:join': async (payload: {
       nickname?: string;
       inviteCode?: string;
+      bot?: { permissions?: unknown; description?: unknown; claimToken?: unknown };
     }) => {
       try {
         const ip = getClientIp();
@@ -159,7 +272,21 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
         const serverHost = socket.handshake.headers.host || "unknown";
         const inviteCode = typeof payload?.inviteCode === "string" ? payload.inviteCode.trim() : undefined;
 
-        const challenge = createChallenge(socket.id, serverHost, nickname, inviteCode);
+        // Everything here is attacker-supplied and ends up in front of an
+        // operator, so it is bounded on the way in and never rendered as markup.
+        const botDeclaration = payload?.bot
+          ? {
+              permissions: Array.isArray(payload.bot.permissions)
+                ? payload.bot.permissions.filter((p): p is string => typeof p === "string").slice(0, 64)
+                : [],
+              description:
+                typeof payload.bot.description === "string" ? payload.bot.description : undefined,
+              claimToken:
+                typeof payload.bot.claimToken === "string" ? payload.bot.claimToken : undefined,
+            }
+          : undefined;
+
+        const challenge = createChallenge(socket.id, serverHost, nickname, inviteCode, botDeclaration);
         socket.emit("server:challenge", challenge);
       } catch (err) {
         consola.error("server:join failed", err);
@@ -286,7 +413,33 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
         // Nothing leaks: the accepted tiers are already advertised in
         // `server:info` before anyone tries, and somebody turned away for
         // having no account can only act on it if they are told so.
-        if (!identityTierAccepted(identityTier)) {
+        // Bots are admitted by the registry, not by GRYT_IDENTITY_TIERS.
+        //
+        // Keeping them off that switch is most of the point of giving them
+        // their own tier: adding one bot used to mean accepting every anonymous
+        // joiner on the server, which is a far larger decision than the operator
+        // thought they were making, and it needed a restart to make it.
+        let botRegistration: Awaited<ReturnType<typeof getBotById>> = null;
+        if (identityTier === "bot") {
+          const outcome = await admitBot(
+            grytUserId,
+            challenge.bot,
+            // The name it asked to be called, used only if this is the first
+            // time anybody has seen it. Once approved, the registration's name
+            // is the one that sticks.
+            (challenge.nickname || "Bot").trim(),
+          );
+          if (!outcome.ok) {
+            consola.info(`Bot join refused for ${grytUserId}: ${outcome.error}`);
+            socket.emit("server:error", {
+              error: outcome.error,
+              message: outcome.message,
+              canReapply: outcome.canReapply,
+            });
+            return;
+          }
+          botRegistration = outcome.bot;
+        } else if (!identityTierAccepted(identityTier)) {
           consola.info(`Join refused for ${grytUserId}: tier "${identityTier}" not accepted`);
           socket.emit("server:error", {
             error: "identity_tier_refused",
@@ -296,7 +449,27 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        const nickname = (challenge.nickname || suggestedNickname || "User").trim();
+        // A bot's name is whatever the operator approved, not what the bot sent
+        // this time. It is the label people will use to decide whether to trust
+        // a message, so it must not be something the bot can change after the
+        // fact.
+        const nickname = botRegistration
+          ? botRegistration.nickname
+          : (challenge.nickname || suggestedNickname || "User").trim();
+
+        // The other half of not being mistaken for a bot: a person must not be
+        // able to take a bot-shaped name. The BOT tag comes from the identity
+        // rather than the name, so somebody calling themselves "BOT_helper"
+        // never gets the badge — they only get the benefit of the doubt from
+        // anyone reading quickly, which is the whole trick.
+        if (!botRegistration && looksLikeABotName(nickname)) {
+          socket.emit("server:error", {
+            error: "nickname_reserved",
+            message: 'Names that start with "bot" are reserved. Pick another.',
+            canReapply: true,
+          });
+          return;
+        }
         let cfg = await getServerConfig().catch(() => null);
 
         // Stays ahead of invite consumption so a banned user does not burn an
@@ -371,7 +544,14 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
         let claimedOwnerGrytUserId: string | null | undefined;
         let usedInviteCode: string | undefined;
 
-        if (!isActiveMember) {
+        // Bots skip the invite and join-policy gate entirely, and have to.
+        //
+        // Their admission *is* the registration: an operator answered them by
+        // name and said what they may do. Making an approved bot also carry an
+        // invite means an approved bot cannot join a server whose policy is
+        // `invite`, which is the default — found by running one against exactly
+        // that and watching it be turned away with "Invite required".
+        if (!isActiveMember && !botRegistration) {
           const ip = getClientIp();
           const inviteKey = getInviteCooldownKey(ip, grytUserId);
           const now = Date.now();
@@ -515,7 +695,12 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
         const setupRequired = isOwner && !cfg?.is_configured;
         const tokenVersion = cfg?.token_version ?? 0;
 
+        // Deliberately skipped for a bot: no roles row, and no auto-role pass.
+        // A bot's permissions live on its registration, and a roles row would be
+        // a second place that could disagree with it — including one that a role
+        // edit could quietly widen.
         try {
+          if (botRegistration) throw new BotHoldsNoRole();
           const existingRole = await getServerRole(user.server_user_id);
           // A first-time joiner lands on the default for their identity tier —
           // which is how "guests may read, accounts may talk" is expressed. An
@@ -531,7 +716,7 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           // no background job to fail quietly.
           await applyAutoRoles(user.server_user_id, grytUserId);
         } catch (e) {
-          consola.warn("Failed to ensure role row:", e);
+          if (!(e instanceof BotHoldsNoRole)) consola.warn("Failed to ensure role row:", e);
         }
 
         const tokenPayload: TokenPayload = {

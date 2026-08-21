@@ -3,6 +3,7 @@ import { randomUUID } from "crypto";
 import type { HandlerContext, EventHandlerMap } from "./types";
 import type { SFUClient } from "../../sfu/client";
 import { requireAuth } from "../middleware/auth";
+import { isBotIdentity } from "../../auth/identity";
 import { socketMay } from "../utils/standing";
 import {
   insertMessage,
@@ -118,6 +119,11 @@ async function enrichMessages(messages: MessageRecord[]): Promise<MessageRecord[
       ...m,
       sender_nickname: info?.nickname ?? "Unknown",
       sender_avatar_file_id: info?.avatar_file_id,
+      // Rides on every message, not just on the member list. A reader deciding
+      // whether to act on what a message says is looking at the message, and
+      // making them cross-reference a sidebar to find out whether a person
+      // wrote it is exactly the gap somebody would build a bot to exploit.
+      sender_is_bot: isBotIdentity(info?.gryt_user_id),
     };
   });
 }

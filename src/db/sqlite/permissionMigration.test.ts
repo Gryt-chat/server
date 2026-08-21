@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 
-import { BUILT_IN_ROLES } from "../../constants/permissions";
+import { BUILT_IN_ROLES, PERMISSION_SCHEMA_VERSION } from "../../constants/permissions";
 import { getSqliteDb, initSqlite } from "./connection";
 import { getRoleDefinition, createRoleDefinition } from "./roleDefinitions";
 
@@ -56,7 +56,9 @@ describe("the permission backfill on start", () => {
     const row = db
       .prepare(`SELECT value FROM schema_meta WHERE key = 'permission_schema_version'`)
       .get() as { value: string } | undefined;
-    assert.equal(row?.value, "2");
+    // Against the constant, not a literal — this assertion should not need
+    // editing every time a batch of permissions is added.
+    assert.equal(row?.value, String(PERMISSION_SCHEMA_VERSION));
   });
 
   it("sweeps a database left at the previous version", async () => {
