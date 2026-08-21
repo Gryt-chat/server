@@ -225,6 +225,20 @@ export interface RoleDefinitionRecord {
   rank: number;
   permissions: Permission[];
   is_system: boolean;
+  /**
+   * What this role asks of somebody before it grants itself to them.
+   *
+   * Both null means it never does. Both set means both have to be true — a
+   * fortnight *and* fifty messages, not either. The other reading, where time
+   * alone is enough, is how a public server's trusted tier ends up on an
+   * account that signed up a month ago and has never spoken.
+   *
+   * Only ever a promotion. A member already holding a role of equal or higher
+   * rank is left alone, and nothing here ever takes a role away: somebody who
+   * goes quiet does not slide back down.
+   */
+  auto_grant_after_days: number | null;
+  auto_grant_after_messages: number | null;
   created_at: Date;
   updated_at: Date;
 }

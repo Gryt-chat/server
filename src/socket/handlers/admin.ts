@@ -124,6 +124,21 @@ function pushSfuAudioState(
  * shows the role, so anything that is not obviously a colour is dropped rather
  * than passed through and hoped about.
  */
+/**
+ * One half of an automatic-grant condition, as it arrives from a client.
+ *
+ * `undefined` means "leave it alone" and is passed straight through; anything
+ * that is not a positive number becomes null, which is off. A cap because
+ * these are two number fields on a form and there is no reading of "grant this
+ * after nine hundred million messages" worth storing.
+ */
+function normalizeThreshold(value: unknown): number | null | undefined {
+  if (value === undefined) return undefined;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.min(Math.floor(n), 1_000_000);
+}
+
 function normalizeRoleColor(value: unknown, fallback: string | null): string | null {
   if (value === null) return null;
   if (typeof value !== "string") return fallback;
@@ -155,6 +170,8 @@ async function roleEditorState() {
       rank: r.rank,
       permissions: r.permissions,
       isSystem: r.is_system,
+      autoGrantAfterDays: r.auto_grant_after_days,
+      autoGrantAfterMessages: r.auto_grant_after_messages,
       memberCount: await countRoleHolders(r.role_id),
     })),
   );
@@ -484,6 +501,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       color?: string | null;
       rank?: number;
       permissions?: string[];
+      autoGrantAfterDays?: number | null;
+      autoGrantAfterMessages?: number | null;
     }) => {
       try {
         const rl = rlCheck("server:roles:definitions:save", ctx, RL_SETTINGS);
@@ -560,15 +579,36 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
+        // A role that hands itself out is a role nobody reviews before it takes
+        // effect, so the same two rules apply as to granting it by hand: it
+        // cannot reach your own rank, and it cannot carry a permission you do
+        // not hold. Both are already checked above, on the way in.
+        const autoGrantAfterDays = normalizeThreshold(payload?.autoGrantAfterDays);
+        const autoGrantAfterMessages = normalizeThreshold(payload?.autoGrantAfterMessages);
+
         const saved = existing
-          ? await updateRoleDefinition(roleId, { name, color, rank, permissions })
-          : await createRoleDefinition(roleId, { name, color, rank, permissions });
+          ? await updateRoleDefinition(roleId, {
+              name,
+              color,
+              rank,
+              permissions,
+              autoGrantAfterDays,
+              autoGrantAfterMessages,
+            })
+          : await createRoleDefinition(roleId, {
+              name,
+              color,
+              rank,
+              permissions,
+              autoGrantAfterDays,
+              autoGrantAfterMessages,
+            });
 
         insertServerAudit({
           actorServerUserId: auth.tokenPayload.serverUserId,
           action: existing ? "role_definition_update" : "role_definition_create",
           target: roleId,
-          meta: { name, rank, permissions },
+          meta: { name, rank, permissions, autoGrantAfterDays, autoGrantAfterMessages },
         }).catch((e) => consola.warn("audit log write failed", e));
 
         io.to("verifiedClients").emit("server:roles:definition:updated", { serverId, role: saved });

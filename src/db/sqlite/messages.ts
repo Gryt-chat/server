@@ -301,3 +301,20 @@ export async function purgeUserContent(senderServerUserId: string): Promise<{
 
   return { deletedMessages, updatedReactions, orphanedAttachmentIds };
 }
+
+/**
+ * How many messages one member has sent, ever.
+ *
+ * For the automatic-promotion thresholds. Counts what is still there rather
+ * than what was ever posted, which means a purge or a moderator's delete moves
+ * somebody back down the count — that is the honest reading of "has posted
+ * fifty messages", and it costs nothing to say so here since nothing is ever
+ * taken away once granted.
+ */
+export async function countMessagesBySender(senderServerUserId: string): Promise<number> {
+  const db = getSqliteDb();
+  const row = db
+    .prepare(`SELECT COUNT(*) AS cnt FROM messages WHERE sender_server_id = ?`)
+    .get(senderServerUserId) as { cnt: number } | undefined;
+  return Number(row?.cnt ?? 0);
+}

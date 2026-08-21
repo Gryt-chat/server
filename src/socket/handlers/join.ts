@@ -5,6 +5,7 @@ import { sendServerDetails } from "../utils/server";
 import { postSystemMessage, formatJoinMessage } from "../utils/systemMessages";
 import { createChallenge, consumeChallenge, verifyCertificate, verifyAssertion, verifyIdentityLink, identityTierAccepted, identityTierOf, IdentityVerificationError, type IdentityTier } from "../../auth/identity";
 import { defaultRoleForTier } from "../../services/permissions";
+import { applyAutoRoles } from "../../services/autoRoles";
 import { readServiceState, serviceStateVarName } from "../../config/serviceState";
 import { generateAccessToken, TokenPayload } from "../../utils/jwt";
 import {
@@ -523,6 +524,12 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           const joinRole = defaultRoleForTier(identityTierOf(grytUserId), cfg);
           if (!existingRole) await setServerRole(user.server_user_id, isOwner ? "owner" : joinRole);
           else if (isOwner && existingRole !== "owner") await setServerRole(user.server_user_id, "owner");
+
+          // A role they earned while they were away lands now. Joining is one
+          // of the two moments the answer can change — the other is sending a
+          // message — and doing it here rather than on a timer means there is
+          // no background job to fail quietly.
+          await applyAutoRoles(user.server_user_id, grytUserId);
         } catch (e) {
           consola.warn("Failed to ensure role row:", e);
         }
