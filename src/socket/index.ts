@@ -23,6 +23,7 @@ import { registerDiagnosticsHandlers } from "./handlers/diagnostics";
 import { registerVoiceLatencyHandlers } from "./handlers/voiceLatency";
 import { registerReportHandlers } from "./handlers/reports";
 import { registerTypingHandlers } from "./handlers/typing";
+import { addressIsOwn, resolveClientIp, trustedProxyHops } from "../config/clientAddress";
 
 export { broadcastChatNew, broadcastCustomEmojisUpdate, broadcastEmojiQueueUpdate, broadcastServerUiUpdate };
 
@@ -181,48 +182,22 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
 }
 
 /**
- * How many proxies in front of this server may be believed.
- *
- * Zero, unless an operator says otherwise, and that default is the whole point.
- * `x-forwarded-for` is a header any client can set to anything, so trusting it
- * unconditionally meant every per-IP limit in the server could be walked around
- * by varying one string per connection — measured at 30 joins against a cap of
- * 19, and the same trick defeats the invite brute-force cooldown.
- *
- * **A server behind a proxy must set this**, or every client arrives wearing the
- * proxy's address and shares one rate-limit bucket between them. One for a
- * single reverse proxy or tunnel, more only if you have genuinely chained them.
- */
-function trustedProxyHops(): number {
-  const raw = parseInt(process.env.GRYT_TRUSTED_PROXY_HOPS || "", 10);
-  return Number.isFinite(raw) && raw > 0 ? raw : 0;
-}
-
-/**
- * The address to hold somebody to, for rate limiting and cooldowns.
- *
- * Counted from the right, which is the only end that means anything.
- * `x-forwarded-for` grows left to right as a request crosses proxies, so the
- * rightmost entries were appended by infrastructure and the leftmost is
- * whatever the client claimed. Reading `[0]` — which this used to do — reads
- * the claim.
+ * Socket-shaped wrappers over the decisions in config/clientAddress, which is
+ * where the reasoning lives and where the tests are.
  */
 function getClientIp(socket: Socket): string {
-  const socketAddress = (socket.handshake.address as string) || "unknown";
-  const hops = trustedProxyHops();
-  if (hops === 0) return socketAddress;
+  return resolveClientIp(
+    (socket.handshake.address as string) || "unknown",
+    socket.handshake.headers["x-forwarded-for"],
+    trustedProxyHops(),
+  );
+}
 
-  const raw = socket.handshake.headers["x-forwarded-for"] as string | string[] | undefined;
-  const chain = (Array.isArray(raw) ? raw.join(",") : raw || "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-
-  // One hop means the last entry was written by our own proxy about its peer.
-  // Asking for more hops than the chain holds means the request did not come
-  // through them, so believe the socket rather than the shortfall.
-  const index = chain.length - hops;
-  return index >= 0 && index < chain.length ? chain[index] : socketAddress;
+function clientAddressIsOwn(socket: Socket): boolean {
+  return addressIsOwn(
+    socket.handshake.headers["x-forwarded-for"],
+    trustedProxyHops(),
+  );
 }
 
 async function getTokenVersionForServer(): Promise<number> {
@@ -281,6 +256,7 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
     clientsInfo,
     sfuClient,
     getClientIp: () => getClientIp(socket),
+    clientAddressIsOwn: () => clientAddressIsOwn(socket),
   };
 
   // Collect all event handlers from domain modules
