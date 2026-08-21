@@ -250,17 +250,17 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           profanityMatches = result.matches;
         }
 
+        // A resend of something already stored. The nonce exists so this does
+        // not post twice, and it has to travel back with the reply: without it
+        // the client that retried cannot tell this is the message it is already
+        // holding, so it draws it a second time and the first one stays pending
+        // forever. The first send attaches it, and for a while this did not.
+        //
+        // Only the sender is told. Everyone else heard about the message when
+        // it was first posted, and had no way to know this one was the same.
         if (payload.nonce && recentNonces.has(payload.nonce)) {
           const cached = recentNonces.get(payload.nonce)!;
-          const connectedClients = Object.entries(clientsInfo).filter(([, ci]) => {
-            if (isConversationAVoiceChannel(cached.message.conversation_id, sfuClient)) {
-              return isUserConnectedToSpecificVoiceChannel(ci.serverUserId, cached.message.conversation_id, sfuClient);
-            }
-            return true;
-          });
-          connectedClients.forEach(([cid]) => {
-            io.sockets.sockets.get(cid)?.emit("chat:new", cached.message);
-          });
+          socket.emit("chat:new", { ...cached.message, nonce: payload.nonce });
           return;
         }
 
