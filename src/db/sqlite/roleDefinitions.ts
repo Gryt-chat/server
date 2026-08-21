@@ -23,6 +23,19 @@ function parsePermissions(raw: unknown): Permission[] {
   }
 }
 
+/**
+ * A stored threshold, or null when there isn't one.
+ *
+ * Zero and negatives read as null rather than as "grant immediately". A role
+ * that grants itself the instant somebody arrives is a joining default, and
+ * there is already a setting for that — reading a stray 0 as one would be a
+ * promotion nobody configured.
+ */
+function positiveOrNull(value: unknown): number | null {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+}
+
 function rowToDefinition(r: Record<string, unknown>): RoleDefinitionRecord {
   return {
     role_id: r.role_id as string,
@@ -31,6 +44,8 @@ function rowToDefinition(r: Record<string, unknown>): RoleDefinitionRecord {
     rank: Number(r.rank ?? 0),
     permissions: parsePermissions(r.permissions),
     is_system: (r.is_system as number) === 1,
+    auto_grant_after_days: positiveOrNull(r.auto_grant_after_days),
+    auto_grant_after_messages: positiveOrNull(r.auto_grant_after_messages),
     created_at: fromIso(r.created_at as string),
     updated_at: fromIso(r.updated_at as string),
   };
@@ -60,6 +75,8 @@ export interface RoleDefinitionInput {
   color?: string | null;
   rank: number;
   permissions: Permission[];
+  autoGrantAfterDays?: number | null;
+  autoGrantAfterMessages?: number | null;
 }
 
 export async function createRoleDefinition(
@@ -70,8 +87,8 @@ export async function createRoleDefinition(
   const now = toIso(new Date());
   const result = db
     .prepare(
-      `INSERT OR IGNORE INTO role_definitions (role_id, name, color, rank, permissions, is_system, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 0, ?, ?)`,
+      `INSERT OR IGNORE INTO role_definitions (role_id, name, color, rank, permissions, is_system, auto_grant_after_days, auto_grant_after_messages, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`,
     )
     .run(
       roleId,
@@ -79,6 +96,8 @@ export async function createRoleDefinition(
       input.color ?? null,
       input.rank,
       JSON.stringify(normalizePermissions(input.permissions)),
+      positiveOrNull(input.autoGrantAfterDays),
+      positiveOrNull(input.autoGrantAfterMessages),
       now,
       now,
     );
@@ -113,15 +132,27 @@ export async function updateRoleDefinition(
     permissions: patch.permissions
       ? normalizePermissions(patch.permissions)
       : existing.permissions,
+    // `undefined` leaves the threshold where it was; `null` clears it. Without
+    // the distinction there is no way to turn an automatic grant back off.
+    autoGrantAfterDays:
+      patch.autoGrantAfterDays === undefined
+        ? existing.auto_grant_after_days
+        : positiveOrNull(patch.autoGrantAfterDays),
+    autoGrantAfterMessages:
+      patch.autoGrantAfterMessages === undefined
+        ? existing.auto_grant_after_messages
+        : positiveOrNull(patch.autoGrantAfterMessages),
   };
 
   db.prepare(
-    `UPDATE role_definitions SET name = ?, color = ?, rank = ?, permissions = ?, updated_at = ? WHERE role_id = ?`,
+    `UPDATE role_definitions SET name = ?, color = ?, rank = ?, permissions = ?, auto_grant_after_days = ?, auto_grant_after_messages = ?, updated_at = ? WHERE role_id = ?`,
   ).run(
     next.name,
     next.color,
     next.rank,
     JSON.stringify(next.permissions),
+    next.autoGrantAfterDays,
+    next.autoGrantAfterMessages,
     toIso(new Date()),
     roleId,
   );

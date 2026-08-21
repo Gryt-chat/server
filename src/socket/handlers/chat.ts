@@ -23,6 +23,8 @@ import {
 } from "../../db";
 import { processProfanity, type CensorStyle, type ProfanityMode } from "../../utils/profanityFilter";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
+import { applyAutoRoles } from "../../services/autoRoles";
+import { broadcastServerUiUpdate } from "../utils/server";
 
 const RL_SEND: RateLimitRule = { limit: 20, windowMs: 10_000, banMs: 30_000, scorePerAction: 1, maxScore: 10, scoreDecayMs: 2000 };
 const RL_REACT: RateLimitRule = { limit: 60, windowMs: 60_000, scorePerAction: 0.5, maxScore: 15, scoreDecayMs: 3000 };
@@ -166,7 +168,7 @@ async function enrichAttachments(messages: MessageRecord[]): Promise<MessageReco
 }
 
 export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
-  const { io, socket, clientId, clientsInfo, sfuClient, getClientIp } = ctx;
+  const { io, socket, clientId, serverId, clientsInfo, sfuClient, getClientIp } = ctx;
 
   return {
     'chat:send': async (payload: { conversationId: string; accessToken: string; text?: string; attachments?: string[]; replyToMessageId?: string; nonce?: string }) => {
@@ -320,6 +322,26 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
             : enriched;
           io.sockets.sockets.get(cid)?.emit("chat:new", msg);
         });
+
+        // After the message is out, not before: a promotion must never be the
+        // reason somebody's message is slow, and it must not be able to stop
+        // one being delivered. Costs a single read of the roles table on a
+        // server that has configured none of this.
+        const promoted = await applyAutoRoles(
+          auth.tokenPayload.serverUserId,
+          auth.tokenPayload.grytUserId,
+        );
+        if (promoted) {
+          io.to("verifiedClients").emit("server:role:updated", {
+            serverId,
+            serverUserId: auth.tokenPayload.serverUserId,
+            role: promoted.granted.role_id,
+          });
+          // Their own permission list is part of server details, so it has to
+          // be re-sent — otherwise the tier they just earned does nothing until
+          // they reconnect.
+          broadcastServerUiUpdate("other");
+        }
       } catch (err) {
         consola.error("chat:send failed", err);
         try {

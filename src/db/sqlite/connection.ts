@@ -187,6 +187,10 @@ function createSchema(d: DatabaseSync): void {
       PRIMARY KEY (conversation_id, message_id)
     );
     CREATE INDEX IF NOT EXISTS idx_messages_conv_time ON messages(conversation_id, created_at);
+    -- How many messages one person has sent, which is half of what an
+    -- automatic promotion is measured on. Without it that count is a full scan
+    -- of the table on every message anybody sends.
+    CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_server_id);
 
     CREATE TABLE IF NOT EXISTS files (
       file_id TEXT PRIMARY KEY,
@@ -427,6 +431,16 @@ function runMigrations(d: DatabaseSync): void {
   }
   if (!hasColumn(d, "server_config", "default_role_local")) {
     d.exec("ALTER TABLE server_config ADD COLUMN default_role_local TEXT NOT NULL DEFAULT 'member'");
+  }
+
+  // What a role asks of somebody before it grants itself. NULL means that half
+  // of the condition is not being asked, and a role with both NULL is never
+  // granted automatically — which is every role that existed before this.
+  if (!hasColumn(d, "role_definitions", "auto_grant_after_days")) {
+    d.exec("ALTER TABLE role_definitions ADD COLUMN auto_grant_after_days INTEGER");
+  }
+  if (!hasColumn(d, "role_definitions", "auto_grant_after_messages")) {
+    d.exec("ALTER TABLE role_definitions ADD COLUMN auto_grant_after_messages INTEGER");
   }
 
   d.prepare("UPDATE server_config SET avatar_thumb_px = ?").run(AVATAR_THUMB_PX);
