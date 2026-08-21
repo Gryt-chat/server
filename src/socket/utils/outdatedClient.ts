@@ -87,7 +87,9 @@ export function formatUpdateReminder(
     "",
     "It has been downloading every new release and installing none of them, and it cannot fix that on its own — the part that is broken is the part that would install the fix.",
     "",
-    "**The installer is already on your machine.** Close Gryt, open `%LOCALAPPDATA%\\gryt-chat-updater\\pending`, and run the `Gryt-Chat-*.exe` sitting in there — there is nothing to download. Updates work on their own again afterwards, and your settings and servers are untouched.",
+    `**The installer is probably already on your machine.** Close Gryt, open \`%LOCALAPPDATA%\\gryt-chat-updater\\pending\`, and look for \`Gryt-Chat-${FIRST_WORKING_WINDOWS_UPDATER}-win-x64.exe\` or newer. Run it and you are done — updates work on their own again afterwards, and your settings and servers are untouched.`,
+    "",
+    `**Check the version in the filename first.** Anything below ${FIRST_WORKING_WINDOWS_UPDATER} carries the same broken updater, so installing it puts you right back here while looking like it worked. If the file in that folder is older, or the folder is empty, download the current one instead: https://github.com/Gryt-chat/gryt/releases/latest`,
     "",
     "Full instructions: https://docs.gryt.chat/docs/client/updates",
   ].join("\n");
