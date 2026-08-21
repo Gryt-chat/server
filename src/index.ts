@@ -8,6 +8,8 @@ import { socketHandler, setupSFUSync } from "./socket";
 import { createServer } from "http";
 import { Server } from "socket.io";
 import express from "express"; // Import express
+import { managementRouter } from "./routes/management";
+import { adminTokenConfigured } from "./middleware/requireAdminToken";
 import { SFUClient } from "./sfu/client"; // Import SFU client
 import {
   createServerConfigIfNotExists,
@@ -412,6 +414,26 @@ function isLoopbackHost(host: string): boolean {
     host === "[::1]" ||
     /^127\.\d+\.\d+\.\d+$/.test(host)
   );
+}
+
+// The management API, on its own listener.
+//
+// A separate port on purpose. The main one is bound to whatever HOST says,
+// which defaults to 0.0.0.0 and is meant to be reachable — so mounting
+// management there would put it wherever the server is, including the public
+// internet for anybody forwarding a port. This one is only ever reached
+// through the Compose file's `127.0.0.1:<port>:<port>` publish, which Docker
+// enforces at the host before anything reaches the container.
+//
+// It does not start at all unless GRYT_ADMIN_TOKEN is set, so a server run any
+// other way has exactly the surface it had before.
+if (adminTokenConfigured()) {
+  const managementApp = express();
+  managementApp.use("/management", managementRouter);
+  const managementPort = Number(process.env.GRYT_ADMIN_PORT || 5099);
+  managementApp.listen(managementPort, "0.0.0.0", () => {
+    consola.success(`Management API listening on ${managementPort} (publish it to 127.0.0.1 only)`);
+  });
 }
 
 httpServer.listen(PORT, HOST, () => {
