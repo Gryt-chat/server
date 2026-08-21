@@ -4,6 +4,7 @@ import { getUserByServerId, updateUserNickname } from "../../db";
 import { hasPermission } from "../../services/permissions";
 import { buildMemberList, syncAllClients, broadcastMemberList } from "../utils/clients";
 import { socketMay } from "../utils/standing";
+import { looksLikeABotName } from "../../auth/identity";
 
 export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
   const { io, socket, clientId, serverId, clientsInfo } = ctx;
@@ -58,6 +59,11 @@ export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
           // Only checked when a name is actually being set. This event is also
           // the client's way of asking for its own profile back, and refusing
           // that would break the read for everybody who cannot write.
+          if (looksLikeABotName(nickname)) {
+            socket.emit("profile:error", 'Names that start with "bot" are reserved.');
+            return;
+          }
+
           const mayRename = await hasPermission(
             serverUserId,
             "change_nickname",

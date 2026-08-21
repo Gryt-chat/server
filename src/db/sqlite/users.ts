@@ -200,17 +200,26 @@ export async function setUserAvatar(serverUserId: string, avatarFileId: string |
   db.prepare(`UPDATE users SET avatar_file_id = ? WHERE server_user_id = ?`).run(avatarFileId, serverUserId);
 }
 
-export async function getUsersByServerIds(ids: string[]): Promise<Map<string, { nickname: string; avatar_file_id?: string }>> {
-  const result = new Map<string, { nickname: string; avatar_file_id?: string }>();
+/**
+ * Now carries `gryt_user_id` as well.
+ *
+ * Only so a caller can tell whether the sender is a bot, which is read off the
+ * id's prefix. The id itself is never sent to a client — see the note on
+ * `Clients` — so anything using this map has to derive the flag and pass that
+ * on, rather than passing the id through.
+ */
+export async function getUsersByServerIds(ids: string[]): Promise<Map<string, { nickname: string; avatar_file_id?: string; gryt_user_id: string }>> {
+  const result = new Map<string, { nickname: string; avatar_file_id?: string; gryt_user_id: string }>();
   if (ids.length === 0) return result;
   const db = getSqliteDb();
   const unique = [...new Set(ids)];
   const placeholders = unique.map(() => "?").join(",");
-  const rows = db.prepare(`SELECT server_user_id, nickname, avatar_file_id FROM users WHERE server_user_id IN (${placeholders})`).all(...unique) as Record<string, unknown>[];
+  const rows = db.prepare(`SELECT server_user_id, gryt_user_id, nickname, avatar_file_id FROM users WHERE server_user_id IN (${placeholders})`).all(...unique) as Record<string, unknown>[];
   for (const r of rows) {
     result.set(r.server_user_id as string, {
       nickname: (r.nickname as string) ?? "Unknown",
       avatar_file_id: (r.avatar_file_id as string) || undefined,
+      gryt_user_id: (r.gryt_user_id as string) ?? "",
     });
   }
   return result;

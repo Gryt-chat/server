@@ -24,8 +24,15 @@ import {
  * challenge-response over P-256 proves that on its own. What it cannot do is
  * survive the key being lost, and it costs nothing to mint another — see the
  * ban note on `identityTierAccepted`.
+ *
+ * `bot` is the same cryptography as `local` and a deliberately separate tier.
+ * A bot is not a person and must never be able to look like one: it lands in
+ * its own `sub` namespace, it is admitted by its own gate rather than by
+ * `GRYT_IDENTITY_TIERS`, and every surface that shows a member shows that it is
+ * one. Sharing the `local` tier would have been less code and would have meant
+ * a bot and a guest were the same kind of thing to every check that asked.
  */
-export type IdentityTier = "account" | "local";
+export type IdentityTier = "account" | "local" | "bot";
 
 /**
  * The `iss` a self-signed certificate must carry.
@@ -37,6 +44,20 @@ export type IdentityTier = "account" | "local";
  * under rules it chose for itself.
  */
 const SELF_ISSUER = "gryt:self";
+
+/**
+ * The `iss` a bot's certificate must carry.
+ *
+ * Cryptographically identical to `gryt:self` — a key signing for itself — and a
+ * separate issuer on purpose. Dispatching on it is what puts a bot in its own
+ * `sub` namespace, and doing that at verification time means the tier is
+ * decided by which door the certificate came through rather than by anything
+ * downstream having to remember to ask.
+ *
+ * A holder of one key can therefore be a person *or* a bot but never both at
+ * once under the same id, and cannot move between them by changing a field.
+ */
+const BOT_ISSUER = "gryt:bot";
 
 /**
  * The `iss` on a certificate where one key vouches for another.
@@ -60,6 +81,22 @@ const DELEGATED_ISSUER = "gryt:delegated";
 const LOCAL_SUB_PREFIX = "key:";
 
 /**
+ * Prefix on the `sub` of every bot identity.
+ *
+ * Loud, and upper case, because this string is what a person sees in an audit
+ * entry, a database row or a support conversation, and the one question it has
+ * to answer instantly is "was that a person". Same construction as the local
+ * prefix: it makes the namespaces disjoint by shape rather than by validation,
+ * so a bot can never hold an id a person could hold and no lookup is needed to
+ * tell them apart.
+ *
+ * Note the underscore rather than a colon. It is not a typo — it is there so
+ * that a `BOT_…` id reads as one word when it turns up in the middle of a
+ * sentence, and so that nothing which splits on `:` can lose the marker.
+ */
+const BOT_SUB_PREFIX = "BOT_";
+
+/**
  * Which tier a stored `gryt_user_id` belongs to.
  *
  * The prefix is why this needs nothing but the id itself — no lookup, no column
@@ -67,7 +104,41 @@ const LOCAL_SUB_PREFIX = "key:";
  * the prefix could only ever have come from a CA.
  */
 export function identityTierOf(sub: string): IdentityTier {
-  return sub.startsWith(LOCAL_SUB_PREFIX) ? "local" : "account";
+  if (sub.startsWith(BOT_SUB_PREFIX)) return "bot";
+  if (sub.startsWith(LOCAL_SUB_PREFIX)) return "local";
+  return "account";
+}
+
+/** Whether a stored id belongs to a bot. Reads off the id alone, like the tier. */
+export function isBotIdentity(sub: string | null | undefined): boolean {
+  return typeof sub === "string" && sub.startsWith(BOT_SUB_PREFIX);
+}
+
+/** Exported so the join path and the bot registry agree on one spelling. */
+export { BOT_SUB_PREFIX };
+
+/**
+ * Names a person may not take, because a bot would be mistaken for them or
+ * they for a bot.
+ *
+ * The BOT tag a client renders comes from the identity, not from the name, so a
+ * person calling themselves "BOT_helper" never actually gets the badge. They do
+ * get the benefit of the doubt from anyone reading quickly, which is the whole
+ * attack — and it costs nothing to refuse.
+ *
+ * Deliberately loose on the separator and the case: `BOT_x`, `bot-x`, `Bot x`
+ * and `[BOT] x` are all the same trick.
+ */
+const BOT_LOOKALIKE = /^\s*\[?\s*bot\s*\]?\s*([_\-–—:.]|\s)/i;
+
+/**
+ * Whether a nickname is one only a bot should be able to hold.
+ *
+ * Applied to people, not to bots — a bot's name comes from its registration and
+ * an operator can call it whatever they like.
+ */
+export function looksLikeABotName(nickname: string): boolean {
+  return BOT_LOOKALIKE.test(nickname) || nickname.trim().toLowerCase() === "bot";
 }
 
 const DEFAULT_ACCEPTED_TIERS: IdentityTier[] = ["account"];
@@ -291,7 +362,13 @@ function assertPublicP256Jwk(value: unknown): JWK {
  * self-signed identity can only ever be the one key it can prove it holds.
  */
 async function verifySelfSignedCertificate(
-  certJwt: string
+  certJwt: string,
+  // Which of the two self-signing issuers this certificate claimed. The
+  // cryptography is identical; the issuer decides which namespace the derived
+  // subject lands in, and therefore which tier the holder is. Passed in from the
+  // dispatch rather than read from the payload here, so it is the value that was
+  // actually matched and verified against.
+  kind: { issuer: string; prefix: string; tier: IdentityTier },
 ): Promise<VerifiedCertificate> {
   let unverified: JWTPayload;
   try {
@@ -314,27 +391,33 @@ async function verifySelfSignedCertificate(
   // closing an open door — it means the accepted algorithm is stated here
   // instead of being a property of a library's defaults.
   await jwtVerify(certJwt, publicKey, {
-    issuer: SELF_ISSUER,
+    issuer: kind.issuer,
     algorithms: ["ES256"],
   });
 
   const thumbprint = await calculateJwkThumbprint(jwk, "sha256");
 
   return {
-    sub: `${LOCAL_SUB_PREFIX}${thumbprint}`,
+    sub: `${kind.prefix}${thumbprint}`,
     // Derived from the key, so it is already impossible for anything else to
     // name it. Nothing to qualify.
-    grytUserId: `${LOCAL_SUB_PREFIX}${thumbprint}`,
+    grytUserId: `${kind.prefix}${thumbprint}`,
     // No `preferred_username`. A self-signed certificate can say anything, so
     // a name in one is worth nothing — and the join path already prefers the
     // nickname the client sent, with the certificate's name as a fallback. A
     // fallback that is self-asserted would read as vouched-for and is not.
     preferredUsername: undefined,
     jwk: jwk as JsonWebKey,
-    issuer: SELF_ISSUER,
-    tier: "local",
+    issuer: kind.issuer,
+    tier: kind.tier,
   };
 }
+
+/** The two issuers where a key signs for itself, and what each one becomes. */
+const SELF_SIGNING_KINDS = [
+  { issuer: SELF_ISSUER, prefix: LOCAL_SUB_PREFIX, tier: "local" as const },
+  { issuer: BOT_ISSUER, prefix: BOT_SUB_PREFIX, tier: "bot" as const },
+];
 
 /**
  * Verify a certificate where a key you hold vouches for a key on a device.
@@ -499,9 +582,10 @@ export async function verifyCertificate(
     );
   }
 
-  if (claimedIssuer === SELF_ISSUER) {
+  const selfKind = SELF_SIGNING_KINDS.find((k) => k.issuer === claimedIssuer);
+  if (selfKind) {
     try {
-      return await verifySelfSignedCertificate(certJwt);
+      return await verifySelfSignedCertificate(certJwt, selfKind);
     } catch (err) {
       throw new IdentityVerificationError(
         "certificate_rejected",
@@ -560,6 +644,16 @@ export async function verifyCertificate(
     const jwk = assertPublicP256Jwk(
       (payload as JWTPayload & { jwk?: unknown }).jwk
     );
+
+    if (payload.sub.startsWith(BOT_SUB_PREFIX)) {
+      // The same argument as the local prefix below, and it matters more. A CA
+      // that could issue into the bot namespace could mint something that reads
+      // as a bot everywhere it is shown — or, worse, hand a person an id that
+      // every surface labels as not-a-person.
+      throw new Error(
+        `Certificate sub must not use the reserved "${BOT_SUB_PREFIX}" prefix`
+      );
+    }
 
     if (payload.sub.startsWith(LOCAL_SUB_PREFIX)) {
       // A CA has no business issuing into the self-signed namespace, and if
@@ -661,11 +755,26 @@ export async function verifyAssertion(
 
 const NONCE_TTL_MS = 60_000;
 
+/** What a bot declares about itself when it first turns up. */
+export interface BotDeclaration {
+  permissions: string[];
+  description?: string;
+  /** A pre-approved registration's token, for the unattended path. */
+  claimToken?: string;
+}
+
 interface PendingChallenge {
   nonce: string;
   serverHost: string;
   nickname: string;
   inviteCode?: string;
+  /**
+   * Bound to the challenge rather than read from the verify payload, for the
+   * same reason the nickname is: it is what an operator will be shown, so it
+   * must be fixed before the identity is known and cannot be swapped between
+   * the two halves of the exchange.
+   */
+  bot?: BotDeclaration;
   createdAt: number;
 }
 
@@ -687,7 +796,8 @@ export function createChallenge(
   socketId: string,
   serverHost: string,
   nickname: string,
-  inviteCode?: string
+  inviteCode?: string,
+  bot?: BotDeclaration
 ): { nonce: string; serverHost: string; identityTiers: IdentityTier[] } {
   const nonce = randomBytes(32).toString("base64url");
   pendingChallenges.set(socketId, {
@@ -695,6 +805,7 @@ export function createChallenge(
     serverHost,
     nickname,
     inviteCode,
+    bot,
     createdAt: Date.now(),
   });
   // The accepted tiers ride along with the challenge because this is the moment

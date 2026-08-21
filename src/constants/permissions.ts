@@ -92,6 +92,15 @@ export const PERMISSIONS = [
   "manage_webhooks",
   /** Edit role definitions, and assign roles to members. */
   "manage_roles",
+  /**
+   * Answer a bot at the door, and decide what it may do.
+   *
+   * Separate from `manage_roles` because it is a different question. A role is
+   * given to somebody who is already here; approving a bot is deciding whether
+   * a piece of software joins at all, and the two are not obviously the same
+   * person's job on a large server.
+   */
+  "manage_bots",
   /** Server name, description, icon, limits, join policy, the lot. */
   "manage_server",
   /**
@@ -230,7 +239,14 @@ const MOD_PERMISSIONS = [
  * thing to acquire by upgrade. An owner who wants any of it ticks the box.
  */
 const ADMIN_PERMISSIONS = EVERY_PERMISSION.filter(
-  (p) => p !== "manage_roles" && p !== "manage_server" && p !== "replace_identity",
+  (p) =>
+    p !== "manage_roles" &&
+    p !== "manage_server" &&
+    p !== "replace_identity" &&
+    // Owner-only to begin with. Approving a bot is granting permissions to
+    // something nobody in the room can vouch for, and it should start where the
+    // other two grant-shaped powers already are.
+    p !== "manage_bots",
 ) as Permission[];
 
 /**
@@ -302,9 +318,9 @@ export interface PermissionBackfill {
  *
  * Version 1 is "roles carry permissions at all" (GRYT-444) — nothing to
  * backfill, the sets were written to match the old gates exactly. Version 2 is
- * this file's expansion (GRYT-453).
+ * this file's expansion (GRYT-453). Version 3 adds `manage_bots` (GRYT-460).
  */
-export const PERMISSION_SCHEMA_VERSION = 2;
+export const PERMISSION_SCHEMA_VERSION = 3;
 
 export const PERMISSION_BACKFILLS: readonly PermissionBackfill[] = [
   // Had no gate before: anybody admitted to the server could do all four.
@@ -326,6 +342,10 @@ export const PERMISSION_BACKFILLS: readonly PermissionBackfill[] = [
   { version: 2, permission: "manage_sidebar", grantedWith: "manage_channels" },
   { version: 2, permission: "replace_identity", grantedWith: "manage_server" },
   { version: 2, permission: "view_server_status", grantedWith: "view_audit_log" },
+
+  // Version 3 (GRYT-460). Bots did not exist, so nobody had this — and it goes
+  // to whoever holds `manage_server`, which by default is the owner alone.
+  { version: 3, permission: "manage_bots", grantedWith: "manage_server" },
 ];
 
 /**
