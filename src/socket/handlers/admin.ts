@@ -1,19 +1,13 @@
 import consola from "consola";
 import type { HandlerContext, EventHandlerMap } from "./types";
-import type { JoinPolicy } from "../../db/interfaces";
 import { requireAuth, requireOutranks } from "../middleware/auth";
 import { broadcastServerUiUpdate, sendEmojiQueueStateToSocket } from "../utils/server";
-import { invalidateSystemChannelCache } from "../utils/systemMessages";
-import { VALID_CENSOR_STYLES, type CensorStyle } from "../../utils/profanityFilter";
-import { syncMdnsAdvertising } from "../../mdns";
+import { applyServerSettings, settingsView } from "../../settings/serverSettings";
 import { syncAllClients, broadcastMemberList } from "../utils/clients";
 import {
   getServerConfig,
   createServerConfigIfNotExists,
   updateServerConfig,
-  DEFAULT_AVATAR_MAX_BYTES,
-  DEFAULT_EMOJI_MAX_BYTES,
-  DEFAULT_UPLOAD_MAX_BYTES,
   createServerInvite,
   listServerInvites,
   getServerInvite,
@@ -133,23 +127,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         if (!cfg) cfg = (await createServerConfigIfNotExists()).config;
 
         const isOwner = !!(cfg.owner_gryt_user_id && cfg.owner_gryt_user_id === client.grytUserId);
-        socket.emit("server:settings", {
-          serverId,
-          isOwner,
-          isConfigured: !!cfg.is_configured,
-          displayName: cfg.display_name || process.env.SERVER_NAME || "Unknown Server",
-          description: cfg.description || process.env.SERVER_DESCRIPTION || "A Gryt server",
-          iconUrl: cfg.icon_url || null,
-          avatarMaxBytes: cfg.avatar_max_bytes ?? DEFAULT_AVATAR_MAX_BYTES,
-          uploadMaxBytes: cfg.upload_max_bytes ?? DEFAULT_UPLOAD_MAX_BYTES,
-          emojiMaxBytes: cfg.emoji_max_bytes ?? DEFAULT_EMOJI_MAX_BYTES,
-          profanityMode: cfg.profanity_mode ?? "censor",
-          profanityCensorStyle: cfg.profanity_censor_style ?? "emoji",
-          systemChannelId: cfg.system_channel_id ?? null,
-          lanOpen: !!cfg.lan_open,
-          joinPolicy: cfg.join_policy ?? "invite",
-          discoverable: cfg.discoverable !== false,
-        });
+        socket.emit("server:settings", settingsView(cfg, serverId, isOwner));
       } catch (e) {
         consola.error("server:settings:get failed", e);
         socket.emit("server:error", { error: "settings_failed", message: "Failed to load settings." });
@@ -189,133 +167,16 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         const auth = await requireAuth(socket, payload, { requiredRole: "owner" });
         if (!auth) return;
 
-        const displayName = typeof payload.displayName === "string" ? payload.displayName.trim().slice(0, 80) : undefined;
-        const description = typeof payload.description === "string" ? payload.description.trim().slice(0, 300) : undefined;
-        const iconUrl = typeof payload.iconUrl === "string" ? payload.iconUrl.trim().slice(0, 500) : payload.iconUrl === null ? null : undefined;
-
-        const clampBytes = (v: number | null | undefined, min: number, max: number): number | null | undefined => {
-          if (v === undefined) return undefined;
-          if (v === null) return null;
-          const n = typeof v === "number" ? v : Number(v);
-          if (!Number.isFinite(n)) return undefined;
-          return Math.max(min, Math.min(max, Math.floor(n)));
-        };
-
-        /**
-         * Same as clampBytes, except zero survives.
-         *
-         * The enforcement code has always treated `maxBytes > 0` as "there is a
-         * limit", so zero has always meant unlimited — but the clamp's 256 KB
-         * floor meant zero could never be stored, and that branch was dead from
-         * the day it was written. Uploads stream to storage now, so unlimited
-         * costs bounded memory rather than the file's size, and the branch can
-         * finally be reached.
-         *
-         * Only uploads. Avatars and emoji are still held in memory to be
-         * re-encoded, so unlimited would mean unlimited RAM there.
-         */
-        const clampBytesAllowingZero = (v: number | null | undefined, min: number, max: number): number | null | undefined => {
-          const n = typeof v === "number" ? v : Number(v);
-          if (v !== undefined && v !== null && Number.isFinite(n) && Math.floor(n) === 0) return 0;
-          return clampBytes(v, min, max);
-        };
-
-        // 200 MB on both, matching uploads' old backstop. Generous on purpose:
-        // an avatar or emoji is re-encoded on the way in, so what an operator is
-        // really choosing is how large a source file they will accept, not how
-        // much they will store. What bounds the memory is MAX_INPUT_PIXELS in
-        // imageValidation, not this number — see the limitInputPixels on every
-        // sharp call in routes/uploads.ts.
-        const avatarMaxBytes = clampBytes(payload.avatarMaxBytes, 256 * 1024, 200 * 1024 * 1024);
-        // No upper clamp: the operator's number is the operator's number, and
-        // the ceiling that used to sit above it here and in multer is gone.
-        const uploadMaxBytes = clampBytesAllowingZero(payload.uploadMaxBytes, 256 * 1024, Number.MAX_SAFE_INTEGER);
-        const emojiMaxBytes = clampBytes(payload.emojiMaxBytes, 64 * 1024, 200 * 1024 * 1024);
-
-        const validProfanityModes = ["off", "flag", "censor", "block"] as const;
-        const profanityMode = typeof payload.profanityMode === "string" && validProfanityModes.includes(payload.profanityMode as typeof validProfanityModes[number])
-          ? payload.profanityMode as typeof validProfanityModes[number]
-          : undefined;
-
-        const profanityCensorStyle: CensorStyle | undefined =
-          typeof payload.profanityCensorStyle === "string" && VALID_CENSOR_STYLES.includes(payload.profanityCensorStyle as CensorStyle)
-            ? payload.profanityCensorStyle as CensorStyle
-            : undefined;
-
-        const systemChannelId: string | null | undefined =
-          payload.systemChannelId === null ? null
-            : typeof payload.systemChannelId === "string" ? payload.systemChannelId.trim().slice(0, 64) || null
-              : undefined;
-
-        const lanOpen: boolean | undefined =
-          typeof payload.lanOpen === "boolean" ? payload.lanOpen : undefined;
-
-        // Only the known values mean anything, and anything else is dropped
-        // rather than coerced — a typo should leave the policy alone, not
-        // silently reset it to the default.
-        const joinPolicy: JoinPolicy | undefined =
-          payload.joinPolicy === "open" || payload.joinPolicy === "invite" || payload.joinPolicy === "request"
-            ? payload.joinPolicy
-            : undefined;
-
-        const discoverable: boolean | undefined =
-          typeof payload.discoverable === "boolean" ? payload.discoverable : undefined;
-
-        const updated = await updateServerConfig({
-          displayName: displayName === undefined ? undefined : (displayName!.length > 0 ? displayName : null),
-          description: description === undefined ? undefined : (description!.length > 0 ? description : null),
-          iconUrl,
-          isConfigured: true,
-          avatarMaxBytes,
-          uploadMaxBytes,
-          emojiMaxBytes,
-          profanityMode,
-          profanityCensorStyle,
-          systemChannelId,
-          lanOpen,
-          joinPolicy,
-          discoverable,
+        // Validation, the row write and every side effect live in
+        // settings/serverSettings.ts, because the management endpoint applies
+        // the same change and two copies would drift on the first thing either
+        // one forgot.
+        const updated = await applyServerSettings(payload, {
+          serverUserId: auth.tokenPayload.serverUserId,
+          via: "client",
         });
 
-        if (systemChannelId !== undefined) invalidateSystemChannelCache();
-
-        // Take effect immediately rather than at the next restart: turning
-        // discoverability off should withdraw the LAN advertisement there and
-        // then, and turning it back on should re-publish it.
-        if (discoverable !== undefined) {
-          void syncMdnsAdvertising().catch((e) =>
-            consola.warn("mDNS: re-sync after a settings change failed", e)
-          );
-        }
-
-        insertServerAudit({
-          actorServerUserId: auth.tokenPayload.serverUserId,
-          action: "settings_update",
-          target: null,
-          meta: {
-            displayName: displayName ?? null,
-            description: description ?? null,
-          },
-        }).catch((e) => consola.warn("audit log write failed", e));
-
-        socket.emit("server:settings", {
-          serverId,
-          isOwner: true,
-          isConfigured: !!updated.is_configured,
-          displayName: updated.display_name || process.env.SERVER_NAME || "Unknown Server",
-          description: updated.description || process.env.SERVER_DESCRIPTION || "A Gryt server",
-          iconUrl: updated.icon_url || null,
-          avatarMaxBytes: updated.avatar_max_bytes ?? DEFAULT_AVATAR_MAX_BYTES,
-          uploadMaxBytes: updated.upload_max_bytes ?? DEFAULT_UPLOAD_MAX_BYTES,
-          emojiMaxBytes: updated.emoji_max_bytes ?? DEFAULT_EMOJI_MAX_BYTES,
-          profanityMode: updated.profanity_mode ?? "censor",
-          profanityCensorStyle: updated.profanity_censor_style ?? "emoji",
-          systemChannelId: updated.system_channel_id ?? null,
-          lanOpen: !!updated.lan_open,
-          joinPolicy: updated.join_policy ?? "invite",
-          discoverable: updated.discoverable !== false,
-        });
-        broadcastServerUiUpdate("settings");
+        socket.emit("server:settings", settingsView(updated, serverId, true));
       } catch (e) {
         consola.error("server:settings:update failed", e);
         socket.emit("server:error", { error: "settings_update_failed", message: "Failed to update settings." });
