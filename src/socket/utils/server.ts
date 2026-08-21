@@ -2,7 +2,7 @@ import consola from "consola";
 import { Server, Socket } from "socket.io";
 import { Clients } from "../../types";
 import type { JoinPolicy, RoleDefinitionRecord } from "../../db/interfaces";
-import { FALLBACK_ROLE_ID } from "../../constants/permissions";
+import { FALLBACK_ROLE_ID, PERMISSIONS } from "../../constants/permissions";
 import { getEffectiveStanding } from "../../services/permissions";
 import { getAcceptedIdentityTiers } from "../../auth/identity";
 import { getVoiceSeatLimit } from "../../utils/voiceSeats";
@@ -352,6 +352,17 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
       is_owner: isOwner,
       role,
       permissions,
+      /**
+       * Every permission this build knows about, alongside the ones this
+       * caller holds.
+       *
+       * Without it a newer client cannot tell "the server denied this" from
+       * "the server has never heard of this". Both look like an absence in
+       * `permissions`, and reading the second as a denial is how a client that
+       * learns about `read_messages` before its server does blanks out every
+       * channel on it.
+       */
+      permission_catalogue: PERMISSIONS,
       roles: roleDefinitions.map((r) => ({
         id: r.role_id,
         name: r.name,
