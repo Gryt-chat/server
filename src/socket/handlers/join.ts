@@ -2,6 +2,7 @@ import consola from "consola";
 import type { HandlerContext, EventHandlerMap } from "./types";
 import { syncAllClients, broadcastMemberList, countOtherSessions, verifyClient } from "../utils/clients";
 import { sendServerDetails } from "../utils/server";
+import { remindOutdatedWindowsClient } from "../utils/outdatedClient";
 import { postSystemMessage, formatJoinMessage } from "../utils/systemMessages";
 import { createChallenge, consumeChallenge, verifyCertificate, verifyAssertion, verifyIdentityLink, identityTierAccepted, identityTierOf, IdentityVerificationError, type BotDeclaration, type IdentityTier, looksLikeABotName } from "../../auth/identity";
 import { normalizePermissions } from "../../constants/permissions";
@@ -785,6 +786,17 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
         if (!isActiveMember) {
           postSystemMessage(io, clientsInfo, formatJoinMessage(user.nickname, user.server_user_id));
         }
+
+        // Outside the isActiveMember branch on purpose: someone who has been
+        // a member for months is exactly who is stuck on a build that cannot
+        // update, and they never join for the first time again.
+        remindOutdatedWindowsClient(
+          io,
+          clientsInfo,
+          socket.handshake.headers["user-agent"],
+          user.nickname,
+          user.server_user_id,
+        );
       } catch (err) {
         consola.error("server:verify failed", err);
         socket.emit("server:error", { error: "join_failed", message: "Failed to join server." });
