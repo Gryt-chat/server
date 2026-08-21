@@ -2,6 +2,7 @@ export { initSqlite } from "./connection";
 export * from "./users";
 export * from "./messages";
 export * from "./servers";
+export * from "./roleDefinitions";
 export * from "./channels";
 export * from "./invites";
 export * from "./joinRequests";

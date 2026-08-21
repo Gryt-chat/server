@@ -5,12 +5,12 @@ import { v4 as uuidv4 } from "uuid";
 
 import { putObject, deleteObject } from "../storage";
 import { requireBearerToken } from "../middleware/requireBearerToken";
+import { ensurePermission } from "../middleware/requirePermission";
 import { broadcastCustomEmojisUpdate } from "../socket";
 import {
   DEFAULT_EMOJI_MAX_BYTES,
   getEmoji,
   getServerConfig,
-  getServerRole,
   insertEmoji,
   listEmojis,
 } from "../db";
@@ -185,11 +185,7 @@ export function registerBttvRoutes(router: Router): void {
       }
       Promise.resolve()
         .then(async () => {
-          const role = await getServerRole(serverUserId);
-          if (role !== "owner" && role !== "admin") {
-            res.status(403).json({ error: "forbidden", message: "Only admins can import emojis." });
-            return;
-          }
+          if (!(await ensurePermission(req, res, "manage_emojis"))) return;
 
           const existingEmojis = await listEmojis();
           const usedNames = new Set(existingEmojis.map(e => e.name));

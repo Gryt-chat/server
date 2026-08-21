@@ -5,11 +5,11 @@ import { unzipSync } from "fflate";
 
 import { putObject } from "../storage";
 import { requireBearerToken } from "../middleware/requireBearerToken";
+import { ensurePermission } from "../middleware/requirePermission";
 import { broadcastEmojiQueueUpdate } from "../socket";
 import {
   DEFAULT_EMOJI_MAX_BYTES,
   getServerConfig,
-  getServerRole,
   insertEmojiJob,
   listEmojiJobs,
 } from "../db";
@@ -32,11 +32,7 @@ export function registerStagingRoutes(router: Router): void {
 
       Promise.resolve()
         .then(async () => {
-          const role = await getServerRole(serverUserId);
-          if (role !== "owner" && role !== "admin") {
-            res.status(403).json({ error: "forbidden", message: "Only admins can view the emoji queue." });
-            return;
-          }
+          if (!(await ensurePermission(req, res, "manage_emojis"))) return;
 
           const limitRaw = req.query?.limit;
           const limit = typeof limitRaw === "string" ? Number(limitRaw) : 150;
@@ -63,11 +59,7 @@ export function registerStagingRoutes(router: Router): void {
 
       Promise.resolve()
         .then(async () => {
-          const role = await getServerRole(serverUserId);
-          if (role !== "owner" && role !== "admin") {
-            res.status(403).json({ error: "forbidden", message: "Only admins can upload custom emojis." });
-            return;
-          }
+          if (!(await ensurePermission(req, res, "manage_emojis"))) return;
 
           const cfg = await getServerConfig().catch(() => null);
           const maxEmojiBytes = cfg?.emoji_max_bytes ?? DEFAULT_EMOJI_MAX_BYTES;

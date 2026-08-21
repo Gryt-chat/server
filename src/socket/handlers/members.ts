@@ -1,6 +1,7 @@
 import consola from "consola";
 import type { HandlerContext, EventHandlerMap } from "./types";
 import { getUserByServerId, updateUserNickname } from "../../db";
+import { hasPermission } from "../../services/permissions";
 import { buildMemberList, syncAllClients, broadcastMemberList } from "../utils/clients";
 
 export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
@@ -46,6 +47,18 @@ export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
           : undefined;
 
         if (nickname !== undefined && nickname.length > 0) {
+          // Only checked when a name is actually being set. This event is also
+          // the client's way of asking for its own profile back, and refusing
+          // that would break the read for everybody who cannot write.
+          const mayRename = await hasPermission(
+            serverUserId,
+            "change_nickname",
+            clientsInfo[clientId].grytUserId,
+          );
+          if (!mayRename) {
+            socket.emit("profile:error", "You do not have permission to change your nickname here.");
+            return;
+          }
           await updateUserNickname(serverUserId, nickname);
           clientsInfo[clientId].nickname = nickname;
         }

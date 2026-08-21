@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { dirname, join } from "path";
 
 import { AVATAR_THUMB_PX } from "../../constants/media";
+import { BUILT_IN_ROLES } from "../../constants/permissions";
 
 /**
  * Re-exported so the query modules can type their dynamic parameter arrays
@@ -86,6 +87,29 @@ function createSchema(d: DatabaseSync): void {
     CREATE TABLE IF NOT EXISTS roles (
       server_user_id TEXT PRIMARY KEY,
       role TEXT NOT NULL DEFAULT 'member',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    -- What a role is, as opposed to who holds one. roles.role points at role_id
+    -- here, deliberately without a foreign key: a role that is deleted while
+    -- somebody holds it leaves that row dangling, and the read path resolves a
+    -- dangling id to the fallback role. ON DELETE SET DEFAULT would have to
+    -- name a default in the schema, and there is no single right answer -- the
+    -- fallback is a policy decision that belongs in code.
+    --
+    -- Permissions are a JSON array of strings rather than a bitfield or a join
+    -- table. A bitfield saves nothing at this size and turns "which permissions
+    -- does this role have" into an archaeology exercise the first time a bit is
+    -- reused; a join table is three more queries for a row that is always read
+    -- whole.
+    CREATE TABLE IF NOT EXISTS role_definitions (
+      role_id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      color TEXT,
+      rank INTEGER NOT NULL DEFAULT 0,
+      permissions TEXT NOT NULL DEFAULT '[]',
+      is_system INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -379,7 +403,54 @@ function runMigrations(d: DatabaseSync): void {
   if (!hasColumn(d, "users", "server_mute_expires_at")) {
     d.exec("ALTER TABLE users ADD COLUMN server_mute_expires_at TEXT");
   }
+  // Which role a first-time joiner gets, split by identity tier. Both start at
+  // 'member' — the role everybody used to be given — so the columns appearing
+  // changes nothing until somebody edits them.
+  if (!hasColumn(d, "server_config", "default_role_account")) {
+    d.exec("ALTER TABLE server_config ADD COLUMN default_role_account TEXT NOT NULL DEFAULT 'member'");
+  }
+  if (!hasColumn(d, "server_config", "default_role_local")) {
+    d.exec("ALTER TABLE server_config ADD COLUMN default_role_local TEXT NOT NULL DEFAULT 'member'");
+  }
+
   d.prepare("UPDATE server_config SET avatar_thumb_px = ?").run(AVATAR_THUMB_PX);
+
+  seedBuiltInRoles(d);
+}
+
+/**
+ * Write the five roles that ship with the server, if they are missing.
+ *
+ * INSERT OR IGNORE rather than a replace: these rows are editable, and running
+ * this on every start is what makes a role somebody deleted by hand come back —
+ * but only the row, never the permissions an operator chose. A build that adds
+ * a sixth built-in gets it on the next start without a version stamp to
+ * maintain.
+ *
+ * The one thing that is rewritten every start is `is_system`, because that flag
+ * is this file's opinion and not the operator's: a build that promotes a role
+ * to built-in has to be able to say so.
+ */
+function seedBuiltInRoles(d: DatabaseSync): void {
+  const now = new Date().toISOString();
+  const insert = d.prepare(
+    `INSERT OR IGNORE INTO role_definitions (role_id, name, color, rank, permissions, is_system, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
+  );
+  const markSystem = d.prepare(`UPDATE role_definitions SET is_system = 1 WHERE role_id = ?`);
+
+  for (const role of BUILT_IN_ROLES) {
+    insert.run(
+      role.id,
+      role.name,
+      role.color,
+      role.rank,
+      JSON.stringify(role.permissions),
+      now,
+      now,
+    );
+    markSystem.run(role.id);
+  }
 }
 
 export function toIso(d: Date): string {

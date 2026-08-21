@@ -4,7 +4,6 @@ import type { NextFunction, Request, Response } from "express";
 import {
   createWebhook,
   deleteWebhook,
-  getServerRole,
   getWebhookByIdAndToken,
   getWebhookById,
   insertMessage,
@@ -12,6 +11,7 @@ import {
   updateWebhook,
 } from "../db";
 import { requireBearerToken } from "../middleware/requireBearerToken";
+import { ensurePermission } from "../middleware/requirePermission";
 import { broadcastChatNew } from "../socket";
 import { checkRateLimit, type RateLimitRule } from "../utils/rateLimiter";
 
@@ -99,18 +99,7 @@ webhooksRouter.post(
 // ── Protected: webhook management ────────────────────────────────
 
 function requireAdmin(req: Request, res: Response): Promise<boolean> {
-  const serverUserId = req.tokenPayload?.serverUserId;
-  if (!serverUserId) {
-    res.status(401).json({ error: "auth_required" });
-    return Promise.resolve(false);
-  }
-  return getServerRole(serverUserId).then((role) => {
-    if (role !== "owner" && role !== "admin") {
-      res.status(403).json({ error: "forbidden", message: "Only admins can manage webhooks." });
-      return false;
-    }
-    return true;
-  });
+  return ensurePermission(req, res, "manage_webhooks");
 }
 
 // GET /api/webhooks

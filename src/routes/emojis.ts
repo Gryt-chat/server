@@ -6,13 +6,13 @@ import { unzipSync } from "fflate";
 
 import { putObject, deleteObject, getObject } from "../storage";
 import { requireBearerToken } from "../middleware/requireBearerToken";
+import { ensurePermission } from "../middleware/requirePermission";
 import { broadcastCustomEmojisUpdate } from "../socket";
 import {
   DEFAULT_EMOJI_MAX_BYTES,
   deleteEmoji,
   getEmoji,
   getServerConfig,
-  getServerRole,
   insertEmoji,
   listEmojis,
   renameEmoji,
@@ -65,13 +65,7 @@ emojisRouter.post(
 
     Promise.resolve()
       .then(async () => {
-        const role = await getServerRole(serverUserId);
-        consola.debug("[EmojiUpload] User role:", role);
-        if (role !== "owner" && role !== "admin") {
-          console.warn("[EmojiUpload] Forbidden — role is not owner/admin:", role);
-          res.status(403).json({ error: "forbidden", message: "Only admins can upload custom emojis." });
-          return;
-        }
+        if (!(await ensurePermission(req, res, "manage_emojis"))) return;
 
         const cfg = await getServerConfig().catch(() => null);
         const maxEmojiBytes = cfg?.emoji_max_bytes ?? DEFAULT_EMOJI_MAX_BYTES;
@@ -272,11 +266,7 @@ emojisRouter.patch(
 
     Promise.resolve()
       .then(async () => {
-        const role = await getServerRole(serverUserId);
-        if (role !== "owner" && role !== "admin") {
-          res.status(403).json({ error: "forbidden", message: "Only admins can rename custom emojis." });
-          return;
-        }
+        if (!(await ensurePermission(req, res, "manage_emojis"))) return;
 
         const existing = await getEmoji(oldName);
         if (!existing) {
@@ -309,11 +299,7 @@ emojisRouter.delete(
 
     Promise.resolve()
       .then(async () => {
-        const role = await getServerRole(serverUserId);
-        if (role !== "owner" && role !== "admin") {
-          res.status(403).json({ error: "forbidden", message: "Only admins can delete emojis." });
-          return;
-        }
+        if (!(await ensurePermission(req, res, "manage_emojis"))) return;
 
         const allEmojis = await listEmojis();
         if (allEmojis.length === 0) {
@@ -353,11 +339,7 @@ emojisRouter.delete(
 
     Promise.resolve()
       .then(async () => {
-        const role = await getServerRole(serverUserId);
-        if (role !== "owner" && role !== "admin") {
-          res.status(403).json({ error: "forbidden", message: "Only admins can delete custom emojis." });
-          return;
-        }
+        if (!(await ensurePermission(req, res, "manage_emojis"))) return;
 
         const emoji = await getEmoji(name);
         if (!emoji) {

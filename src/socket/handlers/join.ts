@@ -3,7 +3,8 @@ import type { HandlerContext, EventHandlerMap } from "./types";
 import { syncAllClients, broadcastMemberList, countOtherSessions, verifyClient } from "../utils/clients";
 import { sendServerDetails } from "../utils/server";
 import { postSystemMessage, formatJoinMessage } from "../utils/systemMessages";
-import { createChallenge, consumeChallenge, verifyCertificate, verifyAssertion, verifyIdentityLink, identityTierAccepted, IdentityVerificationError, type IdentityTier } from "../../auth/identity";
+import { createChallenge, consumeChallenge, verifyCertificate, verifyAssertion, verifyIdentityLink, identityTierAccepted, identityTierOf, IdentityVerificationError, type IdentityTier } from "../../auth/identity";
+import { defaultRoleForTier } from "../../services/permissions";
 import { readServiceState, serviceStateVarName } from "../../config/serviceState";
 import { generateAccessToken, TokenPayload } from "../../utils/jwt";
 import {
@@ -515,7 +516,12 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
 
         try {
           const existingRole = await getServerRole(user.server_user_id);
-          if (!existingRole) await setServerRole(user.server_user_id, isOwner ? "owner" : "member");
+          // A first-time joiner lands on the default for their identity tier —
+          // which is how "guests may read, accounts may talk" is expressed. An
+          // existing member keeps whatever they were given; changing the
+          // default must not re-sort the people already here.
+          const joinRole = defaultRoleForTier(identityTierOf(grytUserId), cfg);
+          if (!existingRole) await setServerRole(user.server_user_id, isOwner ? "owner" : joinRole);
           else if (isOwner && existingRole !== "owner") await setServerRole(user.server_user_id, "owner");
         } catch (e) {
           consola.warn("Failed to ensure role row:", e);
