@@ -219,6 +219,7 @@ const TOKEN_GATES: {
   { event: "server:bots:register", permission: "manage_bots", payload: { nickname: "Probe" } },
   { event: "server:bots:update", permission: "manage_bots", payload: { registrationId: "nope" } },
   { event: "server:bots:revoke", permission: "manage_bots", payload: { registrationId: "nope" } },
+  { event: "server:bots:policy:set", permission: "manage_bots", payload: { policy: "disabled" } },
 ];
 
 describe("every gated event refuses a role without the permission", () => {

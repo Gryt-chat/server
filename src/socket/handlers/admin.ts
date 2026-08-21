@@ -203,8 +203,13 @@ async function roleEditorState() {
  * list is a token that lives as long as the list does.
  */
 async function botsView() {
-  const bots = await listBots();
+  const [bots, cfg] = await Promise.all([listBots(), getServerConfig()]);
   return {
+    // Whether a bot nobody has heard of may leave a knock. Sent with the list
+    // rather than with the server settings, because it is the setting this
+    // screen is about and an operator with `manage_bots` and nothing else
+    // should be able to change it.
+    policy: cfg?.bot_join_policy ?? "disabled",
     bots: bots.map((b) => ({
       registrationId: b.registration_id,
       botId: b.bot_id,
@@ -1048,6 +1053,31 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       } catch (e) {
         consola.error("server:bots:revoke failed", e);
         socket.emit("server:error", { error: "bots_failed", message: "Failed to revoke the bot." });
+      }
+    },
+
+    'server:bots:policy:set': async (payload: { accessToken: string; policy: string }) => {
+      try {
+        const rl = rlCheck("server:bots:policy:set", ctx, RL_SETTINGS);
+        if (!rl.allowed) { emitRateLimited(ctx, rl); return; }
+
+        const auth = await requireAuth(socket, payload, { permission: "manage_bots" });
+        if (!auth) return;
+
+        const policy = payload?.policy === "request" ? "request" : "disabled";
+        await updateServerConfig({ botJoinPolicy: policy });
+
+        insertServerAudit({
+          actorServerUserId: auth.tokenPayload.serverUserId,
+          action: "bot_policy_set",
+          target: null,
+          meta: { policy },
+        }).catch((e) => consola.warn("audit log write failed", e));
+
+        socket.emit("server:bots", await botsView());
+      } catch (e) {
+        consola.error("server:bots:policy:set failed", e);
+        socket.emit("server:error", { error: "bots_failed", message: "Failed to change the setting." });
       }
     },
 
