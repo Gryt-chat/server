@@ -14,6 +14,9 @@ export interface HandlerContext {
   clientsInfo: Clients;
   sfuClient: SFUClient | null;
   getClientIp: () => string;
+  /** Whether getClientIp's answer is this client's own address rather than a
+   *  proxy's. Only trust an address for an access decision when this is true. */
+  clientAddressIsOwn: () => boolean;
 }
 
 type SocketListener = Parameters<Socket["on"]>[1];

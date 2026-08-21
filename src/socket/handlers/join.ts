@@ -82,10 +82,31 @@ function inviteArrivalRule(): RateLimitRule {
   return { limit, windowMs: 3_600_000 };
 }
 
+
+/**
+ * Said once per process, not once per join, because a server in this state
+ * hits it on every single connection and a log that scrolls is a log nobody
+ * reads.
+ */
+let warnedLanOpenBehindProxy = false;
+function warnLanOpenBehindProxy(ip: string): void {
+  if (warnedLanOpenBehindProxy) return;
+  warnedLanOpenBehindProxy = true;
+  consola.warn(
+    `"Allow anyone on LAN to join" is on, but this request arrived through a ` +
+      `proxy and GRYT_TRUSTED_PROXY_HOPS is 0, so the address available here ` +
+      `(${ip}) belongs to the proxy rather than to the client. Treating that ` +
+      `as a local address would let anybody who can reach the proxy join ` +
+      `without an invite, so the invite requirement still applies. Set ` +
+      `GRYT_TRUSTED_PROXY_HOPS to the number of proxies in front of this ` +
+      `server to make LAN open join work as intended.`
+  );
+}
+
 // ── Handlers ────────────────────────────────────────────────────────
 
 export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
-  const { io, socket, clientId, serverId, clientsInfo, getClientIp } = ctx;
+  const { io, socket, clientId, serverId, clientsInfo, getClientIp, clientAddressIsOwn } = ctx;
 
   const helpers = registerJoinHelpers(ctx);
 
@@ -410,10 +431,13 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
             usedInviteCode = inviteCode;
             clearInviteCooldown(inviteKey);
             clearInviteIpCooldown(ip);
-          } else if (cfg?.lan_open && isPrivateIp(ip)) {
+          } else if (cfg?.lan_open && isPrivateIp(ip) && clientAddressIsOwn()) {
             clearInviteCooldown(inviteKey);
             clearInviteIpCooldown(ip);
           } else {
+            if (cfg?.lan_open && isPrivateIp(ip) && !clientAddressIsOwn()) {
+              warnLanOpenBehindProxy(ip);
+            }
             // The claim stays ahead of the policy check, and has to. It is what
             // makes the first person through the door the owner, and on an open
             // server that person arrives without an invite like everybody else
