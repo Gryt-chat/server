@@ -555,7 +555,7 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           clientsInfo[clientId].isServerDeafened = moderation.isServerDeafened;
         }
 
-        verifyClient(socket);
+        await verifyClient(socket, clientsInfo);
 
         const otherCount = countOtherSessions(clientsInfo, clientId, user.gryt_user_id);
         if (otherCount > 0) {

@@ -49,6 +49,8 @@ describe("built-in roles", () => {
     assert.ok(admin);
     assert.equal(admin.permissions.includes("manage_roles"), false);
     assert.equal(admin.permissions.includes("manage_server"), false);
+    // Carved out of manage_server, so it must not arrive with the rest.
+    assert.equal(admin.permissions.includes("replace_identity"), false);
     assert.equal(admin.permissions.includes("ban_members"), true);
   });
 
@@ -60,11 +62,21 @@ describe("built-in roles", () => {
     // Bans, reports and the audit log were admin, and stay admin.
     assert.equal(mod.permissions.includes("ban_members"), false);
     assert.equal(mod.permissions.includes("manage_reports"), false);
+    // Split out of mute, so a moderator keeps both halves of what it used to do.
+    assert.equal(mod.permissions.includes("deafen_members"), true);
+    assert.equal(mod.permissions.includes("disconnect_members"), true);
   });
 
-  it("makes a guest read-only", async () => {
+  it("makes a guest read-only, which includes reading", async () => {
     const guest = await getRoleDefinition("guest");
-    assert.deepEqual(guest?.permissions, []);
+    assert.ok(guest);
+    // Empty until reading became a permission of its own. "Read-only" that
+    // cannot read is the one way this role can be wrong.
+    assert.equal(guest.permissions.includes("read_messages"), true);
+    assert.equal(guest.permissions.includes("view_members"), true);
+    assert.equal(guest.permissions.includes("send_messages"), false);
+    assert.equal(guest.permissions.includes("join_voice"), false);
+    assert.equal(guest.permissions.includes("attach_files"), false);
   });
 });
 
@@ -91,7 +103,13 @@ describe("resolving what somebody may do", () => {
 
     await updateRoleDefinition("member", {
       permissions: [
+        "read_messages",
+        "view_members",
+        "report_messages",
+        "use_link_previews",
         "send_messages",
+        "edit_own_messages",
+        "delete_own_messages",
         "attach_files",
         "add_reactions",
         "join_voice",

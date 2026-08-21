@@ -52,7 +52,7 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        const auth = await requireAuth(socket, payload);
+        const auth = await requireAuth(socket, payload, { permission: "report_messages" });
         if (!auth) return;
 
         const message = await getMessageById(payload.conversationId, payload.messageId);
@@ -113,7 +113,7 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        const auth = await requireAuth(socket, payload, { permission: "manage_reports" });
+        const auth = await requireAuth(socket, payload, { permission: "view_reports" });
         if (!auth) return;
 
         const aggregated = await getAggregatedPendingReports();

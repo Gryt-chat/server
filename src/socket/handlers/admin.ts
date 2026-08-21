@@ -941,7 +941,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
 
     'server:bans:list': async (payload: { accessToken: string }) => {
       try {
-        const auth = await requireAuth(socket, payload, { permission: "ban_members" });
+        const auth = await requireAuth(socket, payload, { permission: "view_bans" });
         if (!auth) return;
         const bans = await listBans();
         socket.emit("server:bans", { serverId, bans });
@@ -998,7 +998,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           socket.emit("server:error", { error: "invalid_payload", message: "targetServerUserId and deafened required." });
           return;
         }
-        const auth = await requireAuth(socket, payload, { permission: "mute_members" });
+        const auth = await requireAuth(socket, payload, { permission: "deafen_members" });
         if (!auth) return;
 
         const targetId = payload.targetServerUserId.trim();
@@ -1035,7 +1035,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           socket.emit("server:error", { error: "invalid_payload", message: "targetServerUserId and newGrytUserId required." });
           return;
         }
-        const auth = await requireAuth(socket, payload, { permission: "manage_server" });
+        const auth = await requireAuth(socket, payload, { permission: "replace_identity" });
         if (!auth) return;
 
         const targetId = payload.targetServerUserId.trim();
@@ -1095,7 +1095,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
 
     'server:version:check': async (payload: { accessToken: string }) => {
       try {
-        const auth = await requireAuth(socket, payload, { permission: "view_audit_log" });
+        const auth = await requireAuth(socket, payload, { permission: "view_server_status" });
         if (!auth) return;
         const status = await getVersionStatus();
         socket.emit("server:version:status", status);

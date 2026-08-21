@@ -3,6 +3,7 @@ import { randomUUID } from "crypto";
 import type { HandlerContext, EventHandlerMap } from "./types";
 import type { SFUClient } from "../../sfu/client";
 import { requireAuth } from "../middleware/auth";
+import { socketMay } from "../utils/standing";
 import {
   insertMessage,
   listMessages,
@@ -43,7 +44,7 @@ setInterval(() => {
   for (const [nonce, entry] of recentNonces) {
     if (now - entry.createdAt > NONCE_TTL_MS) recentNonces.delete(nonce);
   }
-}, 60_000);
+}, 60_000).unref();
 
 async function getMessagesCached(conversationId: string, limit = 50): Promise<MessageRecord[]> {
   const now = Date.now();
@@ -351,6 +352,18 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
       try {
         const ip = getClientIp();
         const userId = clientsInfo[clientId]?.serverUserId;
+        // No access token on this event — the client asks for history the
+        // moment a channel opens, off a socket that has already been verified.
+        // So the permission is read from who the socket is, the same way the
+        // voice events do it.
+        if (!(await socketMay(clientsInfo, clientId, "read_messages"))) {
+          socket.emit("chat:error", {
+            error: "forbidden",
+            message: "You do not have permission to read this channel.",
+            permission: "read_messages",
+          });
+          return;
+        }
         const rl = checkRateLimit("chat:fetch", userId, ip, RL_FETCH);
         if (!rl.allowed) {
           socket.emit("chat:error", { error: "rate_limited", retryAfterMs: rl.retryAfterMs, message: `Too fast. Wait ${Math.ceil((rl.retryAfterMs || 0) / 1000)}s.` });
@@ -453,11 +466,18 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         const message = await getMessageById(payload.conversationId, payload.messageId);
         if (!message) { socket.emit("chat:error", "Message not found"); return; }
 
-        if (
-          message.sender_server_id !== auth.tokenPayload.serverUserId &&
-          !auth.permissions.has("manage_messages")
-        ) {
-          socket.emit("chat:error", "You can only delete your own messages");
+        const isOwnMessage = message.sender_server_id === auth.tokenPayload.serverUserId;
+        const mayDelete = isOwnMessage
+          ? auth.permissions.has("delete_own_messages") || auth.permissions.has("manage_messages")
+          : auth.permissions.has("manage_messages");
+        if (!mayDelete) {
+          socket.emit("chat:error", {
+            error: "forbidden",
+            message: isOwnMessage
+              ? "You do not have permission to delete messages here."
+              : "You can only delete your own messages.",
+            permission: isOwnMessage ? "delete_own_messages" : "manage_messages",
+          });
           return;
         }
 
@@ -506,8 +526,21 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         const message = await getMessageById(payload.conversationId, payload.messageId);
         if (!message) { socket.emit("chat:error", "Message not found"); return; }
 
+        // Deliberately own-messages-only, with no permission that opens it up.
+        // Deleting somebody else's message removes their words; editing one
+        // puts different words under their name, and there is no moderation
+        // case that needs it.
         if (message.sender_server_id !== auth.tokenPayload.serverUserId) {
           socket.emit("chat:error", "You can only edit your own messages");
+          return;
+        }
+
+        if (!auth.permissions.has("edit_own_messages")) {
+          socket.emit("chat:error", {
+            error: "forbidden",
+            message: "You do not have permission to edit messages here.",
+            permission: "edit_own_messages",
+          });
           return;
         }
 

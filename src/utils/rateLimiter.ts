@@ -29,7 +29,12 @@ class SlidingWindowLimiter {
 	private scores: Map<string, ScoreData> = new Map();
 
 	constructor(private defaultRule: RateLimitRule) {
-		setInterval(() => this.evictStale(), 60_000);
+		// Unref'd, so importing this module does not by itself hold the process
+		// open — the same reason the nonce sweeper in auth/identity is. The
+		// server runs forever regardless; anything that only wants a handler,
+		// like a test, should be able to exit when it is done. Without it a
+		// test file that imports any handler hangs after the last assertion.
+		setInterval(() => this.evictStale(), 60_000).unref();
 	}
 
 	private evictStale(): void {

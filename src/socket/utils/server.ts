@@ -2,11 +2,12 @@ import consola from "consola";
 import { Server, Socket } from "socket.io";
 import { Clients } from "../../types";
 import type { JoinPolicy, RoleDefinitionRecord } from "../../db/interfaces";
-import { FALLBACK_ROLE_ID } from "../../constants/permissions";
+import { FALLBACK_ROLE_ID, PERMISSIONS } from "../../constants/permissions";
 import { getEffectiveStanding } from "../../services/permissions";
 import { getAcceptedIdentityTiers } from "../../auth/identity";
 import { getVoiceSeatLimit } from "../../utils/voiceSeats";
 import { syncAllClients, broadcastMemberList } from "./clients";
+import { clientMayReceive, refreshAllClientPermissions } from "./standing";
 import {
   DEFAULT_AVATAR_MAX_BYTES,
   DEFAULT_UPLOAD_MAX_BYTES,
@@ -33,6 +34,14 @@ export function setSocketRefs(io: Server, serverId: string, clientsInfo: Clients
 export function broadcastServerUiUpdate(reason: "settings" | "icon" | "other" = "other"): void {
   if (!_io || !_serverId || !_clientsInfo) return;
   consola.info(`Broadcasting server UI update (${reason})`);
+  // Every caller of this is a change that can move somebody's standing — a role
+  // assigned, a definition edited, a joining default changed. Refreshing the
+  // cached copy here is what keeps broadcast delivery in step with it, and it
+  // is deliberately the only place the cache is written after a join.
+  const clients = _clientsInfo;
+  void refreshAllClientPermissions(clients).catch((e) =>
+    consola.warn("refreshing client permissions failed", e),
+  );
   for (const [sid, s] of _io.sockets.sockets) {
     sendInfo(s, _clientsInfo, _serverId).catch((e) => consola.warn("sendInfo failed", e));
     if (_clientsInfo[sid]?.grytUserId) {
@@ -44,9 +53,14 @@ export function broadcastServerUiUpdate(reason: "settings" | "icon" | "other" = 
 }
 
 export function broadcastChatNew(message: Record<string, unknown>): void {
-  if (!_io) return;
-  for (const [, s] of _io.sockets.sockets) {
-    s.emit("chat:new", message);
+  if (!_io || !_clientsInfo) return;
+  for (const [sid, s] of _io.sockets.sockets) {
+    // A role without `read_messages` is in the server and cannot see it, which
+    // has to mean the live stream as well as the history fetch — otherwise the
+    // gate only holds until somebody says something.
+    if (clientMayReceive(_clientsInfo, sid, "read_messages")) {
+      s.emit("chat:new", message);
+    }
   }
 }
 
@@ -338,6 +352,17 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
       is_owner: isOwner,
       role,
       permissions,
+      /**
+       * Every permission this build knows about, alongside the ones this
+       * caller holds.
+       *
+       * Without it a newer client cannot tell "the server denied this" from
+       * "the server has never heard of this". Both look like an absence in
+       * `permissions`, and reading the second as a denial is how a client that
+       * learns about `read_messages` before its server does blanks out every
+       * channel on it.
+       */
+      permission_catalogue: PERMISSIONS,
       roles: roleDefinitions.map((r) => ({
         id: r.role_id,
         name: r.name,

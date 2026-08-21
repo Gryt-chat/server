@@ -23,6 +23,13 @@ export interface Clients {
     status?: UserStatus;
     lastSeen?: Date;
     accessToken?: string; // JWT access token for this server
+    /**
+     * What this member may do, cached for deciding who a broadcast reaches.
+     *
+     * Never used to authorise an action — see socket/utils/standing. Undefined
+     * until the socket has joined.
+     */
+    permissions?: ReadonlySet<import("./constants/permissions").Permission>;
     latencyStats?: {
       estimatedOneWayMs: number | null;
       networkRttMs: number | null;

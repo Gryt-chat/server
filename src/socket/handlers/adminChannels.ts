@@ -222,7 +222,7 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
           socket.emit("server:error", { error: "invalid_payload", message: "itemId and kind required." });
           return;
         }
-        const auth = await requireAuth(socket, payload, { permission: "manage_channels" });
+        const auth = await requireAuth(socket, payload, { permission: "manage_sidebar" });
         if (!auth) return;
 
         await upsertServerSidebarItem({ itemId: payload.itemId, kind: payload.kind, position: payload.position, channelId: payload.channelId ?? null, spacerHeight: payload.spacerHeight ?? null, label: payload.label ?? null });
@@ -242,7 +242,7 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
           socket.emit("server:error", { error: "invalid_payload", message: "itemId required." });
           return;
         }
-        const auth = await requireAuth(socket, payload, { permission: "manage_channels" });
+        const auth = await requireAuth(socket, payload, { permission: "manage_sidebar" });
         if (!auth) return;
 
         await deleteServerSidebarItem(payload.itemId);
@@ -262,7 +262,7 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
           socket.emit("server:error", { error: "invalid_payload", message: "order required." });
           return;
         }
-        const auth = await requireAuth(socket, payload, { permission: "manage_channels" });
+        const auth = await requireAuth(socket, payload, { permission: "manage_sidebar" });
         if (!auth) return;
 
         const items = await listServerSidebarItems();
