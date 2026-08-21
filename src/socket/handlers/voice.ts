@@ -11,6 +11,10 @@ import type { Permission } from "../../constants/permissions";
 
 const RL_REQUEST_ROOM: RateLimitRule = { limit: 10, windowMs: 60_000, scorePerAction: 1, maxScore: 8, scoreDecayMs: 5000 };
 const RL_JOINED_CHANNEL: RateLimitRule = { limit: 10, windowMs: 60_000, scorePerAction: 0.5, maxScore: 6, scoreDecayMs: 3000 };
+// Tighter than a real room request. Nobody needs to run the Doctor twice a
+// minute, and this grants a live SFU credential, so the cheap way to abuse it
+// is to ask repeatedly.
+const RL_DOCTOR_ROOM: RateLimitRule = { limit: 3, windowMs: 60_000, scorePerAction: 2, maxScore: 6, scoreDecayMs: 10_000 };
 
 export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
   const { io, socket, clientId, serverId, clientsInfo, sfuClient, getClientIp } = ctx;
@@ -199,6 +203,84 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
 
       syncAllClients(io, clientsInfo);
       broadcastMemberList(io, clientsInfo, serverId);
+    },
+
+    /**
+     * A room of one, for finding out whether voice works at all.
+     *
+     * The Doctor can already reach the SFU over HTTP and open a WebSocket, but
+     * neither proves media flows: that needs a real ICE negotiation against a
+     * real room, and the selected candidate pair afterwards is the answer to
+     * "which address did media actually take".
+     *
+     * Deliberately not `voice:room:request` with a made-up name, though that
+     * would work — the SFU creates rooms on demand and the room id has always
+     * come from the client. Two things make it its own event. It must not set
+     * `voiceChannelId`, which would put the person in the member list as being
+     * in a channel that does not exist. And it should be refusable on its own,
+     * without taking voice with it.
+     *
+     * Same permission as joining voice for real, because it is the same act
+     * against the same media plane. Somebody who may not speak here has no
+     * business opening a peer connection to find out whether they could.
+     */
+    'voice:doctor:request': async () => {
+      const userId = clientsInfo[clientId]?.serverUserId;
+      consola.info(`[Voice:Doctor] request from client=${clientId} user=${userId}`);
+
+      try {
+        const rl = checkRateLimit("voice:doctor:request", userId, getClientIp(), RL_DOCTOR_ROOM);
+        if (!rl.allowed) {
+          socket.emit("voice:doctor:error", {
+            error: "rate_limited",
+            retryAfterMs: rl.retryAfterMs,
+            message: `Too fast. Wait ${Math.ceil((rl.retryAfterMs || 0) / 1000)}s.`,
+          });
+          return;
+        }
+
+        if (!(await socketMay("join_voice"))) {
+          socket.emit("voice:doctor:error", {
+            error: "forbidden",
+            message: "You do not have permission to join voice on this server.",
+            permission: "join_voice",
+          });
+          return;
+        }
+
+        if (!sfuClient || !sfuClient.isConnected()) {
+          socket.emit("voice:doctor:error", {
+            error: "sfu_unavailable",
+            message: "The server cannot reach its own voice service, so there is nothing to test against.",
+          });
+          return;
+        }
+
+        // Named for the member, so two people testing at once do not land in
+        // the same room and hear each other. Nothing else can address it: the
+        // channel list is the server's, and this is not in it.
+        const uniqueRoomId = sfuRoomId(serverId, `doctor:${userId ?? clientId}`);
+        await sfuClient.registerRoom(uniqueRoomId);
+
+        const joinToken = sfuClient.generateClientJoinToken(uniqueRoomId, userId);
+        const sfuPublicRaw = process.env.SFU_PUBLIC_HOST || process.env.SFU_WS_HOST || "";
+        const sfuPublicUrls = sfuPublicRaw.split(",").map((h) => h.trim()).filter(Boolean);
+
+        consola.success(`[Voice:Doctor] granted client=${clientId} room=${uniqueRoomId}`);
+        socket.emit("voice:doctor:granted", {
+          room_id: uniqueRoomId,
+          join_token: joinToken,
+          sfu_url: sfuPublicUrls[0],
+          sfu_urls: sfuPublicUrls,
+          timestamp: Date.now(),
+        });
+      } catch (error) {
+        consola.error(`[Voice:Doctor] failed for client=${clientId}:`, error);
+        socket.emit("voice:doctor:error", {
+          error: "failed",
+          message: error instanceof Error ? error.message : "Could not set up a test room",
+        });
+      }
     },
 
     'voice:room:request': async (roomId: string) => {
