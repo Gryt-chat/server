@@ -476,7 +476,7 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
             (otherCount > 0 ? ` — ${otherCount} other session(s) active` : ""),
           );
 
-          verifyClient(socket);
+          await verifyClient(socket, clientsInfo);
           syncAllClients(io, clientsInfo);
           broadcastMemberList(io, clientsInfo, serverId);
           sendServerDetails(socket, clientsInfo, serverId).catch((e) => consola.warn("sendServerDetails failed", e));

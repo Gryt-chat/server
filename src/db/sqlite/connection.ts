@@ -3,7 +3,11 @@ import { DatabaseSync } from "node:sqlite";
 import { dirname, join } from "path";
 
 import { AVATAR_THUMB_PX } from "../../constants/media";
-import { BUILT_IN_ROLES } from "../../constants/permissions";
+import {
+  backfillFor,
+  BUILT_IN_ROLES,
+  PERMISSION_SCHEMA_VERSION,
+} from "../../constants/permissions";
 
 /**
  * Re-exported so the query modules can type their dynamic parameter arrays
@@ -103,6 +107,18 @@ function createSchema(d: DatabaseSync): void {
     -- does this role have" into an archaeology exercise the first time a bit is
     -- reused; a join table is three more queries for a row that is always read
     -- whole.
+    -- Where migrations that are not "does this column exist" record what they
+    -- have done. The permission backfill needs it: what it has to do depends on
+    -- which release last touched the role rows, and no column shape says that.
+    --
+    -- Not a column on server_config, which is where a single-row setting would
+    -- normally go, because that row is created lazily on first join — so a
+    -- database that has never been joined has nowhere to write the stamp.
+    CREATE TABLE IF NOT EXISTS schema_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS role_definitions (
       role_id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -416,6 +432,81 @@ function runMigrations(d: DatabaseSync): void {
   d.prepare("UPDATE server_config SET avatar_thumb_px = ?").run(AVATAR_THUMB_PX);
 
   seedBuiltInRoles(d);
+  backfillRolePermissions(d);
+}
+
+function readSchemaMeta(d: DatabaseSync, key: string): string | null {
+  const row = d.prepare(`SELECT value FROM schema_meta WHERE key = ?`).get(key) as
+    | { value: string }
+    | undefined;
+  return row?.value ?? null;
+}
+
+function writeSchemaMeta(d: DatabaseSync, key: string, value: string): void {
+  d.prepare(
+    `INSERT INTO schema_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?`,
+  ).run(key, value, value);
+}
+
+const PERMISSION_SCHEMA_KEY = "permission_schema_version";
+
+/**
+ * Give existing roles the permissions that did not exist when they were
+ * written.
+ *
+ * A role is a stored list of permission strings, so a build that adds a
+ * permission changes no row — and on the release that made reading a
+ * permission, every role on every existing server would have become a role that
+ * cannot read. The seeder cannot fix that: it only inserts roles that are
+ * missing, and it must never overwrite permissions an operator chose.
+ *
+ * So each new permission names the one it was carved out of, and whoever holds
+ * that keeps doing what they were already doing. Grants only, never removals,
+ * and stamped so it runs once — though `backfillFor` skips what a role already
+ * has, so running it twice would change nothing either.
+ *
+ * A brand-new database gets stamped at the current version after the seeder has
+ * already written the right sets, so this is a no-op there.
+ */
+function backfillRolePermissions(d: DatabaseSync): void {
+  const stamped = Number(readSchemaMeta(d, PERMISSION_SCHEMA_KEY) ?? 0);
+  if (stamped >= PERMISSION_SCHEMA_VERSION) return;
+
+  const rows = d
+    .prepare(`SELECT role_id, permissions FROM role_definitions`)
+    .all() as { role_id: string; permissions: string }[];
+
+  const update = d.prepare(
+    `UPDATE role_definitions SET permissions = ?, updated_at = ? WHERE role_id = ?`,
+  );
+  const now = new Date().toISOString();
+  let changed = 0;
+
+  for (const row of rows) {
+    let held: string[];
+    try {
+      const parsed = JSON.parse(row.permissions);
+      held = Array.isArray(parsed) ? parsed.filter((v) => typeof v === "string") : [];
+    } catch {
+      // A column that will not parse reads as no permissions, same as
+      // everywhere else. The backfill then grants it the ungated set, which is
+      // the closest thing to what the role could actually do before.
+      held = [];
+    }
+
+    const gained = backfillFor(held, stamped);
+    if (gained.length === 0) continue;
+
+    update.run(JSON.stringify([...held, ...gained]), now, row.role_id);
+    changed += 1;
+  }
+
+  if (changed > 0) {
+    console.log(
+      `[permissions] backfilled ${changed} role(s) from schema v${stamped} to v${PERMISSION_SCHEMA_VERSION}`,
+    );
+  }
+  writeSchemaMeta(d, PERMISSION_SCHEMA_KEY, String(PERMISSION_SCHEMA_VERSION));
 }
 
 /**

@@ -26,12 +26,14 @@ const cache = new Map<string, CacheEntry>();
 const CACHE_TTL_MS = 60 * 60 * 1000;
 const MAX_CACHE_SIZE = 1000;
 
+// Unref'd so importing this module does not by itself hold the process open;
+// it only sweeps a metadata cache. Same reasoning as the nonce sweeper in auth/identity.
 setInterval(() => {
   const now = Date.now();
   for (const [key, entry] of cache) {
     if (now - entry.fetchedAt > CACHE_TTL_MS * 2) cache.delete(key);
   }
-}, 5 * 60 * 1000);
+}, 5 * 60 * 1000).unref();
 
 async function readUpToBytes(res: Response, maxBytes: number): Promise<Buffer | null> {
   const reader = res.body?.getReader();

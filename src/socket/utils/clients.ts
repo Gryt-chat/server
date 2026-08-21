@@ -1,10 +1,25 @@
 import { Server, Socket } from "socket.io";
 import { Clients } from "../../types";
 import { getAllRegisteredUsers, getFilesByIds, listServerRoles } from "../../db";
+import { clientMayReceive, refreshClientPermissions } from "./standing";
 import { memberIdentity } from "./memberIdentity";
 
-export function verifyClient(socket: Socket) {
+/**
+ * Mark a socket as belonging to somebody the server has admitted.
+ *
+ * Takes `clientsInfo` so it can cache that member's permissions, which is what
+ * decides whether broadcasts reach them. It is here rather than at each call
+ * site because there are three ways a socket becomes a member — a fresh join, a
+ * restored session, a refreshed token — and a fourth added later would have had
+ * to remember. A member whose permissions were never cached receives nothing.
+ *
+ * Awaited by all three, because the first thing that happens after admission
+ * is a broadcast — the "X joined" system message — and a socket whose
+ * permissions have not landed yet would not receive it.
+ */
+export async function verifyClient(socket: Socket, clientsInfo: Clients) {
   socket.join("verifiedClients");
+  await refreshClientPermissions(clientsInfo, socket.id);
 }
 
 export function unverifyClient(socket: Socket) {
@@ -205,7 +220,14 @@ async function emitMemberListNow(io: Server, clientsInfo: Clients): Promise<void
     lastMemberListEmitByIO.set(io, Date.now());
     lastMemberListStateByIO.set(io, currentMemberStateHash);
 
-    io.to("verifiedClients").emit("members:list", members);
+    // Per socket rather than to the room, because who may see the list is now
+    // a permission. Same list for everybody who gets it — this is about
+    // delivery, not about showing different people different members.
+    for (const [sid, s] of io.sockets.sockets) {
+      if (clientMayReceive(clientsInfo, sid, "view_members")) {
+        s.emit("members:list", members);
+      }
+    }
   } catch (error) {
     console.error('Failed to broadcast member list:', error);
   }

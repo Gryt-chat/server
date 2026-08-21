@@ -3,6 +3,7 @@ import type { HandlerContext, EventHandlerMap } from "./types";
 import { getUserByServerId, updateUserNickname } from "../../db";
 import { hasPermission } from "../../services/permissions";
 import { buildMemberList, syncAllClients, broadcastMemberList } from "../utils/clients";
+import { socketMay } from "../utils/standing";
 
 export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
   const { io, socket, clientId, serverId, clientsInfo } = ctx;
@@ -21,6 +22,13 @@ export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
           // with server:error made every page load show "Failed to join server"
           // — the gate is here to withhold the data, not to complain about a
           // call the client is supposed to make. It asks again after joining.
+          return;
+        }
+
+        if (!(await socketMay(clientsInfo, clientId, "view_members"))) {
+          // Quiet, like the join gate above it. The client asks for this
+          // optimistically on every connect, and a role that may not see the
+          // list is not a state worth an error toast on every page load.
           return;
         }
 

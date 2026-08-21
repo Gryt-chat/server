@@ -6,7 +6,7 @@ import { syncAllClients, broadcastMemberList } from "../utils/clients";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 import { getVoiceSeatLimit } from "../../utils/voiceSeats";
 import { insertServerAudit } from "../../db";
-import { hasPermission } from "../../services/permissions";
+import { socketMay as socketMayFor } from "../utils/standing";
 import type { Permission } from "../../constants/permissions";
 
 const RL_REQUEST_ROOM: RateLimitRule = { limit: 10, windowMs: 60_000, scorePerAction: 1, maxScore: 8, scoreDecayMs: 5000 };
@@ -20,13 +20,12 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
    *
    * The voice events are the one family that carries no access token — they are
    * sent continuously by a client that has already joined, and the socket's
-   * identity is what `clientsInfo` records. So the permission is looked up from
-   * that rather than from a token, and an unidentified socket is refused.
+   * identity is what `clientsInfo` records. `socketMay` in utils/standing is
+   * the shared version; this is the same call with the two things every use
+   * here would repeat already filled in.
    */
-  async function socketMay(permission: Permission): Promise<boolean> {
-    const serverUserId = clientsInfo[clientId]?.serverUserId;
-    if (!serverUserId || serverUserId.startsWith("temp_")) return false;
-    return hasPermission(serverUserId, permission, clientsInfo[clientId]?.grytUserId);
+  function socketMay(permission: Permission): Promise<boolean> {
+    return socketMayFor(clientsInfo, clientId, permission);
   }
 
   return {
@@ -274,7 +273,7 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    'voice:channel:joined': (hasJoined: boolean) => {
+    'voice:channel:joined': async (hasJoined: boolean) => {
       if (!clientsInfo[clientId]) return;
       const ip = getClientIp();
       const userId = clientsInfo[clientId]?.serverUserId;
@@ -288,6 +287,19 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
       const wasInChannel = clientsInfo[clientId].hasJoinedChannel;
       const newJoinedState = Boolean(hasJoined);
       if (wasInChannel === newJoinedState) return;
+
+      // Joining is refused; leaving never is. Without a room grant this socket
+      // has no media path anyway, but the flag is what puts somebody in the
+      // member list as being in voice — so left ungated it is a way to appear
+      // in a channel you were not let into.
+      if (newJoinedState && !(await socketMay("join_voice"))) {
+        socket.emit("voice:room:error", {
+          error: "forbidden",
+          message: "You do not have permission to join voice on this server.",
+          permission: "join_voice",
+        });
+        return;
+      }
 
       const channelId = clientsInfo[clientId].voiceChannelId || "";
       const roomName = channelId ? voiceRoomName(serverId, channelId) : "";
@@ -355,7 +367,7 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        const auth = await requireAuth(socket, payload, { permission: "mute_members" });
+        const auth = await requireAuth(socket, payload, { permission: "disconnect_members" });
         if (!auth) return;
 
         const targetUserId = payload.targetServerUserId.trim();

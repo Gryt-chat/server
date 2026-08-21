@@ -1,6 +1,7 @@
 import { Router } from "express";
 import consola from "consola";
 import { requireBearerToken } from "../middleware/requireBearerToken";
+import { ensurePermission } from "../middleware/requirePermission";
 import { fetchRemoteImageMetadata } from "../utils/remoteImageMetadata";
 
 interface LinkPreviewData {
@@ -18,12 +19,14 @@ const cache = new Map<string, { data: LinkPreviewData; fetchedAt: number }>();
 const CACHE_TTL_MS = 60 * 60 * 1000;
 const MAX_CACHE_SIZE = 500;
 
+// Unref'd so importing this module does not by itself hold the process open;
+// it only sweeps a preview cache. Same reasoning as the nonce sweeper in auth/identity.
 setInterval(() => {
   const now = Date.now();
   for (const [key, entry] of cache) {
     if (now - entry.fetchedAt > CACHE_TTL_MS * 2) cache.delete(key);
   }
-}, 5 * 60 * 1000);
+}, 5 * 60 * 1000).unref();
 
 function decodeHtmlEntities(str: string): string {
   return str
@@ -164,6 +167,8 @@ async function fetchPreview(url: string): Promise<LinkPreviewData> {
 const router = Router();
 
 router.get("/", requireBearerToken, async (req, res) => {
+    if (!(await ensurePermission(req, res, "use_link_previews"))) return;
+
   const url = typeof req.query.url === "string" ? req.query.url : "";
 
   if (!url) {

@@ -15,9 +15,33 @@
  */
 export const PERMISSIONS = [
   // ── Text ──────────────────────────────────────────────────────────
+  /**
+   * See what has been said, live and in history.
+   *
+   * The floor. Everything else in this group assumes it, and a role without it
+   * is somebody who is in the server and cannot see it — which is a real thing
+   * to want for a quarantine tier, and is why reading is a permission rather
+   * than the absence of one.
+   */
+  "read_messages",
   "send_messages",
+  /** Edit a message you sent. Somebody else's is `manage_messages`. */
+  "edit_own_messages",
+  /** Delete a message you sent. Somebody else's is `manage_messages`. */
+  "delete_own_messages",
   "attach_files",
   "add_reactions",
+  /** Put a message in front of the moderators. */
+  "report_messages",
+  /**
+   * Have links in the channel unfurled into a preview.
+   *
+   * Reader-side, not sender-side: the preview is fetched by the client that is
+   * displaying the message, through this server. Turning it off for a role
+   * stops that role's clients asking, which is the only place the server has
+   * any say.
+   */
+  "use_link_previews",
 
   // ── Voice ─────────────────────────────────────────────────────────
   /** Enter a voice channel at all. Without it the channel is not joinable. */
@@ -31,9 +55,11 @@ export const PERMISSIONS = [
   "share_video",
   "share_screen",
 
-  // ── Self ──────────────────────────────────────────────────────────
+  // ── Self and other members ────────────────────────────────────────
   "change_nickname",
   "change_avatar",
+  /** See who else is here. */
+  "view_members",
   /** Mint an invite code. */
   "create_invite",
   /** See every invite this server has issued, and revoke them. */
@@ -44,20 +70,41 @@ export const PERMISSIONS = [
   "manage_messages",
   "kick_members",
   "ban_members",
-  /** Server mute, server deafen, timeouts, and pulling somebody out of voice. */
+  /** Read the ban list without being able to add to it. */
+  "view_bans",
+  /** Server mute, and time somebody out. */
   "mute_members",
+  /** Server deafen. Separate because it decides what somebody may *hear*. */
+  "deafen_members",
+  /** Pull somebody out of a voice channel. */
+  "disconnect_members",
+  /** Read the reported-messages queue. */
+  "view_reports",
+  /** Act on what is in it. */
   "manage_reports",
   "manage_join_requests",
 
   // ── Administration ────────────────────────────────────────────────
   "manage_channels",
+  /** The sidebar's layout: separators, spacers, and what order things are in. */
+  "manage_sidebar",
   "manage_emojis",
   "manage_webhooks",
   /** Edit role definitions, and assign roles to members. */
   "manage_roles",
   /** Server name, description, icon, limits, join policy, the lot. */
   "manage_server",
+  /**
+   * Hand an existing membership to a different identity.
+   *
+   * Its own permission rather than part of `manage_server`, because it is the
+   * one action here that makes somebody else's account into somebody else's
+   * account. Owner-only by default.
+   */
+  "replace_identity",
   "view_audit_log",
+  /** Whether this server is running a current build. */
+  "view_server_status",
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -112,9 +159,36 @@ export interface BuiltInRole {
 
 const EVERY_PERMISSION = PERMISSIONS;
 
+/**
+ * What anybody who has been let in can do, whatever else their role says.
+ *
+ * Not enforced as a floor — a role really can have none of these, and then its
+ * holders are in the server and cannot see it. It is the set every role gets on
+ * *upgrade*, because before these permissions existed there was no gate on any
+ * of them: reading, seeing who is here, reporting a message and unfurling a
+ * link were open to every member, guests included. See PERMISSION_BACKFILLS.
+ */
+const OPEN_TO_EVERYONE = [
+  "read_messages",
+  "view_members",
+  "report_messages",
+  "use_link_previews",
+] as const satisfies readonly Permission[];
+
+/**
+ * The read-only tier.
+ *
+ * Seeded with the four above rather than with nothing, which is what it held
+ * when reading was not yet a permission. "Read-only" has to include reading.
+ */
+const GUEST_PERMISSIONS = OPEN_TO_EVERYONE;
+
 /** What a plain member could do before permissions existed. */
 const MEMBER_PERMISSIONS = [
+  ...OPEN_TO_EVERYONE,
   "send_messages",
+  "edit_own_messages",
+  "delete_own_messages",
   "attach_files",
   "add_reactions",
   "join_voice",
@@ -126,7 +200,7 @@ const MEMBER_PERMISSIONS = [
 ] as const satisfies readonly Permission[];
 
 /**
- * Everything a member has, plus the two things the `mod` gates allowed.
+ * Everything a member has, plus what the old `mod` gates allowed.
  *
  * Shorter than it looks like it should be, and deliberately so. `mod` gated
  * exactly `server:kick`, `server:mute` and `server:deafen`; bans, reports, join
@@ -134,23 +208,29 @@ const MEMBER_PERMISSIONS = [
  * because the name suggests it would be this change quietly widening what a
  * role can do, which is the one thing it must not do — an operator who wants
  * that ticks two boxes.
+ *
+ * `disconnect_members` is here because `voice:disconnect:user` was a `mod`
+ * gate too, under the same permission mute used to carry.
  */
 const MOD_PERMISSIONS = [
   ...MEMBER_PERMISSIONS,
   "kick_members",
   "mute_members",
+  "deafen_members",
+  "disconnect_members",
 ] as const satisfies readonly Permission[];
 
 /**
- * Everything except `manage_roles` and `manage_server`.
+ * Everything except the three that were owner-only.
  *
- * Those two were owner-only, and they stay owner-only: an admin who could grant
+ * `manage_roles` and `manage_server` stay owner-only: an admin who could grant
  * `manage_roles` could grant themselves everything, which makes the owner's
- * authority advisory. An owner who wants that can tick the box; nobody gets it
- * by an upgrade.
+ * authority advisory. `replace_identity` joins them because it sat inside
+ * `manage_server` and handing somebody else's membership to a new key is not a
+ * thing to acquire by upgrade. An owner who wants any of it ticks the box.
  */
 const ADMIN_PERMISSIONS = EVERY_PERMISSION.filter(
-  (p) => p !== "manage_roles" && p !== "manage_server",
+  (p) => p !== "manage_roles" && p !== "manage_server" && p !== "replace_identity",
 ) as Permission[];
 
 /**
@@ -162,7 +242,7 @@ export const BUILT_IN_ROLES: readonly BuiltInRole[] = [
   { id: "admin", name: "Admin", rank: 80, color: null, permissions: ADMIN_PERMISSIONS },
   { id: "mod", name: "Moderator", rank: 60, color: null, permissions: MOD_PERMISSIONS },
   { id: "member", name: "Member", rank: 40, color: null, permissions: MEMBER_PERMISSIONS },
-  { id: "guest", name: "Guest", rank: 10, color: null, permissions: [] },
+  { id: "guest", name: "Guest", rank: 10, color: null, permissions: GUEST_PERMISSIONS },
 ];
 
 const SYSTEM_ROLE_IDS: ReadonlySet<string> = new Set(BUILT_IN_ROLES.map((r) => r.id));
@@ -187,4 +267,90 @@ export const ROLE_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 
 export function isValidRoleId(value: unknown): value is string {
   return typeof value === "string" && ROLE_ID_PATTERN.test(value);
+}
+
+// ── Upgrading an existing server ────────────────────────────────────
+
+/**
+ * Which permissions are new since a given schema version, and who should
+ * already have them.
+ *
+ * The problem this solves: role rows store a list of permission strings, and a
+ * build that adds a permission does not change any row. So on the release that
+ * made reading a permission, every existing role — including the seeded
+ * `member` — would have been a role that cannot read. The seeder cannot fix it
+ * either, because it only inserts roles that are missing and must never
+ * overwrite what an operator has chosen.
+ *
+ * So each new permission names the one it should follow. `everyone` means it
+ * had no gate at all before, and therefore everybody had it. Anything else
+ * means it was carved out of that permission, and whoever held the original
+ * keeps doing what they were already doing.
+ *
+ * Grants only. Nothing here removes a permission from a role, so an operator's
+ * choices survive an upgrade untouched.
+ */
+export interface PermissionBackfill {
+  version: number;
+  permission: Permission;
+  /** The permission this was carved out of, or `everyone` for a new gate. */
+  grantedWith: Permission | "everyone";
+}
+
+/**
+ * Bump this when adding a batch, and give the new entries the new number.
+ *
+ * Version 1 is "roles carry permissions at all" (GRYT-444) — nothing to
+ * backfill, the sets were written to match the old gates exactly. Version 2 is
+ * this file's expansion (GRYT-453).
+ */
+export const PERMISSION_SCHEMA_VERSION = 2;
+
+export const PERMISSION_BACKFILLS: readonly PermissionBackfill[] = [
+  // Had no gate before: anybody admitted to the server could do all four.
+  { version: 2, permission: "read_messages", grantedWith: "everyone" },
+  { version: 2, permission: "view_members", grantedWith: "everyone" },
+  { version: 2, permission: "report_messages", grantedWith: "everyone" },
+  { version: 2, permission: "use_link_previews", grantedWith: "everyone" },
+
+  // Editing and deleting your own message needed nothing but the ability to
+  // have sent one.
+  { version: 2, permission: "edit_own_messages", grantedWith: "send_messages" },
+  { version: 2, permission: "delete_own_messages", grantedWith: "send_messages" },
+
+  // Carved out of permissions that were doing two jobs.
+  { version: 2, permission: "deafen_members", grantedWith: "mute_members" },
+  { version: 2, permission: "disconnect_members", grantedWith: "mute_members" },
+  { version: 2, permission: "view_bans", grantedWith: "ban_members" },
+  { version: 2, permission: "view_reports", grantedWith: "manage_reports" },
+  { version: 2, permission: "manage_sidebar", grantedWith: "manage_channels" },
+  { version: 2, permission: "replace_identity", grantedWith: "manage_server" },
+  { version: 2, permission: "view_server_status", grantedWith: "view_audit_log" },
+];
+
+/**
+ * The permissions a stored role should gain when moving between two versions.
+ *
+ * Pure, so the interesting part is testable without a database — which matters,
+ * because getting this wrong is a silent privilege change in either direction.
+ */
+export function backfillFor(
+  current: readonly string[],
+  fromVersion: number,
+  toVersion: number = PERMISSION_SCHEMA_VERSION,
+): Permission[] {
+  const held = new Set(current);
+  const gained: Permission[] = [];
+
+  for (const entry of PERMISSION_BACKFILLS) {
+    if (entry.version <= fromVersion || entry.version > toVersion) continue;
+    if (held.has(entry.permission)) continue;
+    if (entry.grantedWith !== "everyone" && !held.has(entry.grantedWith)) continue;
+    gained.push(entry.permission);
+    // Added as we go, so a chain — B carved out of A, C carved out of B — lands
+    // in one pass rather than needing the list in dependency order.
+    held.add(entry.permission);
+  }
+
+  return gained;
 }

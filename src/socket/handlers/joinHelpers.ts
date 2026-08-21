@@ -216,7 +216,7 @@ export function registerJoinHelpers(ctx: HandlerContext): EventHandlerMap {
             clientsInfo[clientId].isServerMuted = moderation.isServerMuted;
             clientsInfo[clientId].isServerDeafened = moderation.isServerDeafened;
           }
-          verifyClient(socket);
+          await verifyClient(socket, clientsInfo);
           syncAllClients(io, clientsInfo);
           broadcastMemberList(io, clientsInfo, serverId);
           socket.emit("token:refreshed", { accessToken: newAccessToken });
@@ -256,7 +256,7 @@ export function registerJoinHelpers(ctx: HandlerContext): EventHandlerMap {
             clientsInfo[clientId].serverUserId = serverUserId;
             clientsInfo[clientId].nickname = nickname;
           }
-          verifyClient(socket);
+          await verifyClient(socket, clientsInfo);
           syncAllClients(io, clientsInfo);
           broadcastMemberList(io, clientsInfo, serverId);
           socket.emit("token:refreshed", { accessToken: newToken });
