@@ -113,7 +113,7 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
+        const auth = await requireAuth(socket, payload, { permission: "manage_reports" });
         if (!auth) return;
 
         const aggregated = await getAggregatedPendingReports();
@@ -181,7 +181,7 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
+        const auth = await requireAuth(socket, payload, { permission: "manage_reports" });
         if (!auth) return;
 
         if (payload.action === "approve") {

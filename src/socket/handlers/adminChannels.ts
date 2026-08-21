@@ -83,7 +83,7 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
           socket.emit("server:error", { error: "invalid_payload", message: "name and type required." });
           return;
         }
-        const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
+        const auth = await requireAuth(socket, payload, { permission: "manage_channels" });
         if (!auth) return;
 
         const channelId = (payload.channelId?.trim() || `chan_${randomUUID().slice(0, 10)}`);
@@ -112,7 +112,7 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
           socket.emit("server:error", { error: "invalid_payload", message: "channelId required." });
           return;
         }
-        const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
+        const auth = await requireAuth(socket, payload, { permission: "manage_channels" });
         if (!auth) return;
 
         const channelId = payload.channelId.trim();
@@ -173,7 +173,7 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
           socket.emit("server:error", { error: "invalid_payload", message: "order required." });
           return;
         }
-        const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
+        const auth = await requireAuth(socket, payload, { permission: "manage_channels" });
         if (!auth) return;
 
         const chans = await listServerChannels();
@@ -222,7 +222,7 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
           socket.emit("server:error", { error: "invalid_payload", message: "itemId and kind required." });
           return;
         }
-        const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
+        const auth = await requireAuth(socket, payload, { permission: "manage_channels" });
         if (!auth) return;
 
         await upsertServerSidebarItem({ itemId: payload.itemId, kind: payload.kind, position: payload.position, channelId: payload.channelId ?? null, spacerHeight: payload.spacerHeight ?? null, label: payload.label ?? null });
@@ -242,7 +242,7 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
           socket.emit("server:error", { error: "invalid_payload", message: "itemId required." });
           return;
         }
-        const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
+        const auth = await requireAuth(socket, payload, { permission: "manage_channels" });
         if (!auth) return;
 
         await deleteServerSidebarItem(payload.itemId);
@@ -262,7 +262,7 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
           socket.emit("server:error", { error: "invalid_payload", message: "order required." });
           return;
         }
-        const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
+        const auth = await requireAuth(socket, payload, { permission: "manage_channels" });
         if (!auth) return;
 
         const items = await listServerSidebarItems();

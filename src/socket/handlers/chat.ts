@@ -183,7 +183,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        const auth = await requireAuth(socket, payload);
+        const auth = await requireAuth(socket, payload, { permission: "send_messages" });
         if (!auth) return;
 
         // Identity verification
@@ -208,6 +208,20 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         const attachments = Array.isArray(payload.attachments) ? payload.attachments : null;
         if (!text && (!attachments || attachments.length === 0)) {
           socket.emit("chat:error", "Message is empty");
+          return;
+        }
+
+        // Attaching is its own permission, so "you may talk but not upload" is
+        // expressible. Checked here as well as at the upload endpoint because
+        // these are two different doors into the same room: the file is already
+        // stored by the time it is named in a message, and a file id can be
+        // reused from an earlier message.
+        if (attachments && attachments.length > 0 && !auth.permissions.has("attach_files")) {
+          socket.emit("chat:error", {
+            error: "forbidden",
+            message: "You do not have permission to attach files here.",
+            permission: "attach_files",
+          });
           return;
         }
 
@@ -392,7 +406,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        const auth = await requireAuth(socket, payload);
+        const auth = await requireAuth(socket, payload, { permission: "add_reactions" });
         if (!auth) return;
 
         const user = await getUserByServerId(auth.tokenPayload.serverUserId);
@@ -439,7 +453,10 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         const message = await getMessageById(payload.conversationId, payload.messageId);
         if (!message) { socket.emit("chat:error", "Message not found"); return; }
 
-        if (message.sender_server_id !== auth.tokenPayload.serverUserId && auth.role !== "owner" && auth.role !== "admin") {
+        if (
+          message.sender_server_id !== auth.tokenPayload.serverUserId &&
+          !auth.permissions.has("manage_messages")
+        ) {
           socket.emit("chat:error", "You can only delete your own messages");
           return;
         }

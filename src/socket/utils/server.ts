@@ -1,7 +1,9 @@
 import consola from "consola";
 import { Server, Socket } from "socket.io";
 import { Clients } from "../../types";
-import type { JoinPolicy } from "../../db/interfaces";
+import type { JoinPolicy, RoleDefinitionRecord } from "../../db/interfaces";
+import { FALLBACK_ROLE_ID } from "../../constants/permissions";
+import { getEffectiveStanding } from "../../services/permissions";
 import { getAcceptedIdentityTiers } from "../../auth/identity";
 import { getVoiceSeatLimit } from "../../utils/voiceSeats";
 import { syncAllClients, broadcastMemberList } from "./clients";
@@ -11,8 +13,8 @@ import {
   ensureDefaultChannels,
   ensureDefaultSidebarItems,
   getServerConfig,
-  getServerRole,
   listEmojiJobs,
+  listRoleDefinitions,
   listServerChannels,
   listServerSidebarItems,
 } from "../../db";
@@ -291,7 +293,12 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
   let cfgAvatarMaxBytes: number = DEFAULT_AVATAR_MAX_BYTES;
   let cfgUploadMaxBytes: number = DEFAULT_UPLOAD_MAX_BYTES;
   let isOwner = false;
-  let role: "owner" | "admin" | "mod" | "member" = "member";
+  let role = FALLBACK_ROLE_ID;
+  // What this client may do, so the UI can stop offering what the server will
+  // refuse. Advisory only — every one of these is enforced server-side too, and
+  // a client that ignores the list gets an error rather than an action.
+  let permissions: string[] = [];
+  let roleDefinitions: RoleDefinitionRecord[] = [];
   try {
     const cfg = await getServerConfig();
     if (cfg?.display_name) cfgName = cfg.display_name;
@@ -300,12 +307,17 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
     if (typeof cfg?.avatar_max_bytes === "number") cfgAvatarMaxBytes = cfg.avatar_max_bytes;
     if (typeof cfg?.upload_max_bytes === "number") cfgUploadMaxBytes = cfg.upload_max_bytes;
     isOwner = !!(cfg?.owner_gryt_user_id && cfg.owner_gryt_user_id === client.grytUserId);
-    if (isOwner) {
+    if (client.serverUserId && !client.serverUserId.startsWith("temp_")) {
+      const standing = await getEffectiveStanding(client.serverUserId, client.grytUserId);
+      role = standing.roleId;
+      permissions = [...standing.permissions];
+    } else if (isOwner) {
       role = "owner";
-    } else if (client.serverUserId) {
-      const r = await getServerRole(client.serverUserId);
-      role = r || "member";
     }
+    // The full list, not just the caller's own role: the member sidebar colours
+    // and labels everybody, and a client that only knew its own role would have
+    // to ask again for each name it saw.
+    roleDefinitions = await listRoleDefinitions();
   } catch {
     // ignore DB errors; fall back to env
   }
@@ -325,6 +337,15 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
       icon_url: cfgIconUrl,
       is_owner: isOwner,
       role,
+      permissions,
+      roles: roleDefinitions.map((r) => ({
+        id: r.role_id,
+        name: r.name,
+        color: r.color,
+        rank: r.rank,
+        permissions: r.permissions,
+        isSystem: r.is_system,
+      })),
       max_members: parseInt(process.env.MAX_MEMBERS || "100"),
       voice_enabled: !!sfuHost,
       avatar_max_bytes: cfgAvatarMaxBytes,

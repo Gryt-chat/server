@@ -1,6 +1,7 @@
 import { randomBytes, scrypt as scryptCb, timingSafeEqual } from "crypto";
 import { promisify } from "util";
 
+import type { Permission } from "../constants/permissions";
 import type { CensorStyle, ProfanityMode } from "../utils/profanityFilter";
 
 export type { CensorStyle, ProfanityMode };
@@ -158,17 +159,72 @@ export interface ServerConfigRecord {
   system_channel_id: string | null;
   lan_open: boolean;
   join_policy: JoinPolicy;
+  /**
+   * Which role somebody lands on the first time they join, split by how they
+   * proved who they are.
+   *
+   * Two columns rather than one because the whole point of the split is that a
+   * server can trust the two differently: an account is a durable identity a CA
+   * vouched for, a local key is regenerable in two seconds. A public server
+   * hands the first `member` and the second `guest`, and that combination is
+   * not expressible with a single default.
+   *
+   * Both default to `member`, which is what every server did before these
+   * columns existed. Turning a server into a read-only-for-strangers one is a
+   * decision an operator makes in the role editor, not something an upgrade
+   * does to them.
+   */
+  default_role_account: string;
+  default_role_local: string;
   discoverable: boolean;
   is_configured: boolean;
   created_at: Date;
   updated_at: Date;
 }
 
-export type ServerRole = "owner" | "admin" | "mod" | "member";
+/**
+ * Which role somebody holds, as a `role_definitions.role_id`.
+ *
+ * A bare string rather than the four names it used to be. The four are still
+ * there — seeded as system roles — but a server can now define its own, and a
+ * union that had to be widened every time somebody added "Contributor" would
+ * not be a type, it would be a schema.
+ *
+ * Nothing validates the value here. What a role *means* lives in
+ * `role_definitions`, and an id with no definition behind it resolves to the
+ * fallback role rather than being rejected on read — see `normalizeRoleId`.
+ */
+export type ServerRole = string;
 
 export interface ServerRoleRecord {
   server_user_id: string;
   role: ServerRole;
+  created_at: Date;
+  updated_at: Date;
+}
+
+/**
+ * A role, as opposed to somebody holding one.
+ *
+ * `rank` answers who may act on whom — kick, ban, mute and role assignment all
+ * refuse against an equal or higher rank. `permissions` answers what the holder
+ * may do at all. They are deliberately independent: a bot with `send_messages`
+ * and rank 5 is below everybody and can still talk, and a rank-90 auditor with
+ * nothing but `view_audit_log` outranks the moderators without gaining any of
+ * their powers.
+ *
+ * `is_system` marks the five that ship with the server. They can be renamed,
+ * recoloured and re-permissioned; they cannot be deleted, because the join
+ * defaults and the owner fall back to them.
+ */
+export interface RoleDefinitionRecord {
+  role_id: string;
+  name: string;
+  /** `#rrggbb`, or null to let the client pick. */
+  color: string | null;
+  rank: number;
+  permissions: Permission[];
+  is_system: boolean;
   created_at: Date;
   updated_at: Date;
 }

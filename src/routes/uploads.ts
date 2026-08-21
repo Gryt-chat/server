@@ -13,6 +13,7 @@ import { join } from "path";
 import { deleteObject, putObject, getObject } from "../storage";
 import { insertFile, insertImageJob, getFile, updateFileRecord, updateUserAvatar, setUserAvatar, getServerConfig, DEFAULT_AVATAR_MAX_BYTES, DEFAULT_UPLOAD_MAX_BYTES } from "../db";
 import { requireBearerToken } from "../middleware/requireBearerToken";
+import { ensurePermission } from "../middleware/requirePermission";
 import { AVATAR_MAX_PX, AVATAR_THUMB_PX } from "../constants/media";
 import { findDominantColor, validateImage, MAX_INPUT_PIXELS } from "../utils/imageValidation";
 import { sanitizeSvg } from "../utils/svgSanitize";
@@ -146,6 +147,13 @@ function parseDimField(val: unknown): number | null {
 uploadsRouter.post(
   "/",
   requireBearerToken,
+  // Before multer, not after: refusing a hundred megabytes once it has already
+  // been written to disk is a refusal that still cost the disk write.
+  (req: Request, res: Response, next: NextFunction): void => {
+    ensurePermission(req, res, "attach_files")
+      .then((ok) => { if (ok) next(); })
+      .catch(next);
+  },
   uploadToDisk("file"),
   (req: Request, res: Response, next: NextFunction): void => {
     const file = req.file;
@@ -322,6 +330,11 @@ uploadsRouter.post(
 uploadsRouter.post(
   "/avatar",
   requireBearerToken,
+  (req: Request, res: Response, next: NextFunction): void => {
+    ensurePermission(req, res, "change_avatar")
+      .then((ok) => { if (ok) next(); })
+      .catch(next);
+  },
   upload.single("file"),
   (req: Request, res: Response, next: NextFunction): void => {
     const file = req.file;
@@ -580,8 +593,14 @@ uploadsRouter.delete(
     const serverUserId = req.tokenPayload?.serverUserId;
     if (!serverUserId) { res.status(401).json({ error: "auth_required" }); return; }
 
+    // Removing an avatar needs the same permission as setting one. Somebody who
+    // may not change their picture may not clear it either — otherwise the
+    // permission only bites in one direction and "reset to default" becomes a
+    // way around it.
     Promise.resolve()
       .then(async () => {
+        if (!(await ensurePermission(req, res, "change_avatar"))) return;
+
         // Clear avatar reference (we intentionally do not delete old files from S3).
         // Passing null clears `avatar_file_id` in both user tables.
         await setUserAvatar(serverUserId, null);

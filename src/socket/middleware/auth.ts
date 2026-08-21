@@ -1,9 +1,19 @@
 import { Socket } from "socket.io";
 import { verifyAccessToken, TokenPayload } from "../../utils/jwt";
-import { getServerConfig, getServerRole, getUserByServerId } from "../../db";
+import { getServerConfig } from "../../db";
+import type { Permission } from "../../constants/permissions";
 import { checkSessionAllowed } from "../../moderation/sessionGate";
+import {
+  getEffectiveStanding,
+  getTargetRank,
+  type EffectiveStanding,
+} from "../../services/permissions";
 
-export type Role = "owner" | "admin" | "mod" | "member";
+/**
+ * A role id. Used to be the four names this file knew about; a server defines
+ * its own now, so the name is only ever passed through to the client.
+ */
+export type Role = string;
 
 export interface ServerConfig {
   owner_gryt_user_id?: string | null;
@@ -21,63 +31,27 @@ export interface AuthResult {
   tokenPayload: TokenPayload;
   config: ServerConfig;
   role: Role;
+  /** Rank, for the outranks checks. Higher acts on lower. */
+  rank: number;
+  permissions: ReadonlySet<Permission>;
+  /** True when this is the server owner, whatever their roles row says. */
+  isOwner: boolean;
 }
-
-async function getEffectiveRole(
-  tokenPayload: TokenPayload,
-  cfg: ServerConfig | null,
-): Promise<Role> {
-  if (
-    cfg?.owner_gryt_user_id &&
-    tokenPayload.grytUserId &&
-    cfg.owner_gryt_user_id === tokenPayload.grytUserId
-  ) {
-    return "owner";
-  }
-  try {
-    const r = await getServerRole(tokenPayload.serverUserId);
-    return (r || "member") as Role;
-  } catch {
-    return "member";
-  }
-}
-
-export const ROLE_RANK: Record<Role, number> = { owner: 4, admin: 3, mod: 2, member: 1 };
 
 /**
- * The effective role of somebody who is not the caller.
+ * The caller's standing, and the target's, both resolved the same way.
  *
- * The mirror of `getEffectiveRole`, for the target of a moderation action. Both
- * have to agree, and until now they did not: the handlers resolved *both* sides
- * with `getServerRole`, which reads the roles table and knows nothing about
- * `server_config.owner_gryt_user_id`. A config-owner whose roles row says
- * `admin` therefore passed `requireAuth`'s owner-or-admin gate and was then
- * refused by the handler's own check when acting on an admin — blocked from
- * moderating their own server. The same gap protects a stale `owner` roles row
- * on somebody who is not the owner.
+ * They used to be resolved differently: the handlers read *both* sides with
+ * `getServerRole`, which knows nothing about `server_config.owner_gryt_user_id`.
+ * A config-owner whose roles row said `admin` therefore passed the owner-or-admin
+ * gate and was then refused by the handler's own check when acting on an admin —
+ * blocked from moderating their own server. Both sides go through
+ * `services/permissions` now, so there is one answer to "who is this".
  */
-export async function getEffectiveRoleForServerUser(
-  serverUserId: string,
-): Promise<Role> {
-  try {
-    const [cfg, user] = await Promise.all([
-      getServerConfig(),
-      getUserByServerId(serverUserId),
-    ]);
-    if (
-      cfg?.owner_gryt_user_id &&
-      user?.gryt_user_id &&
-      cfg.owner_gryt_user_id === user.gryt_user_id
-    ) {
-      return "owner";
-    }
-    const r = await getServerRole(serverUserId);
-    return (r || "member") as Role;
-  } catch {
-    // Fail closed. An unknown target reads as owner, so the action is refused
-    // rather than allowed on a database hiccup.
-    return "owner";
-  }
+function standingOf(
+  tokenPayload: TokenPayload,
+): Promise<EffectiveStanding> {
+  return getEffectiveStanding(tokenPayload.serverUserId, tokenPayload.grytUserId);
 }
 
 /**
@@ -105,8 +79,8 @@ export async function requireOutranks(
     return false;
   }
 
-  const targetRole = await getEffectiveRoleForServerUser(targetServerUserId);
-  if ((ROLE_RANK[auth.role] ?? 0) <= (ROLE_RANK[targetRole] ?? 0)) {
+  const targetRank = await getTargetRank(targetServerUserId);
+  if (auth.rank <= targetRank) {
     socket.emit("server:error", {
       error: "forbidden",
       message: `Cannot ${action} a user with an equal or higher role.`,
@@ -127,7 +101,7 @@ export async function requireOutranks(
 export async function requireAuth(
   socket: Socket,
   payload: { accessToken?: string },
-  options?: { requiredRole?: Role },
+  options?: { permission?: Permission },
 ): Promise<AuthResult | null> {
   if (!payload || typeof payload.accessToken !== "string") {
     socket.emit("server:error", { error: "invalid_payload", message: "accessToken is required." });
@@ -173,19 +147,46 @@ export async function requireAuth(
     return null;
   }
 
-  const role = await getEffectiveRole(tokenPayload, config);
+  const standing = await standingOf(tokenPayload);
 
-  if (options?.requiredRole) {
-    const needed = ROLE_RANK[options.requiredRole] ?? 0;
-    const actual = ROLE_RANK[role] ?? 0;
-    if (actual < needed) {
-      socket.emit("server:error", {
-        error: "forbidden",
-        message: `Requires ${options.requiredRole} or higher.`,
-      });
-      return null;
-    }
+  if (options?.permission && !standing.permissions.has(options.permission)) {
+    socket.emit("server:error", {
+      error: "forbidden",
+      // Names the permission rather than a role, because with roles editable
+      // "requires admin or higher" can be false on the very server saying it.
+      message: `You do not have permission to do that (${options.permission}).`,
+      permission: options.permission,
+    });
+    return null;
   }
 
-  return { tokenPayload, config, role };
+  return {
+    tokenPayload,
+    config,
+    role: standing.roleId,
+    rank: standing.rank,
+    permissions: standing.permissions,
+    isOwner: standing.isOwner,
+  };
+}
+
+/**
+ * A permission check on an already-authenticated caller, for handlers that need
+ * a second one.
+ *
+ * Emits the same refusal `requireAuth` would, so a gate reached this way is
+ * indistinguishable from one reached at the door.
+ */
+export function requirePermission(
+  socket: Socket,
+  auth: AuthResult,
+  permission: Permission,
+): boolean {
+  if (auth.permissions.has(permission)) return true;
+  socket.emit("server:error", {
+    error: "forbidden",
+    message: `You do not have permission to do that (${permission}).`,
+    permission,
+  });
+  return false;
 }

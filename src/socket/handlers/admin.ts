@@ -14,6 +14,12 @@ import {
   revokeServerInvite,
   setServerRole,
   listServerRoles,
+  listRoleDefinitions,
+  getRoleDefinition,
+  createRoleDefinition,
+  updateRoleDefinition,
+  deleteRoleDefinition,
+  countRoleHolders,
   insertServerAudit,
   listServerAudit,
   listJoinRequests,
@@ -31,6 +37,14 @@ import { evictUser, resolveGrytUserId } from "../../moderation/evict";
 import { sfuRoomId } from "../utils/voiceRooms";
 import { getVersionStatus } from "../../versionCheck";
 import { registerAdminChannelHandlers } from "./adminChannels";
+import {
+  FALLBACK_ROLE_ID,
+  isSystemRole,
+  isValidRoleId,
+  normalizePermissions,
+  OWNER_ROLE_ID,
+  PERMISSIONS,
+} from "../../constants/permissions";
 
 const RL_SETTINGS: RateLimitRule = { limit: 30, windowMs: 60_000, scorePerAction: 1, maxScore: 20, scoreDecayMs: 3_000 };
 const RL_INVITE: RateLimitRule = { limit: 20, windowMs: 60_000, scorePerAction: 1, maxScore: 10, scoreDecayMs: 5_000 };
@@ -103,6 +117,58 @@ function pushSfuAudioState(
     .catch((e) => consola.error("Failed to update SFU audio state:", e));
 }
 
+/**
+ * A colour a client is willing to render, or null.
+ *
+ * `#rrggbb` only. The value goes straight into a style on every client that
+ * shows the role, so anything that is not obviously a colour is dropped rather
+ * than passed through and hoped about.
+ */
+function normalizeRoleColor(value: unknown, fallback: string | null): string | null {
+  if (value === null) return null;
+  if (typeof value !== "string") return fallback;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return /^#[0-9a-fA-F]{6}$/.test(trimmed) ? trimmed.toLowerCase() : fallback;
+}
+
+/**
+ * Everything the role editor needs, in one payload.
+ *
+ * The permission catalogue rides along rather than being written down in the
+ * client. A client built against an older server would otherwise show a
+ * permission list missing whatever the server has since added, with no sign
+ * that anything was missing — and the editor saves the whole set, so the
+ * missing ones would be dropped on the next save.
+ */
+async function roleEditorState() {
+  const [definitions, config] = await Promise.all([
+    listRoleDefinitions(),
+    getServerConfig(),
+  ]);
+
+  const roles = await Promise.all(
+    definitions.map(async (r) => ({
+      id: r.role_id,
+      name: r.name,
+      color: r.color,
+      rank: r.rank,
+      permissions: r.permissions,
+      isSystem: r.is_system,
+      memberCount: await countRoleHolders(r.role_id),
+    })),
+  );
+
+  return {
+    roles,
+    permissions: PERMISSIONS,
+    defaults: {
+      account: config?.default_role_account ?? FALLBACK_ROLE_ID,
+      local: config?.default_role_local ?? FALLBACK_ROLE_ID,
+    },
+  };
+}
+
 function emitRateLimited(ctx: HandlerContext, rl: { retryAfterMs?: number }) {
   ctx.socket.emit("server:error", {
     error: "rate_limited",
@@ -136,7 +202,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
 
     "server:emojiQueue:get": async (payload: { accessToken: string }) => {
       try {
-        const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
+        const auth = await requireAuth(socket, payload, { permission: "manage_emojis" });
         if (!auth) return;
         sendEmojiQueueStateToSocket(socket);
       } catch (e) {
@@ -164,7 +230,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         const rl = rlCheck("server:settings:update", ctx, RL_SETTINGS);
         if (!rl.allowed) { emitRateLimited(ctx, rl); return; }
 
-        const auth = await requireAuth(socket, payload, { requiredRole: "owner" });
+        const auth = await requireAuth(socket, payload, { permission: "manage_server" });
         if (!auth) return;
 
         // Validation, the row write and every side effect live in
@@ -187,7 +253,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
 
     'server:invites:list': async (payload: { accessToken: string }) => {
       try {
-        const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
+        const auth = await requireAuth(socket, payload, { permission: "manage_invites" });
         if (!auth) return;
         const invites = await listServerInvites();
         socket.emit("server:invites", {
@@ -206,7 +272,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       try {
         const rl = rlCheck("server:invites:create", ctx, RL_INVITE);
         if (!rl.allowed) { emitRateLimited(ctx, rl); return; }
-        const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
+        const auth = await requireAuth(socket, payload, { permission: "create_invite" });
         if (!auth) return;
 
         const infinite = payload.infinite === true;
@@ -238,7 +304,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           socket.emit("server:error", { error: "invalid_payload", message: "code is required." });
           return;
         }
-        const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
+        const auth = await requireAuth(socket, payload, { permission: "manage_invites" });
         if (!auth) return;
 
         const code = payload.code.trim();
@@ -261,7 +327,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       try {
         const rl = rlCheck("server:joinRequests:list", ctx, RL_INVITE);
         if (!rl.allowed) { emitRateLimited(ctx, rl); return; }
-        const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
+        const auth = await requireAuth(socket, payload, { permission: "manage_join_requests" });
         if (!auth) return;
 
         const requests = await listJoinRequests("pending");
@@ -291,7 +357,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
+        const auth = await requireAuth(socket, payload, { permission: "manage_join_requests" });
         if (!auth) return;
 
         const decided = await decideJoinRequest(payload.grytUserId.trim(), decision, auth.tokenPayload.serverUserId);
@@ -326,7 +392,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
 
     'server:roles:list': async (payload: { accessToken: string }) => {
       try {
-        const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
+        const auth = await requireAuth(socket, payload, { permission: "manage_roles" });
         if (!auth) return;
         const roles = await listServerRoles();
         socket.emit("server:roles", { serverId, roles: roles.map((r) => ({ serverUserId: r.server_user_id, role: r.role, updatedAt: r.updated_at })) });
@@ -344,26 +410,302 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           socket.emit("server:error", { error: "invalid_payload", message: "serverUserId and role required." });
           return;
         }
-        const auth = await requireAuth(socket, payload, { requiredRole: "owner" });
+        const auth = await requireAuth(socket, payload, { permission: "manage_roles" });
         if (!auth) return;
 
-        const nextRole = payload.role.toLowerCase();
-        if (nextRole === "owner") {
+        const nextRole = payload.role.trim().toLowerCase();
+        if (nextRole === OWNER_ROLE_ID) {
           socket.emit("server:error", { error: "forbidden", message: "Owner role cannot be reassigned." });
           return;
         }
-        if (payload.serverUserId.trim() === auth.tokenPayload.serverUserId) {
-          socket.emit("server:error", { error: "forbidden", message: "Cannot change your own role." });
+
+        const definition = await getRoleDefinition(nextRole);
+        if (!definition) {
+          socket.emit("server:error", { error: "unknown_role", message: `No such role: ${nextRole}` });
           return;
         }
 
         const targetId = payload.serverUserId.trim();
-        await setServerRole(targetId, nextRole === "admin" || nextRole === "mod" ? nextRole : "member");
+        // Outranking covers acting on yourself as well, so the old
+        // same-person check is gone rather than duplicated.
+        if (!(await requireOutranks(socket, auth, targetId, "change the role of"))) return;
+
+        // Granting a role you do not outrank is granting yourself a promotion
+        // one step removed. Strictly below, matching `requireOutranks`, so an
+        // admin cannot mint a second admin either.
+        if (definition.rank >= auth.rank) {
+          socket.emit("server:error", {
+            error: "forbidden",
+            message: "Cannot grant a role at or above your own.",
+          });
+          return;
+        }
+
+        await setServerRole(targetId, nextRole);
         insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "role_set", target: targetId, meta: { role: nextRole } }).catch((e) => consola.warn("audit log write failed", e));
         io.to("verifiedClients").emit("server:role:updated", { serverId, serverUserId: targetId, role: nextRole });
+        // The target's own permission list is part of server details, so it has
+        // to be re-sent — otherwise a demotion only takes effect on their next
+        // reconnect, and the UI keeps offering what the server now refuses.
+        broadcastServerUiUpdate("other");
       } catch (e) {
         consola.error("server:roles:set failed", e);
         socket.emit("server:error", { error: "roles_update_failed", message: "Failed to update role." });
+      }
+    },
+
+    // ── Role definitions ─────────────────────────────────────────
+    //
+    // What a role *is*, as opposed to who holds one. Gated on `manage_roles`,
+    // which by default only the owner has — see the note on ADMIN_PERMISSIONS.
+
+    'server:roles:definitions:list': async (payload: { accessToken: string }) => {
+      try {
+        const auth = await requireAuth(socket, payload, { permission: "manage_roles" });
+        if (!auth) return;
+        socket.emit("server:roles:definitions", await roleEditorState());
+      } catch (e) {
+        consola.error("server:roles:definitions:list failed", e);
+        socket.emit("server:error", { error: "roles_failed", message: "Failed to load roles." });
+      }
+    },
+
+    /**
+     * Create a role, or edit one that exists.
+     *
+     * One event for both because the editor does not know which it is doing:
+     * the same form saves a role that was created three seconds ago and one
+     * that has been there since the server was set up.
+     */
+    'server:roles:definitions:save': async (payload: {
+      accessToken: string;
+      roleId: string;
+      name?: string;
+      color?: string | null;
+      rank?: number;
+      permissions?: string[];
+    }) => {
+      try {
+        const rl = rlCheck("server:roles:definitions:save", ctx, RL_SETTINGS);
+        if (!rl.allowed) { emitRateLimited(ctx, rl); return; }
+
+        const auth = await requireAuth(socket, payload, { permission: "manage_roles" });
+        if (!auth) return;
+
+        const roleId = String(payload?.roleId || "").trim().toLowerCase();
+        if (!isValidRoleId(roleId)) {
+          socket.emit("server:error", {
+            error: "invalid_payload",
+            message: "Role id must be lowercase letters, numbers, dashes or underscores.",
+          });
+          return;
+        }
+
+        const existing = await getRoleDefinition(roleId);
+
+        // The owner role is what the fail-open path in services/permissions
+        // falls back to, and it is the only thing standing between a mistake in
+        // this editor and a server nobody can administer. It is readable and
+        // not editable.
+        if (roleId === OWNER_ROLE_ID) {
+          socket.emit("server:error", { error: "forbidden", message: "The owner role cannot be edited." });
+          return;
+        }
+
+        const name = typeof payload?.name === "string" ? payload.name.trim().slice(0, 32) : existing?.name;
+        if (!name) {
+          socket.emit("server:error", { error: "invalid_payload", message: "A role needs a name." });
+          return;
+        }
+
+        const color = normalizeRoleColor(payload?.color, existing?.color ?? null);
+
+        const rank = Number.isFinite(payload?.rank)
+          ? Math.max(0, Math.min(99, Math.round(Number(payload?.rank))))
+          : existing?.rank ?? 0;
+
+        // Nobody may create or raise a role to their own level. Without this an
+        // admin with `manage_roles` could define "superadmin" at rank 99 and
+        // hand it to a friend, and the outranks checks would then work exactly
+        // as designed against the owner.
+        if (rank >= auth.rank) {
+          socket.emit("server:error", {
+            error: "forbidden",
+            message: "Cannot create or move a role to your own rank or above.",
+          });
+          return;
+        }
+        if (existing && existing.rank >= auth.rank) {
+          socket.emit("server:error", {
+            error: "forbidden",
+            message: "Cannot edit a role at or above your own.",
+          });
+          return;
+        }
+
+        const permissions = payload?.permissions
+          ? normalizePermissions(payload.permissions)
+          : existing?.permissions ?? [];
+
+        // Same argument as the rank check, for capability rather than
+        // hierarchy: you cannot put a permission into a role that you do not
+        // hold yourself. The owner holds everything, so this only ever binds
+        // somebody the owner has delegated to.
+        const overreach = permissions.filter((perm) => !auth.permissions.has(perm));
+        if (overreach.length > 0) {
+          socket.emit("server:error", {
+            error: "forbidden",
+            message: `Cannot grant permissions you do not have: ${overreach.join(", ")}`,
+          });
+          return;
+        }
+
+        const saved = existing
+          ? await updateRoleDefinition(roleId, { name, color, rank, permissions })
+          : await createRoleDefinition(roleId, { name, color, rank, permissions });
+
+        insertServerAudit({
+          actorServerUserId: auth.tokenPayload.serverUserId,
+          action: existing ? "role_definition_update" : "role_definition_create",
+          target: roleId,
+          meta: { name, rank, permissions },
+        }).catch((e) => consola.warn("audit log write failed", e));
+
+        io.to("verifiedClients").emit("server:roles:definition:updated", { serverId, role: saved });
+        broadcastServerUiUpdate("other");
+      } catch (e) {
+        consola.error("server:roles:definitions:save failed", e);
+        socket.emit("server:error", { error: "roles_update_failed", message: "Failed to save role." });
+      }
+    },
+
+    'server:roles:definitions:delete': async (payload: {
+      accessToken: string;
+      roleId: string;
+      reassignTo?: string;
+    }) => {
+      try {
+        const rl = rlCheck("server:roles:definitions:delete", ctx, RL_SETTINGS);
+        if (!rl.allowed) { emitRateLimited(ctx, rl); return; }
+
+        const auth = await requireAuth(socket, payload, { permission: "manage_roles" });
+        if (!auth) return;
+
+        const roleId = String(payload?.roleId || "").trim().toLowerCase();
+        if (isSystemRole(roleId)) {
+          socket.emit("server:error", {
+            error: "forbidden",
+            // Saying why, because the seeder would silently put the row back on
+            // the next restart and a delete that undoes itself is worse than a
+            // refusal.
+            message: "Built-in roles cannot be deleted. Edit their permissions instead.",
+          });
+          return;
+        }
+
+        const existing = await getRoleDefinition(roleId);
+        if (!existing) {
+          socket.emit("server:error", { error: "unknown_role", message: `No such role: ${roleId}` });
+          return;
+        }
+        if (existing.rank >= auth.rank) {
+          socket.emit("server:error", { error: "forbidden", message: "Cannot delete a role at or above your own." });
+          return;
+        }
+
+        const cfg = await getServerConfig();
+        const requested = String(payload?.reassignTo || "").trim().toLowerCase();
+        const reassignTo = (await getRoleDefinition(requested))
+          ? requested
+          : cfg?.default_role_account || FALLBACK_ROLE_ID;
+
+        const { moved } = await deleteRoleDefinition(roleId, reassignTo);
+
+        // A default that pointed at the role just deleted would leave every
+        // future joiner resolving to the fallback, which is a permission change
+        // nobody asked for and nothing in the UI would show.
+        const defaultsPatch: { defaultRoleAccount?: string; defaultRoleLocal?: string } = {};
+        if (cfg?.default_role_account === roleId) defaultsPatch.defaultRoleAccount = reassignTo;
+        if (cfg?.default_role_local === roleId) defaultsPatch.defaultRoleLocal = reassignTo;
+        if (Object.keys(defaultsPatch).length > 0) await updateServerConfig(defaultsPatch);
+
+        insertServerAudit({
+          actorServerUserId: auth.tokenPayload.serverUserId,
+          action: "role_definition_delete",
+          target: roleId,
+          meta: { reassignTo, moved },
+        }).catch((e) => consola.warn("audit log write failed", e));
+
+        io.to("verifiedClients").emit("server:roles:definition:deleted", { serverId, roleId, reassignTo, moved });
+        broadcastServerUiUpdate("other");
+      } catch (e) {
+        consola.error("server:roles:definitions:delete failed", e);
+        socket.emit("server:error", { error: "roles_update_failed", message: "Failed to delete role." });
+      }
+    },
+
+    /**
+     * Which role people land on when they join, per identity tier.
+     *
+     * The setting that makes a public server possible: accounts get one role,
+     * keys-with-no-account get another, and neither has to be handed out by a
+     * moderator watching the door.
+     */
+    'server:roles:defaults:set': async (payload: {
+      accessToken: string;
+      accountRoleId?: string;
+      localRoleId?: string;
+    }) => {
+      try {
+        const rl = rlCheck("server:roles:defaults:set", ctx, RL_SETTINGS);
+        if (!rl.allowed) { emitRateLimited(ctx, rl); return; }
+
+        const auth = await requireAuth(socket, payload, { permission: "manage_roles" });
+        if (!auth) return;
+
+        const patch: { defaultRoleAccount?: string; defaultRoleLocal?: string } = {};
+
+        for (const [key, field] of [
+          ["accountRoleId", "defaultRoleAccount"],
+          ["localRoleId", "defaultRoleLocal"],
+        ] as const) {
+          const raw = (payload as Record<string, unknown>)[key];
+          if (raw === undefined) continue;
+          const roleId = String(raw || "").trim().toLowerCase();
+          const definition = await getRoleDefinition(roleId);
+          if (!definition) {
+            socket.emit("server:error", { error: "unknown_role", message: `No such role: ${roleId}` });
+            return;
+          }
+          // A default nobody may grant by hand should not be reachable by
+          // walking in the front door either.
+          if (roleId === OWNER_ROLE_ID || definition.rank >= auth.rank) {
+            socket.emit("server:error", {
+              error: "forbidden",
+              message: "Cannot make a role at or above your own the joining default.",
+            });
+            return;
+          }
+          patch[field] = roleId;
+        }
+
+        if (Object.keys(patch).length === 0) {
+          socket.emit("server:error", { error: "invalid_payload", message: "Nothing to change." });
+          return;
+        }
+
+        await updateServerConfig(patch);
+        insertServerAudit({
+          actorServerUserId: auth.tokenPayload.serverUserId,
+          action: "role_defaults_set",
+          target: null,
+          meta: patch,
+        }).catch((e) => consola.warn("audit log write failed", e));
+
+        socket.emit("server:roles:definitions", await roleEditorState());
+      } catch (e) {
+        consola.error("server:roles:defaults:set failed", e);
+        socket.emit("server:error", { error: "roles_update_failed", message: "Failed to set joining defaults." });
       }
     },
 
@@ -377,7 +719,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           socket.emit("server:error", { error: "invalid_payload", message: "targetServerUserId required." });
           return;
         }
-        const auth = await requireAuth(socket, payload, { requiredRole: "mod" });
+        const auth = await requireAuth(socket, payload, { permission: "kick_members" });
         if (!auth) return;
 
         const targetId = payload.targetServerUserId.trim();
@@ -423,7 +765,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
      */
     'server:member:invite': async (payload: { accessToken: string; targetServerUserId?: string }) => {
       try {
-        const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
+        const auth = await requireAuth(socket, payload, { permission: "create_invite" });
         if (!auth) return;
 
         const targetId = typeof payload?.targetServerUserId === "string" ? payload.targetServerUserId.trim() : "";
@@ -459,7 +801,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           socket.emit("server:error", { error: "invalid_payload", message: "targetServerUserId required." });
           return;
         }
-        const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
+        const auth = await requireAuth(socket, payload, { permission: "ban_members" });
         if (!auth) return;
 
         const targetId = payload.targetServerUserId.trim();
@@ -575,7 +917,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
+        const auth = await requireAuth(socket, payload, { permission: "ban_members" });
         if (!auth) return;
 
         let grytUserId = directId;
@@ -599,7 +941,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
 
     'server:bans:list': async (payload: { accessToken: string }) => {
       try {
-        const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
+        const auth = await requireAuth(socket, payload, { permission: "ban_members" });
         if (!auth) return;
         const bans = await listBans();
         socket.emit("server:bans", { serverId, bans });
@@ -617,7 +959,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           socket.emit("server:error", { error: "invalid_payload", message: "targetServerUserId and muted required." });
           return;
         }
-        const auth = await requireAuth(socket, payload, { requiredRole: "mod" });
+        const auth = await requireAuth(socket, payload, { permission: "mute_members" });
         if (!auth) return;
 
         const targetId = payload.targetServerUserId.trim();
@@ -656,7 +998,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           socket.emit("server:error", { error: "invalid_payload", message: "targetServerUserId and deafened required." });
           return;
         }
-        const auth = await requireAuth(socket, payload, { requiredRole: "mod" });
+        const auth = await requireAuth(socket, payload, { permission: "mute_members" });
         if (!auth) return;
 
         const targetId = payload.targetServerUserId.trim();
@@ -693,7 +1035,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           socket.emit("server:error", { error: "invalid_payload", message: "targetServerUserId and newGrytUserId required." });
           return;
         }
-        const auth = await requireAuth(socket, payload, { requiredRole: "owner" });
+        const auth = await requireAuth(socket, payload, { permission: "manage_server" });
         if (!auth) return;
 
         const targetId = payload.targetServerUserId.trim();
@@ -730,7 +1072,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
 
     'server:audit:list': async (payload: { accessToken: string; limit?: number; before?: string }) => {
       try {
-        const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
+        const auth = await requireAuth(socket, payload, { permission: "view_audit_log" });
         if (!auth) return;
         const limit = typeof payload.limit === "number" ? payload.limit : 50;
         const before = typeof payload.before === "string" ? new Date(payload.before) : undefined;
@@ -753,7 +1095,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
 
     'server:version:check': async (payload: { accessToken: string }) => {
       try {
-        const auth = await requireAuth(socket, payload, { requiredRole: "admin" });
+        const auth = await requireAuth(socket, payload, { permission: "view_audit_log" });
         if (!auth) return;
         const status = await getVersionStatus();
         socket.emit("server:version:status", status);

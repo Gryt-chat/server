@@ -6,6 +6,8 @@ import { syncAllClients, broadcastMemberList } from "../utils/clients";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 import { getVoiceSeatLimit } from "../../utils/voiceSeats";
 import { insertServerAudit } from "../../db";
+import { hasPermission } from "../../services/permissions";
+import type { Permission } from "../../constants/permissions";
 
 const RL_REQUEST_ROOM: RateLimitRule = { limit: 10, windowMs: 60_000, scorePerAction: 1, maxScore: 8, scoreDecayMs: 5000 };
 const RL_JOINED_CHANNEL: RateLimitRule = { limit: 10, windowMs: 60_000, scorePerAction: 0.5, maxScore: 6, scoreDecayMs: 3000 };
@@ -13,21 +15,53 @@ const RL_JOINED_CHANNEL: RateLimitRule = { limit: 10, windowMs: 60_000, scorePer
 export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
   const { io, socket, clientId, serverId, clientsInfo, sfuClient, getClientIp } = ctx;
 
+  /**
+   * Whether the socket's own member may do something.
+   *
+   * The voice events are the one family that carries no access token — they are
+   * sent continuously by a client that has already joined, and the socket's
+   * identity is what `clientsInfo` records. So the permission is looked up from
+   * that rather than from a token, and an unidentified socket is refused.
+   */
+  async function socketMay(permission: Permission): Promise<boolean> {
+    const serverUserId = clientsInfo[clientId]?.serverUserId;
+    if (!serverUserId || serverUserId.startsWith("temp_")) return false;
+    return hasPermission(serverUserId, permission, clientsInfo[clientId]?.grytUserId);
+  }
+
   return {
-    'voice:camera:state': (payload: { enabled: boolean; streamId?: string }) => {
+    'voice:camera:state': async (payload: { enabled: boolean; streamId?: string }) => {
       if (!clientsInfo[clientId]) return;
       const enabled = typeof payload === 'boolean' ? payload : Boolean(payload?.enabled);
       const streamId = typeof payload === 'object' ? (payload.streamId || "") : "";
+      // Turning a camera *off* is never refused. A permission that was taken
+      // away mid-call would otherwise leave somebody unable to stop streaming.
+      if (enabled && !(await socketMay("share_video"))) {
+        socket.emit("voice:room:error", {
+          error: "forbidden",
+          message: "You do not have permission to share video here.",
+          permission: "share_video",
+        });
+        return;
+      }
       clientsInfo[clientId].cameraEnabled = enabled;
       clientsInfo[clientId].cameraStreamID = enabled ? streamId : "";
       syncAllClients(io, clientsInfo);
     },
 
-    'voice:screen:state': (payload: { enabled: boolean; videoStreamId?: string; audioStreamId?: string }) => {
+    'voice:screen:state': async (payload: { enabled: boolean; videoStreamId?: string; audioStreamId?: string }) => {
       if (!clientsInfo[clientId]) return;
       const enabled = typeof payload === 'object' ? Boolean(payload?.enabled) : Boolean(payload);
       const videoStreamId = typeof payload === 'object' ? (payload.videoStreamId || "") : "";
       const audioStreamId = typeof payload === 'object' ? (payload.audioStreamId || "") : "";
+      if (enabled && !(await socketMay("share_screen"))) {
+        socket.emit("voice:room:error", {
+          error: "forbidden",
+          message: "You do not have permission to share your screen here.",
+          permission: "share_screen",
+        });
+        return;
+      }
       consola.info(`[ScreenShare] voice:screen:state from=${clientId} enabled=${enabled} videoStreamId=${videoStreamId} audioStreamId=${audioStreamId}`);
       clientsInfo[clientId].screenShareEnabled = enabled;
       clientsInfo[clientId].screenShareVideoStreamID = enabled ? videoStreamId : "";
@@ -35,9 +69,23 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
       syncAllClients(io, clientsInfo);
     },
 
-    'voice:state:update': (clientState: { isMuted: boolean; isDeafened: boolean; isAFK: boolean }) => {
+    'voice:state:update': async (clientState: { isMuted: boolean; isDeafened: boolean; isAFK: boolean }) => {
       if (!clientsInfo[clientId]) return;
-      clientsInfo[clientId].isMuted = Boolean(clientState.isMuted);
+      // Somebody with `join_voice` and not `speak` is a listener: they are in
+      // the room and cannot be heard. Enforced by refusing to record them as
+      // unmuted rather than by refusing the event, so the client's mute button
+      // still works in the direction that always has to — and the corrected
+      // state comes straight back on the sync below.
+      let isMuted = Boolean(clientState.isMuted);
+      if (!isMuted && !(await socketMay("speak"))) {
+        isMuted = true;
+        socket.emit("voice:room:error", {
+          error: "forbidden",
+          message: "You can listen here, but not speak.",
+          permission: "speak",
+        });
+      }
+      clientsInfo[clientId].isMuted = isMuted;
       clientsInfo[clientId].isDeafened = Boolean(clientState.isDeafened);
       clientsInfo[clientId].isAFK = Boolean(clientState.isAFK);
       syncAllClients(io, clientsInfo);
@@ -170,6 +218,15 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
           socket.emit("voice:room:error", "Invalid room ID");
           return;
         }
+        if (!(await socketMay("join_voice"))) {
+          consola.warn(`[Voice:Step 1] FORBIDDEN client=${clientId} user=${userId} lacks join_voice`);
+          socket.emit("voice:room:error", {
+            error: "forbidden",
+            message: "You do not have permission to join voice on this server.",
+            permission: "join_voice",
+          });
+          return;
+        }
         if (!sfuClient) {
           consola.error(`[Voice:Step 2] SFU client not initialized`);
           socket.emit("voice:room:error", "Voice service unavailable");
@@ -298,7 +355,7 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        const auth = await requireAuth(socket, payload, { requiredRole: "mod" });
+        const auth = await requireAuth(socket, payload, { permission: "mute_members" });
         if (!auth) return;
 
         const targetUserId = payload.targetServerUserId.trim();

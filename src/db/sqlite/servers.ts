@@ -13,6 +13,7 @@ import type {
   ServerRole,
   ServerRoleRecord,
 } from "../interfaces";
+import { FALLBACK_ROLE_ID, isValidRoleId } from "../../constants/permissions";
 import { normalizeCensorStyle } from "../../utils/profanityFilter";
 import { fromIso, getSqliteDb, toIso, type SQLInputValue } from "./connection";
 import { getUserByGrytId } from "./users";
@@ -37,10 +38,19 @@ export function normalizeJoinPolicy(v: unknown): JoinPolicy {
   return "invite";
 }
 
-function normalizeRole(role: unknown): ServerRole {
-  const r = String(role || "").toLowerCase();
-  if (r === "owner" || r === "admin" || r === "mod" || r === "member") return r;
-  return "member";
+/**
+ * A stored role id, in the shape ids are compared in.
+ *
+ * It used to reject anything outside the four names and hand back `member`,
+ * which is no longer possible: a server defines its own roles and this module
+ * cannot know their ids without reading a second table on every lookup. So it
+ * only normalises the case and shape, and an id with no definition behind it is
+ * resolved to the fallback role where roles are *used* rather than where they
+ * are read — see `resolveRole` in services/permissions.
+ */
+function normalizeRoleId(role: unknown): ServerRole {
+  const r = String(role || "").trim().toLowerCase();
+  return isValidRoleId(r) ? r : FALLBACK_ROLE_ID;
 }
 
 function rowToConfig(r: Record<string, unknown>): ServerConfigRecord {
@@ -62,6 +72,8 @@ function rowToConfig(r: Record<string, unknown>): ServerConfigRecord {
     system_channel_id: (r.system_channel_id as string) ?? null,
     lan_open: (r.lan_open as number) === 1,
     join_policy: normalizeJoinPolicy(r.join_policy),
+    default_role_account: normalizeRoleId(r.default_role_account ?? FALLBACK_ROLE_ID),
+    default_role_local: normalizeRoleId(r.default_role_local ?? FALLBACK_ROLE_ID),
     discoverable: (r.discoverable as number) !== 0,
     is_configured: (r.is_configured as number) === 1,
     created_at: fromIso(r.created_at as string),
@@ -193,6 +205,8 @@ export async function updateServerConfig(patch: {
   systemChannelId?: string | null;
   lanOpen?: boolean;
   joinPolicy?: JoinPolicy;
+  defaultRoleAccount?: string;
+  defaultRoleLocal?: string;
   discoverable?: boolean;
   isConfigured?: boolean;
 }): Promise<ServerConfigRecord> {
@@ -216,6 +230,8 @@ export async function updateServerConfig(patch: {
     systemChannelId: { col: "system_channel_id" },
     lanOpen: { col: "lan_open", transform: (v) => v ? 1 : 0 },
     joinPolicy: { col: "join_policy", transform: (v) => normalizeJoinPolicy(v) },
+    defaultRoleAccount: { col: "default_role_account", transform: (v) => normalizeRoleId(v) },
+    defaultRoleLocal: { col: "default_role_local", transform: (v) => normalizeRoleId(v) },
     discoverable: { col: "discoverable", transform: (v) => v ? 1 : 0 },
     isConfigured: { col: "is_configured", transform: (v) => v ? 1 : 0 },
   };
@@ -244,7 +260,7 @@ export async function updateServerConfig(patch: {
 export async function getServerRole(serverUserId: string): Promise<ServerRole | null> {
   const db = getSqliteDb();
   const row = db.prepare(`SELECT role FROM roles WHERE server_user_id = ?`).get(serverUserId) as { role: string } | undefined;
-  return row ? normalizeRole(row.role) : null;
+  return row ? normalizeRoleId(row.role) : null;
 }
 
 export async function setServerRole(serverUserId: string, role: ServerRole): Promise<void> {
@@ -260,7 +276,7 @@ export async function listServerRoles(): Promise<ServerRoleRecord[]> {
   const rows = db.prepare(`SELECT * FROM roles`).all() as Record<string, unknown>[];
   return rows.map((r) => ({
     server_user_id: r.server_user_id as string,
-    role: normalizeRole(r.role),
+    role: normalizeRoleId(r.role),
     created_at: fromIso(r.created_at as string),
     updated_at: fromIso(r.updated_at as string),
   }));
