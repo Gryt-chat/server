@@ -8,10 +8,10 @@ import { postSystemMessage } from "./systemMessages";
  *
  * v1.6.6 through v1.6.24 shipped a PowerShell update helper that failed to
  * parse, so those installs find every new release, download it, and install
- * none of them. Nothing published can reach them, because the broken helper is
- * the thing that would have to run the fix. The only way out is a person
- * double-clicking an installer, and the only way to ask is a message in a
- * channel their client already knows how to render.
+ * none of them. Installing is the step that fails, so nothing published since
+ * can reach them. The only way out is a person double-clicking an installer,
+ * and the only way to ask is a message in a channel their client already knows
+ * how to render.
  */
 const FIRST_WORKING_WINDOWS_UPDATER = "1.6.25";
 
@@ -85,11 +85,11 @@ export function formatUpdateReminder(
   return [
     `[@${nickname}](mention:${serverUserId}) — your Windows client (v${version}) cannot update itself.`,
     "",
-    "It has been downloading every new release and installing none of them, and it cannot fix that on its own — the part that is broken is the part that would install the fix.",
+    "It has been downloading every new release and installing none of them. Installing is the step that fails, so it cannot repair itself.",
     "",
-    `**The installer is probably already on your machine.** Close Gryt, open \`%LOCALAPPDATA%\\gryt-chat-updater\\pending\`, and look for \`Gryt-Chat-${FIRST_WORKING_WINDOWS_UPDATER}-win-x64.exe\` or newer. Run it and you are done — updates work on their own again afterwards, and your settings and servers are untouched.`,
+    "**Download the current installer and run it once.** Close Gryt first, including the tray icon: https://github.com/Gryt-chat/gryt/releases/latest",
     "",
-    `**Check the version in the filename first.** Anything below ${FIRST_WORKING_WINDOWS_UPDATER} carries the same broken updater, so installing it puts you right back here while looking like it worked. If the file in that folder is older, or the folder is empty, download the current one instead: https://github.com/Gryt-chat/gryt/releases/latest`,
+    "Updates work on their own again afterwards, and your settings and servers are untouched.",
     "",
     "Full instructions: https://docs.gryt.chat/docs/client/updates",
   ].join("\n");
