@@ -27,6 +27,18 @@ const iconMaxMb = Number.isFinite(Number(iconMaxMbRaw))
   : 25;
 const iconMaxBytes = Math.floor(iconMaxMb * 1024 * 1024);
 
+/**
+ * How many frames an animated server icon may carry.
+ *
+ * Eight seconds at 60fps, which is Sivert's call on 2026-08-22 and is meant to
+ * be generous rather than tight — the point is to stop a runaway, not to
+ * second-guess anybody's sticker. For scale: at 256x256 and quality 80 the
+ * worst case is roughly 0.5-0.7 MB at this cap, against about 1.3 kB for the
+ * still icon prod is serving today. Real files land lower, because animated
+ * WebP predicts between frames.
+ */
+export const MAX_ICON_FRAMES = 480;
+
 const allowedIconMimes = new Set<string>([
   "image/png",
   "image/jpeg",
@@ -218,6 +230,27 @@ serverRouter.post(
         res
           .status(400)
           .json({ error: "invalid_file", message: validation.reason });
+        return;
+      }
+
+      // An icon is drawn at 38 pixels in the server rail, on every server
+      // somebody has joined. A still one is about 1.3 kB; nothing caps how
+      // long an animated one may be, so a long GIF becomes an animated WebP of
+      // several hundred kilobytes that every client fetches to draw a couple
+      // of centimetres across. GRYT-515.
+      //
+      // Refused rather than truncated. Keeping the first N frames cuts a loop
+      // mid-cycle, which looks broken rather than trimmed, and it ships
+      // something other than what was uploaded without saying so.
+      const frames = validation.pages ?? 1;
+      if (isAnimated && frames > MAX_ICON_FRAMES) {
+        res.status(400).json({
+          error: "too_many_frames",
+          message:
+            `This icon has ${frames} frames and the limit is ${MAX_ICON_FRAMES}` +
+            ` — about ${MAX_ICON_FRAMES / 60} seconds at 60fps. Shorten it or` +
+            ` lower its frame rate and upload it again.`,
+        });
         return;
       }
 
