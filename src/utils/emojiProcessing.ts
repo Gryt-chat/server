@@ -1,6 +1,6 @@
 import sharp from "sharp";
 
-import { validateImage } from "./imageValidation";
+import { MAX_INPUT_PIXELS, validateImage } from "./imageValidation";
 
 const ANIMATED_MIME_SET = new Set(["image/gif", "image/webp", "image/avif"]);
 
@@ -17,7 +17,9 @@ export async function processEmojiToOptimizedImage(
     throw new Error(validation.reason);
   }
 
-  const pipeline = sharp(buffer, { animated, failOn: "error" })
+  // validateImage decodes one page; this decodes all of them, so it carries
+  // the ceiling rather than relying on the check that came before it.
+  const pipeline = sharp(buffer, { animated, failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
     .resize({ height: 128, withoutEnlargement: true });
 
   if (animated) {

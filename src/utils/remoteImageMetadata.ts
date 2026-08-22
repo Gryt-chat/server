@@ -1,6 +1,8 @@
 import consola from "consola";
 import sharp from "sharp";
 
+import { MAX_INPUT_PIXELS } from "./imageValidation";
+
 export type RemoteImageMetadata = {
   url: string;
   mime: string | null;
@@ -89,7 +91,7 @@ export async function fetchRemoteImageMetadata(url: string): Promise<RemoteImage
     const buf = await readUpToBytes(res, 450_000);
     if (buf === null) return empty;
 
-    const meta = await sharp(buf, { animated: true, failOn: "error" }).metadata().catch(() => null);
+    const meta = await sharp(buf, { animated: true, failOn: "error", limitInputPixels: MAX_INPUT_PIXELS }).metadata().catch(() => null);
     const data: RemoteImageMetadata = {
       url,
       mime: contentType || null,
