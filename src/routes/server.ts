@@ -13,7 +13,7 @@ import {
   updateServerConfig,
 } from "../db";
 import { broadcastServerUiUpdate } from "../socket";
-import { validateImage } from "../utils/imageValidation";
+import { MAX_INPUT_PIXELS, validateImage } from "../utils/imageValidation";
 import { sanitizeSvg } from "../utils/svgSanitize";
 import { verifyAccessToken } from "../utils/jwt";
 
@@ -240,6 +240,13 @@ serverRouter.post(
         const pipeline = sharp(file.buffer, {
           animated: isAnimated,
           failOn: "error",
+          // validateImage above pixel-checks a single page, because that is
+          // what it decodes. This call decodes every frame — sharp stacks an
+          // animation into one tall strip — so the budget has to be carried
+          // here too, and it is animated input where it matters most: a
+          // modest frame is under the ceiling on its own and two hundred of
+          // them are not.
+          limitInputPixels: MAX_INPUT_PIXELS,
         }).resize(256, 256, { fit: "cover" });
 
         out = isAnimated

@@ -549,7 +549,9 @@ uploadsRouter.post(
               try {
                 const outputFormat = inputMime === "image/gif" ? "gif" : "webp";
                 const outputMime = `image/${outputFormat}`;
-                const pipeline = sharp(animBuf, { animated: true, failOn: "error" })
+                // Every frame is decoded here, unlike the single-page check
+                // that let this buffer through, so the ceiling comes with it.
+                const pipeline = sharp(animBuf, { animated: true, failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
                   .resize({ width: AVATAR_MAX_PX, height: AVATAR_MAX_PX, fit: "cover" });
                 const resized = outputFormat === "gif"
                   ? await pipeline.gif().toBuffer()
@@ -558,7 +560,7 @@ uploadsRouter.post(
                 const animKey = `avatars/${fileId}.${outputFormat}`;
                 await putObject({ bucket, key: animKey, body: resized, contentType: outputMime });
 
-                const thumbBuf = await sharp(resized, { pages: 1, failOn: "error" })
+                const thumbBuf = await sharp(resized, { pages: 1, failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
                   .resize({ width: AVATAR_THUMB_PX, height: AVATAR_THUMB_PX, fit: "cover" })
                   .avif({ quality: 50 })
                   .toBuffer()
