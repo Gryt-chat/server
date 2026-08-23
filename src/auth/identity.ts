@@ -5,6 +5,7 @@ import {
   decodeJwt,
   importJWK,
   jwtVerify,
+  errors as joseErrors,
   type JWK,
   type JWTPayload,
 } from "jose";
@@ -297,6 +298,34 @@ export interface VerifiedCertificate {
 }
 
 /**
+ * How far a clock may be out before a proof bound to a server nonce is refused.
+ *
+ * Generous, because on this path the number buys nothing. `consumeChallenge`
+ * deletes the nonce on first read and refuses it past `NONCE_TTL_MS`, measured
+ * on this server's own clock, so the replay window is 60 seconds whatever the
+ * other end's clock says. The `exp` on an assertion is a second 60-second
+ * window measured by a clock we do not control, guarding against a replay the
+ * nonce has already made impossible, and it was refusing real joins to do it.
+ *
+ * Twelve hours rather than a few minutes because the common cause is not drift.
+ * A machine dual-booting Windows and Linux disagrees with itself by its whole
+ * UTC offset: one writes local time to the RTC and the other reads it as UTC.
+ * That is hours, and minutes of tolerance would not have helped the person who
+ * reported this.
+ */
+const NONCE_BOUND_CLOCK_TOLERANCE = "12 hours";
+
+/**
+ * The same, for a certificate.
+ *
+ * Much smaller, because a certificate's expiry is a real one: it is how long
+ * the holder may keep using a credential, so widening it postpones the moment a
+ * rotated or withdrawn identity stops working. Two minutes covers a machine
+ * that is merely unsynchronised. A machine that is hours out is told so instead.
+ */
+const CERTIFICATE_CLOCK_TOLERANCE = "2 minutes";
+
+/**
  * Which half of the exchange failed.
  *
  * Sent to the client so it can decide whether to repair itself. Nothing here
@@ -317,12 +346,58 @@ export type IdentityFailureReason =
 
 export class IdentityVerificationError extends Error {
   readonly reason: IdentityFailureReason;
+  /**
+   * How far the other end's clock is from ours, when that is what went wrong.
+   *
+   * Positive means their clock is behind ours, which is the sign the client's
+   * own skew message already uses in the other direction. Undefined for every
+   * failure that is not about time.
+   *
+   * It goes over the wire because it is the one number that turns "would not
+   * accept your identity" into something the person reading it can act on. It
+   * says nothing they could not measure themselves by reading their own clock.
+   */
+  readonly skewMs?: number;
 
-  constructor(reason: IdentityFailureReason, message: string) {
+  constructor(reason: IdentityFailureReason, message: string, skewMs?: number) {
     super(message);
     this.name = "IdentityVerificationError";
     this.reason = reason;
+    this.skewMs = skewMs;
   }
+}
+
+/**
+ * The gap between what a proof thought the time was and what we think it is.
+ *
+ * Read from `iat` when the signer set one, and inferred from `exp` otherwise by
+ * assuming the lifetime the signer uses. Positive means their clock is behind
+ * ours.
+ *
+ * Best effort: a proof that will not decode has no skew to report. Called only
+ * once a verification has already failed, so the cost of decoding twice is paid
+ * on the error path.
+ */
+function clockSkewOf(
+  jwt: string,
+  assumedLifetimeSeconds: number
+): number | undefined {
+  let payload: JWTPayload;
+  try {
+    payload = decodeJwt(jwt);
+  } catch {
+    return undefined;
+  }
+
+  const signedAt =
+    typeof payload.iat === "number"
+      ? payload.iat
+      : typeof payload.exp === "number"
+      ? payload.exp - assumedLifetimeSeconds
+      : undefined;
+
+  if (signedAt === undefined) return undefined;
+  return Date.now() - signedAt * 1000;
 }
 
 /**
@@ -393,6 +468,7 @@ async function verifySelfSignedCertificate(
   await jwtVerify(certJwt, publicKey, {
     issuer: kind.issuer,
     algorithms: ["ES256"],
+    clockTolerance: CERTIFICATE_CLOCK_TOLERANCE,
   });
 
   const thumbprint = await calculateJwkThumbprint(jwk, "sha256");
@@ -477,6 +553,7 @@ async function verifyDelegatedCertificate(
   await jwtVerify(certJwt, signingKey, {
     issuer: DELEGATED_ISSUER,
     algorithms: ["ES256"],
+    clockTolerance: CERTIFICATE_CLOCK_TOLERANCE,
   });
 
   return {
@@ -540,6 +617,8 @@ export async function verifyIdentityLink(
       issuer: LINK_ISSUER,
       audience: expectedAud,
       algorithms: ["ES256"],
+      // Nonce-bound, exactly like the assertion, so the same reasoning applies.
+      clockTolerance: NONCE_BOUND_CLOCK_TOLERANCE,
     });
 
     if (payload.nonce !== expectedNonce) {
@@ -634,7 +713,11 @@ export async function verifyCertificate(
       // ES256 is what the identity service signs with (`CA_ALG`). Pinning it
       // here means a CA that changed algorithm would fail loudly at
       // verification rather than quietly widening what this accepts.
-      { issuer, algorithms: ["ES256"] }
+      {
+        issuer,
+        algorithms: ["ES256"],
+        clockTolerance: CERTIFICATE_CLOCK_TOLERANCE,
+      }
     );
 
     if (!payload.sub || typeof payload.sub !== "string") {
@@ -716,11 +799,24 @@ export async function verifyAssertion(
     // what lets the client renew instead of asking the user to sign in again.
     ({ payload } = await jwtVerify(assertionJwt, publicKey, {
       audience: expectedAud,
+      // The assertion is worth 60 seconds by its own `exp`, which is a window
+      // measured on the signer's clock. The nonce it carries is worth 60
+      // seconds on ours, single use, so nothing here turns on the signer being
+      // right about the time. This used to be strict and it made a machine an
+      // hour out permanently unable to join anything — including through the
+      // client's renew-and-retry, which signs the second assertion from the
+      // same wrong clock as the first.
+      clockTolerance: NONCE_BOUND_CLOCK_TOLERANCE,
     }));
   } catch (err) {
     throw new IdentityVerificationError(
       "assertion_rejected",
-      err instanceof Error ? err.message : String(err)
+      err instanceof Error ? err.message : String(err),
+      // 60 is `signAssertion`'s lifetime on the client, used only to place an
+      // assertion that did not set `iat` — every current client does.
+      err instanceof joseErrors.JWTExpired
+        ? clockSkewOf(assertionJwt, 60)
+        : undefined
     );
   }
 
