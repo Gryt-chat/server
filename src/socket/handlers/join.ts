@@ -393,10 +393,15 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           // "sign in again" sent people to do the one thing that cannot help.
           const reason =
             e instanceof IdentityVerificationError ? e.reason : "unknown";
+          // Only set when the verifier could tell that the clock was the
+          // problem. Positive means their clock is behind this server's.
+          const skewMs =
+            e instanceof IdentityVerificationError ? e.skewMs : undefined;
 
           socket.emit("server:error", {
             error: "identity_verification_failed",
             reason,
+            ...(skewMs === undefined ? {} : { skewMs }),
             message:
               reason === "nonce_mismatch"
                 ? "This join attempt expired before it completed. Try again."

@@ -14,6 +14,8 @@ import {
 import {
   getAcceptedIdentityTiers,
   identityTierAccepted,
+  IdentityVerificationError,
+  verifyAssertion,
   verifyCertificate,
 } from "./identity";
 
@@ -320,5 +322,140 @@ describe("issuer-qualified ids", () => {
       delete process.env.GRYT_TRUSTED_CERT_ISSUERS;
       await rogue.close();
     }
+  });
+});
+
+/**
+ * An assertion signed by a client whose clock reads `offsetSeconds` away from
+ * ours. Negative is behind, which is the direction that used to fail.
+ */
+async function makeAssertion(
+  privateKey: Awaited<ReturnType<typeof makeKeyPair>>["privateKey"],
+  opts: { sub: string; aud: string; nonce: string; offsetSeconds?: number }
+) {
+  const now = Math.floor(Date.now() / 1000) + (opts.offsetSeconds ?? 0);
+
+  return await new SignJWT({ nonce: opts.nonce })
+    .setProtectedHeader({ alg: "ES256", typ: "JWT" })
+    .setSubject(opts.sub)
+    .setAudience(opts.aud)
+    .setIssuedAt(now)
+    .setExpirationTime(now + 60)
+    .sign(privateKey);
+}
+
+describe("assertions from a machine whose clock is wrong", () => {
+  const AUD = "10.0.0.5:5000";
+  const NONCE = "nonce-for-this-socket";
+
+  it("accepts one signed an hour behind this server", async () => {
+    const { privateKey, publicJwk } = await makeKeyPair();
+    const assertion = await makeAssertion(privateKey, {
+      sub: "someone",
+      aud: AUD,
+      nonce: NONCE,
+      offsetSeconds: -3600,
+    });
+
+    const { sub } = await verifyAssertion(assertion, publicJwk, AUD, NONCE);
+    assert.equal(sub, "someone");
+  });
+
+  it("accepts one signed an hour ahead", async () => {
+    const { privateKey, publicJwk } = await makeKeyPair();
+    const assertion = await makeAssertion(privateKey, {
+      sub: "someone",
+      aud: AUD,
+      nonce: NONCE,
+      offsetSeconds: 3600,
+    });
+
+    const { sub } = await verifyAssertion(assertion, publicJwk, AUD, NONCE);
+    assert.equal(sub, "someone");
+  });
+
+  it("still refuses one from a clock beyond the tolerance, and says how far", async () => {
+    const { privateKey, publicJwk } = await makeKeyPair();
+    const dayBehind = -(25 * 60 * 60);
+    const assertion = await makeAssertion(privateKey, {
+      sub: "someone",
+      aud: AUD,
+      nonce: NONCE,
+      offsetSeconds: dayBehind,
+    });
+
+    await assert.rejects(
+      () => verifyAssertion(assertion, publicJwk, AUD, NONCE),
+      (err: unknown) => {
+        assert.ok(err instanceof IdentityVerificationError);
+        assert.equal(err.reason, "assertion_rejected");
+        // Positive: their clock is behind ours. Roughly, since the assertion
+        // was signed a moment ago in real time.
+        assert.ok(err.skewMs !== undefined);
+        const hoursBehind = err.skewMs / 3_600_000;
+        assert.ok(
+          hoursBehind > 24.9 && hoursBehind < 25.1,
+          `expected ~25h behind, got ${hoursBehind}`
+        );
+        return true;
+      }
+    );
+  });
+
+  it("reports no skew when the failure was not about time", async () => {
+    const { privateKey, publicJwk } = await makeKeyPair();
+    const assertion = await makeAssertion(privateKey, {
+      sub: "someone",
+      aud: "a-different-server:5000",
+      nonce: NONCE,
+    });
+
+    await assert.rejects(
+      () => verifyAssertion(assertion, publicJwk, AUD, NONCE),
+      (err: unknown) => {
+        assert.ok(err instanceof IdentityVerificationError);
+        assert.equal(err.skewMs, undefined);
+        return true;
+      }
+    );
+  });
+
+  it("refuses a wrong nonce however good the clock is", async () => {
+    const { privateKey, publicJwk } = await makeKeyPair();
+    const assertion = await makeAssertion(privateKey, {
+      sub: "someone",
+      aud: AUD,
+      nonce: "some-other-nonce",
+    });
+
+    await assert.rejects(
+      () => verifyAssertion(assertion, publicJwk, AUD, NONCE),
+      (err: unknown) => {
+        assert.ok(err instanceof IdentityVerificationError);
+        assert.equal(err.reason, "nonce_mismatch");
+        return true;
+      }
+    );
+  });
+});
+
+describe("certificates keep a tight clock", () => {
+  it("refuses a self-signed certificate that expired ten minutes ago", async () => {
+    const { jwt } = await makeSelfSignedCert({ expiresIn: "-10m" });
+
+    await assert.rejects(
+      () => verifyCertificate(jwt),
+      (err: unknown) => {
+        assert.ok(err instanceof IdentityVerificationError);
+        assert.equal(err.reason, "certificate_rejected");
+        return true;
+      }
+    );
+  });
+
+  it("allows the couple of minutes an unsynchronised machine is out by", async () => {
+    const { jwt } = await makeSelfSignedCert({ expiresIn: "-30s" });
+    const cert = await verifyCertificate(jwt);
+    assert.equal(cert.tier, "local");
   });
 });
