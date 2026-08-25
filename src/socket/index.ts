@@ -9,6 +9,7 @@ import { verifyAccessToken } from "../utils/jwt";
 import { getServerConfig, effectiveModerationState } from "../db";
 import { checkSessionAllowed } from "../moderation/sessionGate";
 import { syncAllClients, verifyClient, broadcastMemberList, countOtherSessions } from "./utils/clients";
+import { stashedVoiceState, type StashedVoiceState, voiceStateOf } from "./utils/voiceStash";
 import { sendInfo, sendServerDetails, setSocketRefs, broadcastChatNew, broadcastCustomEmojisUpdate, broadcastEmojiQueueUpdate, broadcastServerUiUpdate } from "./utils/server";
 import { getServerIdFromEnv } from "../utils/serverId";
 
@@ -29,32 +30,53 @@ export { broadcastChatNew, broadcastCustomEmojisUpdate, broadcastEmojiQueueUpdat
 
 const clientsInfo: Clients = {};
 
-// Grace period for voice state during transient Socket.IO disconnects (e.g.
-// Cloudflare Tunnel WebSocket resets). Instead of immediately tearing down
-// voice state, we stash it for VOICE_GRACE_MS and restore it if the same user
-// reconnects within the window.
-const VOICE_GRACE_MS = 15_000;
-
-interface PendingVoiceCleanup {
-  timer: ReturnType<typeof setTimeout>;
-  voiceChannelId: string;
-  streamID: string;
-  nickname: string;
-  screenShareEnabled: boolean;
-  screenShareVideoStreamID: string;
-  screenShareAudioStreamID: string;
-  cameraEnabled: boolean;
-  cameraStreamID: string;
-  isMuted: boolean;
-  isDeafened: boolean;
-}
-
-const pendingVoiceCleanup = new Map<string, PendingVoiceCleanup>();
-
 // The client's nonce is echoed into something this server signs, so it is
 // attacker-supplied input under our own signature. 256 is well clear of the
 // 32-byte base64url value a client actually sends.
 const MAX_CLIENT_NONCE_LENGTH = 256;
+
+/**
+ * Put a held voice state onto a socket, and put that socket in the room.
+ *
+ * Shared by the two things that restore voice: `session:restore`, which runs
+ * the moment a client comes back, and the SFU sync, which catches everything
+ * else. Both used to be written out longhand, and only one of them existed.
+ *
+ * `channelId` is passed separately because the two callers know it from
+ * different places, and they do not always agree. The sync reads it from the
+ * SFU's own room list, which is the better answer — the SFU is where the media
+ * actually is, so if the held state says otherwise the held state is stale.
+ */
+function applyVoiceState(
+  socket: Socket,
+  clientId: string,
+  state: StashedVoiceState,
+  channelId: string,
+  serverId: string,
+): void {
+  const ci = clientsInfo[clientId];
+  if (!ci) return;
+
+  ci.hasJoinedChannel = true;
+  ci.voiceChannelId = channelId;
+  ci.streamID = state.streamID;
+  ci.isConnectedToVoice = true;
+  ci.screenShareEnabled = state.screenShareEnabled;
+  ci.screenShareVideoStreamID = state.screenShareVideoStreamID;
+  ci.screenShareAudioStreamID = state.screenShareAudioStreamID;
+  ci.cameraEnabled = state.cameraEnabled;
+  ci.cameraStreamID = state.cameraStreamID;
+  ci.isMuted = state.isMuted;
+  ci.isDeafened = state.isDeafened;
+
+  const roomName = channelId ? voiceRoomName(serverId, channelId) : "";
+  if (roomName) socket.join(roomName);
+
+  socket.emit("voice:state:restored", {
+    channelId,
+    streamID: state.streamID,
+  });
+}
 
 /**
  * Wire SFU peer_joined / peer_left / sync_response callbacks so the server
@@ -130,9 +152,21 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
         for (const uid of room.user_ids) {
           sfuUsers.add(uid);
           userToChannelId.set(uid, channelId);
-          sfuClient.trackUserConnection(room.room_id, uid);
+          // Only if it is not already known. `trackUserConnection` warns when
+          // it is — which is the right thing to say when a second device tries
+          // to join, and pure noise thirty times a minute from a sync loop.
+          //
+          // It also stamps `connectedAt`, which `onPeerLeft` reads to tell a
+          // stale peer_left from a real one. Re-stamping it every couple of
+          // seconds would keep it permanently inside that window and every
+          // leave would be ignored as stale.
+          if (!sfuClient.getTrackedUser(uid)) {
+            sfuClient.trackUserConnection(room.room_id, uid);
+          }
         }
       }
+
+      let changed = false;
 
       // Update voiceChannelId for active users from SFU state
       for (const [, ci] of Object.entries(clientsInfo)) {
@@ -140,7 +174,80 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
           const channelId = userToChannelId.get(ci.serverUserId);
           if (channelId && ci.voiceChannelId !== channelId) {
             ci.voiceChannelId = channelId;
+            changed = true;
           }
+        }
+      }
+
+      // Put back anyone the SFU is carrying that the socket layer has lost.
+      //
+      // This is the half that was missing, and it is why the whole thing could
+      // only ever be wrong in one direction. Every path here was gated on
+      // `hasJoinedChannel` already being true, so the SFU could take somebody
+      // out of a channel and never put anybody in one — which is exactly the
+      // state a reconnect leaves behind (GRYT-611).
+      for (const uid of sfuUsers) {
+        const alreadyLive = Object.values(clientsInfo).some(
+          (ci) => ci.serverUserId === uid && ci.hasJoinedChannel,
+        );
+        if (alreadyLive) continue;
+
+        const stashed = stashedVoiceState.get(uid);
+        // Nothing held for them. The SFU is carrying a peer this server has no
+        // record of ever being in voice — a leftover from a previous process,
+        // or somebody mid-join. Not ours to invent a stream id for; peer_left
+        // and the SFU's own room lifetime deal with it.
+        if (!stashed) continue;
+
+        // Their socket, if they have one. Somebody whose media is still up but
+        // whose client has not reconnected yet has nothing to attach to, and
+        // the entry keeps waiting for them.
+        const sockets = Object.entries(clientsInfo).filter(
+          ([, ci]) => ci.serverUserId === uid,
+        );
+        if (sockets.length === 0) continue;
+
+        // The newest, which is insertion order. A user with two is mid-device
+        // switch, and the one that just arrived is the one they are looking at.
+        const [sid] = sockets[sockets.length - 1];
+        const sock = io.sockets.sockets.get(sid);
+        if (!sock) continue;
+
+        const channelId = userToChannelId.get(uid) || stashed.voiceChannelId;
+        stashedVoiceState.delete(uid);
+        consola.info(`[SFU-Sync] Restoring voice for ${uid} in ${channelId} — SFU has them, this server did not`);
+        applyVoiceState(sock, sid, stashed, channelId, serverId);
+
+        // Deliberately no `voice:peer:joined`. That event plays the join sound,
+        // and nobody in the room was ever told this person left — their socket
+        // blipped, which is not something the room hears about. Announcing a
+        // join here would put a chime on a recovery.
+        changed = true;
+      }
+
+      // Anyone the SFU has stopped carrying is gone for good — drop what is
+      // held for them so a later reconnect does not put them back into a call
+      // that ended while they were away.
+      for (const [uid, stashed] of [...stashedVoiceState.entries()]) {
+        if (sfuUsers.has(uid)) continue;
+
+        consola.info(`[SFU-Sync] Dropping held voice state for ${uid} — SFU no longer has them`);
+        stashedVoiceState.delete(uid);
+
+        // This is where somebody actually leaves now, so this is where the
+        // room gets told. The disconnect handler used to say it the moment a
+        // socket went, which meant a two second network blip played the leave
+        // chime and then the join chime. Here we know the media connection is
+        // really gone, because the SFU has stopped reporting it.
+        const roomName = stashed.voiceChannelId
+          ? voiceRoomName(serverId, stashed.voiceChannelId)
+          : "";
+        if (roomName) {
+          io.to(roomName).emit("voice:peer:left", {
+            clientId: "",
+            nickname: stashed.nickname,
+            channelId: stashed.voiceChannelId,
+          });
         }
       }
 
@@ -148,6 +255,7 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
       for (const [sid, ci] of Object.entries(clientsInfo)) {
         if (ci.hasJoinedChannel && !sfuUsers.has(ci.serverUserId)) {
           consola.info(`[SFU-Sync] Stale voice user ${ci.serverUserId}, forcing disconnect`);
+          changed = true;
           const nickname = ci.nickname;
           const channelId = ci.voiceChannelId || "";
           const roomName = channelId ? voiceRoomName(serverId, channelId) : "";
@@ -175,8 +283,15 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
         }
       }
 
-      syncAllClients(io, clientsInfo);
-      broadcastMemberList(io, clientsInfo, serverId);
+      // Only when something actually moved. This runs every couple of seconds
+      // now rather than every minute, and `broadcastMemberList` reads three
+      // tables before it works out it has nothing new to say — so an
+      // unconditional call here is three queries a second, for ever, on a
+      // server where nobody is doing anything.
+      if (changed) {
+        syncAllClients(io, clientsInfo);
+        broadcastMemberList(io, clientsInfo, serverId);
+      }
     },
   });
 }
@@ -313,54 +428,25 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
     const wasRegistered = serverUserId && !serverUserId.startsWith("temp_");
     const hadVoice = clientInfo?.hasJoinedChannel ?? false;
 
-    // On transient transport drops (typical for Cloudflare Tunnel), defer voice
-    // cleanup so the user can reconnect without a full SFU teardown.
-    if (reason === "transport close" && hadVoice && wasRegistered) {
-      consola.info(`[Voice:Grace] Stashing voice state for ${serverUserId} (${VOICE_GRACE_MS}ms grace)`);
-
-      const timer = setTimeout(() => {
-        pendingVoiceCleanup.delete(serverUserId);
-        consola.info(`[Voice:Grace] Grace expired for ${serverUserId} — cleaning up`);
-
-        if (sfuClient) sfuClient.untrackUserConnection(serverUserId);
-
-        const channelId = clientInfo.voiceChannelId || "";
-        const roomName = channelId ? voiceRoomName(serverId, channelId) : "";
-        if (roomName) {
-          io.to(roomName).emit("voice:peer:left", {
-            clientId,
-            nickname: clientInfo.nickname,
-            channelId,
-          });
-        }
-
-        syncAllClients(io, clientsInfo);
-        broadcastMemberList(io, clientsInfo, serverId);
-      }, VOICE_GRACE_MS);
-
-      pendingVoiceCleanup.set(serverUserId, {
-        timer,
-        voiceChannelId: clientInfo.voiceChannelId || "",
-        streamID: clientInfo.streamID || "",
-        nickname: clientInfo.nickname,
-        screenShareEnabled: clientInfo.screenShareEnabled,
-        screenShareVideoStreamID: clientInfo.screenShareVideoStreamID,
-        screenShareAudioStreamID: clientInfo.screenShareAudioStreamID,
-        cameraEnabled: clientInfo.cameraEnabled,
-        cameraStreamID: clientInfo.cameraStreamID,
-        isMuted: clientInfo.isMuted,
-        isDeafened: clientInfo.isDeafened,
-      });
+    // Keep the voice state against the user, whatever took the socket away.
+    //
+    // This used to be gated on `reason === "transport close"`, which is one of
+    // several ways a socket dies and not the interesting one. A ping timeout, a
+    // server restart, a redeploy — all of them dropped the state on the floor
+    // while the media connection carried on working. The SFU decides when this
+    // entry dies now, so there is no reason to be picky about how the socket
+    // went (GRYT-611).
+    if (hadVoice && wasRegistered) {
+      consola.info(`[Voice:Stash] Holding voice state for ${serverUserId} (socket gone: ${reason})`);
+      stashedVoiceState.set(serverUserId, voiceStateOf(clientInfo));
 
       delete clientsInfo[clientId];
-      if (wasRegistered) {
-        syncAllClients(io, clientsInfo);
-        broadcastMemberList(io, clientsInfo, serverId);
-      }
+      syncAllClients(io, clientsInfo);
+      broadcastMemberList(io, clientsInfo, serverId);
       return;
     }
 
-    // Immediate cleanup for intentional disconnects and other reasons
+    // Nothing in voice to hold on to. Cleanup as before.
     if (serverUserId && sfuClient) {
       sfuClient.untrackUserConnection(serverUserId);
     }
@@ -440,34 +526,18 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
           clientsInfo[clientId].isServerMuted = moderation.isServerMuted;
           clientsInfo[clientId].isServerDeafened = moderation.isServerDeafened;
 
-          // Restore voice state if the user reconnected within the grace period
-          const pending = pendingVoiceCleanup.get(tokenPayload.serverUserId);
-          if (pending) {
-            clearTimeout(pending.timer);
-            pendingVoiceCleanup.delete(tokenPayload.serverUserId);
-            consola.info(`[Voice:Grace] Restored voice state for ${tokenPayload.nickname} (${tokenPayload.serverUserId})`);
-
-            clientsInfo[clientId].hasJoinedChannel = true;
-            clientsInfo[clientId].voiceChannelId = pending.voiceChannelId;
-            clientsInfo[clientId].streamID = pending.streamID;
-            clientsInfo[clientId].isConnectedToVoice = true;
-            clientsInfo[clientId].screenShareEnabled = pending.screenShareEnabled;
-            clientsInfo[clientId].screenShareVideoStreamID = pending.screenShareVideoStreamID;
-            clientsInfo[clientId].screenShareAudioStreamID = pending.screenShareAudioStreamID;
-            clientsInfo[clientId].cameraEnabled = pending.cameraEnabled;
-            clientsInfo[clientId].cameraStreamID = pending.cameraStreamID;
-            clientsInfo[clientId].isMuted = pending.isMuted;
-            clientsInfo[clientId].isDeafened = pending.isDeafened;
-
-            const roomName = pending.voiceChannelId
-              ? voiceRoomName(serverId, pending.voiceChannelId)
-              : "";
-            if (roomName) socket.join(roomName);
-
-            socket.emit("voice:state:restored", {
-              channelId: pending.voiceChannelId,
-              streamID: pending.streamID,
-            });
+          // Put voice back on the new socket if this user still has state held
+          // against them. The fast path — the SFU sync below is the backstop,
+          // and doing it here means a reconnect is whole by the time the client
+          // hears anything rather than up to one sync tick later.
+          //
+          // No window to be inside any more. The entry exists for exactly as
+          // long as the SFU says the user is connected to it.
+          const stashed = stashedVoiceState.get(tokenPayload.serverUserId);
+          if (stashed) {
+            stashedVoiceState.delete(tokenPayload.serverUserId);
+            consola.info(`[Voice:Stash] Restored voice state for ${tokenPayload.nickname} (${tokenPayload.serverUserId})`);
+            applyVoiceState(socket, clientId, stashed, stashed.voiceChannelId, serverId);
           }
 
           const otherCount = countOtherSessions(clientsInfo, clientId, tokenPayload.grytUserId);
