@@ -1,4 +1,5 @@
 import { sfuRoomId, voiceRoomName } from "../utils/voiceRooms";
+import { forgetStashedVoiceState } from "../utils/voiceStash";
 import consola from "consola";
 import { randomUUID } from "crypto";
 import type { HandlerContext, EventHandlerMap } from "./types";
@@ -143,6 +144,9 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
             if (ctx.sfuClient && ci.serverUserId) {
               try { ctx.sfuClient.untrackUserConnection(ci.serverUserId); } catch { /* ignore */ }
             }
+            // The channel is being deleted, so there is nothing to restore them
+            // into if their socket drops before the SFU catches up.
+            if (ci.serverUserId) forgetStashedVoiceState(ci.serverUserId);
           }
           syncAllClients(io, clientsInfo);
           broadcastMemberList(io, clientsInfo, serverId);

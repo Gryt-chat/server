@@ -4,6 +4,7 @@ import type { Server as SocketIoServer } from "socket.io";
 import { getUserByServerId, setUserInactive, revokeUserRefreshTokens } from "../db";
 import type { Clients } from "../types";
 import { sfuRoomId, voiceRoomName } from "../socket/utils/voiceRooms";
+import { forgetStashedVoiceState } from "../socket/utils/voiceStash";
 
 /**
  * The Gryt identity behind a server user, from a live session if there is one
@@ -89,9 +90,14 @@ export async function evictUser(params: {
         sfuClient.untrackUserConnection(ci.serverUserId);
       }
 
+      // Nothing held against them either. The disconnect handler keeps voice
+      // state for anyone whose socket goes while they are in a channel, and the
+      // SFU sync puts it back — which for somebody being thrown out is the
+      // opposite of what is wanted (GRYT-611).
+      forgetStashedVoiceState(ci.serverUserId);
+
       // Tell the room, and tell them, rather than relying on the disconnect
-      // handler — which stashes voice state for a grace period on a transport
-      // drop, and this is deliberate rather than accidental.
+      // handler, because this is deliberate rather than accidental.
       s.to(voiceRoomName(serverId, ci.voiceChannelId)).emit("voice:peer:left", {
         clientId: sid,
         nickname: ci.nickname,

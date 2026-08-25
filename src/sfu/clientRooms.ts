@@ -227,7 +227,8 @@ export class SFURoomManager {
     };
 
     ws.send(JSON.stringify(message));
-    consola.info('[SFU] Sent sync_request');
+    // Not logged. This runs every two seconds; saying so each time buries
+    // everything else in the log.
   }
 
   onConnectionClosed(): void {

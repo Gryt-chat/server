@@ -7,6 +7,7 @@ import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 import { getVoiceSeatLimit } from "../../utils/voiceSeats";
 import { insertServerAudit } from "../../db";
 import { socketMay as socketMayFor } from "../utils/standing";
+import { forgetStashedVoiceState } from "../utils/voiceStash";
 import type { Permission } from "../../constants/permissions";
 
 const RL_REQUEST_ROOM: RateLimitRule = { limit: 10, windowMs: 60_000, scorePerAction: 1, maxScore: 8, scoreDecayMs: 5000 };
@@ -193,6 +194,7 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
 
       clientsInfo[clientId].streamID = streamID;
       if (!newJoinedState) {
+        if (serverUserId) forgetStashedVoiceState(serverUserId);
         clientsInfo[clientId].cameraEnabled = false;
         clientsInfo[clientId].cameraStreamID = "";
         clientsInfo[clientId].screenShareEnabled = false;
@@ -394,6 +396,12 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
 
       clientsInfo[clientId].hasJoinedChannel = newJoinedState;
       if (!newJoinedState) {
+        // Leaving on purpose. Drop anything held against this user so the SFU
+        // sync cannot put them back on the way out — the media connection takes
+        // a moment to actually close, and for that moment the SFU still has
+        // them (GRYT-611).
+        const leavingUserId = clientsInfo[clientId].serverUserId;
+        if (leavingUserId) forgetStashedVoiceState(leavingUserId);
         clientsInfo[clientId].isConnectedToVoice = false;
         clientsInfo[clientId].voiceChannelId = "";
         clientsInfo[clientId].cameraEnabled = false;
