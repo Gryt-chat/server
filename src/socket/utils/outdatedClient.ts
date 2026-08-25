@@ -77,6 +77,20 @@ export function needsUpdateReminder(userAgent: string | undefined): boolean {
   return isOlder(client.version, FIRST_WORKING_WINDOWS_UPDATER);
 }
 
+/**
+ * Where the installer comes from.
+ *
+ * This pointed at GitHub Releases, which is a page of release notes above a
+ * collapsed Assets list holding a dozen files across three platforms. The
+ * person reading this message is stuck on a client that cannot update itself,
+ * and that page asks them to go and identify the .exe.
+ *
+ * gryt.chat/download resolves the current build for the platform in the query
+ * and starts the download on arrival. The reminder only ever reaches Windows —
+ * `needsUpdateReminder` returns false for anything else — so it can say which.
+ */
+const INSTALLER_URL = "https://gryt.chat/download?os=windows";
+
 export function formatUpdateReminder(
   nickname: string,
   serverUserId: string,
@@ -87,7 +101,7 @@ export function formatUpdateReminder(
     "",
     "It has been downloading every new release and installing none of them. Installing is the step that fails, so it cannot repair itself.",
     "",
-    "**Download the current installer and run it once.** Close Gryt first, including the tray icon: https://github.com/Gryt-chat/gryt/releases/latest",
+    `**[Download the current installer](${INSTALLER_URL})**, then close Gryt, including the tray icon, and run it.`,
     "",
     "Updates work on their own again afterwards, and your settings and servers are untouched.",
     "",
