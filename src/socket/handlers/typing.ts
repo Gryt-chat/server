@@ -52,6 +52,9 @@ export function registerTypingHandlers(ctx: HandlerContext): EventHandlerMap {
 					serverUserId: userId,
 					nickname: user.nickname,
 					avatarFileId: user.avatar_file_id ?? null,
+					// The indicator draws a face, so it needs the same three
+					// things every other face in the app is drawn from.
+					avatarWorn: user.avatar_worn ?? null,
 					conversationId: payload.conversationId,
 				});
 			}

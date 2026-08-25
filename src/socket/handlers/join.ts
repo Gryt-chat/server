@@ -765,6 +765,10 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           refreshToken: refreshTokenRecord.token_id,
           nickname: user.nickname,
           avatarFileId: user.avatar_file_id || null,
+          // What this server already holds for them, so a client knows on the
+          // way in whether they have a look here rather than after the first
+          // member list arrives.
+          avatarWorn: user.avatar_worn ?? null,
           isOwner,
           setupRequired,
         });

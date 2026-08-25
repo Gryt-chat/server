@@ -197,43 +197,58 @@ export async function buildMemberList(clientsInfo: Clients) {
     });
 }
 
+/** One member, as far as the dedupe below is concerned. */
+type MemberListEntry = Awaited<ReturnType<typeof buildMemberList>>[number];
+
+/**
+ * What the broadcast compares against the last one it sent.
+ *
+ * Named and exported so it can be tested. The failure it guards is silent and
+ * has happened: a field is added to `buildMemberList` and not to this, the list
+ * is rebuilt with the new value, the hash comes out identical to the last one,
+ * the broadcast returns early — and the value reaches nobody. Nothing errors,
+ * the field is right in the builder, and it costs a debugging round to find
+ * (GRYT-65). `memberStateHash.test.ts` now fails instead.
+ *
+ * Not every field belongs here. `lastSeen` moves constantly and would defeat
+ * the dedupe entirely; this is the set that should repaint somebody's row.
+ */
+export function memberStateHash(members: MemberListEntry[]): string {
+  return JSON.stringify(
+    members.map(m => ({
+      serverUserId: m.serverUserId,
+      nickname: m.nickname,
+      // Changes when an identity is replaced (`replaceUserIdentity`), which
+      // is exactly when a member list showing the old one would be wrong.
+      identityFingerprint: m.identityFingerprint,
+      // A rename changes the name above too, so this is redundant for the
+      // dedupe — kept so that a rename back to a previous name, which leaves
+      // `nickname` looking untouched, still reaches the client.
+      nicknameChangedAt: m.nicknameChangedAt,
+      avatarFileId: m.avatarFileId,
+      avatarColor: m.avatarColor,
+      // Designing a new owl changes nothing else about a member, so without
+      // this line it would change nothing anybody sees.
+      avatarWorn: m.avatarWorn,
+      role: m.role,
+      isBot: m.isBot,
+      status: m.status,
+      isConnectedToVoice: m.isConnectedToVoice,
+      hasJoinedChannel: m.hasJoinedChannel,
+      voiceChannelId: m.voiceChannelId,
+      isMuted: m.isMuted,
+      isDeafened: m.isDeafened,
+      isServerMuted: m.isServerMuted,
+      isServerDeafened: m.isServerDeafened,
+    })).sort((a, b) => a.serverUserId.localeCompare(b.serverUserId))
+  );
+}
+
 async function emitMemberListNow(io: Server, clientsInfo: Clients): Promise<void> {
   try {
     const members = await buildMemberList(clientsInfo);
 
-    // IMPORTANT: include fields that should trigger UI updates (e.g. avatar/nickname),
-    // otherwise updates can get deduped away and clients won't refresh.
-    const currentMemberStateHash = JSON.stringify(
-      members.map(m => ({
-        serverUserId: m.serverUserId,
-        nickname: m.nickname,
-        // Changes when an identity is replaced (`replaceUserIdentity`), which
-        // is exactly when a member list showing the old one would be wrong.
-        identityFingerprint: m.identityFingerprint,
-        // A rename changes the name above too, so this is redundant for the
-        // dedupe — kept so that a rename back to a previous name, which leaves
-        // `nickname` looking untouched, still reaches the client.
-        nicknameChangedAt: m.nicknameChangedAt,
-        avatarFileId: m.avatarFileId,
-        avatarColor: m.avatarColor,
-        // In the hash as well as in the builder above. A field the builder
-        // carries and the hash does not is a value that reaches nobody: the
-        // list is rebuilt, the hash matches the last one, and the broadcast
-        // returns early. Designing a new owl changes nothing else about a
-        // member, so without this line it would change nothing anybody sees.
-        avatarWorn: m.avatarWorn,
-        role: m.role,
-        isBot: m.isBot,
-        status: m.status,
-        isConnectedToVoice: m.isConnectedToVoice,
-        hasJoinedChannel: m.hasJoinedChannel,
-        voiceChannelId: m.voiceChannelId,
-        isMuted: m.isMuted,
-        isDeafened: m.isDeafened,
-        isServerMuted: m.isServerMuted,
-        isServerDeafened: m.isServerDeafened,
-      })).sort((a, b) => a.serverUserId.localeCompare(b.serverUserId))
-    );
+    const currentMemberStateHash = memberStateHash(members);
 
     if (currentMemberStateHash === lastMemberListStateByIO.get(io)) {
       return;
