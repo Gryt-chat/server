@@ -159,6 +159,15 @@ export async function buildMemberList(clientsInfo: Clients) {
         avatarColor: user.avatar_file_id
           ? avatarFiles.get(user.avatar_file_id)?.dominant_color ?? null
           : null,
+        // What their owl is wearing, if they designed one. The client draws it
+        // rather than fetching a picture, so it stays sharp at every size and
+        // follows a palette change; `avatarFileId` above is still set, because
+        // saving a design uploads a PNG as well and that is what a client too
+        // old to know about this field shows.
+        //
+        // Passed through exactly as it was stored. The server never resolves a
+        // key — see `utils/wornString.ts`.
+        avatarWorn: user.avatar_worn,
         role: roleMap.get(user.server_user_id) || 'member',
         // Read off the id, so it cannot be wrong and cannot be spoofed by
         // anything the member sends. Every surface that shows a name shows this
@@ -207,6 +216,12 @@ async function emitMemberListNow(io: Server, clientsInfo: Clients): Promise<void
         nicknameChangedAt: m.nicknameChangedAt,
         avatarFileId: m.avatarFileId,
         avatarColor: m.avatarColor,
+        // In the hash as well as in the builder above. A field the builder
+        // carries and the hash does not is a value that reaches nobody: the
+        // list is rebuilt, the hash matches the last one, and the broadcast
+        // returns early. Designing a new owl changes nothing else about a
+        // member, so without this line it would change nothing anybody sees.
+        avatarWorn: m.avatarWorn,
         role: m.role,
         isBot: m.isBot,
         status: m.status,

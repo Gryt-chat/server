@@ -72,6 +72,12 @@ export interface UserRecord {
    */
   nickname_change_count: number;
   nickname_changed_at: Date | null;
+  /**
+   * What this member's owl is wearing, as the string `@gryt/owl` encodes, or
+   * null when they have no designed look. Stored and passed on without being
+   * read — see `utils/wornString.ts`.
+   */
+  avatar_worn: string | null;
 }
 
 // ── Message types ────────────────────────────────────────────────

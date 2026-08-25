@@ -1,10 +1,11 @@
 import consola from "consola";
 import type { HandlerContext, EventHandlerMap } from "./types";
-import { getUserByServerId, updateUserNickname } from "../../db";
+import { getUserByServerId, setUserWorn, updateUserNickname } from "../../db";
 import { hasPermission } from "../../services/permissions";
 import { buildMemberList, syncAllClients, broadcastMemberList } from "../utils/clients";
 import { socketMay } from "../utils/standing";
 import { looksLikeABotName } from "../../auth/identity";
+import { readWornUpdate } from "../../utils/wornString";
 
 export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
   const { io, socket, clientId, serverId, clientsInfo } = ctx;
@@ -42,7 +43,7 @@ export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    'profile:update': async (data: { nickname?: string }) => {
+    'profile:update': async (data: { nickname?: string; avatarWorn?: string | null }) => {
       if (!clientsInfo[clientId]) return;
       const serverUserId = clientsInfo[clientId].serverUserId;
       if (!serverUserId || serverUserId.startsWith("temp_")) {
@@ -77,10 +78,27 @@ export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
           clientsInfo[clientId].nickname = nickname;
         }
 
+        // The look, which rides along with the nickname because that is what it
+        // is: a second thing about how somebody appears here, set from the same
+        // screen and synced by the same button.
+        //
+        // Gated on nothing. `change_nickname` exists because a name is what
+        // everybody reads and a name can be abusive; a hat cannot, and the
+        // options are a fixed registry rather than free text. A member barred
+        // from renaming should still be able to choose a hat.
+        const wornUpdate = readWornUpdate(data?.avatarWorn);
+        if (wornUpdate.kind === "invalid") {
+          socket.emit("profile:error", "That avatar could not be read.");
+          return;
+        }
+        if (wornUpdate.kind === "set") await setUserWorn(serverUserId, wornUpdate.worn);
+        if (wornUpdate.kind === "clear") await setUserWorn(serverUserId, null);
+
         const user = await getUserByServerId(serverUserId);
         socket.emit("profile:updated", {
           nickname: user?.nickname ?? clientsInfo[clientId].nickname,
           avatarFileId: user?.avatar_file_id ?? null,
+          avatarWorn: user?.avatar_worn ?? null,
         });
 
         syncAllClients(io, clientsInfo);
@@ -99,6 +117,7 @@ export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
           socket.emit("profile:updated", {
             nickname: user?.nickname ?? clientsInfo[clientId]?.nickname,
             avatarFileId: user?.avatar_file_id ?? null,
+            avatarWorn: user?.avatar_worn ?? null,
           });
         }
         broadcastMemberList(io, clientsInfo, serverId);

@@ -486,6 +486,24 @@ function runMigrations(d: DatabaseSync): void {
     d.exec("ALTER TABLE server_config ADD COLUMN bot_join_policy TEXT NOT NULL DEFAULT 'request'");
   }
 
+  // What somebody's owl is wearing, as the short string `@gryt/owl` encodes.
+  //
+  // The avatar it describes is drawn on the client, every time, at the size it
+  // is shown. That is the difference from `avatar_file_id`, which is a picture
+  // somebody uploaded: a designed owl kept as a PNG stops following palette
+  // changes and never gets sharper than the raster it was saved at.
+  //
+  // Null means there is no designed look — every row that predates this, and
+  // everybody who uploaded a picture instead. That is not the same as the string
+  // for a look with every slot empty, which is somebody who took everything off
+  // and draws differently from the owl their seed would have picked.
+  //
+  // Never parsed here. See `utils/wornString.ts` for why the server checks the
+  // shape and stops there.
+  if (!hasColumn(d, "users", "avatar_worn")) {
+    d.exec("ALTER TABLE users ADD COLUMN avatar_worn TEXT");
+  }
+
   d.prepare("UPDATE server_config SET avatar_thumb_px = ?").run(AVATAR_THUMB_PX);
 
   seedBuiltInRoles(d);

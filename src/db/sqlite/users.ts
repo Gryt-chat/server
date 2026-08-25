@@ -24,6 +24,7 @@ function rowToUser(r: Record<string, unknown>): UserRecord {
     nickname_changed_at: r.nickname_changed_at
       ? fromIso(r.nickname_changed_at as string)
       : null,
+    avatar_worn: (r.avatar_worn as string) || null,
   };
 }
 
@@ -137,6 +138,9 @@ export async function upsertUser(
     server_mute_expires_at: null,
     nickname_change_count: 0,
     nickname_changed_at: null,
+    // A new member has not designed anything yet, so their owl is whatever
+    // their name draws.
+    avatar_worn: null,
   };
 }
 
@@ -198,6 +202,24 @@ export async function updateUserAvatar(serverUserId: string, avatarFileId: strin
 export async function setUserAvatar(serverUserId: string, avatarFileId: string | null): Promise<void> {
   const db = getSqliteDb();
   db.prepare(`UPDATE users SET avatar_file_id = ? WHERE server_user_id = ?`).run(avatarFileId, serverUserId);
+}
+
+/**
+ * Set or clear the look this member's owl is drawn in.
+ *
+ * Deliberately not folded into `setUserAvatar`. Designing an owl uploads a
+ * picture too — it is what an older client and the voice tile's dominant colour
+ * both read — so an upload cannot be taken to mean somebody has stopped using a
+ * designed look. The client knows which of the two happened and says so; the
+ * server would have to guess, and it would guess wrong on every save from the
+ * editor.
+ *
+ * Null clears it, and clearing is a real thing somebody does: it is going back
+ * to an uploaded picture, or back to the owl their name draws.
+ */
+export async function setUserWorn(serverUserId: string, worn: string | null): Promise<void> {
+  const db = getSqliteDb();
+  db.prepare(`UPDATE users SET avatar_worn = ? WHERE server_user_id = ?`).run(worn, serverUserId);
 }
 
 /**
