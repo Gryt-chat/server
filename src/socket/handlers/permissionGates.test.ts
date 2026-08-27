@@ -364,6 +364,79 @@ describe("events that read the socket rather than a token", () => {
     assert.equal(clientsInfo[ctx.clientId].cameraEnabled, false);
   });
 
+  /**
+   * A socket mid-restore is not a socket that has been refused (GRYT-647).
+   *
+   * On a reconnect the client sends `session:restore` and its voice
+   * re-announce together and they race. Caught on prod three milliseconds
+   * apart: `voice:room:request` arrived while the socket still held its
+   * `temp_<id>` placeholder, every gate read that as no permissions, and the
+   * server said `forbidden`.
+   *
+   * `forbidden` is the one answer the client will not retry, because a
+   * permission decision does not change if you ask again. This one changed
+   * three milliseconds later. So the assertions below are about the *code*
+   * rather than about being refused: refusing is right, saying `forbidden` is
+   * what put people out of the channel.
+   */
+  function unidentifiedCaller(clientsInfo: Clients, clientId: string) {
+    clientsInfo[clientId] = {
+      ...clientsInfo[clientId],
+      serverUserId: `temp_${clientId}`,
+      grytUserId: undefined,
+    } as Clients[string];
+  }
+
+  function codes(emitted: Emitted[]): string[] {
+    return emitted
+      .map((e) => (e.payload as { error?: string })?.error)
+      .filter((c): c is string => typeof c === "string");
+  }
+
+  it("voice:room:request tells an unidentified socket to retry, not that it is forbidden", async () => {
+    const { ctx, emitted, clientsInfo } = makeContext();
+    await socketCaller(["join_voice"], clientsInfo, ctx.clientId);
+    unidentifiedCaller(clientsInfo, ctx.clientId);
+
+    await registerVoiceHandlers(ctx)["voice:room:request"]("chan_probe");
+
+    assert.equal(codes(emitted).includes("unidentified"), true);
+    assert.equal(
+      refusals(emitted).length,
+      0,
+      "forbidden is the one code the client will not retry",
+    );
+  });
+
+  it("voice:channel:joined does the same", async () => {
+    const { ctx, emitted, clientsInfo } = makeContext();
+    await socketCaller(["join_voice"], clientsInfo, ctx.clientId);
+    unidentifiedCaller(clientsInfo, ctx.clientId);
+
+    await registerVoiceHandlers(ctx)["voice:channel:joined"](true);
+
+    assert.equal(codes(emitted).includes("unidentified"), true);
+    assert.equal(refusals(emitted).length, 0);
+    assert.equal(clientsInfo[ctx.clientId].hasJoinedChannel, false);
+  });
+
+  it("voice:state:update does not force-mute a socket it cannot evaluate yet", async () => {
+    // Forcing the mute here records the wrong state and tells somebody they
+    // cannot speak, both on the strength of not knowing who they are.
+    const { ctx, emitted, clientsInfo } = makeContext();
+    await socketCaller([], clientsInfo, ctx.clientId);
+    unidentifiedCaller(clientsInfo, ctx.clientId);
+
+    await registerVoiceHandlers(ctx)["voice:state:update"]({
+      isMuted: false,
+      isDeafened: false,
+      isAFK: false,
+    });
+
+    assert.equal(clientsInfo[ctx.clientId].isMuted, false);
+    assert.equal(refusals(emitted).length, 0);
+  });
+
   it("voice:state:update records somebody without speak as muted", async () => {
     const { ctx, emitted, clientsInfo } = makeContext();
     await socketCaller(["join_voice"], clientsInfo, ctx.clientId);
