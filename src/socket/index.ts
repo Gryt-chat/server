@@ -328,7 +328,12 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
   // Keep module-level refs for REST-triggered broadcasts
   setSocketRefs(io, serverId, clientsInfo);
 
-  consola.info(`Client ${clientId} connected from ${socket.handshake.address}`);
+  /* The resolved address rather than the handshake one. Everything public
+     arrives through a tunnel, so `handshake.address` is the tunnel for every
+     client and cannot tell two of them apart — which is the whole point of
+     logging it. getClientIp reads X-Forwarded-For through the configured
+     trusted hops. */
+  consola.info(`Client ${clientId} connected from ${getClientIp(socket)}`);
 
   if (verboseLogs) {
     const originalEmit = socket.emit;
@@ -422,9 +427,20 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
   });
 
   socket.on("disconnect", (reason) => {
-    consola.info(`Client disconnected: ${clientId} (${reason})`);
     const clientInfo = clientsInfo[clientId];
     const serverUserId = clientInfo?.serverUserId ?? "";
+
+    /* Who and from where, not just which socket (GRYT-645).
+     *
+     * On 2026-08-27 two clients were dropped by ping timeout on prod and on
+     * beta within five seconds, and the logs could not say whether that was one
+     * uplink, two, or the tunnel — `Client disconnected: <socket id> (reason)`
+     * names a socket that no longer exists and nothing else. Two stacks
+     * agreeing on one address is a different diagnosis from two stacks
+     * disagreeing, and both were consistent with what was written down. */
+    consola.info(
+      `Client disconnected: ${clientId} user=${serverUserId || "anonymous"} ip=${getClientIp(socket)} (${reason})`,
+    );
     const wasRegistered = serverUserId && !serverUserId.startsWith("temp_");
     const hadVoice = clientInfo?.hasJoinedChannel ?? false;
 
