@@ -6,7 +6,7 @@ import { syncAllClients, broadcastMemberList } from "../utils/clients";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 import { getVoiceSeatLimit } from "../../utils/voiceSeats";
 import { insertServerAudit } from "../../db";
-import { socketMay as socketMayFor } from "../utils/standing";
+import { socketIsIdentified, socketMay as socketMayFor } from "../utils/standing";
 import { forgetStashedVoiceState } from "../utils/voiceStash";
 import type { Permission } from "../../constants/permissions";
 
@@ -31,6 +31,42 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
    */
   function socketMay(permission: Permission): Promise<boolean> {
     return socketMayFor(clientsInfo, clientId, permission);
+  }
+
+  /**
+   * Refuse without closing the door, for a socket that has not said who it is.
+   *
+   * On a reconnect the client sends `session:restore` and its voice
+   * re-announce together, and they race. Caught on prod on 2026-08-27, three
+   * milliseconds apart:
+   *
+   *     15:37:31.804  voice:room:request  user=temp_rsBB
+   *     15:37:31.807  FORBIDDEN           user=temp_rsBB lacks join_voice
+   *     15:37:31.810  Restored session:   Sivert
+   *
+   * A placeholder user holds no permissions, so every gate here said
+   * `forbidden` — and `forbidden` is the one answer the client will not retry,
+   * on the reasonable grounds that a permission decision does not change if you
+   * ask again. This one changed three milliseconds later, so the single case it
+   * refused to retry was the case that would have worked. It gave up, fell back
+   * to a full reconnect, and put the user out of the channel.
+   *
+   * So an unidentified socket gets its own code. The client's re-announce
+   * backs off [0, 2000, 5000] on anything that is not `forbidden`, so the
+   * second attempt lands well after the restore.
+   *
+   * Returns true when it has answered, so callers read as a guard.
+   */
+  function refusedAsUnidentified(): boolean {
+    if (socketIsIdentified(clientsInfo, clientId)) return false;
+
+    socket.emit("voice:room:error", {
+      error: "unidentified",
+      message: "Still working out who you are — try again in a moment.",
+      retryAfterMs: 2000,
+    });
+
+    return true;
   }
 
   return {
@@ -81,7 +117,13 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
       // still works in the direction that always has to — and the corrected
       // state comes straight back on the sync below.
       let isMuted = Boolean(clientState.isMuted);
-      if (!isMuted && !(await socketMay("speak"))) {
+      /* Unidentified is not the same as unpermitted here either. Forcing the
+         mute on a socket mid-restore records the wrong state and tells somebody
+         they cannot speak, both on the strength of not knowing yet. They are
+         not in a member list while unidentified — clients.ts filters `temp_`
+         out — so nothing is shown either way until the restore lands and the
+         next update is evaluated properly. */
+      if (!isMuted && socketIsIdentified(clientsInfo, clientId) && !(await socketMay("speak"))) {
         isMuted = true;
         socket.emit("voice:room:error", {
           error: "forbidden",
@@ -301,6 +343,10 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
           socket.emit("voice:room:error", "Invalid room ID");
           return;
         }
+        if (refusedAsUnidentified()) {
+          consola.info(`[Voice:Step 1] not identified yet client=${clientId} — asked to retry`);
+          return;
+        }
         if (!(await socketMay("join_voice"))) {
           consola.warn(`[Voice:Step 1] FORBIDDEN client=${clientId} user=${userId} lacks join_voice`);
           socket.emit("voice:room:error", {
@@ -376,6 +422,8 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
       // has no media path anyway, but the flag is what puts somebody in the
       // member list as being in voice — so left ungated it is a way to appear
       // in a channel you were not let into.
+      if (newJoinedState && refusedAsUnidentified()) return;
+
       if (newJoinedState && !(await socketMay("join_voice"))) {
         socket.emit("voice:room:error", {
           error: "forbidden",

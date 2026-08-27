@@ -26,6 +26,27 @@ export async function socketMay(
 }
 
 /**
+ * Whether this socket has said who it is yet.
+ *
+ * A socket is given `temp_<id>` at connection and keeps it until
+ * `session:restore` or a join finishes. `socketMay` answers false for one of
+ * those, correctly — a placeholder holds no permissions — but false is the same
+ * answer it gives somebody who has been refused, and the two are not the same
+ * thing. One is a decision and the other is a moment.
+ *
+ * Callers that only gate an action can keep using `socketMay` and treat both as
+ * no. Callers that *report* the refusal need this: telling a client it is
+ * forbidden when the truth is "not yet" makes it stop asking (GRYT-647).
+ */
+export function socketIsIdentified(
+  clientsInfo: Clients,
+  clientId: string,
+): boolean {
+  const serverUserId = clientsInfo[clientId]?.serverUserId;
+  return Boolean(serverUserId) && !serverUserId!.startsWith("temp_");
+}
+
+/**
  * The same answer, cached on the socket, for deciding who a broadcast goes to.
  *
  * Chat messages and member lists go out to every connected socket, and asking
