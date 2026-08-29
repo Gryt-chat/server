@@ -570,6 +570,25 @@ function runMigrations(d: DatabaseSync): void {
     d.exec("ALTER TABLE server_config ADD COLUMN allow_dms INTEGER NOT NULL DEFAULT 1");
   }
 
+  // What a member says their DM public key is (GRYT-720).
+  //
+  // A compact JWT the client signs with the identity key it joined on, carrying
+  // its X25519 public key. Stored whole and handed back whole. Nothing here
+  // reads it, and that is the design rather than a shortcut: the point of the
+  // feature is that this server cannot read the messages, and a server that
+  // verified the binding would be asserting something a client must check for
+  // itself anyway. Members pin what they are given and refuse a change.
+  //
+  // One column rather than a key and a signature side by side, so there is no
+  // way to hand out one member's key with another's signature.
+  //
+  // NULL for everybody who has not sent one, which is every row written before
+  // this and every client older than the feature. No DM key means no encrypted
+  // message, which is what happens today.
+  if (!hasColumn(d, "users", "dm_key_binding")) {
+    d.exec("ALTER TABLE users ADD COLUMN dm_key_binding TEXT");
+  }
+
   d.prepare("UPDATE server_config SET avatar_thumb_px = ?").run(AVATAR_THUMB_PX);
 
   seedBuiltInRoles(d);

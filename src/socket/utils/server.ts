@@ -195,6 +195,22 @@ export async function sendInfo(socket: Socket, clientsInfo: Clients | undefined,
     // in. A client can only say "you don't need an account to join this
     // server" when both are favourable.
     joinPolicy,
+    /**
+     * Whether this server carries DM key bindings, so a client can say what it
+     * will get before joining (GRYT-720).
+     *
+     * A constant, not a setting. There is nothing for an operator to decide:
+     * either the code stores and relays the column or it does not, and a
+     * version that does cannot be asked to stop. It is here rather than
+     * inferred from `version` because a version string is a fact about a
+     * release and this is a question about behaviour, and reading one off the
+     * other means every client shipping a table of which versions had which
+     * feature.
+     *
+     * A server too old to know the field sends nothing, and an absent value
+     * means no — which is correct, and needs no fallback list anywhere.
+     */
+    encryptedDirectMessages: true,
   };
   
   socket.emit("server:info", serverInfo);

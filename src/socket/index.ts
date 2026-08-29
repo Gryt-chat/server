@@ -26,6 +26,7 @@ import { registerDiagnosticsHandlers } from "./handlers/diagnostics";
 import { registerVoiceLatencyHandlers } from "./handlers/voiceLatency";
 import { registerReportHandlers } from "./handlers/reports";
 import { registerTypingHandlers } from "./handlers/typing";
+import { registerDmKeyHandlers } from "./handlers/dmKeys";
 import { addressIsOwn, resolveClientIp, trustedProxyHops } from "../config/clientAddress";
 
 export { broadcastChatNew, broadcastCustomEmojisUpdate, broadcastEmojiQueueUpdate, broadcastServerUiUpdate };
@@ -394,6 +395,7 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
     ...registerDiagnosticsHandlers(ctx),
     ...registerVoiceLatencyHandlers(ctx),
     ...registerTypingHandlers(ctx),
+    ...registerDmKeyHandlers(ctx),
   };
 
   // ── Base socket events ───────────────────────────────────────

@@ -73,6 +73,19 @@ export interface UserRecord {
   nickname_change_count: number;
   nickname_changed_at: Date | null;
   /**
+   * What this member says their DM public key is (GRYT-720).
+   *
+   * A compact JWT the client signed with the identity key it joined on,
+   * carrying its X25519 public key. Opaque here on purpose: nothing on this
+   * server reads it, verifies it or acts on it. The point of the feature is
+   * that this server cannot read the messages, so a server that vouched for
+   * the binding would be vouching for something a member has to check anyway.
+   *
+   * Null for anybody who has not sent one, which is every row written before
+   * this and every client older than the feature.
+   */
+  dm_key_binding: string | null;
+  /**
    * What this member's owl is wearing, as the string `@gryt/owl` encodes, or
    * null when they have no designed look. Stored and passed on without being
    * read — see `utils/wornString.ts`.
