@@ -589,6 +589,21 @@ function runMigrations(d: DatabaseSync): void {
     d.exec("ALTER TABLE users ADD COLUMN dm_key_binding TEXT");
   }
 
+  // A message this server cannot read (GRYT-729).
+  //
+  // The whole sealed envelope, stored and handed back untouched. When it is set
+  // `text` is null and there is nothing here to filter, search, moderate or
+  // export — which is the feature rather than a regression, and is why the
+  // handler refuses one on a channel: a channel is a room with a member list,
+  // not a pair of people, and there is no key to seal to.
+  //
+  // Null for every message written before this and every one sent in the clear.
+  // A conversation is a mix of both for as long as it takes everybody to
+  // update, and each message says which it was.
+  if (!hasColumn(d, "messages", "sealed")) {
+    d.exec("ALTER TABLE messages ADD COLUMN sealed TEXT");
+  }
+
   d.prepare("UPDATE server_config SET avatar_thumb_px = ?").run(AVATAR_THUMB_PX);
 
   seedBuiltInRoles(d);

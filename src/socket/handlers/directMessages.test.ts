@@ -720,3 +720,139 @@ describe("group conversations", () => {
     assert.ok((await listFor(alice)).some((c) => c.conversation_id === pairId), "the pair conversation was left");
   });
 });
+
+/**
+ * Sealed messages (GRYT-729).
+ *
+ * The server stores an envelope it cannot read and refuses the two shapes that
+ * would put a copy in the clear beside it — a message that is both, and a
+ * message sealed on a channel, where there is no set of keys to seal to and
+ * anybody admitted later would find the history unreadable.
+ */
+describe("a sealed direct message", () => {
+  const envelope = JSON.stringify({
+    type: "gryt-sealed-message",
+    version: 1,
+    sender: "c2VuZGVy",
+    iv: "aXY",
+    body: "Ym9keQ",
+    keys: {},
+  });
+
+  it("is stored whole and comes back whole", async () => {
+    const conversationId = await openDm(alice, bob);
+    clearAll();
+
+    await alice.handlers["chat:send"]({
+      conversationId,
+      accessToken: alice.accessToken,
+      sealed: envelope,
+    });
+
+    const [posted] = alice.received("chat:new") as { sealed?: string; text?: string | null }[];
+    assert.equal(posted?.sealed, envelope,
+      "the envelope has to survive byte for byte; a recipient verifies a tag over it");
+    assert.equal(posted?.text ?? null, null,
+      "a sealed message must not also carry text, or the plaintext was stored after all");
+  });
+
+  it("reaches the other person", async () => {
+    const conversationId = await openDm(alice, bob);
+    clearAll();
+
+    await alice.handlers["chat:send"]({
+      conversationId,
+      accessToken: alice.accessToken,
+      sealed: envelope,
+    });
+
+    const [seen] = bob.received("chat:new") as { sealed?: string }[];
+    assert.equal(seen?.sealed, envelope, "an encrypted message still has to be delivered");
+  });
+
+  it("is still there after a reload", async () => {
+    const conversationId = await openDm(alice, bob);
+    clearAll();
+
+    await alice.handlers["chat:send"]({
+      conversationId,
+      accessToken: alice.accessToken,
+      sealed: envelope,
+    });
+
+    /*
+     * Straight out of the database rather than through `chat:fetch`.
+     *
+     * Two layers sit in front of the column and both hand back a copy that
+     * never touched it: the broadcast is built from what `insertMessage` was
+     * given, and `chat:fetch` reads `getMessagesCached`. So a `rowToMessage`
+     * that dropped `sealed` passes every handler-level assertion, and the
+     * message goes empty only once the cache expires and somebody reloads —
+     * which is exactly the shape of bug that reaches people rather than CI.
+     */
+    const { listMessages } = await import("../../db/sqlite/messages");
+    const stored = await listMessages(conversationId, 50);
+
+    assert.ok(
+      stored.some((m) => m.sealed === envelope),
+      `the envelope did not survive storage: ${JSON.stringify(stored)}`,
+    );
+    assert.ok(
+      stored.every((m) => m.sealed !== envelope || m.text === null),
+      "a sealed row must have no text beside it",
+    );
+  });
+
+  it("refuses a message that is sealed and in the clear at once", async () => {
+    const conversationId = await openDm(alice, bob);
+    clearAll();
+
+    await alice.handlers["chat:send"]({
+      conversationId,
+      accessToken: alice.accessToken,
+      sealed: envelope,
+      text: "and here it is in plaintext",
+    });
+
+    assert.equal(alice.received("chat:new").length, 0,
+      "whichever half the server kept, the other one was already written down");
+    assert.ok(alice.received("chat:error").length > 0, "and it has to say so");
+  });
+
+  it("refuses one on a channel", async () => {
+    const { upsertServerChannel } = await import("../../db/sqlite/channels");
+    await upsertServerChannel({ channelId: "sealed-test", name: "Sealed test", type: "text" });
+    resetChannelIdCache();
+    clearAll();
+
+    await alice.handlers["chat:send"]({
+      conversationId: "sealed-test",
+      accessToken: alice.accessToken,
+      sealed: envelope,
+    });
+
+    const errors = alice.received("chat:error") as { error?: string }[];
+    assert.ok(
+      errors.some((e) => e?.error === "sealed_not_allowed"),
+      `a channel has no set of keys to seal to; got ${JSON.stringify(errors)}`,
+    );
+    assert.equal(alice.received("chat:new").length, 0);
+  });
+
+  it("refuses one that is too large", async () => {
+    const conversationId = await openDm(alice, bob);
+    clearAll();
+
+    // Over 64 kB and still a plausible envelope. The cap is not about security
+    // — nothing here reads the column — it is that a field nobody parses is a
+    // place to park data.
+    await alice.handlers["chat:send"]({
+      conversationId,
+      accessToken: alice.accessToken,
+      sealed: "a".repeat(70_000),
+    });
+
+    assert.equal(alice.received("chat:new").length, 0);
+    assert.ok(alice.received("chat:error").length > 0);
+  });
+});

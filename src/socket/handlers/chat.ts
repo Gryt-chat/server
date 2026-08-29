@@ -26,7 +26,7 @@ import {
 } from "../../db";
 import { processProfanity, type CensorStyle, type ProfanityMode } from "../../utils/profanityFilter";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
-import { MESSAGE_MAX_LENGTH, MESSAGE_TOO_LONG } from "../../utils/messageLimits";
+import { MESSAGE_MAX_LENGTH, MESSAGE_TOO_LONG, SEALED_MAX_LENGTH } from "../../utils/messageLimits";
 import { applyAutoRoles } from "../../services/autoRoles";
 import { broadcastServerUiUpdate } from "../utils/server";
 import { directConversationViews } from "./dm";
@@ -227,7 +227,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
   }
 
   return {
-    'chat:send': async (payload: { conversationId: string; accessToken: string; text?: string; attachments?: string[]; replyToMessageId?: string; nonce?: string }) => {
+    'chat:send': async (payload: { conversationId: string; accessToken: string; text?: string; sealed?: string; attachments?: string[]; replyToMessageId?: string; nonce?: string }) => {
       try {
         const ip = getClientIp();
         const userId = clientsInfo[clientId]?.serverUserId;
@@ -267,9 +267,30 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         }
 
         const text = typeof payload.text === "string" ? payload.text.trim() : "";
+        const sealed = typeof payload.sealed === "string" ? payload.sealed : null;
         const attachments = Array.isArray(payload.attachments) ? payload.attachments : null;
-        if (!text && (!attachments || attachments.length === 0)) {
+        if (!text && !sealed && (!attachments || attachments.length === 0)) {
           socket.emit("chat:error", "Message is empty");
+          return;
+        }
+
+        /*
+         * A sealed message and a plaintext one, at once (GRYT-729).
+         *
+         * Refused rather than picking one. A client that sent both would have
+         * put the message in the clear beside the encrypted copy, and whichever
+         * this server chose to keep, the other one was already written down.
+         */
+        if (sealed && text) {
+          socket.emit("chat:error", "A message is sealed or it is not.");
+          return;
+        }
+
+        // Generous next to a real envelope, which is a body plus one wrapped
+        // key per member and is bounded by the member cap. A cap at all, because
+        // this column is not a place to park data.
+        if (sealed && sealed.length > SEALED_MAX_LENGTH) {
+          socket.emit("chat:error", "That message is too large to send encrypted.");
           return;
         }
 
@@ -311,6 +332,23 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         // only in `dm:open` would gate making a conversation while leaving every
         // conversation that already exists open to post in — including to
         // somebody whose role had the permission taken away.
+        /*
+         * Only a conversation can be sealed.
+         *
+         * A channel is a room with a member list rather than a pair of people:
+         * there is no set of keys to seal to, anybody admitted later would find
+         * every message unreadable, and the moderation an operator has over a
+         * channel would go with it. Refused rather than stored, so nothing ends
+         * up in the column that nothing can ever open.
+         */
+        if (sealed && access.kind !== "dm") {
+          socket.emit("chat:error", {
+            error: "sealed_not_allowed",
+            message: "Only direct messages can be encrypted.",
+          });
+          return;
+        }
+
         if (access.kind === "dm" && !auth.permissions.has("send_direct_messages")) {
           socket.emit("chat:error", {
             error: "forbidden",
@@ -347,6 +385,9 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         let finalText = text;
         let profanityMatches: { startIndex: number; endIndex: number }[] | undefined;
 
+        // Nothing to filter, search or moderate on a sealed message, because
+        // there is no text here at all. That is the feature rather than a gap,
+        // and `finalText` stays empty so nothing below reads it.
         if (profanityMode !== "off" && finalText) {
           const result = await processProfanity(finalText, profanityMode, censorStyle);
           if (result.action === "reject") {
@@ -375,6 +416,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           conversation_id: payload.conversationId,
           sender_server_id: auth.tokenPayload.serverUserId,
           text: finalText || null,
+          sealed,
           attachments: attachments && attachments.length > 0 ? attachments : null,
           reactions: null,
           reply_to_message_id: replyToMessageId,
