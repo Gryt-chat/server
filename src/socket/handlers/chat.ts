@@ -25,6 +25,7 @@ import {
 } from "../../db";
 import { processProfanity, type CensorStyle, type ProfanityMode } from "../../utils/profanityFilter";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
+import { MESSAGE_MAX_LENGTH, MESSAGE_TOO_LONG } from "../../utils/messageLimits";
 import { applyAutoRoles } from "../../services/autoRoles";
 import { broadcastServerUiUpdate } from "../utils/server";
 import {
@@ -267,6 +268,14 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         const attachments = Array.isArray(payload.attachments) ? payload.attachments : null;
         if (!text && (!attachments || attachments.length === 0)) {
           socket.emit("chat:error", "Message is empty");
+          return;
+        }
+
+        // Refused rather than truncated. Silently keeping the first 4000
+        // characters of what somebody wrote and dropping the rest is a worse
+        // answer than saying no — they can see what they lost and decide.
+        if (text.length > MESSAGE_MAX_LENGTH) {
+          socket.emit("chat:error", MESSAGE_TOO_LONG);
           return;
         }
 
@@ -624,6 +633,12 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         }
 
         const text = payload.text.trim();
+        // The same cap as sending, because otherwise it is not a cap: send four
+        // characters and edit them into four million.
+        if (text.length > MESSAGE_MAX_LENGTH) {
+          socket.emit("chat:error", MESSAGE_TOO_LONG);
+          return;
+        }
         if (!text) {
           socket.emit("chat:error", "Edited message cannot be empty");
           return;
