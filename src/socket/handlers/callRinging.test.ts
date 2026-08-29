@@ -282,6 +282,41 @@ describe("starting a ring", () => {
     assert.equal(refusals.some((r) => r.error === "forbidden" && r.permission === "join_voice"), true);
     assert.equal(bob.received("call:incoming").length, 0);
   });
+
+  it("needs start_calls, which is not the same as being able to answer one", async () => {
+    // The tier a server owner is buying with this: in every channel, in every
+    // conversation, reachable by anybody who wants to call them — and not able
+    // to place the call themselves.
+    const listener = await connectPerson(
+      "Listener",
+      PERMISSIONS.filter((p) => p !== "start_calls"),
+    );
+    await openDirectConversation(listener.serverUserId, bob.serverUserId);
+    const listenerPair = directConversationId(listener.serverUserId, bob.serverUserId);
+
+    await ring(listener, listenerPair);
+
+    const refusals = listener.received("server:error") as { error?: string; permission?: string }[];
+    assert.equal(refusals.some((r) => r.error === "forbidden" && r.permission === "start_calls"), true);
+    assert.equal(bob.received("call:incoming").length, 0);
+  });
+
+  it("still lets somebody without start_calls be rung", async () => {
+    const listener = await connectPerson(
+      "Listener2",
+      PERMISSIONS.filter((p) => p !== "start_calls"),
+    );
+    await openDirectConversation(bob.serverUserId, listener.serverUserId);
+    const listenerPair = directConversationId(bob.serverUserId, listener.serverUserId);
+
+    listener.clear();
+    await ring(bob, listenerPair);
+
+    // Both devices, same as anybody else — losing `start_calls` takes away the
+    // call button and nothing else.
+    assert.equal(listener.laptop.received("call:incoming").length, 1);
+    assert.equal(listener.phone.received("call:incoming").length, 1);
+  });
 });
 
 describe("stopping a ring", () => {
