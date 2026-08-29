@@ -14,7 +14,7 @@ import {
   listEmojiJobs,
 } from "../db";
 import {
-  upload,
+  emojiUpload,
   EMOJI_NAME_RE,
   IMAGE_EXT_RE,
   ZIP_MIME_RE,
@@ -48,7 +48,7 @@ export function registerStagingRoutes(router: Router): void {
   router.post(
     "/stage",
     requireBearerToken,
-    upload.fields([{ name: "file", maxCount: 1 }, { name: "files" }]),
+    emojiUpload([{ name: "file", maxCount: 1 }, { name: "files" }]),
     (req: Request, res: Response, next: NextFunction): void => {
       const serverUserId = req.tokenPayload?.serverUserId;
       consola.debug("[EmojiStage] POST /api/emojis/stage — serverUserId:", serverUserId);

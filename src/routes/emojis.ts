@@ -19,7 +19,7 @@ import {
 } from "../db";
 import { processEmojiToOptimizedImage } from "../utils/emojiProcessing";
 import {
-  upload,
+  emojiUpload,
   EMOJI_NAME_RE,
   IMAGE_EXT_RE,
   ZIP_MIME_RE,
@@ -53,7 +53,7 @@ emojisRouter.get(
 emojisRouter.post(
   "/",
   requireBearerToken,
-  upload.fields([{ name: "file", maxCount: 1 }, { name: "files" }]),
+  emojiUpload([{ name: "file", maxCount: 1 }, { name: "files" }]),
   (req: Request, res: Response, next: NextFunction): void => {
     const serverUserId = req.tokenPayload?.serverUserId;
     consola.debug("[EmojiUpload] POST /api/emojis — serverUserId:", serverUserId);
