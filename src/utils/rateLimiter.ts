@@ -50,6 +50,13 @@ class SlidingWindowLimiter {
 		}
 	}
 
+	/** Forget everything. Tests only — a live server has no reason to. */
+	reset(): void {
+		this.buckets.clear();
+		this.bans.clear();
+		this.scores.clear();
+	}
+
 	private key(parts: RateLimitKeyParts): string {
 		const uid = parts.userId || "anonymous";
 		const ip = parts.ip || "unknown";
@@ -138,6 +145,18 @@ export const limiter = new SlidingWindowLimiter({ limit: 100, windowMs: 60_000 }
 
 export function checkRateLimit(event: string, userId?: string, ip?: string, rule?: RateLimitRule) {
 	return limiter.check({ event, userId, ip }, rule);
+}
+
+/**
+ * Clear every counter, for a test that drives one handler many times.
+ *
+ * The limiter is process-global and keyed on the caller, so a test file acting
+ * as the same person twenty times looks exactly like somebody hammering the
+ * server — which is the point of it, and makes it the wrong thing to leave
+ * running between cases. The same seam `resetChannelIdCache` is.
+ */
+export function resetRateLimits(): void {
+	limiter.reset();
 }
 
 

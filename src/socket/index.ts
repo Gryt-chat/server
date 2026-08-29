@@ -20,6 +20,7 @@ import { getVouchChain, signServerProof } from "../auth/serverIdentity";
 import { registerChatHandlers } from "./handlers/chat";
 import { registerDirectMessageHandlers } from "./handlers/dm";
 import { registerVoiceHandlers } from "./handlers/voice";
+import { endRingsFor, registerCallHandlers } from "./handlers/calls";
 import { registerMemberHandlers } from "./handlers/members";
 import { registerDiagnosticsHandlers } from "./handlers/diagnostics";
 import { registerVoiceLatencyHandlers } from "./handlers/voiceLatency";
@@ -387,6 +388,7 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
     ...registerChatHandlers(ctx),
     ...registerDirectMessageHandlers(ctx),
     ...registerVoiceHandlers(ctx),
+    ...registerCallHandlers(ctx),
     ...registerMemberHandlers(ctx),
     ...registerReportHandlers(ctx),
     ...registerDiagnosticsHandlers(ctx),
@@ -445,6 +447,23 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
     );
     const wasRegistered = serverUserId && !serverUserId.startsWith("temp_");
     const hadVoice = clientInfo?.hasJoinedChannel ?? false;
+
+    /**
+     * Stop ringing on behalf of somebody who has gone.
+     *
+     * Only when this was their last socket. A person with a laptop and a phone
+     * closing one of them has not given up on the call.
+     *
+     * The timer would end it anyway, but thirty seconds of a phone ringing for
+     * a caller who is no longer there is thirty seconds of the other person
+     * deciding whether to answer something that cannot be answered.
+     */
+    if (wasRegistered) {
+      const stillHere = Object.entries(clientsInfo).some(
+        ([cid, ci]) => cid !== clientId && ci.serverUserId === serverUserId,
+      );
+      if (!stillHere) endRingsFor(io, clientsInfo, { callerGone: serverUserId });
+    }
 
     // Keep the voice state against the user, whatever took the socket away.
     //
