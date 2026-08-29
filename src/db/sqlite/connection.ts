@@ -225,6 +225,8 @@ function createSchema(d: DatabaseSync): void {
     CREATE TABLE IF NOT EXISTS conversations (
       conversation_id TEXT PRIMARY KEY,
       kind TEXT NOT NULL DEFAULT 'dm',
+      name TEXT,
+      icon_file_id TEXT,
       created_by_server_user_id TEXT,
       created_at TEXT NOT NULL,
       last_message_at TEXT
@@ -532,6 +534,25 @@ function runMigrations(d: DatabaseSync): void {
   //
   // Defaults to on, which matches every other feature arriving switched on,
   // and an operator who wants it off can say so before inviting anybody.
+  // What a group is called, when somebody has named it.
+  //
+  // Only groups. A one-to-one conversation is named after the person you are
+  // talking to, which is not a string this table should be holding: it changes
+  // when they rename themselves, and a copy here would go stale. NULL on a
+  // group means the clients build a name from who is in it.
+  if (!hasColumn(d, "conversations", "name")) {
+    d.exec("ALTER TABLE conversations ADD COLUMN name TEXT");
+  }
+
+  // A picture somebody uploaded for a group.
+  //
+  // Only an upload. A group with none is drawn from its name, by the clients,
+  // the same way a server with no icon is — so the generated one follows a
+  // rename instead of being a file that has to be regenerated and stored.
+  if (!hasColumn(d, "conversations", "icon_file_id")) {
+    d.exec("ALTER TABLE conversations ADD COLUMN icon_file_id TEXT");
+  }
+
   // When somebody took this conversation out of their own sidebar.
   //
   // On the membership row rather than the conversation, because it is one
