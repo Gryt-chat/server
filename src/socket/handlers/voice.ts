@@ -77,6 +77,12 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
       if (!clientsInfo[clientId]) return;
       const enabled = typeof payload === 'boolean' ? payload : Boolean(payload?.enabled);
       const streamId = typeof payload === 'object' ? (payload.streamId || "") : "";
+      // Same race as the room request, one event later (GRYT-717). The client
+      // re-asserts its camera after a reconnect, and a socket mid-restore has
+      // no permissions yet, so this said `forbidden` and the camera stayed off
+      // in the room while it was still sending. Guarded before the permission
+      // check, not instead of it.
+      if (enabled && refusedAsUnidentified()) return;
       // Turning a camera *off* is never refused. A permission that was taken
       // away mid-call would otherwise leave somebody unable to stop streaming.
       if (enabled && !(await socketMay("share_video"))) {
@@ -97,6 +103,8 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
       const enabled = typeof payload === 'object' ? Boolean(payload?.enabled) : Boolean(payload);
       const videoStreamId = typeof payload === 'object' ? (payload.videoStreamId || "") : "";
       const audioStreamId = typeof payload === 'object' ? (payload.audioStreamId || "") : "";
+      // As above (GRYT-717). Turning a share off is never refused either.
+      if (enabled && refusedAsUnidentified()) return;
       if (enabled && !(await socketMay("share_screen"))) {
         socket.emit("voice:room:error", {
           error: "forbidden",

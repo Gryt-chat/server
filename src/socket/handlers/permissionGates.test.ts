@@ -423,6 +423,59 @@ describe("events that read the socket rather than a token", () => {
     assert.equal(clientsInfo[ctx.clientId].hasJoinedChannel, false);
   });
 
+  it("voice:camera:state tells an unidentified socket to retry, not that it is forbidden", async () => {
+    // What the client does on a reconnect: it says the camera is still on. The
+    // socket is mid-restore, so `forbidden` here is a state the client will not
+    // re-send — and the camera goes on sending while the room sees it as off.
+    const { ctx, emitted, clientsInfo } = makeContext();
+    await socketCaller(["share_video"], clientsInfo, ctx.clientId);
+    unidentifiedCaller(clientsInfo, ctx.clientId);
+
+    await registerVoiceHandlers(ctx)["voice:camera:state"]({ enabled: true, streamId: "cam_1" });
+
+    assert.equal(codes(emitted).includes("unidentified"), true);
+    assert.equal(
+      refusals(emitted).length,
+      0,
+      "forbidden is the one code the client will not retry",
+    );
+    assert.equal(clientsInfo[ctx.clientId].cameraEnabled, false);
+  });
+
+  it("voice:screen:state does the same", async () => {
+    const { ctx, emitted, clientsInfo } = makeContext();
+    await socketCaller(["share_screen"], clientsInfo, ctx.clientId);
+    unidentifiedCaller(clientsInfo, ctx.clientId);
+
+    await registerVoiceHandlers(ctx)["voice:screen:state"]({
+      enabled: true,
+      videoStreamId: "vid_1",
+      audioStreamId: "aud_1",
+    });
+
+    assert.equal(codes(emitted).includes("unidentified"), true);
+    assert.equal(refusals(emitted).length, 0);
+    assert.equal(clientsInfo[ctx.clientId].screenShareEnabled, false);
+  });
+
+  it("an unidentified socket can still turn its camera and screen share off", async () => {
+    // The guard is on `enabled` only. Stopping has never needed a permission,
+    // and somebody mid-restore who hits the button has to be able to stop.
+    const { ctx, emitted, clientsInfo } = makeContext();
+    await socketCaller([], clientsInfo, ctx.clientId);
+    clientsInfo[ctx.clientId].cameraEnabled = true;
+    clientsInfo[ctx.clientId].screenShareEnabled = true;
+    unidentifiedCaller(clientsInfo, ctx.clientId);
+
+    const handlers = registerVoiceHandlers(ctx);
+    await handlers["voice:camera:state"]({ enabled: false });
+    await handlers["voice:screen:state"]({ enabled: false });
+
+    assert.equal(codes(emitted).length, 0);
+    assert.equal(clientsInfo[ctx.clientId].cameraEnabled, false);
+    assert.equal(clientsInfo[ctx.clientId].screenShareEnabled, false);
+  });
+
   it("voice:state:update does not force-mute a socket it cannot evaluate yet", async () => {
     // Forcing the mute here records the wrong state and tells somebody they
     // cannot speak, both on the strength of not knowing who they are.
