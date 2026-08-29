@@ -71,7 +71,20 @@ async function fetchLatestVersions(repo: string): Promise<{ stable: string; beta
 }
 
 /**
- * The three numbers, or null if this is not a plain release version.
+ * The prerelease stages the release workflows actually produce, in order.
+ *
+ * A closed set on purpose — see `parseVersion`.
+ */
+const PRERELEASE_STAGES = ["alpha", "beta", "rc"] as const;
+
+interface ParsedVersion {
+	release: [number, number, number];
+	/** Null for a plain release, which sorts above every prerelease of itself. */
+	pre: { stage: number; number: number } | null;
+}
+
+/**
+ * A version this code is willing to compare, or null.
  *
  * `1.0.48-1-gafa06e4` is what `git describe` gives for a build that is not
  * sitting exactly on a tag, and embedded builds produced exactly that for a
@@ -82,27 +95,54 @@ async function fetchLatestVersions(repo: string): Promise<{ stable: string; beta
  *
  * Refusing to parse is the honest answer. A caller that cannot compare should
  * say nothing rather than guess low.
+ *
+ * It refused too much, though (GRYT-722). `1.6.15-beta.1` is a version this
+ * project publishes, and refusing it meant an embedded prerelease fell down
+ * `detectChannel`'s unparseable branch, called itself stable, and took the
+ * newest *stable* release as `latest` — a version older than the one running.
+ * `updateAvailable` then compared null and came out false, so a server on a
+ * beta stopped being offered updates at all. Quieter than GRYT-306 and harder
+ * to notice.
+ *
+ * So: plain releases, and the `-<stage>.<n>` shape the workflows produce.
+ * Deliberately a closed set of stages rather than the semver grammar. Full
+ * semver would read `1.0.48-1-gafa06e4` as a valid prerelease of 1.0.48 and
+ * compare it, which is exactly the door GRYT-306 closed.
  */
-function parseSemver(v: string): [number, number, number] | null {
-	const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(v.trim());
+export function parseVersion(v: string): ParsedVersion | null {
+	const m = /^(\d+)\.(\d+)\.(\d+)(?:-([a-z]+)\.(\d+))?$/.exec(v.trim());
 	if (!m) return null;
-	return [Number(m[1]), Number(m[2]), Number(m[3])];
+
+	const release: [number, number, number] = [Number(m[1]), Number(m[2]), Number(m[3])];
+	if (m[4] === undefined) return { release, pre: null };
+
+	const stage = PRERELEASE_STAGES.indexOf(m[4] as (typeof PRERELEASE_STAGES)[number]);
+	if (stage === -1) return null;
+
+	return { release, pre: { stage, number: Number(m[5]) } };
 }
 
-/** Negative, zero or positive as usual, or null when either side is not a release version. */
-function compareSemver(a: string, b: string): number | null {
-	const pa = parseSemver(a);
-	const pb = parseSemver(b);
+/** Negative, zero or positive as usual, or null when either side is not a version we compare. */
+export function compareSemver(a: string, b: string): number | null {
+	const pa = parseVersion(a);
+	const pb = parseVersion(b);
 	if (!pa || !pb) return null;
 
 	for (let i = 0; i < 3; i++) {
-		const diff = pa[i] - pb[i];
+		const diff = pa.release[i] - pb.release[i];
 		if (diff !== 0) return diff;
 	}
-	return 0;
+
+	// Same three numbers. A release outranks any prerelease of itself, which is
+	// what makes 1.6.15-beta.1 an update to nothing and 1.6.15 an update to it.
+	if (!pa.pre && !pb.pre) return 0;
+	if (!pa.pre) return 1;
+	if (!pb.pre) return -1;
+
+	return pa.pre.stage - pb.pre.stage || pa.pre.number - pb.pre.number;
 }
 
-function detectChannel(current: string, latestStable: string, latestBeta: string | null): "stable" | "beta" {
+export function detectChannel(current: string, latestStable: string, latestBeta: string | null): "stable" | "beta" {
 	if (current === latestStable) return "stable";
 
 	const vsStable = compareSemver(current, latestStable);
@@ -115,7 +155,7 @@ function detectChannel(current: string, latestStable: string, latestBeta: string
 	return "stable";
 }
 
-function buildComponentInfo(
+export function buildComponentInfo(
 	current: string,
 	versions: { stable: string; beta: string | null },
 ): ComponentVersionInfo {
