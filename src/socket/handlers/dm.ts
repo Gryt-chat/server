@@ -1,11 +1,14 @@
 import consola from "consola";
 
 import {
+  getConversation,
   getServerConfig,
   getUserByServerId,
   getUsersByServerIds,
+  isConversationMember,
   listConversationsForUser,
   openDirectConversation,
+  setConversationHidden,
 } from "../../db";
 import { isBotIdentity } from "../../auth/identity";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
@@ -40,6 +43,36 @@ export interface DirectConversationView {
   };
 }
 
+/**
+ * One member's direct messages, as the client sees them.
+ *
+ * Outside the handler closure because the chat path needs it as well: a
+ * message arriving in a conversation somebody had hidden brings it back, and
+ * the row it comes back as is this one.
+ */
+export async function directConversationViews(serverUserId: string): Promise<DirectConversationView[]> {
+  const conversations = await listConversationsForUser(serverUserId);
+  const otherIds = [...new Set(conversations.flatMap((c) => c.other_server_user_ids))];
+  const users = otherIds.length > 0 ? await getUsersByServerIds(otherIds) : new Map();
+
+  return conversations.flatMap((c) => {
+    const otherId = c.other_server_user_ids[0];
+    if (!otherId) return [];
+    const other = users.get(otherId);
+    return [{
+      conversation_id: c.conversation_id,
+      created_at: c.created_at.toISOString(),
+      last_message_at: c.last_message_at ? c.last_message_at.toISOString() : null,
+      other: {
+        server_user_id: otherId,
+        nickname: other?.nickname ?? "Unknown",
+        avatar_file_id: other?.avatar_file_id ?? null,
+        avatar_worn: other?.avatar_worn ?? null,
+      },
+    }];
+  });
+}
+
 export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandlerMap {
   const { io, socket, clientId, clientsInfo, getClientIp } = ctx;
 
@@ -55,28 +88,7 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
       .map(([cid]) => cid);
   }
 
-  async function viewsFor(serverUserId: string): Promise<DirectConversationView[]> {
-    const conversations = await listConversationsForUser(serverUserId);
-    const otherIds = [...new Set(conversations.flatMap((c) => c.other_server_user_ids))];
-    const users = otherIds.length > 0 ? await getUsersByServerIds(otherIds) : new Map();
-
-    return conversations.flatMap((c) => {
-      const otherId = c.other_server_user_ids[0];
-      if (!otherId) return [];
-      const other = users.get(otherId);
-      return [{
-        conversation_id: c.conversation_id,
-        created_at: c.created_at.toISOString(),
-        last_message_at: c.last_message_at ? c.last_message_at.toISOString() : null,
-        other: {
-          server_user_id: otherId,
-          nickname: other?.nickname ?? "Unknown",
-          avatar_file_id: other?.avatar_file_id ?? null,
-          avatar_worn: other?.avatar_worn ?? null,
-        },
-      }];
-    });
-  }
+  const viewsFor = directConversationViews;
 
   return {
     /**
@@ -135,6 +147,11 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
 
         const conversation = await openDirectConversation(self, target);
 
+        // Asking for a conversation you had hidden is asking for it back. Only
+        // the caller's row: the other party hiding it is their answer, and it
+        // is the message that follows which brings theirs back, not this.
+        await setConversationHidden(conversation.conversation_id, self, false);
+
         // Both ends are told, and each is told about the other rather than
         // about themselves, so neither has to work out which member of the
         // conversation it is looking at.
@@ -149,6 +166,59 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
       } catch (err) {
         consola.error("dm:open failed", err);
         socket.emit("dm:error", { error: "failed", message: "Could not open the conversation" });
+      }
+    },
+
+    /**
+     * Take a conversation out of your own sidebar, or put it back.
+     *
+     * Nothing is deleted and nobody else is affected — `hidden_at` is on the
+     * caller's own membership row. A message arriving in the conversation
+     * brings it back on its own, which is why this is not a way to stop
+     * somebody talking to you.
+     */
+    'dm:setHidden': async (payload: { accessToken: string; conversationId: string; hidden: boolean }) => {
+      try {
+        const ip = getClientIp();
+        const rl = checkRateLimit("dm:setHidden", clientsInfo[clientId]?.serverUserId, ip, RL_OPEN);
+        if (!rl.allowed) {
+          socket.emit("dm:error", { error: "rate_limited", retryAfterMs: rl.retryAfterMs, message: `Too fast. Wait ${Math.ceil((rl.retryAfterMs || 0) / 1000)}s.` });
+          return;
+        }
+
+        if (!payload || typeof payload.accessToken !== "string" || typeof payload.conversationId !== "string" || typeof payload.hidden !== "boolean") {
+          socket.emit("dm:error", { error: "invalid_payload", message: "Invalid payload" });
+          return;
+        }
+
+        const auth = await requireAuth(socket, payload);
+        if (!auth) return;
+
+        const self = auth.tokenPayload.serverUserId;
+
+        // A conversation, and one of theirs. Without the membership check this
+        // would write a row for somebody else's conversation — harmless today,
+        // since the row would not exist, but it is the check that keeps it
+        // harmless if the table ever gains a different key.
+        const conversation = await getConversation(payload.conversationId);
+        if (!conversation || !(await isConversationMember(payload.conversationId, self))) {
+          socket.emit("dm:error", { error: "not_found", message: "No such conversation" });
+          return;
+        }
+
+        await setConversationHidden(payload.conversationId, self, payload.hidden);
+
+        // Every socket this person has, so hiding on the desktop takes it off
+        // the phone as well.
+        for (const cid of socketIdsFor(self)) {
+          io.sockets.sockets.get(cid)?.emit("dm:hidden", {
+            conversation_id: payload.conversationId,
+            hidden: payload.hidden,
+          });
+        }
+      } catch (err) {
+        consola.error("dm:setHidden failed", err);
+        socket.emit("dm:error", { error: "failed", message: "Could not update the conversation" });
       }
     },
 
