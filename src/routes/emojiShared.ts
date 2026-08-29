@@ -3,7 +3,10 @@ import multer from "multer";
 export const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
 export const EMOJI_NAME_RE = /^[A-Za-z0-9_]{2,32}$/;
-export const IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|svg|avif)$/i;
+// SVG is deliberately absent. validateImage refuses it, so a .svg inside a ZIP
+// used to be unpacked into an entry that failed one step later with a
+// per-file error. Skipping it here means there is nothing to report.
+export const IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|avif)$/i;
 export const ZIP_MIME_RE = /^application\/(zip|x-zip|x-zip-compressed)$/;
 
 export function deriveEmojiName(filename: string): string {
@@ -20,7 +23,6 @@ export function extToMime(ext: string): string {
   if (lower === "png") return "image/png";
   if (lower === "webp") return "image/webp";
   if (lower === "gif") return "image/gif";
-  if (lower === "svg") return "image/svg+xml";
   if (lower === "avif") return "image/avif";
   return "application/octet-stream";
 }

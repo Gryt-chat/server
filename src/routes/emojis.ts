@@ -240,6 +240,21 @@ emojisRouter.get(
           : "image/png";
         res.setHeader("Content-Type", imgContentType);
 
+        // The same two headers `uploads.ts` puts on every file it serves, and
+        // this route never had them.
+        //
+        // Nothing uploaded today can be an SVG — validateImage refuses it — but
+        // emoji uploaded before that check went in were stored as-is, and the
+        // branch above still hands them back as image/svg+xml from this
+        // server's own origin. In an <img> a script inside one does not run;
+        // opened at its own URL, or in an iframe, it does. `sandbox` is what
+        // takes that away, and `nosniff` stops a mislabelled file being
+        // guessed into something executable.
+        //
+        // Deciding what to do with the ones already on disk is GRYT-691.
+        res.setHeader("X-Content-Type-Options", "nosniff");
+        res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
+
         body.pipe(res);
       })
       .catch(next);
