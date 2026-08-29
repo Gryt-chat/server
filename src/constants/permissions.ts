@@ -70,6 +70,20 @@ export const PERMISSIONS = [
   "speak",
   "share_video",
   "share_screen",
+  /**
+   * Ring somebody. Answering is `join_voice`, and that asymmetry is the point.
+   *
+   * A server that wants calling limited — to a paying tier, to a role, to
+   * anybody but an account that arrived this morning — has nothing to say
+   * without this. The alternative was taking `send_direct_messages` away, which
+   * stops the conversation as well as the call.
+   *
+   * Only starting one. Everybody who may enter a voice room may still be rung
+   * and pick up: a permission covering both would leave somebody unable to
+   * answer a call placed to them, which is not a thing anyone wants to
+   * configure.
+   */
+  "start_calls",
 
   // ── Self and other members ────────────────────────────────────────
   "change_nickname",
@@ -221,6 +235,7 @@ const MEMBER_PERMISSIONS = [
   "speak",
   "share_video",
   "share_screen",
+  "start_calls",
   "change_nickname",
   "change_avatar",
 ] as const satisfies readonly Permission[];
@@ -335,9 +350,10 @@ export interface PermissionBackfill {
  *
  * Version 1 is "roles carry permissions at all" (GRYT-444) — nothing to
  * backfill, the sets were written to match the old gates exactly. Version 2 is
- * this file's expansion (GRYT-453). Version 3 adds `manage_bots` (GRYT-460).
+ * this file's expansion (GRYT-453). Version 3 adds `manage_bots` (GRYT-460),
+ * version 4 `send_direct_messages`, and version 5 `start_calls` (GRYT-712).
  */
-export const PERMISSION_SCHEMA_VERSION = 4;
+export const PERMISSION_SCHEMA_VERSION = 5;
 
 export const PERMISSION_BACKFILLS: readonly PermissionBackfill[] = [
   // Had no gate before: anybody admitted to the server could do all four.
@@ -369,6 +385,13 @@ export const PERMISSION_BACKFILLS: readonly PermissionBackfill[] = [
   // could already DM. Granting it alongside keeps that true rather than
   // taking something away from roles an operator never edited.
   { version: 4, permission: "send_direct_messages", grantedWith: "send_messages" },
+
+  // Version 5 (GRYT-712). Ringing was gated on being able to DM at all, so
+  // this goes to whoever holds that — every role that could place a call
+  // before the release can still place one after it. An owner who wants
+  // calling restricted takes it off the roles they choose, which is a decision
+  // rather than something an upgrade did to them.
+  { version: 5, permission: "start_calls", grantedWith: "send_direct_messages" },
 ];
 
 /**

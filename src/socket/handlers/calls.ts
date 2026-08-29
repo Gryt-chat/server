@@ -79,11 +79,21 @@ export function registerCallHandlers(ctx: HandlerContext): EventHandlerMap {
     /**
      * Ring everybody else in a conversation.
      *
-     * Two permissions, because this is two things at once. It is a direct
-     * message, so `send_direct_messages`; and the person starting it is about
-     * to be in a voice room, so `join_voice`. Somebody who may not join voice
-     * ringing a call they cannot enter is a call that can only be answered into
-     * an empty room.
+     * Three permissions, because this is three things at once.
+     *
+     * It happens in a direct message, so `send_direct_messages` — a role that
+     * has had direct messages taken away does not get them back through the
+     * call button.
+     *
+     * The person starting it is about to be in a voice room, so `join_voice`.
+     * Somebody who may not join voice ringing a call they cannot enter is a
+     * call that can only be answered into an empty room.
+     *
+     * And starting a call is its own act, so `start_calls` (GRYT-712). This is
+     * the one an owner reaches for to say who may place a call without saying
+     * anything about who may take one — answering is `join_voice`, and it is
+     * deliberately not this. Every role that could ring before the release
+     * holds it, by backfill.
      */
     'call:ring': async (payload: { accessToken: string; conversationId: string }) => {
       try {
@@ -103,8 +113,9 @@ export function registerCallHandlers(ctx: HandlerContext): EventHandlerMap {
 
         const self = auth.tokenPayload.serverUserId;
 
-        // The second gate, through the shared helper so its refusal is the same
-        // one the door would have given.
+        // The other two, through the shared helper so a refusal reads the same
+        // as the one the door would have given.
+        if (!requirePermission(socket, auth, "start_calls")) return;
         if (!requirePermission(socket, auth, "join_voice")) return;
 
         const access = await resolveConversationAccess(payload.conversationId, self);
