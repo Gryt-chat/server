@@ -1,6 +1,12 @@
 import { Server, Socket } from "socket.io";
 import { Clients } from "../../types";
-import { getAllRegisteredUsers, getFilesByIds, isConversationId, listServerRoles } from "../../db";
+import {
+  getAllRegisteredUsers,
+  getFilesByIds,
+  isConversationId,
+  listConversationMemberIds,
+  listServerRoles,
+} from "../../db";
 import { voiceRoomName } from "./voiceRooms";
 import { clientMayReceive, refreshClientPermissions } from "./standing";
 import { isBotIdentity } from "../../auth/identity";
@@ -348,19 +354,73 @@ function broadcastCallParticipants(io: Server, clientsInfo: Clients, serverId: s
     const key = ids.join(",");
     if (seen.get(room) === key) continue;
     seen.set(room, key);
+
+    // The room first, and synchronously. These are the people in the call and
+    // they are the ones for whom a late answer looks like a call that failed.
     io.to(voiceRoomName(serverId, room)).emit("voice:call:members", {
       conversation_id: room,
       server_user_ids: ids,
     });
+
+    tellConversation(io, clientsInfo, room, ids);
   }
 
-  // A room nobody is in any more. Forgotten rather than announced: whoever was
-  // last has already left the socket.io room, so there is nobody to tell — and
-  // keeping the entry would silence the first message of the next call in that
-  // conversation if it happened to have the same people in it.
+  // A room nobody is in any more.
+  //
+  // Nobody in the room to tell — whoever was last has already left it — but the
+  // conversation's other members were told the call started and would otherwise
+  // be left with a row that says it is still going. So they get the empty list.
+  //
+  // The entry is forgotten either way, or the next call in this conversation
+  // between the same people would be deduped against a call that has ended, and
+  // its first message is the one that stops the view being empty.
   for (const room of [...seen.keys()]) {
-    if (!byRoom.has(room)) seen.delete(room);
+    if (byRoom.has(room)) continue;
+    seen.delete(room);
+    tellConversation(io, clientsInfo, room, []);
   }
+}
+
+/**
+ * Tell everybody in a conversation who is in its call, including the people
+ * who are not.
+ *
+ * The room emit above reaches the participants. This reaches the rest of the
+ * conversation, which is how a direct message row can say a call is happening
+ * to somebody who has not joined it — and, when the list comes back empty, stop
+ * saying so.
+ *
+ * Members of a conversation are entitled to this. It is the same audience that
+ * can already read the messages in it, and for a one-to-one they are the two
+ * people in the call anyway.
+ *
+ * Fire and forget, and deliberately after the room has been told. It reads the
+ * conversation's membership from the database, which is a cost worth paying
+ * only because this runs on a change of who is in a call rather than on every
+ * voice event — the dedupe above is what makes that true.
+ */
+function tellConversation(
+  io: Server,
+  clientsInfo: Clients,
+  conversationId: string,
+  serverUserIds: string[],
+): void {
+  void (async () => {
+    try {
+      const memberIds = await listConversationMemberIds(conversationId);
+      const inTheCall = new Set(serverUserIds);
+      const payload = { conversation_id: conversationId, server_user_ids: serverUserIds };
+
+      for (const [clientId, client] of Object.entries(clientsInfo)) {
+        if (!client.serverUserId || inTheCall.has(client.serverUserId)) continue;
+        if (!memberIds.includes(client.serverUserId)) continue;
+        io.sockets.sockets.get(clientId)?.emit("voice:call:members", payload);
+      }
+    } catch {
+      // A conversation that has gone, most likely. Nothing to tell anybody
+      // about, and a broadcast is not worth taking the server down for.
+    }
+  })();
 }
 
 export function broadcastMemberList(io: Server, clientsInfo: Clients, instanceId: string): void {

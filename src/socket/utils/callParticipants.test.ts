@@ -5,7 +5,12 @@ import { join } from "node:path";
 import { after, before, beforeEach, describe, it } from "node:test";
 
 import { initSqlite } from "../../db/sqlite/connection";
+import {
+  directConversationId,
+  openDirectConversation,
+} from "../../db/sqlite/conversations";
 import { createServerConfigIfNotExists } from "../../db/sqlite/servers";
+import { upsertUser } from "../../db/sqlite/users";
 import type { Clients } from "../../types";
 import { broadcastMemberList } from "./clients";
 import { voiceRoomName } from "./voiceRooms";
@@ -42,6 +47,9 @@ interface Sent {
 function makeIo() {
   const sent: Sent[] = [];
   const broadcasts: { event: string; payload: unknown }[] = [];
+  /** Emits addressed at one socket, which is how a non-participant is told. */
+  const direct: { clientId: string; event: string; payload: unknown }[] = [];
+  const sockets = new Map<string, { emit: (event: string, payload?: unknown) => boolean }>();
 
   const io = {
     to(room: string) {
@@ -57,11 +65,23 @@ function makeIo() {
     emit(event: string, payload?: unknown) {
       broadcasts.push({ event, payload });
     },
-    sockets: { sockets: new Map() },
+    sockets: { sockets },
   } as unknown as Parameters<typeof broadcastMemberList>[0];
 
-  return { io, sent, broadcasts };
+  const connect = (clientId: string) => {
+    sockets.set(clientId, {
+      emit(event: string, payload?: unknown) {
+        direct.push({ clientId, event, payload });
+        return true;
+      },
+    });
+  };
+
+  return { io, sent, broadcasts, direct, connect };
 }
+
+/** Let the fan-out's database read and its emits settle. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
 
 function connected(serverUserId: string, voiceChannelId: string): Clients[string] {
   return {
@@ -109,6 +129,91 @@ after(() => {
 function callMembers(sent: Sent[]): Sent[] {
   return sent.filter((s) => s.event === "voice:call:members");
 }
+
+describe("the rest of the conversation hears about the call", () => {
+  let alice: string;
+  let bob: string;
+  let cleo: string;
+  let group: string;
+
+  before(async () => {
+    alice = (await upsertUser("account-live-a", "Alice")).server_user_id;
+    bob = (await upsertUser("account-live-b", "Bob")).server_user_id;
+    cleo = (await upsertUser("account-live-c", "Cleo")).server_user_id;
+    await openDirectConversation(alice, bob);
+    group = directConversationId(alice, bob);
+  });
+
+  it("tells a member who is not in the call that one is happening", async () => {
+    // Bob's phone is on the server and not in the call. Without this his
+    // conversation row cannot say anything is going on.
+    world.connect("bob-socket");
+    const clientsInfo: Clients = {
+      "alice-socket": connected(alice, group),
+      "bob-socket": connected(bob, ""),
+    };
+
+    broadcastMemberList(world.io, clientsInfo, SERVER_ID);
+    await settle();
+
+    const told = world.direct.filter((d) => d.event === "voice:call:members");
+    assert.equal(told.length, 1);
+    assert.equal(told[0].clientId, "bob-socket");
+    assert.deepEqual(told[0].payload, {
+      conversation_id: group,
+      server_user_ids: [alice],
+    });
+  });
+
+  it("says so again, empty, when the call ends", async () => {
+    world.connect("bob-socket");
+    const clientsInfo: Clients = {
+      "alice-socket": connected(alice, group),
+      "bob-socket": connected(bob, ""),
+    };
+
+    broadcastMemberList(world.io, clientsInfo, SERVER_ID);
+    await settle();
+
+    // Alice hangs up. Nobody is left in the room to hear it, so without the
+    // empty list Bob's row would say a call is still going for ever.
+    delete clientsInfo["alice-socket"];
+    broadcastMemberList(world.io, clientsInfo, SERVER_ID);
+    await settle();
+
+    const told = world.direct.filter((d) => d.event === "voice:call:members");
+    assert.equal(told.length, 2);
+    assert.deepEqual((told[1].payload as { server_user_ids: string[] }).server_user_ids, []);
+  });
+
+  it("does not tell somebody outside the conversation", async () => {
+    world.connect("cleo-socket");
+    const clientsInfo: Clients = {
+      "alice-socket": connected(alice, group),
+      "cleo-socket": connected(cleo, ""),
+    };
+
+    broadcastMemberList(world.io, clientsInfo, SERVER_ID);
+    await settle();
+
+    assert.equal(
+      world.direct.filter((d) => d.clientId === "cleo-socket").length,
+      0,
+      "a member of the server who is not in the conversation learned about the call",
+    );
+  });
+
+  it("does not send it twice to somebody who is in the call", async () => {
+    // They are in the room, so the synchronous emit above already reached them.
+    world.connect("alice-socket");
+    const clientsInfo: Clients = { "alice-socket": connected(alice, group) };
+
+    broadcastMemberList(world.io, clientsInfo, SERVER_ID);
+    await settle();
+
+    assert.equal(world.direct.filter((d) => d.clientId === "alice-socket").length, 0);
+  });
+});
 
 describe("who is in a conversation call", () => {
   it("names them into that call's room and nowhere else", () => {
