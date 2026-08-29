@@ -8,6 +8,7 @@ import {
   getServerConfig,
   getUserByServerId,
   setUserInactive,
+  purgeOrphanedConversations,
   getRefreshToken,
   revokeUserRefreshTokens,
   effectiveModerationState,
@@ -141,6 +142,16 @@ export function registerJoinHelpers(ctx: HandlerContext): EventHandlerMap {
         const { nickname, serverUserId } = clientInfo;
 
         await setUserInactive(serverUserId);
+
+        // A conversation nobody here can open again is one this server is
+        // holding on behalf of two people who have both gone. Swept on the way
+        // out rather than on a timer, so the answer to "how long do you keep my
+        // DMs" is "until you both leave" rather than a number.
+        await purgeOrphanedConversations()
+          .then((ids) => {
+            if (ids.length > 0) consola.info(`Purged ${ids.length} orphaned conversation(s) after leave`);
+          })
+          .catch((e) => consola.warn("conversation purge failed", e));
 
         if (clientInfo.grytUserId) {
           await revokeUserRefreshTokens(clientInfo.grytUserId).catch((e) => consola.warn("token revocation failed", e));
