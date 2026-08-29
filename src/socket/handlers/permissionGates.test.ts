@@ -16,6 +16,7 @@ import { generateAccessToken } from "../../utils/jwt";
 import type { Clients } from "../../types";
 import { registerAdminHandlers } from "./admin";
 import { registerChatHandlers } from "./chat";
+import { registerDirectMessageHandlers } from "./dm";
 import { registerMemberHandlers } from "./members";
 import { registerReportHandlers } from "./reports";
 import type { EventHandlerMap, HandlerContext } from "./types";
@@ -115,6 +116,7 @@ function allHandlers(ctx: HandlerContext): EventHandlerMap {
   return {
     ...registerAdminHandlers(ctx),
     ...registerChatHandlers(ctx),
+    ...registerDirectMessageHandlers(ctx),
     ...registerMemberHandlers(ctx),
     ...registerReportHandlers(ctx),
     ...registerVoiceHandlers(ctx),
@@ -180,6 +182,7 @@ const TOKEN_GATES: {
   refusalOnly?: boolean;
 }[] = [
   { event: "chat:send", permission: "send_messages", payload: { conversationId: "general", text: "hi" } },
+  { event: "dm:open", permission: "send_direct_messages", payload: { targetServerUserId: "user_x" } },
   { event: "chat:react", permission: "add_reactions", payload: { conversationId: "general", messageId: "m1", reactionSrc: "👍" } },
   { event: "chat:report", permission: "report_messages", payload: { conversationId: "general", messageId: "m1" } },
   { event: "reports:list", permission: "view_reports" },

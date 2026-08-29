@@ -25,6 +25,22 @@ export const PERMISSIONS = [
    */
   "read_messages",
   "send_messages",
+  /**
+   * Open a direct message with another member, and post in one.
+   *
+   * Separate from `send_messages` because the two are genuinely different
+   * things to want. A server running a public event wants open channels and
+   * no DMs between strangers; a quiet server wants the opposite of neither.
+   * `allow_dms` on `server_config` is the whole-server switch, and this is
+   * the per-role one — a server with DMs off has them off for everybody,
+   * whatever any role says.
+   *
+   * Reading an existing conversation is not gated on this. Losing the
+   * permission stops you starting or continuing one; it does not reach back
+   * and hide what was already said, the same way turning `allow_dms` off
+   * does not.
+   */
+  "send_direct_messages",
   /** Edit a message you sent. Somebody else's is `manage_messages`. */
   "edit_own_messages",
   /** Delete a message you sent. Somebody else's is `manage_messages`. */
@@ -196,6 +212,7 @@ const GUEST_PERMISSIONS = OPEN_TO_EVERYONE;
 const MEMBER_PERMISSIONS = [
   ...OPEN_TO_EVERYONE,
   "send_messages",
+  "send_direct_messages",
   "edit_own_messages",
   "delete_own_messages",
   "attach_files",
@@ -320,7 +337,7 @@ export interface PermissionBackfill {
  * backfill, the sets were written to match the old gates exactly. Version 2 is
  * this file's expansion (GRYT-453). Version 3 adds `manage_bots` (GRYT-460).
  */
-export const PERMISSION_SCHEMA_VERSION = 3;
+export const PERMISSION_SCHEMA_VERSION = 4;
 
 export const PERMISSION_BACKFILLS: readonly PermissionBackfill[] = [
   // Had no gate before: anybody admitted to the server could do all four.
@@ -346,6 +363,12 @@ export const PERMISSION_BACKFILLS: readonly PermissionBackfill[] = [
   // Version 3 (GRYT-460). Bots did not exist, so nobody had this — and it goes
   // to whoever holds `manage_server`, which by default is the owner alone.
   { version: 3, permission: "manage_bots", grantedWith: "manage_server" },
+
+  // Direct messages arrived already gated on `send_messages`, so on the
+  // release that split them out every role that could talk in a channel
+  // could already DM. Granting it alongside keeps that true rather than
+  // taking something away from roles an operator never edited.
+  { version: 4, permission: "send_direct_messages", grantedWith: "send_messages" },
 ];
 
 /**

@@ -6,6 +6,8 @@ import { after, before, describe, it } from "node:test";
 
 import { BOT_SUB_PREFIX } from "../../auth/identity";
 import { initSqlite } from "../../db/sqlite/connection";
+import { BUILT_IN_ROLES } from "../../constants/permissions";
+import { createRoleDefinition } from "../../db/sqlite/roleDefinitions";
 import { createServerConfigIfNotExists, setServerRole, updateServerConfig } from "../../db/sqlite/servers";
 import { upsertUser } from "../../db/sqlite/users";
 import type { Clients } from "../../types";
@@ -81,12 +83,16 @@ let seq = 0;
  * like once a join has finished; the chat handlers read `serverUserId` off this
  * and nothing else here matters to them.
  */
-async function connectMember(nickname: string, grytUserIdOverride?: string): Promise<Participant> {
+async function connectMember(
+  nickname: string,
+  grytUserIdOverride?: string,
+  roleId = "member",
+): Promise<Participant> {
   seq += 1;
   const clientId = `socket-${seq}`;
   const grytUserId = grytUserIdOverride ?? `account-dm-${seq}`;
   const user = await upsertUser(grytUserId, nickname);
-  await setServerRole(user.server_user_id, "member");
+  await setServerRole(user.server_user_id, roleId);
 
   const emitted: Emitted[] = [];
   const socket = {
@@ -386,5 +392,56 @@ describe("channels are untouched by any of this", () => {
         `${who.serverUserId} missed a channel message`,
       );
     }
+  });
+});
+
+describe("a role that may talk in channels but not in private", () => {
+  it("cannot open one, cannot post in one, and can still read it", async () => {
+    // Everything a member has except the one permission. The point of splitting
+    // it out was that this combination is expressible at all.
+    await createRoleDefinition("channels-only", {
+      name: "Channels only",
+      rank: 30,
+      permissions: (BUILT_IN_ROLES.find((r) => r.id === "member")?.permissions ?? []).filter(
+        (p) => p !== "send_direct_messages",
+      ),
+    });
+    const carl = await connectMember("Carl", undefined, "channels-only");
+
+    clearAll();
+    carl.clear();
+    await carl.handlers["dm:open"]({
+      accessToken: carl.accessToken,
+      targetServerUserId: alice.serverUserId,
+    });
+    assert.equal(carl.received("dm:opened").length, 0, "opened one without the permission");
+
+    // Alice may, so the conversation exists and Carl is party to it. Gating only
+    // `dm:open` would leave this one open to him for good.
+    clearAll();
+    carl.clear();
+    await alice.handlers["dm:open"]({
+      accessToken: alice.accessToken,
+      targetServerUserId: carl.serverUserId,
+    });
+    const conversationId = (alice.received("dm:opened")[0] as { conversation_id: string }).conversation_id;
+    await alice.handlers["chat:send"]({ conversationId, accessToken: alice.accessToken, text: "you can read this" });
+
+    carl.clear();
+    await carl.handlers["chat:send"]({ conversationId, accessToken: carl.accessToken, text: "but not this" });
+    assert.equal(
+      alice.received("chat:new").filter((m) => (m as { text?: string }).text === "but not this").length,
+      0,
+      "posted into a DM without the permission",
+    );
+
+    carl.clear();
+    await carl.handlers["chat:fetch"]({ conversationId });
+    const history = carl.received("chat:history")[0] as { items: { text: string }[] } | undefined;
+    assert.ok(history, "reading was refused, and it should not be");
+    assert.ok(
+      history.items.some((m) => m.text === "you can read this"),
+      "losing the permission hid history that was already there",
+    );
   });
 });
