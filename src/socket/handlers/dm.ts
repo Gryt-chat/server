@@ -291,7 +291,7 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
      * it was — the history two people built is not something a third should
      * inherit because somebody tapped "add". Discord draws the same line.
      */
-    'dm:group:create': async (payload: { accessToken: string; memberIds: string[]; name?: string }) => {
+    'dm:group:create': async (payload: { accessToken: string; memberIds: string[]; name?: string; iconFileId?: string }) => {
       try {
         const ip = getClientIp();
         const rl = checkRateLimit("dm:group:create", clientsInfo[clientId]?.serverUserId, ip, RL_OPEN);
@@ -343,6 +343,14 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
         const conversation = await createGroupConversation(self, targets);
         if (typeof payload.name === "string" && payload.name.trim()) {
           await setConversationName(conversation.conversation_id, payload.name);
+        }
+        // Taken here rather than left to a follow-up `dm:group:update`. The
+        // client uploads the picture before the group exists, so without this
+        // it would have to wait for `dm:opened` to learn the id and then send
+        // a second event — and a group would exist, briefly, wearing the drawn
+        // icon it was not meant to have.
+        if (typeof payload.iconFileId === "string" && payload.iconFileId) {
+          await setConversationIcon(conversation.conversation_id, payload.iconFileId);
         }
 
         await broadcastConversation(io, clientsInfo, conversation.conversation_id, [self, ...targets]);
