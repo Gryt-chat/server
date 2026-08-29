@@ -20,12 +20,18 @@ import {
   getFilesByIds,
   getServerConfig,
   getWebhooksByIds,
+  touchConversation,
   DEFAULT_UPLOAD_MAX_BYTES,
 } from "../../db";
 import { processProfanity, type CensorStyle, type ProfanityMode } from "../../utils/profanityFilter";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 import { applyAutoRoles } from "../../services/autoRoles";
 import { broadcastServerUiUpdate } from "../utils/server";
+import {
+  DENIAL_RESPONSES,
+  resolveConversationAccess,
+  type AllowedConversationAccess,
+} from "../utils/conversationAccess";
 
 const RL_SEND: RateLimitRule = { limit: 20, windowMs: 10_000, banMs: 30_000, scorePerAction: 1, maxScore: 10, scoreDecayMs: 2000 };
 const RL_REACT: RateLimitRule = { limit: 60, windowMs: 60_000, scorePerAction: 0.5, maxScore: 15, scoreDecayMs: 3000 };
@@ -176,6 +182,47 @@ async function enrichAttachments(messages: MessageRecord[]): Promise<MessageReco
 export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
   const { io, socket, clientId, serverId, clientsInfo, sfuClient, getClientIp } = ctx;
 
+  /**
+   * The connected clients that should hear about something in a conversation.
+   *
+   * Every chat event goes through this now, including the two that used to
+   * call `io.emit` and tell the whole server — reactions and deletions. On a
+   * channel that was invisible, because the whole server could read the channel
+   * anyway. On a direct message it would mean everybody learning that a message
+   * they cannot read was reacted to, by whom, and with what.
+   */
+  function recipientClientIds(conversationId: string, access: AllowedConversationAccess): string[] {
+    const members = access.kind === "dm" ? new Set(access.memberIds) : null;
+    const voice = isConversationAVoiceChannel(conversationId, sfuClient);
+
+    return Object.entries(clientsInfo)
+      .filter(([, ci]) => {
+        if (members) return members.has(ci.serverUserId);
+        if (voice) return isUserConnectedToSpecificVoiceChannel(ci.serverUserId, conversationId, sfuClient);
+        return true;
+      })
+      .map(([cid]) => cid);
+  }
+
+  /**
+   * Resolve access, and tell the caller no if they do not have it.
+   *
+   * Returns null once it has emitted the refusal, so every call site is one
+   * `if (!access) return;` rather than another copy of the same error shape.
+   */
+  async function requireConversationAccess(
+    conversationId: string,
+    serverUserId: string | null | undefined,
+  ): Promise<AllowedConversationAccess | null> {
+    const access = await resolveConversationAccess(conversationId, serverUserId);
+    if (!access.allowed) {
+      const { error, message } = DENIAL_RESPONSES[access.reason];
+      socket.emit("chat:error", { error, message });
+      return null;
+    }
+    return access;
+  }
+
   return {
     'chat:send': async (payload: { conversationId: string; accessToken: string; text?: string; attachments?: string[]; replyToMessageId?: string; nonce?: string }) => {
       try {
@@ -194,6 +241,9 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
 
         const auth = await requireAuth(socket, payload, { permission: "send_messages" });
         if (!auth) return;
+
+        const access = await requireConversationAccess(payload.conversationId, auth.tokenPayload.serverUserId);
+        if (!access) return;
 
         // Identity verification
         if (userId && payload.accessToken) {
@@ -235,6 +285,15 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         }
 
         const cfg = await getServerConfig().catch(() => null);
+
+        // A server that has switched direct messages off stops accepting new
+        // ones without hiding what is already there. The conversation and its
+        // history stay readable, so turning the setting back on does not have
+        // to undo a deletion that cannot be undone.
+        if (access.kind === "dm" && cfg && cfg.allow_dms === false) {
+          socket.emit("chat:error", { error: "dms_disabled", message: "Direct messages are turned off on this server" });
+          return;
+        }
 
         if (attachments && attachments.length > 0) {
           const fileMap = await getFilesByIds(attachments);
@@ -314,15 +373,13 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         const items = appended.length > 100 ? appended.slice(-100) : appended;
         messageCache.set(created.conversation_id, { items, fetchedAt: Date.now() });
 
-        // Targeted broadcast (voice channels only to connected users)
-        const connectedClients = Object.entries(clientsInfo).filter(([, ci]) => {
-          if (isConversationAVoiceChannel(created.conversation_id, sfuClient)) {
-            return isUserConnectedToSpecificVoiceChannel(ci.serverUserId, created.conversation_id, sfuClient);
-          }
-          return true;
-        });
+        if (access.kind === "dm") {
+          await touchConversation(created.conversation_id, created.created_at).catch((err) =>
+            consola.warn("touchConversation failed", created.conversation_id, err),
+          );
+        }
 
-        connectedClients.forEach(([cid]) => {
+        recipientClientIds(created.conversation_id, access).forEach((cid) => {
           const msg = cid === clientId && payload.nonce
             ? { ...enriched, nonce: payload.nonce }
             : enriched;
@@ -362,13 +419,21 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
             reactions: null,
             ephemeral: true,
           };
-          const connectedClients = Object.entries(clientsInfo).filter(([, ci]) => {
-            if (isConversationAVoiceChannel(fallback.conversation_id, sfuClient)) {
-              return isUserConnectedToSpecificVoiceChannel(ci.serverUserId, fallback.conversation_id, sfuClient);
-            }
-            return true;
-          });
-          connectedClients.forEach(([cid]) => {
+          // `access` belongs to the try block above and this is the catch, so
+          // it is resolved again rather than reached for. Anything other than a
+          // clear yes means the sender alone hears about it: a message that
+          // failed to save is not worth risking handing a private one to the
+          // whole server, and the sender is the only person who needs to know.
+          const fallbackAccess = await resolveConversationAccess(
+            fallback.conversation_id,
+            clientsInfo[clientId]?.serverUserId,
+          ).catch(() => null);
+
+          const fallbackRecipients = fallbackAccess?.allowed
+            ? recipientClientIds(fallback.conversation_id, fallbackAccess)
+            : [clientId];
+
+          fallbackRecipients.forEach((cid) => {
             io.sockets.sockets.get(cid)?.emit("chat:new", fallback);
           });
           socket.emit("chat:error", "Message not persisted (temporary storage issue)");
@@ -398,6 +463,12 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
         if (!payload || typeof payload.conversationId !== "string") { socket.emit("chat:error", "Invalid fetch payload"); return; }
+
+        // The membership check the read path never had. `read_messages` above
+        // says this person may read channels here; it says nothing about
+        // whether this particular conversation is one of theirs, and for a
+        // direct message that is the only question that matters.
+        if (!(await requireConversationAccess(payload.conversationId, userId))) return;
 
         if (userId && isConversationAVoiceChannel(payload.conversationId, sfuClient)) {
           if (!await isTextInVoiceEnabled(payload.conversationId)) {
@@ -450,6 +521,9 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         const auth = await requireAuth(socket, payload, { permission: "add_reactions" });
         if (!auth) return;
 
+        const access = await requireConversationAccess(payload.conversationId, auth.tokenPayload.serverUserId);
+        if (!access) return;
+
         const user = await getUserByServerId(auth.tokenPayload.serverUserId);
         if (!user) { socket.emit("chat:error", "User not found"); return; }
 
@@ -466,7 +540,9 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
 
         let [enrichedReaction] = await enrichMessages([updatedMessage]);
         [enrichedReaction] = await enrichAttachments([enrichedReaction]);
-        io.emit("chat:reaction", enrichedReaction);
+        recipientClientIds(updatedMessage.conversation_id, access).forEach((cid) => {
+          io.sockets.sockets.get(cid)?.emit("chat:reaction", enrichedReaction);
+        });
       } catch (err) {
         consola.error("chat:react failed", err);
         socket.emit("chat:error", "Failed to add reaction");
@@ -490,6 +566,9 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
 
         const auth = await requireAuth(socket, payload);
         if (!auth) return;
+
+        const access = await requireConversationAccess(payload.conversationId, auth.tokenPayload.serverUserId);
+        if (!access) return;
 
         const message = await getMessageById(payload.conversationId, payload.messageId);
         if (!message) { socket.emit("chat:error", "Message not found"); return; }
@@ -520,7 +599,9 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           });
         }
 
-        io.emit("chat:deleted", { conversation_id: payload.conversationId, message_id: payload.messageId });
+        recipientClientIds(payload.conversationId, access).forEach((cid) => {
+          io.sockets.sockets.get(cid)?.emit("chat:deleted", { conversation_id: payload.conversationId, message_id: payload.messageId });
+        });
       } catch (err) {
         consola.error("chat:delete failed", err);
         socket.emit("chat:error", "Failed to delete message");
@@ -550,6 +631,9 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
 
         const auth = await requireAuth(socket, payload);
         if (!auth) return;
+
+        const access = await requireConversationAccess(payload.conversationId, auth.tokenPayload.serverUserId);
+        if (!access) return;
 
         const message = await getMessageById(payload.conversationId, payload.messageId);
         if (!message) { socket.emit("chat:error", "Message not found"); return; }
@@ -592,14 +676,9 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           });
         }
 
-        const connectedClients = Object.entries(clientsInfo).filter(([, ci]) => {
-          if (isConversationAVoiceChannel(payload.conversationId, sfuClient)) {
-            return isUserConnectedToSpecificVoiceChannel(ci.serverUserId, payload.conversationId, sfuClient);
-          }
-          return true;
-        });
+        const connectedClients = recipientClientIds(payload.conversationId, access);
 
-        connectedClients.forEach(([cid]) => {
+        connectedClients.forEach((cid) => {
           io.sockets.sockets.get(cid)?.emit("chat:edited", enriched);
         });
       } catch (err) {

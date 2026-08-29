@@ -18,6 +18,7 @@ import { registerJoinHandlers } from "./handlers/join";
 import { registerAdminHandlers } from "./handlers/admin";
 import { getVouchChain, signServerProof } from "../auth/serverIdentity";
 import { registerChatHandlers } from "./handlers/chat";
+import { registerDirectMessageHandlers } from "./handlers/dm";
 import { registerVoiceHandlers } from "./handlers/voice";
 import { registerMemberHandlers } from "./handlers/members";
 import { registerDiagnosticsHandlers } from "./handlers/diagnostics";
@@ -384,6 +385,7 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
     ...registerJoinHandlers(ctx),
     ...registerAdminHandlers(ctx),
     ...registerChatHandlers(ctx),
+    ...registerDirectMessageHandlers(ctx),
     ...registerVoiceHandlers(ctx),
     ...registerMemberHandlers(ctx),
     ...registerReportHandlers(ctx),

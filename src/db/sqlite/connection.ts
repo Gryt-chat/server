@@ -67,6 +67,7 @@ function createSchema(d: DatabaseSync): void {
       avatar_thumb_px INTEGER,
       lan_open INTEGER NOT NULL DEFAULT 0,
       discoverable INTEGER NOT NULL DEFAULT 1,
+      allow_dms INTEGER NOT NULL DEFAULT 1,
       is_configured INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -220,6 +221,22 @@ function createSchema(d: DatabaseSync): void {
     -- automatic promotion is measured on. Without it that count is a full scan
     -- of the table on every message anybody sends.
     CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_server_id);
+
+    CREATE TABLE IF NOT EXISTS conversations (
+      conversation_id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL DEFAULT 'dm',
+      created_by_server_user_id TEXT,
+      created_at TEXT NOT NULL,
+      last_message_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS conversation_members (
+      conversation_id TEXT NOT NULL,
+      server_user_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (conversation_id, server_user_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_conversation_members_user ON conversation_members(server_user_id);
 
     CREATE TABLE IF NOT EXISTS files (
       file_id TEXT PRIMARY KEY,
@@ -502,6 +519,20 @@ function runMigrations(d: DatabaseSync): void {
   // shape and stops there.
   if (!hasColumn(d, "users", "avatar_worn")) {
     d.exec("ALTER TABLE users ADD COLUMN avatar_worn TEXT");
+  }
+
+  // Whether members can open direct messages with each other here.
+  //
+  // A server that stores DMs is storing private messages between two of its
+  // members on behalf of both, and an operator who did not sign up for that
+  // needs a way to say no. Off means no conversation can be opened and no
+  // message can be sent to one that already exists; the rows stay, because
+  // turning the setting back on should not have thrown away history.
+  //
+  // Defaults to on, which matches every other feature arriving switched on,
+  // and an operator who wants it off can say so before inviting anybody.
+  if (!hasColumn(d, "server_config", "allow_dms")) {
+    d.exec("ALTER TABLE server_config ADD COLUMN allow_dms INTEGER NOT NULL DEFAULT 1");
   }
 
   d.prepare("UPDATE server_config SET avatar_thumb_px = ?").run(AVATAR_THUMB_PX);
