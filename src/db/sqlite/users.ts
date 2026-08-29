@@ -230,17 +230,21 @@ export async function setUserWorn(serverUserId: string, worn: string | null): Pr
  * `Clients` — so anything using this map has to derive the flag and pass that
  * on, rather than passing the id through.
  */
-export async function getUsersByServerIds(ids: string[]): Promise<Map<string, { nickname: string; avatar_file_id?: string; gryt_user_id: string }>> {
-  const result = new Map<string, { nickname: string; avatar_file_id?: string; gryt_user_id: string }>();
+export async function getUsersByServerIds(ids: string[]): Promise<Map<string, { nickname: string; avatar_file_id?: string; avatar_worn: string | null; gryt_user_id: string }>> {
+  const result = new Map<string, { nickname: string; avatar_file_id?: string; avatar_worn: string | null; gryt_user_id: string }>();
   if (ids.length === 0) return result;
   const db = getSqliteDb();
   const unique = [...new Set(ids)];
   const placeholders = unique.map(() => "?").join(",");
-  const rows = db.prepare(`SELECT server_user_id, gryt_user_id, nickname, avatar_file_id FROM users WHERE server_user_id IN (${placeholders})`).all(...unique) as Record<string, unknown>[];
+  const rows = db.prepare(`SELECT server_user_id, gryt_user_id, nickname, avatar_file_id, avatar_worn FROM users WHERE server_user_id IN (${placeholders})`).all(...unique) as Record<string, unknown>[];
   for (const r of rows) {
     result.set(r.server_user_id as string, {
       nickname: (r.nickname as string) ?? "Unknown",
       avatar_file_id: (r.avatar_file_id as string) || undefined,
+      // Carried so a direct message draws the same avatar as the member list
+      // does. A field added to one of the two builders and not the other is
+      // how an owl silently stops being worn in half the UI.
+      avatar_worn: (r.avatar_worn as string) ?? null,
       gryt_user_id: (r.gryt_user_id as string) ?? "",
     });
   }

@@ -36,6 +36,7 @@ export interface DirectConversationView {
     server_user_id: string;
     nickname: string;
     avatar_file_id: string | null;
+    avatar_worn: string | null;
   };
 }
 
@@ -71,6 +72,7 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
           server_user_id: otherId,
           nickname: other?.nickname ?? "Unknown",
           avatar_file_id: other?.avatar_file_id ?? null,
+          avatar_worn: other?.avatar_worn ?? null,
         },
       }];
     });
@@ -127,7 +129,7 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
         }
 
         if (isBotIdentity(targetUser.gryt_user_id)) {
-          socket.emit("dm:error", { error: "invalid_target", message: "You cannot send a direct message to a bot" });
+          socket.emit("dm:error", { error: "invalid_target", message: "You cannot message a bot" });
           return;
         }
 
