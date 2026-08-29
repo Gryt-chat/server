@@ -87,6 +87,7 @@ function rowToConfig(r: Record<string, unknown>): ServerConfigRecord {
     default_role_account: normalizeRoleId(r.default_role_account ?? FALLBACK_ROLE_ID),
     default_role_local: normalizeRoleId(r.default_role_local ?? FALLBACK_ROLE_ID),
     discoverable: (r.discoverable as number) !== 0,
+    allow_dms: (r.allow_dms as number) !== 0,
     is_configured: (r.is_configured as number) === 1,
     created_at: fromIso(r.created_at as string),
     updated_at: fromIso(r.updated_at as string),
@@ -221,6 +222,7 @@ export async function updateServerConfig(patch: {
   defaultRoleLocal?: string;
   botJoinPolicy?: BotJoinPolicy;
   discoverable?: boolean;
+  allowDms?: boolean;
   isConfigured?: boolean;
 }): Promise<ServerConfigRecord> {
   const db = getSqliteDb();
@@ -247,6 +249,7 @@ export async function updateServerConfig(patch: {
     defaultRoleAccount: { col: "default_role_account", transform: (v) => normalizeRoleId(v) },
     defaultRoleLocal: { col: "default_role_local", transform: (v) => normalizeRoleId(v) },
     discoverable: { col: "discoverable", transform: (v) => v ? 1 : 0 },
+    allowDms: { col: "allow_dms", transform: (v) => v ? 1 : 0 },
     isConfigured: { col: "is_configured", transform: (v) => v ? 1 : 0 },
   };
 

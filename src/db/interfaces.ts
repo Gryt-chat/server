@@ -80,6 +80,24 @@ export interface UserRecord {
   avatar_worn: string | null;
 }
 
+// ── Conversation types ───────────────────────────────────────────
+
+/**
+ * A conversation that is not a channel.
+ *
+ * Channels are not rows here. `messages.conversation_id` holds channel ids and
+ * these ids alike, and which one an id is decides who may read it — a channel
+ * is open to the whole server, one of these is open to the people listed in
+ * `conversation_members` and to nobody else.
+ */
+export interface ConversationRecord {
+  conversation_id: string;
+  kind: "dm";
+  created_by_server_user_id: string | null;
+  created_at: Date;
+  last_message_at: Date | null;
+}
+
 // ── Message types ────────────────────────────────────────────────
 
 export interface Reaction {
@@ -186,6 +204,7 @@ export interface ServerConfigRecord {
   default_role_local: string;
   bot_join_policy: BotJoinPolicy;
   discoverable: boolean;
+  allow_dms: boolean;
   is_configured: boolean;
   created_at: Date;
   updated_at: Date;

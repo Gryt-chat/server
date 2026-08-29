@@ -5,6 +5,7 @@ export * from "./servers";
 export * from "./roleDefinitions";
 export * from "./bots";
 export * from "./channels";
+export * from "./conversations";
 export * from "./invites";
 export * from "./joinRequests";
 export * from "./emojis";
