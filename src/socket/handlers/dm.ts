@@ -15,6 +15,7 @@ import {
   purgeOrphanedConversations,
   openDirectConversation,
   setConversationHidden,
+  setConversationIcon,
   setConversationName,
 } from "../../db";
 import { isBotIdentity } from "../../auth/identity";
@@ -50,6 +51,14 @@ export interface DirectConversationView {
   kind: "dm" | "group";
   /** What a group was named, or null to read it off `members`. Null on a `dm`. */
   name: string | null;
+  /**
+   * A picture somebody uploaded for the group.
+   *
+   * Null means draw one from the name rather than "no picture" — a group with
+   * no upload gets the same treatment a server with no icon does, which is why
+   * nothing is stored for it.
+   */
+  icon_file_id: string | null;
   created_at: string;
   last_message_at: string | null;
   /** Everybody but you, in the order the server holds them. */
@@ -98,6 +107,7 @@ export async function directConversationViews(serverUserId: string): Promise<Dir
       conversation_id: c.conversation_id,
       kind: c.kind,
       name: c.name,
+      icon_file_id: c.icon_file_id,
       created_at: c.created_at.toISOString(),
       last_message_at: c.last_message_at ? c.last_message_at.toISOString() : null,
       members,
@@ -434,8 +444,18 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
       }
     },
 
-    /** Name a group, or clear the name so it reads off its members again. */
-    'dm:group:rename': async (payload: { accessToken: string; conversationId: string; name: string | null }) => {
+    /**
+     * Change what a group is called and what it looks like.
+     *
+     * One event rather than two, because the screen that changes either
+     * changes both, and a client that sent them separately would draw a group
+     * renamed but not re-pictured for one round trip.
+     *
+     * Both are `null`-able and both mean "go back to the drawn one": a group
+     * with no name reads off its members, and a group with no upload is drawn
+     * from that name.
+     */
+    'dm:group:update': async (payload: { accessToken: string; conversationId: string; name?: string | null; iconFileId?: string | null }) => {
       try {
         if (!payload || typeof payload.accessToken !== "string" || typeof payload.conversationId !== "string") {
           socket.emit("dm:error", { error: "invalid_payload", message: "Invalid payload" });
@@ -452,7 +472,15 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
           return;
         }
 
-        await setConversationName(payload.conversationId, typeof payload.name === "string" ? payload.name : null);
+        if ("name" in payload) {
+          await setConversationName(payload.conversationId, typeof payload.name === "string" ? payload.name : null);
+        }
+        if ("iconFileId" in payload) {
+          await setConversationIcon(
+            payload.conversationId,
+            typeof payload.iconFileId === "string" && payload.iconFileId ? payload.iconFileId : null,
+          );
+        }
         await broadcastConversation(
           io,
           clientsInfo,
@@ -460,8 +488,8 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
           await listConversationMemberIds(payload.conversationId),
         );
       } catch (err) {
-        consola.error("dm:group:rename failed", err);
-        socket.emit("dm:error", { error: "failed", message: "Could not rename the group" });
+        consola.error("dm:group:update failed", err);
+        socket.emit("dm:error", { error: "failed", message: "Could not update the group" });
       }
     },
 

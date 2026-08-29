@@ -537,10 +537,10 @@ describe("hiding a conversation", () => {
 });
 
 describe("group conversations", () => {
-  async function listFor(who: Participant): Promise<{ conversation_id: string; kind: string; members: { nickname: string }[]; name: string | null }[]> {
+  async function listFor(who: Participant): Promise<{ conversation_id: string; kind: string; members: { nickname: string }[]; name: string | null; icon_file_id: string | null }[]> {
     who.clear();
     await who.handlers["dm:list"]({ accessToken: who.accessToken });
-    const list = who.received("dm:list")[0] as { items: { conversation_id: string; kind: string; members: { nickname: string }[]; name: string | null }[] };
+    const list = who.received("dm:list")[0] as { items: { conversation_id: string; kind: string; members: { nickname: string }[]; name: string | null; icon_file_id: string | null }[] };
     return list.items;
   }
 
@@ -669,10 +669,36 @@ describe("group conversations", () => {
     assert.equal((await listFor(outsider)).some((c) => c.conversation_id === conversationId), false);
   });
 
+  it("can be given a picture, and clearing it goes back to the drawn one", async () => {
+    const conversationId = await makeGroup();
+
+    await alice.handlers["dm:group:update"]({
+      accessToken: alice.accessToken,
+      conversationId,
+      iconFileId: "file_abc123",
+    });
+    let view = (await listFor(bob)).find((c) => c.conversation_id === conversationId) as
+      | { icon_file_id?: string | null }
+      | undefined;
+    assert.equal(view?.icon_file_id, "file_abc123", "the upload did not reach the other members");
+
+    await alice.handlers["dm:group:update"]({
+      accessToken: alice.accessToken,
+      conversationId,
+      iconFileId: null,
+    });
+    view = (await listFor(bob)).find((c) => c.conversation_id === conversationId) as
+      | { icon_file_id?: string | null }
+      | undefined;
+    // Null is "draw it from the name", not "no picture" — the clients render
+    // the generated one, so nothing needs storing for it.
+    assert.equal(view?.icon_file_id, null);
+  });
+
   it("can be named, and the name reaches everybody", async () => {
     const conversationId = await makeGroup();
 
-    await alice.handlers["dm:group:rename"]({
+    await alice.handlers["dm:group:update"]({
       accessToken: alice.accessToken,
       conversationId,
       name: "  Weekend plans  ",

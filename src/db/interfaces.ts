@@ -103,6 +103,14 @@ export interface ConversationRecord {
   kind: "dm" | "group";
   /** What a group is called, when somebody named it. Always null on a `dm`. */
   name: string | null;
+  /**
+   * A picture somebody uploaded for a group.
+   *
+   * Null is not "no icon" — it means the clients draw one from the name.
+   * Storing a generated image would freeze it against a group that gets
+   * renamed.
+   */
+  icon_file_id: string | null;
   created_by_server_user_id: string | null;
   created_at: Date;
   last_message_at: Date | null;
