@@ -445,3 +445,93 @@ describe("a role that may talk in channels but not in private", () => {
     );
   });
 });
+
+describe("hiding a conversation", () => {
+  /** What this member's sidebar would show right now. */
+  async function listFor(who: Participant): Promise<string[]> {
+    who.clear();
+    await who.handlers["dm:list"]({ accessToken: who.accessToken });
+    const list = who.received("dm:list")[0] as { items: { conversation_id: string }[] };
+    return list.items.map((i) => i.conversation_id);
+  }
+
+  async function hide(who: Participant, conversationId: string, hidden: boolean): Promise<void> {
+    await who.handlers["dm:setHidden"]({
+      accessToken: who.accessToken,
+      conversationId,
+      hidden,
+    });
+  }
+
+  it("takes it out of your list and leaves theirs alone", async () => {
+    // The whole point of the feature, and the thing most likely to be got
+    // wrong: `hidden_at` is on the membership row, so it is one person's
+    // answer. A column on `conversations` would have hidden it for both.
+    const conversationId = await openDm(alice, bob);
+
+    await hide(alice, conversationId, true);
+
+    assert.equal((await listFor(alice)).includes(conversationId), false, "still in Alice's list");
+    assert.equal((await listFor(bob)).includes(conversationId), true, "hiding took it off Bob's too");
+  });
+
+  it("keeps every message", async () => {
+    const conversationId = await openDm(alice, bob);
+    await alice.handlers["chat:send"]({ conversationId, accessToken: alice.accessToken, text: "still here" });
+
+    await hide(alice, conversationId, true);
+
+    clearAll();
+    await alice.handlers["chat:fetch"]({ conversationId });
+    const history = alice.received("chat:history")[0] as { items: { text: string }[] } | undefined;
+    assert.ok(history, "hiding took the history away, and it must not");
+    assert.ok(history.items.some((m) => m.text === "still here"));
+  });
+
+  it("comes back when they say something", async () => {
+    // Otherwise hiding is a way to never hear from somebody again, and the
+    // only sign would be an unread count on a row that is not there.
+    const conversationId = await openDm(alice, bob);
+    await hide(alice, conversationId, true);
+    assert.equal((await listFor(alice)).includes(conversationId), false);
+
+    clearAll();
+    await bob.handlers["chat:send"]({ conversationId, accessToken: bob.accessToken, text: "you there?" });
+
+    // Read before `listFor`, which clears what the socket has seen.
+    const toldAlice = alice.received("dm:opened").some(
+      (v) => (v as { conversation_id?: string }).conversation_id === conversationId,
+    );
+
+    assert.equal((await listFor(alice)).includes(conversationId), true, "stayed hidden through a new message");
+    assert.ok(toldAlice, "Alice was never told it came back, so her sidebar would not know");
+  });
+
+  it("comes back when you open it again", async () => {
+    const conversationId = await openDm(alice, bob);
+    await hide(alice, conversationId, true);
+
+    await alice.handlers["dm:open"]({ accessToken: alice.accessToken, targetServerUserId: bob.serverUserId });
+
+    assert.equal((await listFor(alice)).includes(conversationId), true);
+  });
+
+  it("can be put back by hand", async () => {
+    const conversationId = await openDm(alice, bob);
+    await hide(alice, conversationId, true);
+    await hide(alice, conversationId, false);
+
+    assert.equal((await listFor(alice)).includes(conversationId), true);
+  });
+
+  it("refuses a conversation that is not yours", async () => {
+    const conversationId = await openDm(alice, bob);
+    clearAll();
+
+    await hide(mallory, conversationId, true);
+
+    assert.ok(mallory.received("dm:error").length > 0, "no refusal");
+    assert.equal((await listFor(alice)).includes(conversationId), true, "Mallory hid somebody else's conversation");
+    assert.equal((await listFor(bob)).includes(conversationId), true);
+  });
+});

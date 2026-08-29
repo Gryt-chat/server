@@ -233,6 +233,7 @@ function createSchema(d: DatabaseSync): void {
     CREATE TABLE IF NOT EXISTS conversation_members (
       conversation_id TEXT NOT NULL,
       server_user_id TEXT NOT NULL,
+      hidden_at TEXT,
       created_at TEXT NOT NULL,
       PRIMARY KEY (conversation_id, server_user_id)
     );
@@ -531,6 +532,19 @@ function runMigrations(d: DatabaseSync): void {
   //
   // Defaults to on, which matches every other feature arriving switched on,
   // and an operator who wants it off can say so before inviting anybody.
+  // When somebody took this conversation out of their own sidebar.
+  //
+  // On the membership row rather than the conversation, because it is one
+  // person's answer: hiding a conversation says nothing about whether the
+  // other party wants it in theirs. NULL means visible, which is what every
+  // row written before this column existed meant.
+  //
+  // Nothing is deleted. The messages stay, and the conversation comes back on
+  // its own when a new one arrives — see `clearConversationHidden`.
+  if (!hasColumn(d, "conversation_members", "hidden_at")) {
+    d.exec("ALTER TABLE conversation_members ADD COLUMN hidden_at TEXT");
+  }
+
   if (!hasColumn(d, "server_config", "allow_dms")) {
     d.exec("ALTER TABLE server_config ADD COLUMN allow_dms INTEGER NOT NULL DEFAULT 1");
   }

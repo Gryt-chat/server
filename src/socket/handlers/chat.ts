@@ -20,6 +20,7 @@ import {
   getFilesByIds,
   getServerConfig,
   getWebhooksByIds,
+  clearConversationHidden,
   touchConversation,
   DEFAULT_UPLOAD_MAX_BYTES,
 } from "../../db";
@@ -28,6 +29,7 @@ import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 import { MESSAGE_MAX_LENGTH, MESSAGE_TOO_LONG } from "../../utils/messageLimits";
 import { applyAutoRoles } from "../../services/autoRoles";
 import { broadcastServerUiUpdate } from "../utils/server";
+import { directConversationViews } from "./dm";
 import {
   DENIAL_RESPONSES,
   resolveConversationAccess,
@@ -400,6 +402,31 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           await touchConversation(created.conversation_id, created.created_at).catch((err) =>
             consola.warn("touchConversation failed", created.conversation_id, err),
           );
+
+          // A message brings the conversation back to anybody who had hidden
+          // it. Hiding is "not in my sidebar", not "never speak to me again" —
+          // without this the message would be delivered to a row that is not
+          // there, and the only sign of it would be an unread count on
+          // nothing. Blocking is the feature that means the other thing, and
+          // this is not it.
+          //
+          // After the send rather than before, and swallowed on failure, for
+          // the same reason auto-roles are: a sidebar that has not caught up
+          // must never be the reason a message does not arrive.
+          try {
+            const restored = await clearConversationHidden(created.conversation_id);
+            for (const serverUserId of restored) {
+              const views = await directConversationViews(serverUserId);
+              const view = views.find((v) => v.conversation_id === created.conversation_id);
+              if (!view) continue;
+              for (const [cid, ci] of Object.entries(clientsInfo)) {
+                if (ci.serverUserId !== serverUserId) continue;
+                io.sockets.sockets.get(cid)?.emit("dm:opened", view);
+              }
+            }
+          } catch (err) {
+            consola.warn("un-hiding the conversation failed", created.conversation_id, err);
+          }
         }
 
         recipientClientIds(created.conversation_id, access).forEach((cid) => {
