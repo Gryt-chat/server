@@ -1,14 +1,21 @@
 import consola from "consola";
 
 import {
+  addConversationMember,
+  createGroupConversation,
   getConversation,
   getServerConfig,
   getUserByServerId,
   getUsersByServerIds,
   isConversationMember,
+  leaveConversation,
+  listConversationMemberIds,
   listConversationsForUser,
+  MAX_CONVERSATION_MEMBERS,
+  purgeOrphanedConversations,
   openDirectConversation,
   setConversationHidden,
+  setConversationName,
 } from "../../db";
 import { isBotIdentity } from "../../auth/identity";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
@@ -31,16 +38,32 @@ import type { EventHandlerMap, HandlerContext } from "./types";
 const RL_OPEN: RateLimitRule = { limit: 10, windowMs: 60_000, scorePerAction: 1, maxScore: 10, scoreDecayMs: 3000 };
 const RL_LIST: RateLimitRule = { limit: 20, windowMs: 60_000, scorePerAction: 0.3, maxScore: 8, scoreDecayMs: 2000 };
 
+export interface ConversationParticipant {
+  server_user_id: string;
+  nickname: string;
+  avatar_file_id: string | null;
+  avatar_worn: string | null;
+}
+
 export interface DirectConversationView {
   conversation_id: string;
+  kind: "dm" | "group";
+  /** What a group was named, or null to read it off `members`. Null on a `dm`. */
+  name: string | null;
   created_at: string;
   last_message_at: string | null;
-  other: {
-    server_user_id: string;
-    nickname: string;
-    avatar_file_id: string | null;
-    avatar_worn: string | null;
-  };
+  /** Everybody but you, in the order the server holds them. */
+  members: ConversationParticipant[];
+  /**
+   * The first of `members`.
+   *
+   * Redundant, and kept on purpose: it is what a client written before groups
+   * existed reads, and dropping it would turn every one of those into a crash
+   * on `other.nickname` rather than a client that simply does not know what a
+   * group is. On a group it names one arbitrary person, which reads oddly on
+   * an old build and does not break it.
+   */
+  other: ConversationParticipant;
 }
 
 /**
@@ -55,22 +78,50 @@ export async function directConversationViews(serverUserId: string): Promise<Dir
   const otherIds = [...new Set(conversations.flatMap((c) => c.other_server_user_ids))];
   const users = otherIds.length > 0 ? await getUsersByServerIds(otherIds) : new Map();
 
+  const participant = (id: string): ConversationParticipant => {
+    const user = users.get(id);
+    return {
+      server_user_id: id,
+      nickname: user?.nickname ?? "Unknown",
+      avatar_file_id: user?.avatar_file_id ?? null,
+      avatar_worn: user?.avatar_worn ?? null,
+    };
+  };
+
   return conversations.flatMap((c) => {
-    const otherId = c.other_server_user_ids[0];
-    if (!otherId) return [];
-    const other = users.get(otherId);
+    const members = c.other_server_user_ids.map(participant);
+    // A conversation with nobody else in it is one everybody else has left.
+    // There is nothing to draw and no name to give it, so it is left out
+    // rather than listed as a row naming "Unknown".
+    if (members.length === 0) return [];
     return [{
       conversation_id: c.conversation_id,
+      kind: c.kind,
+      name: c.name,
       created_at: c.created_at.toISOString(),
       last_message_at: c.last_message_at ? c.last_message_at.toISOString() : null,
-      other: {
-        server_user_id: otherId,
-        nickname: other?.nickname ?? "Unknown",
-        avatar_file_id: other?.avatar_file_id ?? null,
-        avatar_worn: other?.avatar_worn ?? null,
-      },
+      members,
+      other: members[0],
     }];
   });
+}
+
+/** Tell everybody in a conversation what it looks like to each of them. */
+async function broadcastConversation(
+  io: HandlerContext["io"],
+  clientsInfo: HandlerContext["clientsInfo"],
+  conversationId: string,
+  memberIds: string[],
+): Promise<void> {
+  for (const serverUserId of memberIds) {
+    const views = await directConversationViews(serverUserId);
+    const view = views.find((v) => v.conversation_id === conversationId);
+    if (!view) continue;
+    for (const [cid, ci] of Object.entries(clientsInfo)) {
+      if (ci.serverUserId !== serverUserId) continue;
+      io.sockets.sockets.get(cid)?.emit("dm:opened", view);
+    }
+  }
 }
 
 export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandlerMap {
@@ -219,6 +270,198 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
       } catch (err) {
         consola.error("dm:setHidden failed", err);
         socket.emit("dm:error", { error: "failed", message: "Could not update the conversation" });
+      }
+    },
+
+    /**
+     * Start a group conversation.
+     *
+     * Adding somebody to a one-to-one does not happen. This makes a new
+     * conversation with a new id, and the pair conversation stays exactly as
+     * it was — the history two people built is not something a third should
+     * inherit because somebody tapped "add". Discord draws the same line.
+     */
+    'dm:group:create': async (payload: { accessToken: string; memberIds: string[]; name?: string }) => {
+      try {
+        const ip = getClientIp();
+        const rl = checkRateLimit("dm:group:create", clientsInfo[clientId]?.serverUserId, ip, RL_OPEN);
+        if (!rl.allowed) {
+          socket.emit("dm:error", { error: "rate_limited", retryAfterMs: rl.retryAfterMs, message: `Too fast. Wait ${Math.ceil((rl.retryAfterMs || 0) / 1000)}s.` });
+          return;
+        }
+
+        if (!payload || typeof payload.accessToken !== "string" || !Array.isArray(payload.memberIds)) {
+          socket.emit("dm:error", { error: "invalid_payload", message: "Invalid payload" });
+          return;
+        }
+
+        const auth = await requireAuth(socket, payload, { permission: "send_direct_messages" });
+        if (!auth) return;
+
+        const cfg = await getServerConfig().catch(() => null);
+        if (cfg && cfg.allow_dms === false) {
+          socket.emit("dm:error", { error: "dms_disabled", message: "Direct messages are turned off on this server" });
+          return;
+        }
+
+        const self = auth.tokenPayload.serverUserId;
+        const targets = [...new Set(payload.memberIds.filter((id) => typeof id === "string" && id !== self))];
+
+        if (targets.length < 2) {
+          socket.emit("dm:error", { error: "too_few", message: "A group needs at least two other people" });
+          return;
+        }
+        if (targets.length + 1 > MAX_CONVERSATION_MEMBERS) {
+          socket.emit("dm:error", { error: "too_many", message: `A group can hold ${MAX_CONVERSATION_MEMBERS} people` });
+          return;
+        }
+
+        // Every one of them, checked before anything is written. A group made
+        // with one bad id would otherwise exist with a member nobody can see.
+        for (const id of targets) {
+          const user = await getUserByServerId(id);
+          if (!user || !user.is_active) {
+            socket.emit("dm:error", { error: "unknown_member", message: "Somebody in that list is not a member of this server" });
+            return;
+          }
+          if (isBotIdentity(user.gryt_user_id)) {
+            socket.emit("dm:error", { error: "invalid_target", message: "You cannot add a bot to a group" });
+            return;
+          }
+        }
+
+        const conversation = await createGroupConversation(self, targets);
+        if (typeof payload.name === "string" && payload.name.trim()) {
+          await setConversationName(conversation.conversation_id, payload.name);
+        }
+
+        await broadcastConversation(io, clientsInfo, conversation.conversation_id, [self, ...targets]);
+      } catch (err) {
+        consola.error("dm:group:create failed", err);
+        socket.emit("dm:error", { error: "failed", message: "Could not start the group" });
+      }
+    },
+
+    /** Add somebody to a group you are in. Anybody in it may; there is no owner. */
+    'dm:group:add': async (payload: { accessToken: string; conversationId: string; targetServerUserId: string }) => {
+      try {
+        if (!payload || typeof payload.accessToken !== "string" || typeof payload.conversationId !== "string" || typeof payload.targetServerUserId !== "string") {
+          socket.emit("dm:error", { error: "invalid_payload", message: "Invalid payload" });
+          return;
+        }
+
+        const auth = await requireAuth(socket, payload, { permission: "send_direct_messages" });
+        if (!auth) return;
+
+        const self = auth.tokenPayload.serverUserId;
+        const conversation = await getConversation(payload.conversationId);
+        if (!conversation || !(await isConversationMember(payload.conversationId, self))) {
+          socket.emit("dm:error", { error: "not_found", message: "No such conversation" });
+          return;
+        }
+        if (conversation.kind !== "group") {
+          socket.emit("dm:error", { error: "not_a_group", message: "Start a group to add more people" });
+          return;
+        }
+
+        const target = await getUserByServerId(payload.targetServerUserId);
+        if (!target || !target.is_active || isBotIdentity(target.gryt_user_id)) {
+          socket.emit("dm:error", { error: "unknown_member", message: "That person is not a member of this server" });
+          return;
+        }
+
+        await addConversationMember(payload.conversationId, payload.targetServerUserId);
+        await broadcastConversation(
+          io,
+          clientsInfo,
+          payload.conversationId,
+          await listConversationMemberIds(payload.conversationId),
+        );
+      } catch (err) {
+        consola.error("dm:group:add failed", err);
+        socket.emit("dm:error", { error: "failed", message: err instanceof Error && err.message.includes("at most") ? `A group can hold ${MAX_CONVERSATION_MEMBERS} people` : "Could not add them" });
+      }
+    },
+
+    /**
+     * Leave a group for good.
+     *
+     * Not hiding. Hiding is your own sidebar and a message brings it back;
+     * this drops the membership, so nothing arrives afterwards and the history
+     * stops being yours to read.
+     */
+    'dm:group:leave': async (payload: { accessToken: string; conversationId: string }) => {
+      try {
+        if (!payload || typeof payload.accessToken !== "string" || typeof payload.conversationId !== "string") {
+          socket.emit("dm:error", { error: "invalid_payload", message: "Invalid payload" });
+          return;
+        }
+
+        const auth = await requireAuth(socket, payload);
+        if (!auth) return;
+
+        const self = auth.tokenPayload.serverUserId;
+        const conversation = await getConversation(payload.conversationId);
+        if (!conversation || !(await isConversationMember(payload.conversationId, self))) {
+          socket.emit("dm:error", { error: "not_found", message: "No such conversation" });
+          return;
+        }
+        if (conversation.kind !== "group") {
+          socket.emit("dm:error", { error: "not_a_group", message: "Hide a direct message instead of leaving it" });
+          return;
+        }
+
+        await leaveConversation(payload.conversationId, self);
+
+        // The last person out takes the room with them. Without this a group
+        // everybody left would sit in the table for good, holding messages
+        // nobody can reach — the same sweep `server:leave` already does, run
+        // at the other moment a conversation can empty out.
+        const remaining = await listConversationMemberIds(payload.conversationId);
+        if (remaining.length === 0) {
+          await purgeOrphanedConversations().catch((e) =>
+            consola.warn("purging the empty group failed", e),
+          );
+        }
+
+        for (const cid of socketIdsFor(self)) {
+          io.sockets.sockets.get(cid)?.emit("dm:left", { conversation_id: payload.conversationId });
+        }
+        await broadcastConversation(io, clientsInfo, payload.conversationId, remaining);
+      } catch (err) {
+        consola.error("dm:group:leave failed", err);
+        socket.emit("dm:error", { error: "failed", message: "Could not leave the group" });
+      }
+    },
+
+    /** Name a group, or clear the name so it reads off its members again. */
+    'dm:group:rename': async (payload: { accessToken: string; conversationId: string; name: string | null }) => {
+      try {
+        if (!payload || typeof payload.accessToken !== "string" || typeof payload.conversationId !== "string") {
+          socket.emit("dm:error", { error: "invalid_payload", message: "Invalid payload" });
+          return;
+        }
+
+        const auth = await requireAuth(socket, payload, { permission: "send_direct_messages" });
+        if (!auth) return;
+
+        const self = auth.tokenPayload.serverUserId;
+        const conversation = await getConversation(payload.conversationId);
+        if (!conversation || conversation.kind !== "group" || !(await isConversationMember(payload.conversationId, self))) {
+          socket.emit("dm:error", { error: "not_found", message: "No such conversation" });
+          return;
+        }
+
+        await setConversationName(payload.conversationId, typeof payload.name === "string" ? payload.name : null);
+        await broadcastConversation(
+          io,
+          clientsInfo,
+          payload.conversationId,
+          await listConversationMemberIds(payload.conversationId),
+        );
+      } catch (err) {
+        consola.error("dm:group:rename failed", err);
+        socket.emit("dm:error", { error: "failed", message: "Could not rename the group" });
       }
     },
 

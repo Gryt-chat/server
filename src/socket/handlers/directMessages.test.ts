@@ -535,3 +535,162 @@ describe("hiding a conversation", () => {
     assert.equal((await listFor(bob)).includes(conversationId), true);
   });
 });
+
+describe("group conversations", () => {
+  async function listFor(who: Participant): Promise<{ conversation_id: string; kind: string; members: { nickname: string }[]; name: string | null }[]> {
+    who.clear();
+    await who.handlers["dm:list"]({ accessToken: who.accessToken });
+    const list = who.received("dm:list")[0] as { items: { conversation_id: string; kind: string; members: { nickname: string }[]; name: string | null }[] };
+    return list.items;
+  }
+
+  async function makeGroup(): Promise<string> {
+    clearAll();
+    await alice.handlers["dm:group:create"]({
+      accessToken: alice.accessToken,
+      memberIds: [bob.serverUserId, mallory.serverUserId],
+    });
+    const opened = alice.received("dm:opened").at(-1) as { conversation_id?: string } | undefined;
+    assert.ok(opened?.conversation_id, `no group came back: ${JSON.stringify(alice.emitted)}`);
+    return opened.conversation_id;
+  }
+
+  it("takes three people and tells all of them", async () => {
+    const conversationId = await makeGroup();
+
+    for (const who of [alice, bob, mallory]) {
+      const view = (await listFor(who)).find((c) => c.conversation_id === conversationId);
+      assert.ok(view, `${who.serverUserId} cannot see the group`);
+      assert.equal(view.kind, "group");
+      assert.equal(view.members.length, 2, "each of them sees the other two");
+    }
+  });
+
+  it("does not swallow the one-to-one those people already had", async () => {
+    // The decision this feature turns on. Adding somebody to a pair
+    // conversation would make its history readable by a third person, so
+    // making a group makes a *new* conversation and leaves the pair alone.
+    const pairId = await openDm(alice, bob);
+    await alice.handlers["chat:send"]({ conversationId: pairId, accessToken: alice.accessToken, text: "just us" });
+
+    const groupId = await makeGroup();
+    assert.notEqual(groupId, pairId);
+
+    const forAlice = await listFor(alice);
+    assert.ok(forAlice.some((c) => c.conversation_id === pairId), "the pair conversation went missing");
+    assert.ok(forAlice.some((c) => c.conversation_id === groupId));
+
+    clearAll();
+    await alice.handlers["chat:fetch"]({ conversationId: pairId });
+    const history = alice.received("chat:history")[0] as { items: { text: string }[] } | undefined;
+    assert.ok(history?.items.some((m) => m.text === "just us"), "the pair history was lost");
+
+    // And the third person cannot reach it.
+    clearAll();
+    await mallory.handlers["chat:fetch"]({ conversationId: pairId });
+    assert.equal(mallory.received("chat:history").length, 0, "a group member could read the pair history");
+  });
+
+  it("delivers to everybody in it and nobody outside it", async () => {
+    const conversationId = await makeGroup();
+    const outsider = await connectMember("Outsider");
+    clearAll();
+    outsider.clear();
+
+    await alice.handlers["chat:send"]({ conversationId, accessToken: alice.accessToken, text: "all three" });
+
+    const got = (p: Participant) =>
+      p.received("chat:new").filter((m) => (m as { text?: string }).text === "all three").length;
+    assert.equal(got(alice), 1);
+    assert.equal(got(bob), 1);
+    assert.equal(got(mallory), 1);
+    assert.equal(got(outsider), 0, "somebody outside the group received it");
+  });
+
+  it("lets anybody in it add somebody, and the new person sees it", async () => {
+    const conversationId = await makeGroup();
+    const dave = await connectMember("Dave");
+
+    // Bob, not Alice. There is no owner; anybody in the group may add.
+    await bob.handlers["dm:group:add"]({
+      accessToken: bob.accessToken,
+      conversationId,
+      targetServerUserId: dave.serverUserId,
+    });
+
+    assert.ok(
+      (await listFor(dave)).some((c) => c.conversation_id === conversationId),
+      "the person added cannot see the group",
+    );
+  });
+
+  it("stops delivering once you leave", async () => {
+    const conversationId = await makeGroup();
+
+    await mallory.handlers["dm:group:leave"]({ accessToken: mallory.accessToken, conversationId });
+    assert.equal(
+      (await listFor(mallory)).some((c) => c.conversation_id === conversationId),
+      false,
+      "still listed after leaving",
+    );
+
+    clearAll();
+    await alice.handlers["chat:send"]({ conversationId, accessToken: alice.accessToken, text: "after she left" });
+    assert.equal(
+      mallory.received("chat:new").filter((m) => (m as { text?: string }).text === "after she left").length,
+      0,
+      "a message reached somebody who had left",
+    );
+    // Leaving is not hiding: it does not come back.
+    assert.equal((await listFor(mallory)).some((c) => c.conversation_id === conversationId), false);
+  });
+
+  it("refuses a group with fewer than two other people", async () => {
+    clearAll();
+    await alice.handlers["dm:group:create"]({
+      accessToken: alice.accessToken,
+      memberIds: [bob.serverUserId],
+    });
+    assert.equal(alice.received("dm:opened").length, 0, "made a two-person group");
+    assert.ok(alice.received("dm:error").length > 0);
+  });
+
+  it("refuses somebody who is not in it", async () => {
+    const conversationId = await makeGroup();
+    const outsider = await connectMember("Nosy");
+    outsider.clear();
+
+    await outsider.handlers["dm:group:add"]({
+      accessToken: outsider.accessToken,
+      conversationId,
+      targetServerUserId: outsider.serverUserId,
+    });
+    assert.ok(outsider.received("dm:error").length > 0, "an outsider added themselves");
+    assert.equal((await listFor(outsider)).some((c) => c.conversation_id === conversationId), false);
+  });
+
+  it("can be named, and the name reaches everybody", async () => {
+    const conversationId = await makeGroup();
+
+    await alice.handlers["dm:group:rename"]({
+      accessToken: alice.accessToken,
+      conversationId,
+      name: "  Weekend plans  ",
+    });
+
+    for (const who of [alice, bob, mallory]) {
+      const view = (await listFor(who)).find((c) => c.conversation_id === conversationId);
+      assert.equal(view?.name, "Weekend plans", `${who.serverUserId} did not get the name`);
+    }
+  });
+
+  it("refuses leaving a one-to-one, which is what hiding is for", async () => {
+    const pairId = await openDm(alice, bob);
+    clearAll();
+
+    await alice.handlers["dm:group:leave"]({ accessToken: alice.accessToken, conversationId: pairId });
+
+    assert.ok(alice.received("dm:error").length > 0);
+    assert.ok((await listFor(alice)).some((c) => c.conversation_id === pairId), "the pair conversation was left");
+  });
+});
