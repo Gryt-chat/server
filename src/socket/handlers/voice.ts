@@ -507,6 +507,22 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
 
       syncAllClients(io, clientsInfo);
 
+      /*
+       * This is the event that sets `hasJoinedChannel`, so it is the one that
+       * has to announce the call.
+       *
+       * A client sends `voice:stream:set` and then this, ten milliseconds
+       * apart. `voice:stream:set` broadcasts; this one did not. So the count of
+       * who is in a call was always taken a moment before the flag that puts
+       * somebody in it — and for the first person into a room that count is
+       * zero, which sends nothing at all.
+       *
+       * The caller pressed Call and got an empty voice view until somebody
+       * answered, because the answer was the next thing to run the count
+       * (GRYT-713).
+       */
+      broadcastMemberList(io, clientsInfo, serverId);
+
       if (newJoinedState && !wasInChannel) {
         if (roomName) {
           socket.to(roomName).emit("voice:peer:joined", {
