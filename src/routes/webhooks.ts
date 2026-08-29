@@ -14,6 +14,7 @@ import { requireBearerToken } from "../middleware/requireBearerToken";
 import { ensurePermission } from "../middleware/requirePermission";
 import { broadcastChatNew } from "../socket";
 import { checkRateLimit, type RateLimitRule } from "../utils/rateLimiter";
+import { MESSAGE_MAX_LENGTH, MESSAGE_TOO_LONG } from "../utils/messageLimits";
 
 const RL_WEBHOOK_SEND: RateLimitRule = {
   limit: 30,
@@ -58,8 +59,8 @@ webhooksRouter.post(
           res.status(400).json({ error: "empty_message", message: "Message text is required." });
           return;
         }
-        if (text.length > 4000) {
-          res.status(400).json({ error: "message_too_long", message: "Max 4000 characters." });
+        if (text.length > MESSAGE_MAX_LENGTH) {
+          res.status(400).json(MESSAGE_TOO_LONG);
           return;
         }
 
