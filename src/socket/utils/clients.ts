@@ -1,6 +1,7 @@
 import { Server, Socket } from "socket.io";
 import { Clients } from "../../types";
 import { getAllRegisteredUsers, getFilesByIds, isConversationId, listServerRoles } from "../../db";
+import { voiceRoomName } from "./voiceRooms";
 import { clientMayReceive, refreshClientPermissions } from "./standing";
 import { isBotIdentity } from "../../auth/identity";
 import { memberIdentity } from "./memberIdentity";
@@ -295,7 +296,78 @@ async function emitMemberListNow(io: Server, clientsInfo: Clients): Promise<void
   }
 }
 
-export function broadcastMemberList(io: Server, clientsInfo: Clients, _instanceId: string): void {
+const lastCallMembersByIO = new WeakMap<Server, Map<string, string>>();
+
+/**
+ * Who is in each conversation call, told only to the people in it.
+ *
+ * `publicVoiceRoom` blanks a conversation id out of the member list and out of
+ * `server:clients`, because those go to every member of the server and a
+ * one-to-one id reads straight back to the pair. That is right, and it left the
+ * people actually in the call unable to see each other: both clients group
+ * participants by `voiceChannelId`, and blanking it means nothing matches — a
+ * call showed nobody in it, including yourself.
+ *
+ * So the id goes to the one audience allowed to have it. Everybody in a call is
+ * already in that call's socket.io room, and nobody else is, so addressing the
+ * room is the whole of the access rule. Not a second copy of it — there is no
+ * `if` here to disagree with `resolveConversationAccess`, because you cannot be
+ * in the room without having gone through it.
+ *
+ * Channels are deliberately not sent. The member list already names those, and
+ * sending this for them would put a payload on every voice event on the server
+ * to say something already said.
+ */
+function broadcastCallParticipants(io: Server, clientsInfo: Clients, serverId: string): void {
+  const byRoom = new Map<string, Set<string>>();
+
+  for (const client of Object.values(clientsInfo)) {
+    const room = client.voiceChannelId || "";
+    if (!room || !isConversationId(room)) continue;
+    if (!client.hasJoinedChannel) continue;
+    if (!client.serverUserId || client.serverUserId.startsWith("temp_")) continue;
+
+    let members = byRoom.get(room);
+    if (!members) {
+      members = new Set();
+      byRoom.set(room, members);
+    }
+    members.add(client.serverUserId);
+  }
+
+  // Voice state changes constantly — every mute, every camera. Only a change of
+  // who is in the room is worth a message.
+  let seen = lastCallMembersByIO.get(io);
+  if (!seen) {
+    seen = new Map();
+    lastCallMembersByIO.set(io, seen);
+  }
+
+  for (const [room, members] of byRoom) {
+    const ids = [...members].sort();
+    const key = ids.join(",");
+    if (seen.get(room) === key) continue;
+    seen.set(room, key);
+    io.to(voiceRoomName(serverId, room)).emit("voice:call:members", {
+      conversation_id: room,
+      server_user_ids: ids,
+    });
+  }
+
+  // A room nobody is in any more. Forgotten rather than announced: whoever was
+  // last has already left the socket.io room, so there is nobody to tell — and
+  // keeping the entry would silence the first message of the next call in that
+  // conversation if it happened to have the same people in it.
+  for (const room of [...seen.keys()]) {
+    if (!byRoom.has(room)) seen.delete(room);
+  }
+}
+
+export function broadcastMemberList(io: Server, clientsInfo: Clients, instanceId: string): void {
+  // Ahead of the debounce below, and not subject to it. A call view that draws
+  // nobody for a fifth of a second reads as a call that failed.
+  broadcastCallParticipants(io, clientsInfo, instanceId);
+
   const pending = pendingMemberListByIO.get(io);
   if (pending) clearTimeout(pending);
 
