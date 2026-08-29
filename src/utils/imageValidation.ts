@@ -1,4 +1,4 @@
-import sharp from "sharp";
+import sharp, { type SharpOptions } from "sharp";
 
 export type ImageValidationResult =
   | {
@@ -63,7 +63,7 @@ export async function validateImage(
   opts?: { animated?: boolean },
 ): Promise<ImageValidationResult> {
   try {
-    const base: sharp.SharpOptions = {
+    const base: SharpOptions = {
       failOn: "error",
       limitInputPixels: MAX_INPUT_PIXELS,
       ...(opts?.animated ? { animated: true } : {}),

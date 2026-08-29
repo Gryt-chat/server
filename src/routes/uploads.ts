@@ -1,7 +1,6 @@
 import consola from "consola";
 import express from "express";
 import type { Request, Response, NextFunction } from "express";
-import { imageSize } from "image-size";
 import multer from "multer";
 import { v4 as uuidv4 } from "uuid";
 import mime from "mime-types";
@@ -269,16 +268,13 @@ uploadsRouter.post(
           width = parseDimField(req.body?.width);
           height = parseDimField(req.body?.height);
 
+          // `validateImage` has already decoded this through sharp and read
+          // its dimensions off the same bytes, so a second library decoding it
+          // again was work for an answer we were holding. It was also the only
+          // use of `image-size`, whose advisory has no patched release.
           if (!width || !height) {
-            try {
-              const dims = imageSize(imageBytes);
-              if (dims.width && dims.height) {
-                width = dims.width;
-                height = dims.height;
-              }
-            } catch {
-              consola.debug("image-size fallback failed for", fileId);
-            }
+            width = validation.width;
+            height = validation.height;
           }
         }
 
