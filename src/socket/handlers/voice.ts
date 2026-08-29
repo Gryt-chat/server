@@ -8,6 +8,7 @@ import { getVoiceSeatLimit } from "../../utils/voiceSeats";
 import { insertServerAudit } from "../../db";
 import { socketIsIdentified, socketMay as socketMayFor } from "../utils/standing";
 import { forgetStashedVoiceState } from "../utils/voiceStash";
+import { DENIAL_RESPONSES, resolveConversationAccess } from "../utils/conversationAccess";
 import type { Permission } from "../../constants/permissions";
 
 const RL_REQUEST_ROOM: RateLimitRule = { limit: 10, windowMs: 60_000, scorePerAction: 1, maxScore: 8, scoreDecayMs: 5000 };
@@ -356,6 +357,35 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
           });
           return;
         }
+        /**
+         * Whether this room is one of theirs.
+         *
+         * Until this check existed the handler granted an SFU token for any
+         * string at all — the only gate was `join_voice`, which says whether
+         * somebody may use voice on this server, not *where*. That was
+         * survivable while every room id was a channel, because a channel is
+         * open to every member anyway.
+         *
+         * A conversation is not. Its id is derived from the sorted pair of
+         * member ids and `conversations.ts` says in as many words that it is
+         * not a secret — anybody who can read a member list can compute the id
+         * of any two people's conversation. So an ungated room request is a way
+         * to sit in someone else's private call by working out its name, and it
+         * becomes reachable the moment a client asks for a conversation room.
+         *
+         * `resolveConversationAccess` is the same answer the chat events get,
+         * deliberately: two rules for who may touch a conversation is two rules
+         * to disagree. It also refuses an id that is neither a channel nor a
+         * conversation, which is how a made-up room stops being free.
+         */
+        const access = await resolveConversationAccess(roomId, userId);
+        if (!access.allowed) {
+          const denial = DENIAL_RESPONSES[access.reason];
+          consola.warn(`[Voice:Step 1] REFUSED client=${clientId} user=${userId} room=${roomId} reason=${access.reason}`);
+          socket.emit("voice:room:error", { error: denial.error, message: denial.message });
+          return;
+        }
+
         if (!sfuClient) {
           consola.error(`[Voice:Step 2] SFU client not initialized`);
           socket.emit("voice:room:error", "Voice service unavailable");

@@ -1,6 +1,6 @@
 import { Server, Socket } from "socket.io";
 import { Clients } from "../../types";
-import { getAllRegisteredUsers, getFilesByIds, listServerRoles } from "../../db";
+import { getAllRegisteredUsers, getFilesByIds, isConversationId, listServerRoles } from "../../db";
 import { clientMayReceive, refreshClientPermissions } from "./standing";
 import { isBotIdentity } from "../../auth/identity";
 import { memberIdentity } from "./memberIdentity";
@@ -27,6 +27,28 @@ export function unverifyClient(socket: Socket) {
   socket.leave("verifiedClients");
 }
 
+/**
+ * The room to tell the whole server somebody is in.
+ *
+ * A channel, or nothing. Both of these payloads go to every member, and a
+ * conversation id names who is talking to whom: a one-to-one id is derived from
+ * the sorted pair, so anybody holding a member list can compute it and read the
+ * answer back out. Broadcasting it would undo the reason
+ * `memberIdentity.ts` refuses to hand out `gryt_user_id` in the first place.
+ *
+ * Blanking it costs nothing the clients use. The channel list draws people
+ * under the channel this names, and a call is not in the channel list;
+ * `isConnectedToVoice` still says the person is busy, which is the true part
+ * everyone is allowed to know.
+ *
+ * Members of the conversation learn about the call through the conversation
+ * itself, not through this.
+ */
+function publicVoiceRoom(voiceChannelId: string | undefined): string {
+  const id = voiceChannelId || "";
+  return isConversationId(id) ? "" : id;
+}
+
 const lastEmitAtByIO = new WeakMap<Server, number>();
 const lastClientsStateByIO = new WeakMap<Server, string>();
 const pendingEmitByIO = new WeakMap<Server, ReturnType<typeof setTimeout>>();
@@ -40,7 +62,10 @@ function emitClientsNow(io: Server, clientsInfo: Clients, stateHash: string) {
   const registeredClients: Clients = {};
   Object.entries(clientsInfo).forEach(([clientId, client]) => {
     if (client.serverUserId && !client.serverUserId.startsWith('temp_')) {
-      registeredClients[clientId] = client;
+      // Copied rather than passed through: this is the live record the rest of
+      // the server reads, and blanking the field on it would take the person
+      // out of their own call.
+      registeredClients[clientId] = { ...client, voiceChannelId: publicVoiceRoom(client.voiceChannelId) };
     }
   });
 
@@ -56,7 +81,7 @@ export function syncAllClients(io: Server, clientsInfo: Clients) {
         serverUserId: client.serverUserId,
         nickname: client.nickname,
         hasJoinedChannel: client.hasJoinedChannel,
-        voiceChannelId: client.voiceChannelId,
+        voiceChannelId: publicVoiceRoom(client.voiceChannelId),
         isConnectedToVoice: client.isConnectedToVoice,
         isMuted: client.isMuted,
         isDeafened: client.isDeafened,
@@ -191,7 +216,7 @@ export async function buildMemberList(clientsInfo: Clients) {
         color: onlineClient?.color || '#666666',
         isConnectedToVoice: onlineClient?.isConnectedToVoice || false,
         hasJoinedChannel: onlineClient?.hasJoinedChannel || false,
-        voiceChannelId: onlineClient?.voiceChannelId || '',
+        voiceChannelId: publicVoiceRoom(onlineClient?.voiceChannelId),
         streamID: onlineClient?.streamID || '',
       };
     });
