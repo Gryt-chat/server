@@ -187,6 +187,19 @@ export async function buildMemberList(clientsInfo: Clients) {
         serverUserId: user.server_user_id,
         nickname: user.nickname,
         ...memberIdentity(user.gryt_user_id),
+        /**
+         * What this member says their DM public key is (GRYT-720).
+         *
+         * Passed through untouched. This server has never read it and cannot
+         * usefully check it — the point of the feature is that the messages are
+         * unreadable here, so a server vouching for the binding would be
+         * vouching for the very thing a peer has to establish for itself.
+         *
+         * Null for anybody who has not published one, which is every client
+         * older than this and everybody on a server that has not been updated.
+         * No binding means no encrypted message, which is today's behaviour.
+         */
+        dmKeyBinding: user.dm_key_binding,
         avatarFileId: user.avatar_file_id || null,
         avatarColor: user.avatar_file_id
           ? avatarFiles.get(user.avatar_file_id)?.dominant_color ?? null
@@ -253,6 +266,11 @@ export function memberStateHash(members: MemberListEntry[]): string {
       // Changes when an identity is replaced (`replaceUserIdentity`), which
       // is exactly when a member list showing the old one would be wrong.
       identityFingerprint: m.identityFingerprint,
+      // A member replacing their DM key is the one change here that other
+      // clients must not miss: a peer holding the old one encrypts to a key
+      // nobody has. Left out of this hash, a new binding would sit unsent until
+      // something unrelated happened to move.
+      dmKeyBinding: m.dmKeyBinding,
       // A rename changes the name above too, so this is redundant for the
       // dedupe — kept so that a rename back to a previous name, which leaves
       // `nickname` looking untouched, still reaches the client.

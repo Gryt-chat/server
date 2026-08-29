@@ -25,6 +25,7 @@ function rowToUser(r: Record<string, unknown>): UserRecord {
       ? fromIso(r.nickname_changed_at as string)
       : null,
     avatar_worn: (r.avatar_worn as string) || null,
+    dm_key_binding: (r.dm_key_binding as string) || null,
   };
 }
 
@@ -141,7 +142,34 @@ export async function upsertUser(
     // A new member has not designed anything yet, so their owl is whatever
     // their name draws.
     avatar_worn: null,
+    // Sent after joining, if at all. A client older than GRYT-720 never sends
+    // one, and a member with no binding simply has no encrypted messages.
+    dm_key_binding: null,
   };
+}
+
+/**
+ * Record what a member says their DM public key is.
+ *
+ * Stored whole and handed back whole. Not parsed, not verified, not trusted —
+ * see the note on `UserRecord.dm_key_binding`. Null clears it, which is what a
+ * client does when it has no identity to sign one with any more.
+ *
+ * Last write wins. A member who signs in from a second device sends the same
+ * binding, because the key is derived from a seed both devices have; a member
+ * whose seed changed sends a different one, and every peer who had pinned the
+ * old key will refuse it and say so. That refusal is the feature, so nothing
+ * here tries to smooth it over by keeping both.
+ */
+export async function setUserDmKeyBinding(
+  serverUserId: string,
+  binding: string | null,
+): Promise<void> {
+  const db = getSqliteDb();
+  db.prepare(`UPDATE users SET dm_key_binding = ? WHERE server_user_id = ?`).run(
+    binding,
+    serverUserId,
+  );
 }
 
 export async function getUserByGrytId(grytUserId: string): Promise<UserRecord | null> {
