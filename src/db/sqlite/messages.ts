@@ -9,6 +9,7 @@ function rowToMessage(r: Record<string, unknown>): MessageRecord {
     message_id: r.message_id as string,
     sender_server_id: r.sender_server_id as string,
     text: (r.text as string) ?? null,
+    sealed: (r.sealed as string) ?? null,
     created_at: fromIso(r.created_at as string),
     edited_at: fromIsoNullable(r.edited_at as string | null),
     attachments: r.attachments ? JSON.parse(r.attachments as string) : null,
@@ -23,12 +24,13 @@ export async function insertMessage(record: Omit<MessageRecord, "message_id" | "
   const message_id = record.message_id ?? randomUUID();
 
   db.prepare(
-    `INSERT INTO messages (conversation_id, message_id, sender_server_id, text, attachments, reactions, reply_to_message_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO messages (conversation_id, message_id, sender_server_id, text, sealed, attachments, reactions, reply_to_message_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     record.conversation_id,
     message_id,
     record.sender_server_id,
     record.text ?? null,
+    record.sealed ?? null,
     record.attachments ? JSON.stringify(record.attachments) : null,
     record.reactions ? JSON.stringify(record.reactions) : null,
     record.reply_to_message_id ?? null,

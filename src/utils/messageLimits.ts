@@ -30,3 +30,16 @@ export const MESSAGE_TOO_LONG = {
   error: "message_too_long",
   message: `Messages are limited to ${MESSAGE_MAX_LENGTH.toLocaleString("en")} characters.`,
 } as const;
+
+/**
+ * How large a sealed envelope may be (GRYT-729).
+ *
+ * Not `MESSAGE_MAX_LENGTH`. An envelope is a body of ciphertext plus one
+ * wrapped key for every member, base64url, so it is several times the message
+ * inside it and grows with the conversation — comparing it against the limit
+ * for plain text would refuse ordinary messages in a large group.
+ *
+ * A cap at all because nothing on this server reads the column, and an
+ * unbounded field nobody parses is a place to park data.
+ */
+export const SEALED_MAX_LENGTH = 64 * 1024;

@@ -142,6 +142,13 @@ export interface MessageRecord {
   message_id: string;
   sender_server_id: string;
   text: string | null;
+  /**
+   * The sealed envelope, when this message was encrypted (GRYT-729).
+   *
+   * Opaque. Nothing on this server parses it, and `text` is null whenever it is
+   * set — there is no plaintext copy anywhere, which is the point.
+   */
+  sealed?: string | null;
   created_at: Date;
   edited_at?: Date | null;
   attachments: string[] | null;
