@@ -9,6 +9,8 @@ import { insertServerAudit } from "../../db";
 import { socketIsIdentified, socketMay as socketMayFor } from "../utils/standing";
 import { forgetStashedVoiceState } from "../utils/voiceStash";
 import { DENIAL_RESPONSES, resolveConversationAccess } from "../utils/conversationAccess";
+import { isConversationId } from "../../db";
+import { endRingsFor } from "./calls";
 import type { Permission } from "../../constants/permissions";
 
 const RL_REQUEST_ROOM: RateLimitRule = { limit: 10, windowMs: 60_000, scorePerAction: 1, maxScore: 8, scoreDecayMs: 5000 };
@@ -468,6 +470,20 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
 
       if (newJoinedState) {
         if (roomName) socket.join(roomName);
+
+        // Answering a call is joining its room. There is no `call:accept` —
+        // one message that says "I am in" is better than two that can
+        // disagree, and this is the one that is already true when the media
+        // starts flowing.
+        //
+        // Ends the ring for the caller and for this person's *other* devices,
+        // which is the point: answering on the laptop has to stop the phone.
+        if (channelId && isConversationId(channelId)) {
+          endRingsFor(io, clientsInfo, {
+            conversationId: channelId,
+            answeredBy: clientsInfo[clientId].serverUserId,
+          });
+        }
       } else {
         if (roomName) socket.leave(roomName);
       }
