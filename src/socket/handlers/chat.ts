@@ -304,6 +304,20 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
+        // `send_messages` got this far, which is the permission for a channel.
+        // Posting into a direct message is its own permission, and checking it
+        // only in `dm:open` would gate making a conversation while leaving every
+        // conversation that already exists open to post in — including to
+        // somebody whose role had the permission taken away.
+        if (access.kind === "dm" && !auth.permissions.has("send_direct_messages")) {
+          socket.emit("chat:error", {
+            error: "forbidden",
+            message: "You do not have permission to send direct messages here.",
+            permission: "send_direct_messages",
+          });
+          return;
+        }
+
         if (attachments && attachments.length > 0) {
           const fileMap = await getFilesByIds(attachments);
           const maxBytes = typeof cfg?.upload_max_bytes === "number" ? cfg.upload_max_bytes : DEFAULT_UPLOAD_MAX_BYTES;

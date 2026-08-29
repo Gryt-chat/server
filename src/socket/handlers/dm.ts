@@ -101,7 +101,7 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
           return;
         }
 
-        const auth = await requireAuth(socket, payload, { permission: "send_messages" });
+        const auth = await requireAuth(socket, payload, { permission: "send_direct_messages" });
         if (!auth) return;
 
         const cfg = await getServerConfig().catch(() => null);
