@@ -1,6 +1,7 @@
 import { randomBytes } from "crypto";
 import {
   calculateJwkThumbprint,
+  createLocalJWKSet,
   createRemoteJWKSet,
   decodeJwt,
   importJWK,
@@ -9,6 +10,8 @@ import {
   type JWK,
   type JWTPayload,
 } from "jose";
+
+import { BUNDLED_IDENTITY_JWKS } from "./bundledJwks";
 
 // ── Identity tiers ──────────────────────────────────────────────────
 
@@ -250,12 +253,11 @@ function getJwksUrlForIssuer(issuer: string): string {
   return `${normalizeUrl(issuer)}/.well-known/jwks.json`;
 }
 
-// ── JWKS cache per issuer ───────────────────────────────────────────
+// ── JWKS per issuer: bundled first, fetched only if that misses ─────
 
 const jwksCache = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
 
-function getIdentityJwksForIssuer(issuer: string) {
-  const normalizedIssuer = normalizeUrl(issuer);
+function getRemoteIdentityJwks(normalizedIssuer: string) {
   const cached = jwksCache.get(normalizedIssuer);
   if (cached) return cached;
 
@@ -264,6 +266,74 @@ function getIdentityJwksForIssuer(issuer: string) {
   );
   jwksCache.set(normalizedIssuer, jwks);
   return jwks;
+}
+
+const localJwksCache = new Map<
+  string,
+  ReturnType<typeof createLocalJWKSet> | null
+>();
+
+/**
+ * The shipped keys for an issuer, or null for one we do not ship keys for.
+ *
+ * Null is the ordinary answer for anybody running their own CA through
+ * `GRYT_TRUSTED_CERT_ISSUERS`. A key pinned in the binary is pinned by whoever
+ * built it, and that is only true of the project's own.
+ */
+function getBundledIdentityJwks(normalizedIssuer: string) {
+  const cached = localJwksCache.get(normalizedIssuer);
+  if (cached !== undefined) return cached;
+
+  const bundled = BUNDLED_IDENTITY_JWKS[normalizedIssuer];
+  const jwks = bundled ? createLocalJWKSet(bundled) : null;
+  localJwksCache.set(normalizedIssuer, jwks);
+  return jwks;
+}
+
+/**
+ * Verify a certificate against the shipped keys, and only ask the CA if they
+ * do not contain the one it names (GRYT-721).
+ *
+ * Fetching the JWKS told the identity service which servers exist and, by
+ * pairing a fetch with a certificate request from the same address, who runs
+ * them. The keys are public and the same for everybody, so shipping them costs
+ * nothing and removes both — a server that never asks cannot be handed a
+ * different answer either.
+ *
+ * ## The fallback is narrow on purpose
+ *
+ * Only `JWKSNoMatchingKey`, which means the certificate names a `kid` this
+ * build has never heard of. That is what a CA key rotation looks like from
+ * here, and the whole reason not to hard-fail: an old build would otherwise
+ * refuse every account holder the day a key rolled.
+ *
+ * A signature that fails against a key we *do* hold is not retried. The
+ * certificate is forged, the remote set would reject it too, and retrying would
+ * let anybody who can reach a join endpoint make this server fetch a URL by
+ * sending a bad certificate.
+ *
+ * Claims failures — expired, wrong issuer, wrong algorithm — are not retried
+ * either. The keys are not the problem and a second attempt fails identically,
+ * one round trip later.
+ */
+async function verifyAgainstIdentityJwks(
+  certJwt: string,
+  issuer: string,
+  options: Parameters<typeof jwtVerify>[2]
+) {
+  const normalizedIssuer = normalizeUrl(issuer);
+  const bundled = getBundledIdentityJwks(normalizedIssuer);
+
+  if (bundled) {
+    try {
+      return await jwtVerify(certJwt, bundled, options);
+    } catch (err) {
+      if (!(err instanceof joseErrors.JWKSNoMatchingKey)) throw err;
+      // Rotated, or a key this build predates. Ask, once, and cache it.
+    }
+  }
+
+  return jwtVerify(certJwt, getRemoteIdentityJwks(normalizedIssuer), options);
 }
 
 // ── Certificate verification ────────────────────────────────────────
@@ -707,9 +777,9 @@ export async function verifyCertificate(
   }
 
   try {
-    const { payload } = await jwtVerify(
+    const { payload } = await verifyAgainstIdentityJwks(
       certJwt,
-      getIdentityJwksForIssuer(issuer),
+      issuer,
       // ES256 is what the identity service signs with (`CA_ALG`). Pinning it
       // here means a CA that changed algorithm would fail loudly at
       // verification rather than quietly widening what this accepts.

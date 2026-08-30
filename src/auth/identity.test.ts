@@ -11,6 +11,7 @@ import {
   type JWK,
 } from "jose";
 
+import { BUNDLED_IDENTITY_JWKS } from "./bundledJwks";
 import {
   getAcceptedIdentityTiers,
   identityTierAccepted,
@@ -176,8 +177,14 @@ describe("self-signed certificates", () => {
 // the other's user.
 
 async function startJwksServer(publicJwk: JWK, kid: string) {
+  // Counted, because "did this server phone home" is the property GRYT-721 is
+  // about and it cannot be seen any other way — a fetch that happens and
+  // succeeds looks exactly like one that never happened.
+  let hits = 0;
+
   const server = createServer((req, res) => {
     if (req.url === "/.well-known/jwks.json") {
+      hits += 1;
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ keys: [{ ...publicJwk, kid, alg: "ES256", use: "sig" }] }));
       return;
@@ -190,6 +197,7 @@ async function startJwksServer(publicJwk: JWK, kid: string) {
 
   return {
     origin: `http://127.0.0.1:${port}`,
+    hits: () => hits,
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
 }
@@ -203,18 +211,187 @@ async function startCa(kid: string) {
 
   return {
     origin: jwks.origin,
+    hits: jwks.hits,
+    publicJwk: await exportJWK(publicKey),
     close: jwks.close,
-    async issue(sub: string, holderJwk: JWK) {
+    async issue(sub: string, holderJwk: JWK, expiresIn = "24h") {
       return new SignJWT({ jwk: holderJwk })
         .setProtectedHeader({ alg: "ES256", typ: "JWT", kid })
         .setIssuer(jwks.origin)
         .setSubject(sub)
         .setIssuedAt()
-        .setExpirationTime("24h")
+        .setExpirationTime(expiresIn)
         .sign(privateKey);
     },
   };
 }
+
+describe("the CA's keys are shipped, not fetched", () => {
+  /**
+   * Whether a server phones home (GRYT-721).
+   *
+   * Fetching `/.well-known/jwks.json` told the identity service that a Gryt
+   * server exists at this address, and — paired with a certificate request from
+   * the same address — that this person runs it. The keys are public, so the
+   * fix was to ship them; what has to be checked is that the normal path
+   * genuinely stops asking, and that is invisible from the result. A fetch that
+   * happens and succeeds verifies exactly the same certificate as one that
+   * never happened. So these count requests to the CA rather than reading the
+   * outcome.
+   *
+   * `BUNDLED_IDENTITY_JWKS` is written into rather than mocked: the loopback CA
+   * gets a real entry under its own origin, which is the same shape
+   * `id.gryt.chat` has in the shipped file.
+   */
+  function bundle(origin: string, keys: JWK[]) {
+    BUNDLED_IDENTITY_JWKS[origin] = { keys };
+    return () => {
+      delete BUNDLED_IDENTITY_JWKS[origin];
+    };
+  }
+
+  it("verifies against the bundled key without asking the CA", async () => {
+    const ca = await startCa("bundled-kid");
+    const holder = await makeKeyPair();
+    const unbundle = bundle(ca.origin, [
+      { ...ca.publicJwk, kid: "bundled-kid", alg: "ES256", use: "sig" },
+    ]);
+    process.env.GRYT_TRUSTED_CERT_ISSUERS = ca.origin;
+
+    try {
+      const result = await verifyCertificate(await ca.issue("abc", holder.publicJwk));
+
+      assert.equal(result.tier, "account");
+      assert.equal(result.sub, "abc");
+      assert.equal(ca.hits(), 0,
+        "the whole point: a server that already holds the key must not tell the CA it exists");
+    } finally {
+      delete process.env.GRYT_TRUSTED_CERT_ISSUERS;
+      unbundle();
+      await ca.close();
+    }
+  });
+
+  it("asks the CA when the certificate names a key this build does not have", async () => {
+    // What a key rotation looks like from here. Hard-failing would refuse every
+    // account holder on every old build the day a key rolled.
+    const ca = await startCa("rotated-kid");
+    const stale = await makeKeyPair();
+    const holder = await makeKeyPair();
+    const unbundle = bundle(ca.origin, [
+      { ...stale.publicJwk, kid: "retired-kid", alg: "ES256", use: "sig" },
+    ]);
+    process.env.GRYT_TRUSTED_CERT_ISSUERS = ca.origin;
+
+    try {
+      const result = await verifyCertificate(await ca.issue("abc", holder.publicJwk));
+
+      assert.equal(result.sub, "abc", "a rotated key still verifies");
+      assert.ok(ca.hits() >= 1, "and it can only have done so by asking");
+    } finally {
+      delete process.env.GRYT_TRUSTED_CERT_ISSUERS;
+      unbundle();
+      await ca.close();
+    }
+  });
+
+  it("does not ask the CA about a certificate forged under a bundled kid", async () => {
+    // The amplification this closes: falling back on any failure would let
+    // anybody who can reach a join endpoint make this server fetch a URL, as
+    // often as they like, by sending a certificate that was never going to
+    // verify. The remote set holds the same key and would reject it too.
+    const ca = await startCa("bundled-kid");
+    const impostor = await makeKeyPair();
+    const holder = await makeKeyPair();
+
+    // The bundled entry names the kid the CA signs with and carries somebody
+    // else's key under it, so the signature fails against a key we do hold.
+    const unbundle = bundle(ca.origin, [
+      { ...impostor.publicJwk, kid: "bundled-kid", alg: "ES256", use: "sig" },
+    ]);
+    process.env.GRYT_TRUSTED_CERT_ISSUERS = ca.origin;
+
+    try {
+      const forged = await ca.issue("abc", holder.publicJwk);
+
+      await assert.rejects(
+        () => verifyCertificate(forged),
+        IdentityVerificationError,
+      );
+      assert.equal(ca.hits(), 0,
+        "a bad signature must not be a way to make this server make a request");
+    } finally {
+      delete process.env.GRYT_TRUSTED_CERT_ISSUERS;
+      unbundle();
+      await ca.close();
+    }
+  });
+
+  it("does not ask the CA about an expired certificate", async () => {
+    // A claims failure is not a key failure. Retrying fails identically, one
+    // round trip later, and tells the CA something for nothing.
+    const ca = await startCa("bundled-kid");
+    const holder = await makeKeyPair();
+    const unbundle = bundle(ca.origin, [
+      { ...ca.publicJwk, kid: "bundled-kid", alg: "ES256", use: "sig" },
+    ]);
+    process.env.GRYT_TRUSTED_CERT_ISSUERS = ca.origin;
+
+    try {
+      const expired = await ca.issue("abc", holder.publicJwk, "-1h");
+
+      await assert.rejects(
+        () => verifyCertificate(expired),
+        IdentityVerificationError,
+      );
+      assert.equal(ca.hits(), 0);
+    } finally {
+      delete process.env.GRYT_TRUSTED_CERT_ISSUERS;
+      unbundle();
+      await ca.close();
+    }
+  });
+
+  it("still fetches for an issuer nothing is bundled for", async () => {
+    // Somebody running their own CA through GRYT_TRUSTED_CERT_ISSUERS. A key
+    // pinned in a binary is pinned by whoever built it, which is only true of
+    // the project's own — so this path is unchanged, deliberately.
+    const ca = await startCa("theirs");
+    const holder = await makeKeyPair();
+    process.env.GRYT_TRUSTED_CERT_ISSUERS = ca.origin;
+
+    try {
+      const result = await verifyCertificate(await ca.issue("abc", holder.publicJwk));
+
+      assert.equal(result.sub, "abc");
+      assert.ok(ca.hits() >= 1);
+    } finally {
+      delete process.env.GRYT_TRUSTED_CERT_ISSUERS;
+      await ca.close();
+    }
+  });
+
+  it("ships a key for the issuer it trusts by default", async () => {
+    // The file is only worth having if it covers the CA a default install
+    // actually uses. A typo in the origin here is silent: every server falls
+    // through to the network and nothing else changes.
+    assert.ok(
+      BUNDLED_IDENTITY_JWKS["https://id.gryt.chat"],
+      "no bundled keys for the default issuer, so nothing stops phoning home",
+    );
+
+    const keys = BUNDLED_IDENTITY_JWKS["https://id.gryt.chat"].keys;
+    assert.ok(keys.length > 0, "an empty key list bundles nothing");
+
+    for (const key of keys) {
+      assert.equal(key.kty, "EC");
+      assert.equal(key.crv, "P-256");
+      assert.equal(key.alg, "ES256");
+      assert.ok(key.kid, "a key with no kid can never be matched against a certificate");
+      assert.equal(key.d, undefined, "a private key must never be in a shipped file");
+    }
+  });
+});
 
 describe("issuer-qualified ids", () => {
   it("stores the primary issuer's users under a bare sub", async () => {
