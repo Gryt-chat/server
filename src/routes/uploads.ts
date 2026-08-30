@@ -11,6 +11,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { deleteObject, putObject, getObject } from "../storage";
 import { insertFile, insertImageJob, getFile, updateFileRecord, updateUserAvatar, setUserAvatar, getServerConfig, DEFAULT_AVATAR_MAX_BYTES, DEFAULT_UPLOAD_MAX_BYTES } from "../db";
+import { isSealedUpload, storageForUpload } from "./uploadStorage";
 import { requireBearerToken } from "../middleware/requireBearerToken";
 import { ensurePermission } from "../middleware/requirePermission";
 import { AVATAR_MAX_PX, AVATAR_THUMB_PX } from "../constants/media";
@@ -167,9 +168,16 @@ uploadsRouter.post(
     }
 
     const fileId = uuidv4();
-    const fileMime = (file.mimetype || "").toLowerCase();
-    const isImage = fileMime.startsWith("image/");
-    const isVideo = fileMime.startsWith("video/");
+
+    // What to store it as, and what to do to it on the way in. In its own file
+    // because nothing in here can be loaded in a test, and because sealing is
+    // the one part of it with a security answer — see `uploadStorage.ts`.
+    const storage = storageForUpload({
+      sealed: isSealedUpload(req.body),
+      fileId,
+      mimetype: file.mimetype,
+      originalName: file.originalname,
+    });
 
     Promise.resolve()
       .then(async () => {
@@ -203,8 +211,7 @@ uploadsRouter.post(
           return;
         }
 
-        const key = `uploads/${fileId}.${mime.extension(file.mimetype || "") || "bin"}`;
-        const storedMime: string = file.mimetype || "application/octet-stream";
+        const { key, storedMime } = storage;
         let thumbKey: string | null = null;
         let width: number | null = null;
         let height: number | null = null;
@@ -213,7 +220,7 @@ uploadsRouter.post(
         // queued as an image job below — the worker would hand it to sharp, and
         // sharp renders SVG through librsvg. Storing the vector is what keeps a
         // memory-unsafe parser away from a stranger's bytes.
-        if (fileMime === "image/svg+xml") {
+        if (storage.treatAsSvg) {
           const svg = sanitizeSvg(await readFile(file.path));
           if (!svg.valid) {
             res.status(400).json({ error: "invalid_file", message: svg.reason });
@@ -232,7 +239,12 @@ uploadsRouter.post(
             width: svg.width,
             height: svg.height,
             thumbnail_key: null,
-            original_name: file.originalname || null,
+            // Through the decision rather than off the request, so there is one
+            // place the client's filename can reach a row. This branch is
+            // unreachable for a sealed upload anyway — `treatAsSvg` is false for
+            // one — but two sources for the same field is how the sealed path
+            // gets it wrong later.
+            original_name: storage.originalName,
             created_at: new Date(),
           });
 
@@ -240,7 +252,7 @@ uploadsRouter.post(
           return;
         }
 
-        if (isImage) {
+        if (storage.validateAsImage) {
           // Anything claiming to be an image has to actually decode as one of
           // the raster formats we allow. This route previously took the mime
           // straight from the request and stored the bytes untouched, so an
@@ -282,7 +294,7 @@ uploadsRouter.post(
         // to storage without the process ever holding them.
         await putObject({ bucket, key, sourcePath: file.path, contentType: storedMime });
 
-        if (isVideo) {
+        if (storage.extractVideoThumbnail) {
           const thumb = await extractVideoThumbnail(file.path, fileId);
           if (thumb) {
             thumbKey = `thumbnails/${fileId}.jpg`;
@@ -298,11 +310,11 @@ uploadsRouter.post(
           width,
           height,
           thumbnail_key: thumbKey,
-          original_name: file.originalname || null,
+          original_name: storage.originalName,
           created_at: new Date(),
         });
 
-        if (isImage) {
+        if (storage.queueImageJob) {
           const jobId = uuidv4();
           await insertImageJob({
             job_id: jobId,
