@@ -16,6 +16,7 @@ import { broadcastServerUiUpdate } from "../socket";
 import { MAX_INPUT_PIXELS, validateImage } from "../utils/imageValidation";
 import { sanitizeSvg } from "../utils/svgSanitize";
 import { verifyAccessToken } from "../utils/jwt";
+import { requireBearerToken } from "../middleware/requireBearerToken";
 
 const iconMaxMbRaw = (
   process.env.GRYT_SERVER_ICON_MAX_MB ||
@@ -99,6 +100,15 @@ function sanitizeStoragePathSegment(value: string): string {
 
 serverRouter.post(
   "/icon",
+  // Before multer, not after. multer uses memoryStorage, so with the handler's
+  // own check further down the body was read to completion into the heap and
+  // *then* answered 401 — measured at 20 MB accepted from an anonymous request
+  // against a fresh server, with RSS moving 112 MiB to 138 MiB. /api/server
+  // carries no rate limit either, so that was repeatable by anyone.
+  //
+  // This also gains the ban gate, which the inline check below does not do: a
+  // banned member holding a valid token still got their upload buffered.
+  requireBearerToken,
   upload.single("file"),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -341,6 +351,7 @@ serverRouter.post(
 
 serverRouter.delete(
   "/icon",
+  requireBearerToken,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const token = getBearerToken(req);

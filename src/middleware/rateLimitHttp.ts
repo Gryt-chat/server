@@ -89,5 +89,14 @@ export const RL_HTTP_UPLOAD: RateLimitRule = { limit: 30, windowMs: 60_000, banM
  */
 export const RL_HTTP_FILE: RateLimitRule = { limit: 240, windowMs: 60_000 };
 
+/**
+ * Ordinary authenticated API traffic: messages, members.
+ *
+ * Generous, because a client scrolling history makes a lot of these and a limit
+ * that fires while somebody reads their own backlog is worse than no limit.
+ * It is here to bound what one address can do, not to pace normal use.
+ */
+export const RL_HTTP_API: RateLimitRule = { limit: 240, windowMs: 60_000 };
+
 /** Unauthenticated metadata: `/info`, `/icon`, `/health`. */
 export const RL_HTTP_PUBLIC: RateLimitRule = { limit: 60, windowMs: 60_000 };

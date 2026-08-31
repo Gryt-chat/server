@@ -1,12 +1,6 @@
 import { config } from "dotenv";
 import { isOriginAllowed, readAllowedOrigins } from "./config/cors";
-import {
-  httpRateLimit,
-  RL_HTTP_FILE,
-  RL_HTTP_OUTBOUND,
-  RL_HTTP_PUBLIC,
-  RL_HTTP_UPLOAD,
-} from "./middleware/rateLimitHttp";
+import { RL_HTTP_API, RL_HTTP_FILE, RL_HTTP_OUTBOUND, RL_HTTP_PUBLIC, RL_HTTP_UPLOAD, httpRateLimit } from "./middleware/rateLimitHttp";
 config({ path: "config.env", override: false });
 config({ override: false });
 import { consola } from "consola";
@@ -311,8 +305,15 @@ app.get("/icon", httpRateLimit("http:public", RL_HTTP_PUBLIC), async (req, res) 
 // Limits go in front of the routers, so a refused request never reaches body
 // parsing, signature checking or an outbound fetch. `webhooks` carries its own,
 // keyed per webhook rather than per address, and is left alone.
-app.use("/api/server", serverRouter);
-app.use("/api/messages", messagesRouter);
+// These three were mounted bare. The comment above has said "limits go in front
+// of the routers" since #106, and these were the routers it did not cover.
+//
+// /api/server matters most of the three: its only routes write a server icon,
+// and multer buffered an anonymous 25 MB body into the heap before anything
+// checked a token (GRYT-788). The auth check moved in front of multer in the
+// same change, so this is the second half rather than the fix.
+app.use("/api/server", httpRateLimit("http:server", RL_HTTP_UPLOAD), serverRouter);
+app.use("/api/messages", httpRateLimit("http:api", RL_HTTP_API), messagesRouter);
 // Reading a file and writing one are the same mount, so they need different
 // budgets: a busy channel legitimately fetches hundreds of attachments as it
 // scrolls, while writing that many is not a thing anybody does by hand.
@@ -328,7 +329,7 @@ app.use(
   (req, res, next) => (req.path.startsWith("/files") ? next() : limitUploadWrites(req, res, next)),
   uploadsRouter,
 );
-app.use("/api/members", membersRouter);
+app.use("/api/members", httpRateLimit("http:api", RL_HTTP_API), membersRouter);
 app.use("/api/emojis", httpRateLimit("http:emoji", RL_HTTP_UPLOAD), emojisRouter);
 app.use("/api/link-preview", httpRateLimit("http:outbound", RL_HTTP_OUTBOUND), linkPreviewRouter);
 app.use("/api/oembed", httpRateLimit("http:outbound", RL_HTTP_OUTBOUND), oEmbedRouter);
