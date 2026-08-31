@@ -85,7 +85,6 @@ function isInlineSafe(contentType: string | undefined): boolean {
 // Avatars and emoji stay in memory. Both are re-encoded through sharp
 // immediately and both carry their own small ceilings, so a temp file would be
 // written and deleted for no benefit.
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 200 * 1024 * 1024 } });
 
 /**
  * An image has to be decoded to be validated, and decoding means holding it.
@@ -109,13 +108,40 @@ const IMAGE_VALIDATION_MAX_BYTES = 64 * 1024 * 1024;
  * enforcement code below reachable for the first time.
  */
 function uploadToDisk(field: string) {
-  return (req: Request, res: Response, next: NextFunction): void => {
+  return function bufferUploadToDisk(req: Request, res: Response, next: NextFunction): void {
     Promise.resolve()
       .then(async () => {
         const cfg = await getServerConfig().catch(() => null);
         const maxBytes = typeof cfg?.upload_max_bytes === "number" ? cfg.upload_max_bytes : DEFAULT_UPLOAD_MAX_BYTES;
         const limits = typeof maxBytes === "number" && maxBytes > 0 ? { fileSize: maxBytes } : undefined;
         multer({ storage: multer.diskStorage({}), limits }).single(field)(req, res, next);
+      })
+      .catch(next);
+  };
+}
+
+/**
+ * Buffer an avatar, refusing an oversized one before it is in memory.
+ *
+ * The avatar path keeps the file in memory because it is re-encoded rather than
+ * streamed to storage, and the size check used to run *after* multer had
+ * finished. So a file was buffered in full and then rejected: the configured
+ * limit governed what was stored, and nothing governed what was allocated. A
+ * member with `change_avatar` could make the process hold the multer ceiling,
+ * repeatedly.
+ *
+ * Same shape as `uploadToDisk`: read the configured limit first, hand it to
+ * multer, let multer refuse. The check further down stays, because it is what
+ * produces the readable error.
+ */
+function uploadAvatarToMemory(field: string) {
+  return function bufferAvatarToMemory(req: Request, res: Response, next: NextFunction): void {
+    Promise.resolve()
+      .then(async () => {
+        const cfg = await getServerConfig().catch(() => null);
+        const maxBytes = typeof cfg?.avatar_max_bytes === "number" ? cfg.avatar_max_bytes : DEFAULT_AVATAR_MAX_BYTES;
+        const limits = typeof maxBytes === "number" && maxBytes > 0 ? { fileSize: maxBytes } : undefined;
+        multer({ storage: multer.memoryStorage(), limits }).single(field)(req, res, next);
       })
       .catch(next);
   };
@@ -343,7 +369,7 @@ uploadsRouter.post(
       .then((ok) => { if (ok) next(); })
       .catch(next);
   },
-  upload.single("file"),
+  uploadAvatarToMemory("file"),
   (req: Request, res: Response, next: NextFunction): void => {
     const file = req.file;
     if (!file) { res.status(400).json({ error: "file_required", message: "file is required" }); return; }
