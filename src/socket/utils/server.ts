@@ -234,7 +234,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
   // Sidebar items are persisted in DB; bootstrap defaults if missing.
   // We still emit `channels` for backward compatibility (derived from sidebar items).
   let sidebar_items: { id: string; kind: string; position: number; channelId?: string; spacerHeight?: number; label?: string }[] = [];
-  let channels: { id: string; name: string; type: string; description?: string; requirePushToTalk?: boolean; disableRnnoise?: boolean; maxBitrate?: number; eSportsMode?: boolean; textInVoice?: boolean }[] = [];
+  let channels: { id: string; name: string; type: string; description?: string; requirePushToTalk?: boolean; disableRnnoise?: boolean; maxBitrate?: number; eSportsMode?: boolean; textInVoice?: boolean; postMinRank?: number | null }[] = [];
   try {
     await ensureDefaultSidebarItems();
 
@@ -269,6 +269,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
           maxBitrate: c.max_bitrate ?? undefined,
           eSportsMode: c.esports_mode || false,
           textInVoice: c.text_in_voice || false,
+          postMinRank: c.post_min_rank ?? null,
         }];
       });
 
@@ -284,6 +285,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
         maxBitrate: c.max_bitrate ?? undefined,
         eSportsMode: c.esports_mode || false,
         textInVoice: c.text_in_voice || false,
+        postMinRank: c.post_min_rank ?? null,
       }));
     }
   } catch (e) {
