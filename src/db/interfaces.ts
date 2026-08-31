@@ -24,7 +24,24 @@ export type { CensorStyle, ProfanityMode };
  * without being unattended — `open` lets anyone walk in, and `invite` makes a
  * shareable link the whole security model.
  */
-export type JoinPolicy = "invite" | "open" | "request";
+/**
+ * How somebody gets in.
+ *
+ * A list rather than a union of string literals, because two places need to
+ * check a value against it — the normaliser that reads the column, and the
+ * settings patch that writes it — and when they each carried their own copy
+ * they drifted: the patch validator knew only "open" and "invite", so
+ * `join_policy: "request"` was implemented throughout the server and could not
+ * be selected from the client or the management API (GRYT-792).
+ */
+export const JOIN_POLICIES = ["invite", "open", "request"] as const;
+
+export type JoinPolicy = (typeof JOIN_POLICIES)[number];
+
+/** Whether an untrusted value is one of them. Refuses rather than defaulting. */
+export function isJoinPolicy(v: unknown): v is JoinPolicy {
+  return typeof v === "string" && (JOIN_POLICIES as readonly string[]).includes(v);
+}
 
 /**
  * Somebody asking to be let in, on a `request` server.

@@ -3,6 +3,7 @@ import {
   DEFAULT_EMOJI_MAX_BYTES,
   DEFAULT_UPLOAD_MAX_BYTES,
   DEFAULT_VOICE_MAX_BITRATE_BPS,
+  isJoinPolicy,
 } from "../interfaces";
 import type {
   BotJoinPolicy,
@@ -34,9 +35,7 @@ function normalizeProfanityMode(v: unknown): ProfanityMode {
  */
 export function normalizeJoinPolicy(v: unknown): JoinPolicy {
   const s = String(v || "").toLowerCase();
-  if (s === "open") return "open";
-  if (s === "request") return "request";
-  return "invite";
+  return isJoinPolicy(s) ? s : "invite";
 }
 
 /**
