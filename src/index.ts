@@ -3,7 +3,6 @@ import { isOriginAllowed, readAllowedOrigins } from "./config/cors";
 import {
   httpRateLimit,
   RL_HTTP_FILE,
-  RL_HTTP_METRICS,
   RL_HTTP_OUTBOUND,
   RL_HTTP_PUBLIC,
   RL_HTTP_UPLOAD,
@@ -88,12 +87,8 @@ app.use((req, res, next) => {
 // Parse JSON bodies
 app.use(express.json({ limit: "2mb" }));
 
-// Prometheus metrics
+// Records the metrics. Serving them is further down, on a port of their own.
 app.use(metricsMiddleware);
-app.get("/metrics", httpRateLimit("http:metrics", RL_HTTP_METRICS), async (_req, res) => {
-  res.setHeader("Content-Type", register.contentType);
-  res.end(await register.metrics());
-});
 
 // Basic health check (used by docker-compose healthcheck)
 app.get("/health", (_req, res) => {
@@ -460,6 +455,42 @@ if (adminTokenConfigured()) {
   managementApp.listen(managementPort, "0.0.0.0", () => {
     consola.success(`Management API listening on ${managementPort} (publish it to 127.0.0.1 only)`);
   });
+}
+
+/*
+ * Metrics get a port of their own, and it is not the one the world talks to.
+ *
+ * They used to be served from the main app at /metrics, with no authentication,
+ * which meant every deployment behind a reverse proxy or a tunnel published its
+ * full Prometheus register to anybody who asked: socket counts, per-route
+ * timings, memory, garbage collection. Not message content, but more than a
+ * stranger has any business reading, and it undid the care taken elsewhere —
+ * /info deliberately withholds the version from non-members, and /metrics gave
+ * it away.
+ *
+ * A separate port rather than a token, because a token is only safe for people
+ * who set one. The monitoring stack in the Compose file is opt-in
+ * (profiles: ["monitoring"]), so most deployments run no Prometheus at all and
+ * would never have set it — they would have kept the exposure and gained
+ * nothing. This way the default is closed for them without anybody doing
+ * anything.
+ *
+ * Prometheus reaches it as `server:<port>` over the Compose network, which
+ * needs no published port. Publishing this one, or running the server with host
+ * networking, puts it back on the public internet — so don't.
+ */
+const metricsPort = Number(process.env.METRICS_PORT || 9091);
+if (metricsPort > 0) {
+  const metricsApp = express();
+  metricsApp.get("/metrics", async (_req, res) => {
+    res.setHeader("Content-Type", register.contentType);
+    res.end(await register.metrics());
+  });
+  metricsApp.listen(metricsPort, "0.0.0.0", () => {
+    consola.success(`Metrics on ${metricsPort} (container-only; do not publish this port)`);
+  });
+} else {
+  consola.info("METRICS_PORT=0, so metrics are recorded but not served anywhere");
 }
 
 /**
