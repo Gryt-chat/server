@@ -1,6 +1,6 @@
 import WebSocket from 'ws';
 import { consola } from 'consola';
-import { randomBytes } from 'crypto';
+import { mintClientToken } from './clientToken';
 
 interface ServerRegistrationData {
   server_id: string;
@@ -8,10 +8,16 @@ interface ServerRegistrationData {
   room_id: string;
 }
 
+/**
+ * What the client is given so it can join a room on the SFU.
+ *
+ * Deliberately without `server_password`. It used to carry one, which meant
+ * every browser that ever joined a call held the secret shared between this
+ * server and the SFU. `user_token` replaces it — see clientToken.ts.
+ */
 interface ClientJoinData {
   room_id: string;
   server_id: string;
-  server_password: string;
   user_token: string;
   user_id: string;
 }
@@ -110,22 +116,12 @@ export class SFURoomManager {
       throw new Error('Room ID and User ID are required for token generation');
     }
 
-    const userToken = this.generateSecureToken(userId, roomId);
-
     return {
       room_id: roomId,
       server_id: this.serverId,
-      server_password: this.serverToken,
-      user_token: userToken,
+      user_token: mintClientToken(this.serverToken, userId, roomId),
       user_id: userId,
     };
-  }
-
-  private generateSecureToken(userId: string, roomId: string): string {
-    const timestamp = Date.now();
-    const randomData = randomBytes(16).toString('hex');
-    const payload = `${userId}:${roomId}:${timestamp}:${randomData}`;
-    return Buffer.from(payload).toString('base64');
   }
 
   async updateUserAudioState(roomId: string, userId: string, isMuted: boolean, isDeafened: boolean): Promise<void> {
