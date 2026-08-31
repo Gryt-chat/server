@@ -1,4 +1,6 @@
 import consola from "consola";
+
+import { deleteUnreferencedFiles } from "../../jobs/mediaSweep";
 import { randomUUID } from "crypto";
 import type { HandlerContext, EventHandlerMap } from "./types";
 import type { SFUClient } from "../../sfu/client";
@@ -713,6 +715,27 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
 
         const deleted = await deleteMessage(payload.conversationId, payload.messageId);
         if (!deleted) { socket.emit("chat:error", "Failed to delete message"); return; }
+
+        // Take the bytes with it, rather than leaving them for the periodic
+        // sweep. The sweep would get there eventually, but its grace period is
+        // measured from upload, so something posted and deleted a minute later
+        // sits in storage for the best part of an hour — and the file route
+        // takes no authentication, so deleting the message does nothing about a
+        // link somebody already has.
+        //
+        // Banning with content purge already does this. An ordinary delete not
+        // doing it was the inconsistency rather than the design.
+        //
+        // Not awaited: the message is gone either way, and a storage backend
+        // having a bad minute should not turn a successful delete into an error
+        // the person has to retry. A file that survives this is orphaned, so
+        // the sweep still collects it by the ordinary rule.
+        const attachmentIds = Array.isArray(message.attachments) ? message.attachments : [];
+        if (attachmentIds.length > 0) {
+          void deleteUnreferencedFiles(attachmentIds).catch((e) =>
+            consola.warn("attachment cleanup after delete failed", e),
+          );
+        }
 
         const existing = messageCache.get(payload.conversationId);
         if (existing?.items) {
