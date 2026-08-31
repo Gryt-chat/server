@@ -486,8 +486,25 @@ if (metricsPort > 0) {
     res.setHeader("Content-Type", register.contentType);
     res.end(await register.metrics());
   });
-  metricsApp.listen(metricsPort, "0.0.0.0", () => {
+  const metricsServer = metricsApp.listen(metricsPort, "0.0.0.0", () => {
     consola.success(`Metrics on ${metricsPort} (container-only; do not publish this port)`);
+  });
+
+  // A port for telemetry being unavailable is not a reason to refuse to run a
+  // chat server. Without this the listen error is an unhandled 'error' event,
+  // which takes the process down and puts it in a restart loop — so the first
+  // deployment to run two servers on one host with host networking lost the
+  // second one entirely, and the logs said EADDRINUSE rather than anything
+  // about metrics.
+  //
+  // Two servers sharing a host share its ports, so a collision here is ordinary
+  // rather than exceptional, and the answer is to say so and carry on. Metrics
+  // are still recorded either way; they are simply not served.
+  metricsServer.on("error", (err: NodeJS.ErrnoException) => {
+    const because = err.code === "EADDRINUSE"
+      ? `port ${metricsPort} is already in use, most likely by another Gryt server on this host`
+      : err.message;
+    consola.warn(`Metrics are not being served: ${because}. Set METRICS_PORT to a free port, or METRICS_PORT=0 to stop trying.`);
   });
 } else {
   consola.info("METRICS_PORT=0, so metrics are recorded but not served anywhere");
