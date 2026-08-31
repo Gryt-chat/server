@@ -1,4 +1,5 @@
 import consola from "consola";
+import { isJoinPolicy } from "../db/interfaces";
 import type { JoinPolicy, ServerConfigRecord } from "../db/interfaces";
 import {
   updateServerConfig,
@@ -105,8 +106,18 @@ export async function applyServerSettings(
 
   // Only the two values mean anything, and anything else is dropped rather
   // than coerced — a typo should leave the policy alone, not silently reset it.
-  const joinPolicy: JoinPolicy | undefined =
-    patch.joinPolicy === "open" || patch.joinPolicy === "invite" ? patch.joinPolicy : undefined;
+  // Checked against the shared list rather than a second copy of it. The copy
+  // is what broke: this knew "open" and "invite" while everything else knew
+  // three, so "request" was dropped here without an error and the whole
+  // join-request path was unreachable (GRYT-792).
+  //
+  // Still `undefined` for anything unrecognised, which means "not being
+  // changed" — deliberately not the normaliser, which answers `invite` for
+  // junk. Failing shut is right when reading a stored column and wrong here,
+  // where it would silently rewrite a typo into a real policy change.
+  const joinPolicy: JoinPolicy | undefined = isJoinPolicy(patch.joinPolicy)
+    ? patch.joinPolicy
+    : undefined;
 
   const discoverable: boolean | undefined = typeof patch.discoverable === "boolean" ? patch.discoverable : undefined;
 
