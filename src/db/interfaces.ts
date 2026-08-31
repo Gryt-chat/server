@@ -382,6 +382,11 @@ export interface ServerChannelRecord {
   max_bitrate: number | null;
   esports_mode: boolean;
   text_in_voice: boolean;
+  /**
+   * Minimum rank required to post. Null means anybody holding send_messages,
+   * which is every channel unless an operator narrows it.
+   */
+  post_min_rank: number | null;
   created_at: Date;
   updated_at: Date;
 }

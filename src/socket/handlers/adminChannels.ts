@@ -63,6 +63,7 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
             maxBitrate: c.max_bitrate ?? null,
             eSportsMode: c.esports_mode || false,
             textInVoice: c.text_in_voice || false,
+            postMinRank: c.post_min_rank ?? null,
           })),
         });
       } catch (e) {
@@ -76,6 +77,8 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
       description?: string | null; position?: number;
       requirePushToTalk?: boolean; disableRnnoise?: boolean; maxBitrate?: number | null;
       eSportsMode?: boolean; textInVoice?: boolean;
+      /** Minimum rank required to post. Null reopens the channel to everyone. */
+      postMinRank?: number | null;
     }) => {
       try {
         const rl = rlCheck("server:channels:upsert", ctx, RL_SETTINGS);
@@ -96,8 +99,9 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
           maxBitrate: payload.maxBitrate,
           eSportsMode: payload.eSportsMode,
           textInVoice: payload.textInVoice,
+          postMinRank: payload.postMinRank,
         });
-        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "channel_upsert", target: channelId, meta: { name: payload.name, type: payload.type } }).catch((e) => consola.warn("audit log write failed", e));
+        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "channel_upsert", target: channelId, meta: { name: payload.name, type: payload.type, postMinRank: payload.postMinRank ?? null } }).catch((e) => consola.warn("audit log write failed", e));
         broadcastDetails(ctx);
       } catch (e) {
         consola.error("server:channels:upsert failed", e);

@@ -189,6 +189,12 @@ function createSchema(d: DatabaseSync): void {
       max_bitrate INTEGER,
       esports_mode INTEGER NOT NULL DEFAULT 0,
       text_in_voice INTEGER NOT NULL DEFAULT 0,
+      -- Minimum rank required to post here. NULL means anybody who holds
+      -- send_messages, which is every channel until somebody says otherwise.
+      -- A rank rather than a list of roles because ranks are already ordered
+      -- and already decide who may act on whom, so "staff only" is one number
+      -- and stays correct when a role is added between two others.
+      post_min_rank INTEGER,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -378,6 +384,10 @@ function runMigrations(d: DatabaseSync): void {
     if (needsBackfill.cnt > 0) {
       d.exec("UPDATE users SET created_at = last_seen WHERE created_at = '' OR created_at IS NULL");
     }
+  }
+
+  if (!hasColumn(d, "channels", "post_min_rank")) {
+    d.exec("ALTER TABLE channels ADD COLUMN post_min_rank INTEGER");
   }
 
   if (!hasColumn(d, "server_config", "lan_open")) {

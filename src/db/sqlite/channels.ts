@@ -25,6 +25,7 @@ function rowToChannel(r: Record<string, unknown>): ServerChannelRecord {
     max_bitrate: r.max_bitrate != null ? Number(r.max_bitrate) : null,
     esports_mode: intToBool(r.esports_mode as number),
     text_in_voice: intToBool(r.text_in_voice as number),
+    post_min_rank: r.post_min_rank != null ? Number(r.post_min_rank) : null,
     created_at: fromIso(r.created_at as string),
     updated_at: fromIso(r.updated_at as string),
   };
@@ -51,7 +52,7 @@ export async function listServerChannels(): Promise<ServerChannelRecord[]> {
 
 export async function upsertServerChannel(channel: {
   channelId: string; name: string; type: "text" | "voice"; position?: number; description?: string | null;
-  requirePushToTalk?: boolean; disableRnnoise?: boolean; maxBitrate?: number | null; eSportsMode?: boolean; textInVoice?: boolean;
+  requirePushToTalk?: boolean; disableRnnoise?: boolean; maxBitrate?: number | null; eSportsMode?: boolean; textInVoice?: boolean; postMinRank?: number | null;
 }): Promise<void> {
   const db = getSqliteDb();
   const now = toIso(new Date());
@@ -65,13 +66,17 @@ export async function upsertServerChannel(channel: {
   const maxBr = typeof channel.maxBitrate === "number" ? Math.max(0, Math.min(510_000, channel.maxBitrate)) : null;
   const eMode = channel.eSportsMode ? 1 : 0;
   const tiv = channel.textInVoice ? 1 : 0;
+  // Clamped to the rank range roles actually use. Undefined leaves the column
+  // alone on an update, so a caller that does not know about this setting
+  // cannot quietly reopen a channel by omitting it.
+  const pmr = channel.postMinRank == null ? null : Math.max(0, Math.min(1000, Math.floor(channel.postMinRank)));
 
   db.prepare(
-    `INSERT INTO channels (channel_id, name, type, position, description, require_push_to_talk, disable_rnnoise, max_bitrate, esports_mode, text_in_voice, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(channel_id) DO UPDATE SET name=?, type=?, position=?, description=?, require_push_to_talk=?, disable_rnnoise=?, max_bitrate=?, esports_mode=?, text_in_voice=?, updated_at=?`
-  ).run(channelId, name, type, position, description, rPtt, dRnn, maxBr, eMode, tiv, now, now,
-    name, type, position, description, rPtt, dRnn, maxBr, eMode, tiv, now);
+    `INSERT INTO channels (channel_id, name, type, position, description, require_push_to_talk, disable_rnnoise, max_bitrate, esports_mode, text_in_voice, post_min_rank, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(channel_id) DO UPDATE SET name=?, type=?, position=?, description=?, require_push_to_talk=?, disable_rnnoise=?, max_bitrate=?, esports_mode=?, text_in_voice=?, post_min_rank=COALESCE(?, post_min_rank), updated_at=?`
+  ).run(channelId, name, type, position, description, rPtt, dRnn, maxBr, eMode, tiv, pmr, now, now,
+    name, type, position, description, rPtt, dRnn, maxBr, eMode, tiv, pmr, now);
 }
 
 export async function deleteServerChannel(channelId: string): Promise<void> {
