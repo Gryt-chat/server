@@ -91,12 +91,3 @@ export const RL_HTTP_FILE: RateLimitRule = { limit: 240, windowMs: 60_000 };
 
 /** Unauthenticated metadata: `/info`, `/icon`, `/health`. */
 export const RL_HTTP_PUBLIC: RateLimitRule = { limit: 60, windowMs: 60_000 };
-
-/**
- * `/metrics`.
- *
- * Nothing legitimate scrapes it more than once or twice a minute, and it is the
- * most detailed thing this server will tell a stranger. Requiring
- * authentication on it is a separate change; this bounds it in the meantime.
- */
-export const RL_HTTP_METRICS: RateLimitRule = { limit: 12, windowMs: 60_000 };
