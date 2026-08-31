@@ -82,6 +82,40 @@ export async function runMediaSweep(): Promise<{ deleted: number; errors: number
  * the file does not survive for long: it is orphaned, so the next sweep finds
  * it by the ordinary rule.
  */
+/**
+ * Which of `fileIds` nothing points at any more.
+ *
+ * Separate from the delete so the selection can be asserted on its own: getting
+ * this wrong either leaves rubbish in storage or removes a file somebody else's
+ * message still shows, and only one of those is visible from the outside.
+ *
+ * Reads the same two sources as the periodic sweep, messages and avatars, so it
+ * cannot select something the sweep would have kept.
+ */
+export async function unreferencedAmong(fileIds: string[]): Promise<string[]> {
+  if (fileIds.length === 0) return [];
+
+  const [referencedByMessages, referencedByAvatars] = await Promise.all([
+    getAllReferencedAttachmentIds(),
+    getAllAvatarFileIds(),
+  ]);
+  const referenced = new Set<string>([...referencedByMessages, ...referencedByAvatars]);
+
+  return fileIds.filter((id) => !referenced.has(id));
+}
+
+/**
+ * Delete the ones among `fileIds` that nothing points at any more.
+ *
+ * `deleteFilesNow` trusts its caller to have checked; this does the checking,
+ * which is what you want at a call site deleting one message that has no idea
+ * what else might reference its attachments. A file can be attached to several
+ * messages — forwarding one is enough.
+ */
+export async function deleteUnreferencedFiles(fileIds: string[]): Promise<{ deleted: number; errors: number }> {
+  return deleteFilesNow(await unreferencedAmong(fileIds));
+}
+
 export async function deleteFilesNow(fileIds: string[]): Promise<{ deleted: number; errors: number }> {
   if (fileIds.length === 0) return { deleted: 0, errors: 0 };
 
