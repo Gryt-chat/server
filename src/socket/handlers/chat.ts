@@ -25,6 +25,7 @@ import {
   clearConversationHidden,
   touchConversation,
   DEFAULT_UPLOAD_MAX_BYTES,
+  DEFAULT_MAX_ATTACHMENTS_PER_MESSAGE as MAX_ATTACHMENTS_PER_MESSAGE,
 } from "../../db";
 import { processProfanity, type CensorStyle, type ProfanityMode } from "../../utils/profanityFilter";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
@@ -340,6 +341,17 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         // these are two different doors into the same room: the file is already
         // stored by the time it is named in a message, and a file id can be
         // reused from an earlier message.
+        // A cap on how many, not only how large. The size limit is per file, so
+        // without this one message could name a hundred of them and the only
+        // bound was how many the sender managed to upload first.
+        if (attachments && attachments.length > MAX_ATTACHMENTS_PER_MESSAGE) {
+          socket.emit("chat:error", {
+            error: "too_many_attachments",
+            message: `A message can carry at most ${MAX_ATTACHMENTS_PER_MESSAGE} files.`,
+          });
+          return;
+        }
+
         if (attachments && attachments.length > 0 && !auth.permissions.has("attach_files")) {
           socket.emit("chat:error", {
             error: "forbidden",

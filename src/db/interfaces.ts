@@ -217,9 +217,23 @@ export interface FileRecord {
 // re-encoded result is stored, so the number governs which source files are
 // accepted rather than what is kept. What bounds the memory is MAX_INPUT_PIXELS
 // in utils/imageValidation, not these.
-export const DEFAULT_AVATAR_MAX_BYTES = 100 * 1024 * 1024;
-export const DEFAULT_UPLOAD_MAX_BYTES = 100 * 1024 * 1024;
-export const DEFAULT_EMOJI_MAX_BYTES = 100 * 1024 * 1024;
+// Sized for what people actually send, not for the largest thing that could be
+// made to work. A default is what almost every server runs on, and 100MB of it
+// was storage nobody asked for on a box that may have no backups. An operator
+// who wants more says so; one who never opens the settings gets something
+// survivable.
+export const DEFAULT_AVATAR_MAX_BYTES = 8 * 1024 * 1024;
+export const DEFAULT_UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
+export const DEFAULT_EMOJI_MAX_BYTES = 2 * 1024 * 1024;
+
+/**
+ * How many files one message may carry.
+ *
+ * There was no limit. The size cap is per file, so a single message could name
+ * a hundred of them and the only bound was how many the sender could upload
+ * first.
+ */
+export const DEFAULT_MAX_ATTACHMENTS_PER_MESSAGE = 10;
 export const DEFAULT_VOICE_MAX_BITRATE_BPS = 96_000;
 
 export interface ServerConfigRecord {

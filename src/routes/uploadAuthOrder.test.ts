@@ -28,7 +28,14 @@ type RouteLayer = {
 };
 
 const AUTH = /^(requireBearerToken|requireAdminToken|requirePermission|requireRank)/;
-const MULTER = /^multerMiddleware$/;
+// Anything that reads the request body into memory or onto disk.
+//
+// `multerMiddleware` is multer used directly. The `buffer*` wrappers are multer
+// used late — the limit has to be read from the database first, so a closure
+// stands in the route stack and constructs multer when the request arrives.
+// They count for exactly the same reason, and they used to be invisible here:
+// naming them is what makes this test see the avatar route at all (GRYT-742).
+const MULTER = /^(multerMiddleware|buffer[A-Z]\w*)$/;
 
 function routesOf(router: unknown, mount: string) {
   const stack = (router as { stack: RouteLayer[] }).stack ?? [];
@@ -47,13 +54,24 @@ const allRoutes = [
 ];
 
 describe("multer never runs before authentication", () => {
-  it("finds routes to check at all", () => {
-    // Guards against the whole suite passing because an import changed shape
-    // and routesOf quietly returned nothing.
+  it("finds every route that buffers a body", () => {
+    // Not just "some route buffers". The first version of this asked only that
+    // one did, and that is how it kept passing while covering less: the avatar
+    // route moved to a named-closure wrapper, its handler stopped being called
+    // `multerMiddleware`, and the check went quiet because the server icon
+    // route still matched. Naming the routes is what stops a rename from
+    // silently narrowing what this file is testing.
     assert.ok(allRoutes.length > 0, "no routes were inspected");
-    assert.ok(
-      allRoutes.some((r) => r.handlers.some((h) => MULTER.test(h))),
-      "no multer route was inspected, so this test proves nothing",
+
+    const buffering = allRoutes
+      .filter((r) => r.handlers.some((h) => MULTER.test(h)))
+      .map((r) => r.label)
+      .sort();
+
+    assert.deepEqual(
+      buffering,
+      ["POST /api/server/icon", "POST /api/uploads/", "POST /api/uploads/avatar"],
+      "the set of body-buffering routes changed; if that is deliberate, update this list",
     );
   });
 
