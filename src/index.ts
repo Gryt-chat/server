@@ -1,5 +1,13 @@
 import { config } from "dotenv";
 import { isOriginAllowed, readAllowedOrigins } from "./config/cors";
+import {
+  httpRateLimit,
+  RL_HTTP_FILE,
+  RL_HTTP_METRICS,
+  RL_HTTP_OUTBOUND,
+  RL_HTTP_PUBLIC,
+  RL_HTTP_UPLOAD,
+} from "./middleware/rateLimitHttp";
 config({ path: "config.env", override: false });
 config({ override: false });
 import { consola } from "consola";
@@ -82,7 +90,7 @@ app.use(express.json({ limit: "2mb" }));
 
 // Prometheus metrics
 app.use(metricsMiddleware);
-app.get("/metrics", async (_req, res) => {
+app.get("/metrics", httpRateLimit("http:metrics", RL_HTTP_METRICS), async (_req, res) => {
   res.setHeader("Content-Type", register.contentType);
   res.end(await register.metrics());
 });
@@ -175,7 +183,7 @@ if (process.env.SFU_WS_HOST) {
 }
 
 // Public server info (used by the "Add Server" dialog & site invite page — no auth required)
-app.get("/info", async (_req, res) => {
+app.get("/info", httpRateLimit("http:public", RL_HTTP_PUBLIC), async (_req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
 
   let displayName = process.env.SERVER_NAME || "Unknown Server";
@@ -258,7 +266,7 @@ app.get("/info", async (_req, res) => {
 // Streams through the API instead of redirecting to presigned URLs, because in
 // dev/self-hosted setups the S3 endpoint is often an internal address (e.g.
 // http://minio:9000 or 127.0.0.1:9000) that browsers cannot reach.
-app.get("/icon", async (req, res) => {
+app.get("/icon", httpRateLimit("http:public", RL_HTTP_PUBLIC), async (req, res) => {
   try {
     const cfg = await getServerConfig();
     const iconKey = cfg?.icon_url;
@@ -305,14 +313,31 @@ app.get("/icon", async (req, res) => {
 });
 
 // API routes (all /api/* routes require Bearer token auth except /api/server/icon which has its own)
+// Limits go in front of the routers, so a refused request never reaches body
+// parsing, signature checking or an outbound fetch. `webhooks` carries its own,
+// keyed per webhook rather than per address, and is left alone.
 app.use("/api/server", serverRouter);
 app.use("/api/messages", messagesRouter);
-app.use("/api/uploads", uploadsRouter);
+// Reading a file and writing one are the same mount, so they need different
+// budgets: a busy channel legitimately fetches hundreds of attachments as it
+// scrolls, while writing that many is not a thing anybody does by hand.
+//
+// The order matters and so does the skip. Express runs every mount that
+// matches, so without it `/api/uploads/files/<id>` would be charged to the
+// upload budget as well as the file one, and scrolling would trip a limit meant
+// for uploading.
+const limitUploadWrites = httpRateLimit("http:upload", RL_HTTP_UPLOAD);
+app.use("/api/uploads/files", httpRateLimit("http:file", RL_HTTP_FILE));
+app.use(
+  "/api/uploads",
+  (req, res, next) => (req.path.startsWith("/files") ? next() : limitUploadWrites(req, res, next)),
+  uploadsRouter,
+);
 app.use("/api/members", membersRouter);
-app.use("/api/emojis", emojisRouter);
-app.use("/api/link-preview", linkPreviewRouter);
-app.use("/api/oembed", oEmbedRouter);
-app.use("/api/media/metadata", mediaMetadataRouter);
+app.use("/api/emojis", httpRateLimit("http:emoji", RL_HTTP_UPLOAD), emojisRouter);
+app.use("/api/link-preview", httpRateLimit("http:outbound", RL_HTTP_OUTBOUND), linkPreviewRouter);
+app.use("/api/oembed", httpRateLimit("http:outbound", RL_HTTP_OUTBOUND), oEmbedRouter);
+app.use("/api/media/metadata", httpRateLimit("http:outbound", RL_HTTP_OUTBOUND), mediaMetadataRouter);
 app.use("/api/webhooks", webhooksRouter);
 
 // Basic error handler
