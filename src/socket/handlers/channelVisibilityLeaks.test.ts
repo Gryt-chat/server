@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 
 import type { Permission } from "../../constants/permissions";
-import { initSqlite } from "../../db/sqlite/connection";
+import { getSqliteDb, initSqlite } from "../../db/sqlite/connection";
 import { upsertServerChannel, upsertServerSidebarItem } from "../../db/sqlite/channels";
 import {
   createPermissionScope,
@@ -25,6 +25,10 @@ import { registerAdminChannelHandlers } from "./adminChannels";
 import { registerChatHandlers } from "./chat";
 import { registerTypingHandlers } from "./typing";
 import { registerVoiceHandlers } from "./voice";
+import { registerAdminHandlers } from "./admin";
+import { registerReportHandlers } from "./reports";
+import { insertServerAudit } from "../../db/sqlite/invites";
+import { insertReport } from "../../db/sqlite/reports";
 import type { HandlerContext } from "./types";
 
 /**
@@ -103,14 +107,34 @@ before(async () => {
   await upsertServerSidebarItem({ itemId: "sb-open", kind: "channel", position: 10, channelId: OPEN });
   await upsertServerSidebarItem({ itemId: "sb-hidden", kind: "channel", position: 20, channelId: HIDDEN });
 
-  low = await memberAt("low", 10, ["read_messages", "send_messages", "view_members", "add_reactions"]);
-  high = await memberAt("high", 80, ["read_messages", "send_messages", "view_members", "add_reactions"]);
+  low = await memberAt("low", 10, ["read_messages", "send_messages", "view_members", "add_reactions", "view_audit_log", "view_reports"]);
+  high = await memberAt("high", 80, ["read_messages", "send_messages", "view_members", "add_reactions", "view_audit_log", "view_reports"]);
 
   const staffOnly = await createPermissionScope({ name: "Staff only", isTemplate: true });
   await replacePermissionRules(staffOnly, [
     { roleId: SHUT_OUT_ROLE, permission: "read_messages", effect: "deny" },
   ]);
   await setChannelPermissionScope(HIDDEN, staffOnly);
+
+  // Something for each of the new paths to leak: an audit entry naming the
+  // hidden channel, a report from it, and the server pointing its system
+  // messages at it. Without these the cases pass by having nothing to find.
+  await insertServerAudit({
+    actorServerUserId: high.serverUserId,
+    action: "channel_upsert",
+    target: HIDDEN,
+    meta: { name: "Staff" },
+  });
+  await insertReport({
+    message_id: "m-hidden",
+    conversation_id: HIDDEN,
+    reporter_server_user_id: high.serverUserId,
+    message_text: "something said in the staff channel",
+    message_attachments: null,
+    message_sender_server_id: high.serverUserId,
+    message_sender_nickname: "high",
+  });
+  getSqliteDb().prepare(`UPDATE server_config SET system_channel_id = ?`).run(HIDDEN);
 
   resetChannelPermissionCache();
   resetChannelIdCache();
@@ -266,6 +290,33 @@ const PATHS: {
         accessToken: who.accessToken,
         text: "is anyone here",
       });
+      return h.mine();
+    },
+    skipPermittedHalf: true,
+  },
+  {
+    name: "server:audit:list — an auditor below the gate",
+    run: async (who) => {
+      const h = harness(who);
+      await registerAdminHandlers(h.ctx)["server:audit:list"]({ accessToken: who.accessToken });
+      return h.mine();
+    },
+    skipPermittedHalf: true,
+  },
+  {
+    name: "reports:list — a moderator below the gate",
+    run: async (who) => {
+      const h = harness(who);
+      await registerReportHandlers(h.ctx)["reports:list"]({ accessToken: who.accessToken });
+      return h.mine();
+    },
+    skipPermittedHalf: true,
+  },
+  {
+    name: "server:settings:get — systemChannelId on a hidden channel",
+    run: async (who) => {
+      const h = harness(who);
+      await registerAdminHandlers(h.ctx)["server:settings:get"]();
       return h.mine();
     },
     skipPermittedHalf: true,
