@@ -1,4 +1,5 @@
 import consola from "consola";
+import { mayViewChannel } from "../../services/channelPermissions";
 import type { HandlerContext, EventHandlerMap } from "./types";
 import { requireAuth, requireOutranks } from "../middleware/auth";
 import { broadcastServerUiUpdate, sendEmojiQueueStateToSocket } from "../utils/server";
@@ -251,7 +252,22 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         if (!cfg) cfg = (await createServerConfigIfNotExists()).config;
 
         const isOwner = !!(cfg.owner_gryt_user_id && cfg.owner_gryt_user_id === client.grytUserId);
-        socket.emit("server:settings", settingsView(cfg, serverId, isOwner));
+        const view = settingsView(cfg, serverId, isOwner);
+
+        // This event asks only that you have joined, so every member receives
+        // it — and `systemChannelId` is a channel id. If the system channel is
+        // one somebody cannot see, naming it here undoes the rest of the work.
+        // Blanked rather than the whole payload refused: the other twenty
+        // settings are theirs to read, and a client that cannot resolve the id
+        // draws nothing, which is what it should draw.
+        if (
+          view.systemChannelId &&
+          !(await mayViewChannel(view.systemChannelId, client.serverUserId, client.grytUserId))
+        ) {
+          view.systemChannelId = null;
+        }
+
+        socket.emit("server:settings", view);
       } catch (e) {
         consola.error("server:settings:get failed", e);
         socket.emit("server:error", { error: "settings_failed", message: "Failed to load settings." });
@@ -1449,9 +1465,30 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         const limit = typeof payload.limit === "number" ? payload.limit : 50;
         const before = typeof payload.before === "string" ? new Date(payload.before) : undefined;
         const items = await listServerAudit(limit, before && Number.isFinite(before.getTime()) ? before : undefined);
+
+        // `view_audit_log` is its own permission and interfaces.ts describes
+        // exactly the case that makes this a leak: "a rank-90 auditor with
+        // nothing but view_audit_log". Rank does not gate the audit log, so an
+        // auditor below a channel's scope would otherwise read that channel's
+        // id out of `target` — and its name out of `meta`, which channel_upsert
+        // records. Entries about a channel they cannot see are dropped whole
+        // rather than redacted, because a redacted row still says one exists.
+        // mayViewChannel answers true for anything that is not a channel, which
+        // is most targets here — user ids, role ids, webhook ids. So this asks
+        // one question per row and only narrows the channel ones. It reads a
+        // cache rather than the database, so the per-row call is cheap.
+        const allowed = await Promise.all(
+          items.map((it) =>
+            it.target
+              ? mayViewChannel(it.target, auth.tokenPayload.serverUserId, auth.tokenPayload.grytUserId)
+              : Promise.resolve(true),
+          ),
+        );
+        const readable = items.filter((_, i) => allowed[i]);
+
         socket.emit("server:audit", {
           serverId,
-          items: items.map((it) => ({
+          items: readable.map((it) => ({
             createdAt: it.created_at, eventId: it.event_id, actorServerUserId: it.actor_server_user_id,
             action: it.action, target: it.target,
             meta: it.meta_json ? (() => { try { return JSON.parse(it.meta_json); } catch { return it.meta_json; } })() : null,

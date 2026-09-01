@@ -1,4 +1,5 @@
 import consola from "consola";
+import { mayViewChannel } from "../../services/channelPermissions";
 import type { HandlerContext, EventHandlerMap } from "./types";
 import { requireAuth, requireOutranks } from "../middleware/auth";
 import { evictUser, resolveGrytUserId } from "../../moderation/evict";
@@ -118,15 +119,32 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
 
         const aggregated = await getAggregatedPendingReports();
 
+        // A report names the conversation it came from, and carries a snapshot
+        // of the message text. `view_reports` is not `read_messages`, so a
+        // moderator below a channel's scope would otherwise read both out of
+        // the queue — the channel's existence and a line of what was said in
+        // it. Dropped rather than redacted: a row saying "a report from
+        // somewhere you cannot see" still answers the question.
+        //
+        // The cost is that a report from a hidden channel reaches only the
+        // moderators who can see that channel. That is the right trade and
+        // worth knowing: if nobody moderating can see it, nobody is told.
+        const readable = await Promise.all(
+          aggregated.map((r) =>
+            mayViewChannel(r.conversation_id, auth.tokenPayload.serverUserId, auth.tokenPayload.grytUserId),
+          ),
+        );
+        const visibleReports = aggregated.filter((_, i) => readable[i]);
+
         const allFileIds = new Set<string>();
-        for (const r of aggregated) {
+        for (const r of visibleReports) {
           if (r.message_attachments) r.message_attachments.forEach((id) => allFileIds.add(id));
         }
         const fileMap = allFileIds.size > 0 ? await getFilesByIds([...allFileIds]) : new Map();
 
         socket.emit("reports:list", {
           serverId,
-          reports: aggregated.map((r) => ({
+          reports: visibleReports.map((r) => ({
             messageId: r.message_id,
             conversationId: r.conversation_id,
             messageText: r.message_text,

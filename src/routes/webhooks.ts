@@ -12,6 +12,7 @@ import {
 } from "../db";
 import { requireBearerToken } from "../middleware/requireBearerToken";
 import { ensurePermission } from "../middleware/requirePermission";
+import { visibleChannelIds } from "../services/channelPermissions";
 import { broadcastChatNew } from "../socket";
 import { checkRateLimit, type RateLimitRule } from "../utils/rateLimiter";
 import { MESSAGE_MAX_LENGTH, MESSAGE_TOO_LONG } from "../utils/messageLimits";
@@ -112,7 +113,24 @@ webhooksRouter.get(
       .then(async () => {
         if (!await requireAdmin(req, res)) return;
         const webhooks = await listAllWebhooks();
-        res.json({ items: webhooks.map((w) => ({ ...w, created_at: w.created_at.toISOString(), updated_at: w.updated_at.toISOString() })) });
+
+        // A webhook row names the channel it posts into. `manage_webhooks` is
+        // not `manage_channels` and carries no rank, so somebody holding only
+        // the first would otherwise read the id of every hidden channel that
+        // has a webhook.
+        //
+        // Deliberately different from `server:channels:list`, which stays
+        // unfiltered for `manage_channels`: managing channels means knowing
+        // which exist, managing webhooks does not. The cost is that a webhook
+        // in a channel you cannot see is one you cannot administer, which is
+        // the same answer the channel itself gives.
+        const visible = await visibleChannelIds(
+          req.tokenPayload?.serverUserId,
+          req.tokenPayload?.grytUserId,
+        );
+        const readable = webhooks.filter((w) => !w.channel_id || visible.has(w.channel_id));
+
+        res.json({ items: readable.map((w) => ({ ...w, created_at: w.created_at.toISOString(), updated_at: w.updated_at.toISOString() })) });
       })
       .catch(next);
   },
