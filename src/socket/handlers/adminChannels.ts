@@ -281,10 +281,21 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
         const auth = await requireAuth(socket, payload, { permission: "manage_roles" });
         if (!auth) return;
 
-        const [templates, rulesByScope] = await Promise.all([
+        const [templates, rulesByScope, channels] = await Promise.all([
           listPermissionTemplates(),
           listAllPermissionRules(),
+          listServerChannels(),
         ]);
+
+        // How many channels each template decides. Editing a template changes
+        // every one of them at once, so this is the number somebody wants
+        // before they touch a row — and the one that makes the difference
+        // between a safe edit and a frightening one.
+        const usedBy = new Map<string, number>();
+        for (const channel of channels) {
+          if (!channel.permission_scope_id) continue;
+          usedBy.set(channel.permission_scope_id, (usedBy.get(channel.permission_scope_id) ?? 0) + 1);
+        }
 
         socket.emit("server:permissions:templates", {
           serverId,
@@ -293,6 +304,7 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
             id: t.scope_id,
             name: t.name,
             isSystem: t.is_system,
+            channelCount: usedBy.get(t.scope_id) ?? 0,
             rules: (rulesByScope.get(t.scope_id) ?? []).map((r) => ({
               roleId: r.role_id,
               permission: r.permission,
