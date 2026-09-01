@@ -18,8 +18,30 @@
  */
 import { createHmac, randomBytes } from "crypto";
 
-/** Bumped only if the payload layout changes; the SFU refuses anything else. */
+/**
+ * Bumped only if the payload layout changes; the SFU refuses anything else.
+ *
+ * v2 adds a capability list. v1 is still minted nowhere but still verified by
+ * the SFU, where it means every capability — the two services deploy
+ * separately, so an SFU that read v1 as "grants nothing" would mute every
+ * server that had not caught up yet. `internal/auth/clienttoken.go` carries the
+ * same note from the other side.
+ */
 export const TOKEN_VERSION = "v1";
+export const TOKEN_VERSION_2 = "v2";
+
+/**
+ * The capability to publish microphone audio.
+ *
+ * This is `speak` denied on a channel scope, carried to the place that can
+ * actually enforce it. Audio does not pass through this server, so a check here
+ * decides nothing on its own — the SFU drops the track, and it will only do
+ * that if the token says to.
+ *
+ * Screen-share audio is not this. It is `share_screen`, it arrives on a
+ * different transceiver, and the SFU tells them apart by which one.
+ */
+export const CAP_SPEAK = "speak";
 
 /**
  * Long enough to survive a slow client finishing its WebRTC setup, short enough
@@ -44,11 +66,48 @@ export function signClientToken(
   nonce: string,
 ): string {
   const payload = `${userId}|${roomId}|${expiresAtMs}|${nonce}`;
+  return `${TOKEN_VERSION}.${sealed(secret, payload)}`;
+}
+
+/**
+ * A v2 token, which also says what the bearer may do.
+ *
+ * The capabilities are inside the signed payload rather than beside it, for the
+ * same reason the room is: the client is the thing being restricted, so nothing
+ * it can edit may be believed. Adding `speak` to a token that was minted
+ * without it breaks the signature.
+ */
+export function signClientTokenV2(
+  secret: string,
+  userId: string,
+  roomId: string,
+  expiresAtMs: number,
+  nonce: string,
+  capabilities: readonly string[],
+): string {
+  const payload = `${userId}|${roomId}|${expiresAtMs}|${nonce}|${capabilities.join(",")}`;
+  return `${TOKEN_VERSION_2}.${sealed(secret, payload)}`;
+}
+
+function sealed(secret: string, payload: string): string {
   const mac = createHmac("sha256", secret).update(payload).digest();
-  return `${TOKEN_VERSION}.${b64url(Buffer.from(payload, "utf8"))}.${b64url(mac)}`;
+  return `${b64url(Buffer.from(payload, "utf8"))}.${b64url(mac)}`;
 }
 
 /** The same thing with a fresh nonce and the default lifetime. */
-export function mintClientToken(secret: string, userId: string, roomId: string, now = Date.now()): string {
-  return signClientToken(secret, userId, roomId, now + TOKEN_TTL_MS, randomBytes(12).toString("hex"));
+export function mintClientToken(
+  secret: string,
+  userId: string,
+  roomId: string,
+  capabilities: readonly string[],
+  now = Date.now(),
+): string {
+  return signClientTokenV2(
+    secret,
+    userId,
+    roomId,
+    now + TOKEN_TTL_MS,
+    randomBytes(12).toString("hex"),
+    capabilities,
+  );
 }

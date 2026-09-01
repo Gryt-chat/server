@@ -12,6 +12,8 @@ import { DENIAL_RESPONSES, resolveConversationAccess } from "../utils/conversati
 import { isConversationId } from "../../db";
 import { endRingsFor } from "./calls";
 import type { Permission } from "../../constants/permissions";
+import { mayInChannel } from "../../services/channelPermissions";
+import { CAP_SPEAK } from "../../sfu/clientToken";
 
 const RL_REQUEST_ROOM: RateLimitRule = { limit: 10, windowMs: 60_000, scorePerAction: 1, maxScore: 8, scoreDecayMs: 5000 };
 const RL_JOINED_CHANNEL: RateLimitRule = { limit: 10, windowMs: 60_000, scorePerAction: 0.5, maxScore: 6, scoreDecayMs: 3000 };
@@ -317,7 +319,12 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
         const uniqueRoomId = sfuRoomId(serverId, `doctor:${userId ?? clientId}`);
         await sfuClient.registerRoom(uniqueRoomId);
 
-        const joinToken = sfuClient.generateClientJoinToken(uniqueRoomId, userId);
+        /* Always allowed to speak. This is a room of one, named for the member
+         * and reachable from nothing else, and the whole point of it is to hear
+         * your own microphone back. Applying a channel's `speak` denial here
+         * would take the microphone test away from exactly the person most
+         * likely to be wondering why nobody can hear them. */
+        const joinToken = sfuClient.generateClientJoinToken(uniqueRoomId, userId, [CAP_SPEAK]);
         const sfuPublicRaw = process.env.SFU_PUBLIC_HOST || process.env.SFU_WS_HOST || "";
         const sfuPublicUrls = sfuPublicRaw.split(",").map((h) => h.trim()).filter(Boolean);
 
@@ -429,8 +436,23 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
         consola.info(`[Voice:Step 3] Room registered: ${uniqueRoomId}`);
 
         const serverUserId = clientsInfo[clientId]?.serverUserId;
-        consola.info(`[Voice:Step 4] Generating join token for client=${clientId} user=${serverUserId} room=${uniqueRoomId}`);
-        const joinToken = sfuClient.generateClientJoinToken(uniqueRoomId, serverUserId);
+
+        /* What the SFU will let them publish, decided here because this is
+         * where the channel is known. Audio never reaches this server, so this
+         * is the only chance to say it: the token is the whole mechanism.
+         *
+         * `mayInChannel` against the channel id rather than `uniqueRoomId` —
+         * the latter is the SFU's name for the room and has the server id
+         * folded into it, so it matches no scope and would answer from the
+         * server-wide permission every time.
+         *
+         * Denied `speak` still joins. They hear everything and their microphone
+         * is dropped at the SFU, which is the announcement-channel case this
+         * exists for rather than a refusal to let them in. */
+        const capabilities = (await mayInChannel(roomId, serverUserId, "speak")) ? [CAP_SPEAK] : [];
+
+        consola.info(`[Voice:Step 4] Generating join token for client=${clientId} user=${serverUserId} room=${uniqueRoomId} caps=[${capabilities.join(",")}]`);
+        const joinToken = sfuClient.generateClientJoinToken(uniqueRoomId, serverUserId, capabilities);
         const sfuPublicRaw = process.env.SFU_PUBLIC_HOST || process.env.SFU_WS_HOST || "";
         const sfuPublicUrls = sfuPublicRaw.split(",").map(h => h.trim()).filter(Boolean);
         const sfuPublicUrl = sfuPublicUrls[0];
