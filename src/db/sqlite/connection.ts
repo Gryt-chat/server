@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { dirname, join } from "path";
 
 import { AVATAR_THUMB_PX } from "../../constants/media";
+import { migrateRankGatesToScopes } from "./rankGateMigration";
 import {
   backfillFor,
   BUILT_IN_ROLES,
@@ -189,14 +190,64 @@ function createSchema(d: DatabaseSync): void {
       max_bitrate INTEGER,
       esports_mode INTEGER NOT NULL DEFAULT 0,
       text_in_voice INTEGER NOT NULL DEFAULT 0,
-      -- Minimum rank required to post here. NULL means anybody who holds
-      -- send_messages, which is every channel until somebody says otherwise.
-      -- A rank rather than a list of roles because ranks are already ordered
-      -- and already decide who may act on whom, so "staff only" is one number
-      -- and stays correct when a role is added between two others.
+      -- Both of these are migrated into channel_permission_scopes on upgrade
+      -- and nothing reads them afterwards. They stay so that a server rolled
+      -- back to an older build still enforces the gate it had, which a dropped
+      -- column would lose silently. migrateRankGatesToScopes in
+      -- migrations/rankGates.ts is the one-way door, and schema_meta records
+      -- that it has run.
       post_min_rank INTEGER,
+      view_min_rank INTEGER,
+      -- Which permission scope decides what each role may do here.
+      --
+      -- NULL means the channel has no opinion: every role gets exactly what its
+      -- server-wide definition gives it. That is every channel until somebody
+      -- narrows one, so the common case stores nothing and costs nothing.
+      permission_scope_id TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
+    );
+
+    -- A named set of per-role rules, shared by every channel that points at it.
+    --
+    -- Templates are the reason this is its own table rather than columns on
+    -- channels. Discord puts the overwrites on the channel, which works until
+    -- you have forty channels that were meant to match: there is then no way to
+    -- change them together, and they drift apart one edit at a time. A scope
+    -- that several channels share can be edited once.
+    --
+    -- "Custom" is not a special case. Choosing it makes a private scope owned by
+    -- that one channel: is_template 0, no name. So there is exactly one
+    -- lookup path and no branch anywhere that resolves a permission.
+    CREATE TABLE IF NOT EXISTS channel_permission_scopes (
+      scope_id TEXT PRIMARY KEY,
+      -- NULL for a channel's private scope. Templates are the named ones, and
+      -- they are the only ones the settings UI lists.
+      name TEXT,
+      is_template INTEGER NOT NULL DEFAULT 0,
+      -- A template the server ships and will not let you delete.
+      is_system INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    -- One row per thing a scope actually changes.
+    --
+    -- Absence is "inherit", which is why there is no row for it. A scope that
+    -- hides a channel from three roles is three rows, not thirteen permissions
+    -- times five roles — and a permission added to the catalogue later needs no
+    -- backfill, because every scope already inherits it.
+    --
+    -- effect is 'allow' or 'deny'. Allow is not redundant with inheriting: it
+    -- grants a permission the role does not hold server-wide, which is how one
+    -- channel lets a role post when it may not post anywhere else.
+    CREATE TABLE IF NOT EXISTS channel_permission_rules (
+      scope_id TEXT NOT NULL,
+      role_id TEXT NOT NULL,
+      permission TEXT NOT NULL,
+      effect TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (scope_id, role_id, permission)
     );
 
     CREATE TABLE IF NOT EXISTS sidebar_items (
@@ -389,6 +440,40 @@ function runMigrations(d: DatabaseSync): void {
   if (!hasColumn(d, "channels", "post_min_rank")) {
     d.exec("ALTER TABLE channels ADD COLUMN post_min_rank INTEGER");
   }
+
+  // NULL on every existing row, so an upgrade leaves every channel visible to
+  // everybody. A migration that guessed a threshold would hide channels people
+  // were already using.
+  if (!hasColumn(d, "channels", "view_min_rank")) {
+    d.exec("ALTER TABLE channels ADD COLUMN view_min_rank INTEGER");
+  }
+
+  if (!hasColumn(d, "channels", "permission_scope_id")) {
+    d.exec("ALTER TABLE channels ADD COLUMN permission_scope_id TEXT");
+  }
+
+  // Older databases predate both tables. CREATE TABLE IF NOT EXISTS above only
+  // runs against a fresh file, so upgrading needs them here as well.
+  d.exec(`
+    CREATE TABLE IF NOT EXISTS channel_permission_scopes (
+      scope_id TEXT PRIMARY KEY,
+      name TEXT,
+      is_template INTEGER NOT NULL DEFAULT 0,
+      is_system INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS channel_permission_rules (
+      scope_id TEXT NOT NULL,
+      role_id TEXT NOT NULL,
+      permission TEXT NOT NULL,
+      effect TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (scope_id, role_id, permission)
+    );
+    CREATE INDEX IF NOT EXISTS idx_channel_permission_rules_scope
+      ON channel_permission_rules (scope_id);
+  `);
 
   if (!hasColumn(d, "server_config", "lan_open")) {
     d.exec("ALTER TABLE server_config ADD COLUMN lan_open INTEGER NOT NULL DEFAULT 0");
@@ -618,6 +703,11 @@ function runMigrations(d: DatabaseSync): void {
 
   seedBuiltInRoles(d);
   backfillRolePermissions(d);
+
+  // After the roles exist, because the translation reads their ranks. Before
+  // anything serves a request, because between the columns being ignored and
+  // the scopes existing a gated channel would be open to everybody.
+  migrateRankGatesToScopes(d);
 }
 
 function readSchemaMeta(d: DatabaseSync, key: string): string | null {

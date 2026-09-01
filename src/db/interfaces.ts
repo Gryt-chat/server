@@ -418,8 +418,59 @@ export interface ServerChannelRecord {
    * which is every channel unless an operator narrows it.
    */
   post_min_rank: number | null;
+  /**
+   * Which permission scope decides what each role may do here.
+   *
+   * Null means the channel has no opinion and every role gets what its
+   * server-wide definition gives it, which is every channel until somebody
+   * narrows one.
+   *
+   * Never resolve a permission by reading this. `channelPermissions.ts` is the
+   * one answer and every path goes through it — the comment there says why.
+   */
+  permission_scope_id: string | null;
+  /**
+   * Both of these are migrated into a permission scope on upgrade and nothing
+   * reads them afterwards. They stay so a server rolled back to an older build
+   * still enforces the gate it had, which dropping the columns would lose
+   * silently. See migrations/rankGates.ts.
+   */
+  view_min_rank: number | null;
   created_at: Date;
   updated_at: Date;
+}
+
+/** Allow grants a permission the role lacks; deny takes one it holds. */
+export type RuleEffect = "allow" | "deny";
+
+/**
+ * A named set of per-role channel rules, or one channel's private set.
+ *
+ * `is_template` tells the two apart. A template is shared, named, and listed in
+ * server settings; a private scope belongs to the one channel that chose
+ * "Custom" and dies with it.
+ */
+export interface ChannelPermissionScopeRecord {
+  scope_id: string;
+  name: string | null;
+  is_template: boolean;
+  is_system: boolean;
+  created_at: Date;
+  updated_at: Date;
+}
+
+/**
+ * One thing a scope changes.
+ *
+ * There is no row for "inherit" — that is the absence of one. So a scope that
+ * hides a channel from three roles is three rows, and a permission added to the
+ * catalogue later needs no backfill.
+ */
+export interface ChannelPermissionRuleRecord {
+  scope_id: string;
+  role_id: string;
+  permission: string;
+  effect: RuleEffect;
 }
 
 export type ServerSidebarItemKind = "channel" | "separator" | "spacer";

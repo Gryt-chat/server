@@ -1,4 +1,5 @@
 import { getConversation, isConversationMember, listConversationMemberIds, listServerChannels } from "../../db";
+import { mayViewChannel } from "../../services/channelPermissions";
 
 /**
  * Who is allowed to read and write a conversation.
@@ -45,6 +46,12 @@ export type AccessDenial =
  * Telling them apart turns this into an oracle for whether two particular
  * people have a conversation open, which anybody who can read a member list
  * could then ask, since the id is derived from the pair.
+ *
+ * A channel hidden by `view_min_rank` answers `unknown_conversation` for the
+ * same reason. Anything else — a `forbidden`, a distinct code, even a different
+ * message — tells the caller the channel is there, which is the one fact the
+ * gate exists to withhold. Guessing an id has to be indistinguishable from
+ * guessing wrong.
  */
 export const DENIAL_RESPONSES: Record<AccessDenial, { error: string; message: string; status: number }> = {
   unauthenticated: { error: "unauthenticated", message: "You are not signed in to this server", status: 401 },
@@ -108,7 +115,16 @@ export async function resolveConversationAccess(
     return { allowed: true, kind: "dm", memberIds: await listConversationMemberIds(conversationId) };
   }
 
-  if (await channelExists(conversationId)) return { allowed: true, kind: "channel" };
+  if (await channelExists(conversationId)) {
+    // The gate is checked here rather than at each caller because this is
+    // already where the socket handlers, the REST route and the call handlers
+    // meet. A channel somebody may not see has to read as absent from all
+    // three, and history is the path where a guessed id would otherwise pay.
+    if (!(await mayViewChannel(conversationId, serverUserId))) {
+      return { allowed: false, reason: "unknown_conversation" };
+    }
+    return { allowed: true, kind: "channel" };
+  }
 
   return { allowed: false, reason: "unknown_conversation" };
 }

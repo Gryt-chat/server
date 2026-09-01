@@ -31,6 +31,7 @@ import { processProfanity, type CensorStyle, type ProfanityMode } from "../../ut
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 import { MESSAGE_MAX_LENGTH, MESSAGE_TOO_LONG, SEALED_MAX_LENGTH } from "../../utils/messageLimits";
 import { applyAutoRoles } from "../../services/autoRoles";
+import { mayInChannel } from "../../services/channelPermissions";
 import { broadcastServerUiUpdate } from "../utils/server";
 import { directConversationViews } from "./dm";
 import {
@@ -185,19 +186,6 @@ async function enrichAttachments(messages: MessageRecord[]): Promise<MessageReco
   return result;
 }
 
-/**
- * The minimum rank required to post in a channel, or null when anybody holding
- * `send_messages` may.
- *
- * Returns null for anything that is not a channel — a direct message
- * conversation id will not be in the list, and must not be treated as a channel
- * with an unmet requirement.
- */
-async function getChannelPostMinRank(conversationId: string): Promise<number | null> {
-  const channels = await listServerChannels().catch(() => []);
-  const channel = channels.find((c) => c.channel_id === conversationId);
-  return channel?.post_min_rank ?? null;
-}
 
 export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
   const { io, socket, clientId, serverId, clientsInfo, sfuClient, getClientIp } = ctx;
@@ -265,16 +253,15 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         const access = await requireConversationAccess(payload.conversationId, auth.tokenPayload.serverUserId);
         if (!access) return;
 
-        // A channel can require a rank to post in, which is what makes a
-        // read-only #rules or an announcements channel possible. `send_messages`
-        // is server-wide and answers "may this person talk at all"; this answers
-        // "may they talk *here*", and both have to be true.
+        // `send_messages` on the role answers "may this person talk at all".
+        // The channel's scope answers "may they talk *here*", and both have to
+        // be true — which is what makes a read-only #rules or an announcements
+        // channel possible.
         //
-        // Only channels have one. A direct message has no rank to compare
-        // against and listChannels does not return one, so this is skipped
-        // rather than defaulting to a number that would lock DMs.
-        const postGate = await getChannelPostMinRank(payload.conversationId);
-        if (postGate != null && auth.rank < postGate) {
+        // A direct message has no scope, so `mayInChannel` falls through to the
+        // server-wide answer rather than refusing. requireAuth has already
+        // checked that, so this only ever narrows.
+        if (!(await mayInChannel(payload.conversationId, auth.tokenPayload.serverUserId, "send_messages", auth.tokenPayload.grytUserId))) {
           socket.emit("chat:error", {
             error: "forbidden",
             message: "This channel is read-only for your role.",
