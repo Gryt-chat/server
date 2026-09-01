@@ -17,6 +17,7 @@ import {
   setConversationHidden,
   setConversationIcon,
   setConversationName,
+  eitherHasBlocked,
 } from "../../db";
 import { isBotIdentity } from "../../auth/identity";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
@@ -203,6 +204,20 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
 
         if (isBotIdentity(targetUser.gryt_user_id)) {
           socket.emit("dm:error", { error: "invalid_target", message: "You cannot message a bot" });
+          return;
+        }
+
+        /* Either direction. Asking one way round would let the blocked person
+         * open the conversation the block exists to prevent, and the blocker
+         * would find it in their list.
+         *
+         * The refusal is `unknown_member`, the same answer somebody who left
+         * the server gets, and it is deliberately not its own error. A code
+         * that means "they have blocked you" is a code a client would render,
+         * and telling somebody they have been blocked invites exactly what the
+         * block is for. */
+        if (await eitherHasBlocked(auth.tokenPayload.grytUserId, targetUser.gryt_user_id)) {
+          socket.emit("dm:error", { error: "unknown_member", message: "That person is not a member of this server" });
           return;
         }
 

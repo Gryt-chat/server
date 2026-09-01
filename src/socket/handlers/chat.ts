@@ -26,6 +26,8 @@ import {
   touchConversation,
   DEFAULT_UPLOAD_MAX_BYTES,
   DEFAULT_MAX_ATTACHMENTS_PER_MESSAGE as MAX_ATTACHMENTS_PER_MESSAGE,
+  blockersOfSender,
+  blockedServerIdsFor,
 } from "../../db";
 import { processProfanity, type CensorStyle, type ProfanityMode } from "../../utils/profanityFilter";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
@@ -199,6 +201,40 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
    * anyway. On a direct message it would mean everybody learning that a message
    * they cannot read was reacted to, by whom, and with what.
    */
+  /**
+   * The same list, minus anybody who has blocked the sender.
+   *
+   * Blocking is enforced at delivery rather than hidden in the client, and this
+   * is where that costs least: `chat:new` is already emitted socket by socket
+   * rather than to a room, so dropping a few from the list changes nothing
+   * about the shape of the send path.
+   *
+   * It also has to be here rather than in the client for direct messages,
+   * which are sealed — the server cannot read one, so the only way to stop it
+   * reaching somebody is not to send it.
+   *
+   * One query per message, against an index on `blocked_gryt_user_id`. On a
+   * server where nobody has blocked anybody it returns an empty set.
+   */
+  async function deliverableClientIds(
+    conversationId: string,
+    access: AllowedConversationAccess,
+    senderServerUserId: string,
+  ): Promise<string[]> {
+    const blockers = await blockersOfSender(senderServerUserId);
+    const all = recipientClientIds(conversationId, access);
+    if (blockers.size === 0) return all;
+
+    /* The sender still gets their own copy. Blocking somebody does not stop
+     * them seeing what they said, and a message that vanished as it was sent
+     * would read as a failure to send. */
+    return all.filter(
+      (cid) =>
+        clientsInfo[cid]?.serverUserId === senderServerUserId ||
+        !blockers.has(clientsInfo[cid]?.serverUserId ?? ""),
+    );
+  }
+
   function recipientClientIds(conversationId: string, access: AllowedConversationAccess): string[] {
     const members = access.kind === "dm" ? new Set(access.memberIds) : null;
     const voice = isConversationAVoiceChannel(conversationId, sfuClient);
@@ -503,7 +539,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           }
         }
 
-        recipientClientIds(created.conversation_id, access).forEach((cid) => {
+        (await deliverableClientIds(created.conversation_id, access, auth.tokenPayload.serverUserId)).forEach((cid) => {
           const msg = cid === clientId && payload.nonce
             ? { ...enriched, nonce: payload.nonce }
             : enriched;
@@ -611,7 +647,21 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         const items = before
           ? await listMessages(payload.conversationId, limit, before)
           : await getMessagesCached(payload.conversationId, limit);
-        let enrichedItems = await enrichMessages(items);
+        /* Blocked senders come out before enrichment rather than after, so
+         * nothing is spent looking up an avatar for a message nobody is going
+         * to see.
+         *
+         * `hasMore` is computed from what is left, which means a page that was
+         * mostly one blocked person's messages comes back short. That is the
+         * honest answer — the alternative is refetching until the page is full,
+         * which turns one query into an unbounded number for whoever has
+         * blocked the most people. */
+        const hidden = await blockedServerIdsFor(clientsInfo[clientId]?.serverUserId ?? "");
+        const visible = hidden.size === 0
+          ? items
+          : items.filter((m) => !hidden.has(m.sender_server_id));
+
+        let enrichedItems = await enrichMessages(visible);
         enrichedItems = await enrichAttachments(enrichedItems);
         const response: { conversation_id: string; items: typeof enrichedItems; hasMore: boolean; before?: string } = {
           conversation_id: payload.conversationId,

@@ -322,6 +322,33 @@ export async function openDirectConversation(
  * Only ever touches the caller's own row. Returns whether anything changed, so
  * a handler can decline to tell everybody about a no-op.
  */
+/**
+ * Take the conversation between two people out of one of their sidebars.
+ *
+ * Called when somebody blocks: the blocker stops seeing it and the blocked
+ * person's own list is untouched, which is the same act the blocker could have
+ * performed by hand. Nothing is deleted — unblocking and saying something puts
+ * it back with its history intact.
+ *
+ * Only the direct conversation. A group both of them are in is not between
+ * them, and removing somebody from a group because one member blocked another
+ * would be a block with a blast radius.
+ */
+export async function hideConversationsBetween(
+  blockerServerUserId: string,
+  blockedServerUserId: string,
+): Promise<void> {
+  const db = getSqliteDb();
+  db.prepare(
+    `UPDATE conversation_members SET hidden_at = ?
+      WHERE conversation_id = ? AND server_user_id = ? AND hidden_at IS NULL`,
+  ).run(
+    toIso(new Date()),
+    directConversationId(blockerServerUserId, blockedServerUserId),
+    blockerServerUserId,
+  );
+}
+
 export async function setConversationHidden(
   conversationId: string,
   serverUserId: string,
