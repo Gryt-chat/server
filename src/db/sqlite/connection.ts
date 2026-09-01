@@ -169,6 +169,32 @@ function createSchema(d: DatabaseSync): void {
       expires_at TEXT
     );
 
+    -- Who somebody does not want to hear from.
+    --
+    -- A personal act, not a moderator one: no permission is needed, it works
+    -- against somebody who outranks you, and nobody but the blocker ever sees
+    -- a row. The bans table is the moderator's and this is deliberately
+    -- separate from it.
+    --
+    -- Keyed on gryt_user_id on both sides, the same as bans. A block keyed on
+    -- server_user_id would last only until the blocked person rejoined with a
+    -- fresh local identity, which is one tap. Every row in users has both
+    -- columns and both are NOT NULL UNIQUE, local identities included, so this
+    -- costs nothing to look up.
+    --
+    -- No reason column. The list is read by one person about people they can
+    -- already see, and a reason field is somewhere for the blocker to write
+    -- something the blocked person must never read.
+    CREATE TABLE IF NOT EXISTS blocks (
+      blocker_gryt_user_id TEXT NOT NULL,
+      blocked_gryt_user_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (blocker_gryt_user_id, blocked_gryt_user_id)
+    );
+    -- Delivery asks who has blocked this sender on every message, which is the
+    -- opposite direction from the one the primary key serves.
+    CREATE INDEX IF NOT EXISTS idx_blocks_blocked ON blocks(blocked_gryt_user_id);
+
     CREATE TABLE IF NOT EXISTS join_requests (
       gryt_user_id TEXT PRIMARY KEY,
       nickname TEXT NOT NULL,

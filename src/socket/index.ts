@@ -25,6 +25,7 @@ import { registerMemberHandlers } from "./handlers/members";
 import { registerDiagnosticsHandlers } from "./handlers/diagnostics";
 import { registerVoiceLatencyHandlers } from "./handlers/voiceLatency";
 import { registerReportHandlers } from "./handlers/reports";
+import { registerBlockHandlers } from "./handlers/blocks";
 import { registerTypingHandlers } from "./handlers/typing";
 import { registerDmKeyHandlers } from "./handlers/dmKeys";
 import { addressIsOwn, resolveClientIp, trustedProxyHops } from "../config/clientAddress";
@@ -392,6 +393,7 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
     ...registerCallHandlers(ctx),
     ...registerMemberHandlers(ctx),
     ...registerReportHandlers(ctx),
+    ...registerBlockHandlers(ctx),
     ...registerDiagnosticsHandlers(ctx),
     ...registerVoiceLatencyHandlers(ctx),
     ...registerTypingHandlers(ctx),
