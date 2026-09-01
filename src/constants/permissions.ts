@@ -148,6 +148,51 @@ export const PERMISSIONS = [
 
 export type Permission = (typeof PERMISSIONS)[number];
 
+/**
+ * The permissions a single channel can have an opinion about.
+ *
+ * A deliberate subset, not the whole catalogue. Most of what is above is about
+ * the server rather than a place in it — `ban_members` and `manage_server` mean
+ * the same thing wherever you stand, and offering them per channel would put
+ * twenty-six rows nobody can act on into the matrix and invite somebody to set
+ * one and wonder why nothing happened.
+ *
+ * What is here is everything that answers "what may this role do *here*":
+ * reading and writing, the things attached to a message, and the four that
+ * decide what you may do in a voice room.
+ *
+ * `read_messages` carries more weight than the rest. Denied at channel scope it
+ * does not grey the channel out — the server stops naming the channel at all,
+ * so the member has no way to learn it exists. See services/channelPermissions.
+ *
+ * `manage_messages` is here because moderating one channel and not another is a
+ * real thing to want, and it is the permission somebody hands to a helper.
+ */
+export const CHANNEL_PERMISSIONS = [
+  "read_messages",
+  "send_messages",
+  "edit_own_messages",
+  "delete_own_messages",
+  "attach_files",
+  "add_reactions",
+  "report_messages",
+  "use_link_previews",
+  "manage_messages",
+  "join_voice",
+  "speak",
+  "share_video",
+  "share_screen",
+] as const;
+
+export type ChannelPermission = (typeof CHANNEL_PERMISSIONS)[number];
+
+const CHANNEL_PERMISSION_SET: ReadonlySet<string> = new Set(CHANNEL_PERMISSIONS);
+
+/** Whether this permission means anything when scoped to one channel. */
+export function isChannelPermission(value: unknown): value is ChannelPermission {
+  return typeof value === "string" && CHANNEL_PERMISSION_SET.has(value);
+}
+
 const PERMISSION_SET: ReadonlySet<string> = new Set(PERMISSIONS);
 
 export function isPermission(value: unknown): value is Permission {

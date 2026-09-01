@@ -4,6 +4,7 @@ import { Clients } from "../../types";
 import type { JoinPolicy, RoleDefinitionRecord } from "../../db/interfaces";
 import { FALLBACK_ROLE_ID, PERMISSIONS } from "../../constants/permissions";
 import { getEffectiveStanding } from "../../services/permissions";
+import { visibleChannelIds } from "../../services/channelPermissions";
 import { getAcceptedIdentityTiers } from "../../auth/identity";
 import { getVoiceSeatLimit } from "../../utils/voiceSeats";
 import { syncAllClients, broadcastMemberList } from "./clients";
@@ -234,16 +235,25 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
   // Sidebar items are persisted in DB; bootstrap defaults if missing.
   // We still emit `channels` for backward compatibility (derived from sidebar items).
   let sidebar_items: { id: string; kind: string; position: number; channelId?: string; spacerHeight?: number; label?: string }[] = [];
-  let channels: { id: string; name: string; type: string; description?: string; requirePushToTalk?: boolean; disableRnnoise?: boolean; maxBitrate?: number; eSportsMode?: boolean; textInVoice?: boolean; postMinRank?: number | null }[] = [];
+  let channels: { id: string; name: string; type: string; description?: string; requirePushToTalk?: boolean; disableRnnoise?: boolean; maxBitrate?: number; eSportsMode?: boolean; textInVoice?: boolean; permissionScopeId?: string | null }[] = [];
   try {
     await ensureDefaultSidebarItems();
 
-    const [items, persistedChannels] = await Promise.all([
+    const [allItems, allChannels] = await Promise.all([
       listServerSidebarItems(),
       listServerChannels(),
     ]);
 
-    const channelById = new Map(persistedChannels.map((c) => [c.channel_id, c]));
+    const channelById = new Map(allChannels.map((c) => [c.channel_id, c]));
+
+    // Both arrays below are derived from `items`, so the filter goes here
+    // rather than on either one of them. Filtering `channels` alone would have
+    // left the channel's id, position and label in `sidebar_items`, which is
+    // enough to know it exists and to guess at what it is for — and the client
+    // draws the sidebar from those items, so it would have rendered a gap
+    // where the hidden channel sits.
+    const visible = await visibleChannelIds(client.serverUserId, client.grytUserId);
+    const items = allItems.filter((it) => it.kind !== "channel" || !it.channel_id || visible.has(it.channel_id));
 
     sidebar_items = items.map((it) => ({
       id: it.item_id,
@@ -269,13 +279,17 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
           maxBitrate: c.max_bitrate ?? undefined,
           eSportsMode: c.esports_mode || false,
           textInVoice: c.text_in_voice || false,
-          postMinRank: c.post_min_rank ?? null,
+          permissionScopeId: c.permission_scope_id ?? null,
         }];
       });
 
-    // If sidebar exists but is missing channels (e.g. manual DB edits), fall back to channel list.
+    // If the sidebar exists but names no channels — manual DB edits, or every
+    // channel it named being hidden from this member — fall back to the channel
+    // list. Filtered too: this branch is reached precisely when somebody sees
+    // nothing, which is exactly when an unfiltered fallback would hand them
+    // everything.
     if (channels.length === 0) {
-      channels = persistedChannels.map((c) => ({
+      channels = allChannels.filter((c) => visible.has(c.channel_id)).map((c) => ({
         id: c.channel_id,
         name: c.name,
         type: c.type,
@@ -285,7 +299,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
         maxBitrate: c.max_bitrate ?? undefined,
         eSportsMode: c.esports_mode || false,
         textInVoice: c.text_in_voice || false,
-        postMinRank: c.post_min_rank ?? null,
+        permissionScopeId: c.permission_scope_id ?? null,
       }));
     }
   } catch (e) {

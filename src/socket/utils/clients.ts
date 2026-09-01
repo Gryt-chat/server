@@ -11,6 +11,7 @@ import { voiceRoomName } from "./voiceRooms";
 import { clientMayReceive, refreshClientPermissions } from "./standing";
 import { isBotIdentity } from "../../auth/identity";
 import { memberIdentity } from "./memberIdentity";
+import { scopedChannelIds, visibleChannelIds } from "../../services/channelPermissions";
 
 /**
  * Mark a socket as belonging to somebody the server has admitted.
@@ -56,13 +57,44 @@ function publicVoiceRoom(voiceChannelId: string | undefined): string {
   return isConversationId(id) ? "" : id;
 }
 
+/**
+ * The same blanking, for a channel this particular recipient may not see.
+ *
+ * `publicVoiceRoom` answers the same for everybody, because a conversation id
+ * is private from the whole server. A `view_min_rank` channel is private from
+ * some of it, so this takes the recipient.
+ *
+ * Only the id goes. `isConnectedToVoice` stays true, exactly as it does for a
+ * direct call — that somebody is busy is the part everyone is allowed to know,
+ * and it is already true of a DM, so it names no channel.
+ */
+function voiceRoomFor(visible: Set<string>, voiceChannelId: string | undefined): string {
+  const id = publicVoiceRoom(voiceChannelId);
+  if (!id) return "";
+  return visible.has(id) ? id : "";
+}
+
+/**
+ * Drop the "nothing changed since last time" memory for both broadcasts.
+ *
+ * Both dedupe on a hash of client state, and a gate is not part of that state.
+ * So hiding a channel while somebody is sitting in its voice room would change
+ * what each recipient should be told without changing the hash, and the
+ * correction would wait for the next unrelated mute or join. Called from the
+ * channel write path.
+ */
+export function invalidateBroadcastDedupe(io: Server): void {
+  lastClientsStateByIO.delete(io);
+  lastMemberListStateByIO.delete(io);
+}
+
 const lastEmitAtByIO = new WeakMap<Server, number>();
 const lastClientsStateByIO = new WeakMap<Server, string>();
 const pendingEmitByIO = new WeakMap<Server, ReturnType<typeof setTimeout>>();
 const EMIT_MIN_INTERVAL_MS = 100;
 const MEMBER_LIST_DEBOUNCE_MS = 200;
 
-function emitClientsNow(io: Server, clientsInfo: Clients, stateHash: string) {
+async function emitClientsNow(io: Server, clientsInfo: Clients, stateHash: string) {
   lastEmitAtByIO.set(io, Date.now());
   lastClientsStateByIO.set(io, stateHash);
 
@@ -76,7 +108,30 @@ function emitClientsNow(io: Server, clientsInfo: Clients, stateHash: string) {
     }
   });
 
-  io.to("verifiedClients").emit("server:clients", registeredClients);
+  // One payload to the room while no channel is gated, which is every server
+  // that has not used the setting. The per-socket branch below costs a standing
+  // lookup each and only earns it once somebody can be shown less.
+  const scoped = await scopedChannelIds();
+  if (scoped.size === 0) {
+    io.to("verifiedClients").emit("server:clients", registeredClients);
+    return;
+  }
+
+  const anyScopedInUse = Object.values(registeredClients).some((c) => scoped.has(c.voiceChannelId || ""));
+  if (!anyScopedInUse) {
+    io.to("verifiedClients").emit("server:clients", registeredClients);
+    return;
+  }
+
+  for (const [sid, sock] of io.sockets.sockets) {
+    if (!sock.rooms.has("verifiedClients")) continue;
+    const visible = await visibleChannelIds(clientsInfo[sid]?.serverUserId, clientsInfo[sid]?.grytUserId);
+    const forThem: Clients = {};
+    for (const [cid, client] of Object.entries(registeredClients)) {
+      forThem[cid] = { ...client, voiceChannelId: voiceRoomFor(visible, client.voiceChannelId) };
+    }
+    sock.emit("server:clients", forThem);
+  }
 }
 
 export function syncAllClients(io: Server, clientsInfo: Clients) {
@@ -113,13 +168,13 @@ export function syncAllClients(io: Server, clientsInfo: Clients) {
   const elapsed = now - (lastEmitAtByIO.get(io) || 0);
 
   if (elapsed >= EMIT_MIN_INTERVAL_MS) {
-    emitClientsNow(io, clientsInfo, currentStateHash);
+    void emitClientsNow(io, clientsInfo, currentStateHash);
   } else {
     pendingEmitByIO.set(
       io,
       setTimeout(() => {
         pendingEmitByIO.delete(io);
-        emitClientsNow(io, clientsInfo, currentStateHash);
+        void emitClientsNow(io, clientsInfo, currentStateHash);
       }, EMIT_MIN_INTERVAL_MS - elapsed),
     );
   }
@@ -307,13 +362,21 @@ async function emitMemberListNow(io: Server, clientsInfo: Clients): Promise<void
     lastMemberListEmitByIO.set(io, Date.now());
     lastMemberListStateByIO.set(io, currentMemberStateHash);
 
-    // Per socket rather than to the room, because who may see the list is now
-    // a permission. Same list for everybody who gets it — this is about
-    // delivery, not about showing different people different members.
+    // Per socket rather than to the room, because who may see the list is a
+    // permission. It is no longer the same list for everybody who gets it
+    // either: the row carries `voiceChannelId`, so a member sitting in a
+    // gated voice channel would otherwise name it to the whole server.
+    const scoped = await scopedChannelIds();
+    const anyScopedInUse = scoped.size > 0 && members.some((m) => scoped.has(m.voiceChannelId || ""));
+
     for (const [sid, s] of io.sockets.sockets) {
-      if (clientMayReceive(clientsInfo, sid, "view_members")) {
+      if (!clientMayReceive(clientsInfo, sid, "view_members")) continue;
+      if (!anyScopedInUse) {
         s.emit("members:list", members);
+        continue;
       }
+      const visible = await visibleChannelIds(clientsInfo[sid]?.serverUserId, clientsInfo[sid]?.grytUserId);
+      s.emit("members:list", members.map((m) => ({ ...m, voiceChannelId: voiceRoomFor(visible, m.voiceChannelId) })));
     }
   } catch (error) {
     console.error('Failed to broadcast member list:', error);
