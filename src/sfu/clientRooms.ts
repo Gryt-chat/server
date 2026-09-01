@@ -111,7 +111,13 @@ export class SFURoomManager {
     consola.info(`Unregistered room ${roomId} from SFU client`);
   }
 
-  generateClientJoinToken(roomId: string, userId: string): ClientJoinData {
+  /**
+   * `capabilities` is what the SFU will let this client do beyond listening.
+   * Required rather than defaulted: the callers are the two places that know
+   * whether the member may speak in this particular room, and a default here
+   * would be one of them silently getting it wrong.
+   */
+  generateClientJoinToken(roomId: string, userId: string, capabilities: readonly string[]): ClientJoinData {
     if (!roomId || !userId) {
       throw new Error('Room ID and User ID are required for token generation');
     }
@@ -119,7 +125,7 @@ export class SFURoomManager {
     return {
       room_id: roomId,
       server_id: this.serverId,
-      user_token: mintClientToken(this.serverToken, userId, roomId),
+      user_token: mintClientToken(this.serverToken, userId, roomId, capabilities),
       user_id: userId,
     };
   }

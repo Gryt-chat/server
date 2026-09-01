@@ -283,8 +283,8 @@ export class SFUClient {
     return this.roomManager.unregisterRoom(roomId);
   }
 
-  generateClientJoinToken(roomId: string, userId: string) {
-    return this.roomManager.generateClientJoinToken(roomId, userId);
+  generateClientJoinToken(roomId: string, userId: string, capabilities: readonly string[]) {
+    return this.roomManager.generateClientJoinToken(roomId, userId, capabilities);
   }
 
   async updateUserAudioState(roomId: string, userId: string, isMuted: boolean, isDeafened: boolean): Promise<void> {
