@@ -604,6 +604,8 @@ export interface UserReportRecord {
   /** Snapshot, so the row stays readable after they leave or are renamed. */
   reported_nickname: string | null;
   reporter_server_user_id: string;
+  /** Snapshot too — see the table comment; the reporter often leaves. */
+  reporter_nickname: string | null;
   reason: string;
   status: "pending" | "dismissed" | "actioned";
   resolved_by_server_user_id: string | null;

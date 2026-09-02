@@ -181,7 +181,7 @@ interface QueueCard {
   reportedNickname: string | null;
   reportCount: number;
   reporters: string[];
-  reasons: Array<{ reporterServerUserId: string; reason: string }>;
+  reasons: Array<{ reporterServerUserId: string; reporterNickname: string | null; reason: string }>;
 }
 
 /** The user half of whatever `reports:list` answers this moderator. */
@@ -249,6 +249,9 @@ describe("submitting a report about a person", () => {
     assert.equal(card.reasons[0].reason, "following me between channels");
     assert.equal(card.reasons[0].reporterServerUserId, alice.serverUserId);
     assert.equal(card.reportedNickname, "Target One");
+    /* Snapshotted, not resolved at read time: the person who reported
+       harassment is often the one who then leaves. */
+    assert.equal(card.reasons[0].reporterNickname, "Alice");
   });
 
   it("tells the reported person nothing", async () => {

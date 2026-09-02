@@ -18,6 +18,7 @@ function rowToUserReport(r: Record<string, unknown>): UserReportRecord {
     reported_server_user_id: r.reported_server_user_id as string,
     reported_nickname: (r.reported_nickname as string) ?? null,
     reporter_server_user_id: r.reporter_server_user_id as string,
+    reporter_nickname: (r.reporter_nickname as string) ?? null,
     reason: r.reason as string,
     status: (r.status as UserReportRecord["status"]) ?? "pending",
     resolved_by_server_user_id: (r.resolved_by_server_user_id as string) ?? null,
@@ -30,18 +31,20 @@ export async function insertUserReport(record: {
   reported_server_user_id: string;
   reported_nickname: string | null;
   reporter_server_user_id: string;
+  reporter_nickname: string | null;
   reason: string;
 }): Promise<UserReportRecord> {
   const db = getSqliteDb();
   const report_id = randomUUID();
   const created_at = new Date();
   db.prepare(
-    `INSERT INTO user_reports (report_id, reported_server_user_id, reported_nickname, reporter_server_user_id, reason, status, created_at) VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
+    `INSERT INTO user_reports (report_id, reported_server_user_id, reported_nickname, reporter_server_user_id, reporter_nickname, reason, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`,
   ).run(
     report_id,
     record.reported_server_user_id,
     record.reported_nickname,
     record.reporter_server_user_id,
+    record.reporter_nickname,
     record.reason,
     toIso(created_at),
   );
@@ -80,7 +83,12 @@ export interface AggregatedUserReport {
   reported_nickname: string | null;
   report_count: number;
   reporters: string[];
-  reasons: Array<{ reporter_server_user_id: string; reason: string; created_at: Date }>;
+  reasons: Array<{
+    reporter_server_user_id: string;
+    reporter_nickname: string | null;
+    reason: string;
+    created_at: Date;
+  }>;
   first_reported_at: Date;
   report_ids: string[];
 }
@@ -123,6 +131,7 @@ export async function getAggregatedPendingUserReports(): Promise<AggregatedUserR
     entry.report_ids.push(r.report_id);
     entry.reasons.push({
       reporter_server_user_id: r.reporter_server_user_id,
+      reporter_nickname: r.reporter_nickname,
       reason: r.reason,
       created_at: r.created_at,
     });

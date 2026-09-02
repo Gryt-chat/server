@@ -185,6 +185,7 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
           reported_server_user_id: payload.serverUserId,
           reported_nickname: target.nickname ?? null,
           reporter_server_user_id: auth.tokenPayload.serverUserId,
+          reporter_nickname: auth.tokenPayload.nickname ?? null,
           reason,
         });
 
@@ -260,6 +261,7 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
             reporters: r.reporters,
             reasons: r.reasons.map((x) => ({
               reporterServerUserId: x.reporter_server_user_id,
+              reporterNickname: x.reporter_nickname,
               reason: x.reason,
               createdAt: x.created_at,
             })),

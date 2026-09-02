@@ -425,13 +425,18 @@ function createSchema(d: DatabaseSync): void {
     -- the evidence. A report about a person with nothing attached says only
     -- that somebody is unhappy, and a moderator cannot act on that.
     --
-    -- reported_nickname is a snapshot, for the same reason the message queue
+    -- Both nicknames are snapshots, for the same reason the message queue
     -- snapshots the sender's: the row has to stay readable after they leave.
+    -- The reporter's is snapshotted too, which the message queue does not do —
+    -- somebody reported for harassment is often banned, and the person who
+    -- reported them often leaves. Resolving the name at read time then puts a
+    -- raw user id where the card says who this came from.
     CREATE TABLE IF NOT EXISTS user_reports (
       report_id TEXT PRIMARY KEY,
       reported_server_user_id TEXT NOT NULL,
       reported_nickname TEXT,
       reporter_server_user_id TEXT NOT NULL,
+      reporter_nickname TEXT,
       reason TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'pending',
       resolved_by_server_user_id TEXT,
