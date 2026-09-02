@@ -99,7 +99,29 @@ export const PERMISSIONS = [
 
   // ── Self and other members ────────────────────────────────────────
   "change_nickname",
+  /**
+   * Choose an avatar: the owl, and clearing one.
+   *
+   * Everything a Gryt client can draw from a string rather than store. It costs
+   * the server a column and nothing else, which is why it is separate from the
+   * permission below.
+   */
   "change_avatar",
+  /**
+   * Upload a picture to use as one.
+   *
+   * Split from `change_avatar` because they are different asks. Designing an
+   * owl is a string; uploading a picture puts a file a stranger chose on the
+   * server, in front of everybody, at the size of every member list. On a
+   * public server that is the one worth earning, and gating both together
+   * would have meant a day-old account either keeping the default owl or
+   * getting the run of both.
+   *
+   * A member without this still gets every owl. The client stores the string
+   * and draws it; only the PNG that goes with it is skipped, and no Gryt
+   * client renders that PNG while a worn string is set.
+   */
+  "upload_avatar_image",
   /** See who else is here. */
   "view_members",
   /** Mint an invite code. */
@@ -295,6 +317,7 @@ const MEMBER_PERMISSIONS = [
   "start_calls",
   "change_nickname",
   "change_avatar",
+  "upload_avatar_image",
 ] as const satisfies readonly Permission[];
 
 /**
@@ -410,7 +433,7 @@ export interface PermissionBackfill {
  * this file's expansion (GRYT-453). Version 3 adds `manage_bots` (GRYT-460),
  * version 4 `send_direct_messages`, and version 5 `start_calls` (GRYT-712).
  */
-export const PERMISSION_SCHEMA_VERSION = 5;
+export const PERMISSION_SCHEMA_VERSION = 6;
 
 export const PERMISSION_BACKFILLS: readonly PermissionBackfill[] = [
   // Had no gate before: anybody admitted to the server could do all four.
@@ -449,6 +472,12 @@ export const PERMISSION_BACKFILLS: readonly PermissionBackfill[] = [
   // calling restricted takes it off the roles they choose, which is a decision
   // rather than something an upgrade did to them.
   { version: 5, permission: "start_calls", grantedWith: "send_direct_messages" },
+
+  // Version 6 (GRYT-866). Uploading a picture was part of `change_avatar`, so
+  // every role that could set an avatar could already upload one. Granting it
+  // alongside keeps that true: an upgrade takes nothing away, and an operator
+  // who wants pictures earned removes it from the roles they choose.
+  { version: 6, permission: "upload_avatar_image", grantedWith: "change_avatar" },
 ];
 
 /**

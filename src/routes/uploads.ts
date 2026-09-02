@@ -364,8 +364,20 @@ uploadsRouter.post(
 uploadsRouter.post(
   "/avatar",
   requireBearerToken,
+  /*
+   * `upload_avatar_image`, not `change_avatar`.
+   *
+   * This endpoint only ever receives a picture. An owl is a string on the
+   * profile — the client draws it, and `resolveAvatarSrc` prefers the drawn one
+   * over any uploaded file — so a member without this permission still gets
+   * every owl, and only the PNG that would have accompanied it is skipped.
+   *
+   * That is what makes the split enforceable rather than declared. There is no
+   * flag here saying "this upload is an owl" for a modified client to lie
+   * about: the owl never needed the endpoint.
+   */
   (req: Request, res: Response, next: NextFunction): void => {
-    ensurePermission(req, res, "change_avatar")
+    ensurePermission(req, res, "upload_avatar_image")
       .then((ok) => { if (ok) next(); })
       .catch(next);
   },
