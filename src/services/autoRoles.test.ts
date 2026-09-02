@@ -14,7 +14,7 @@ import {
 import { listServerAudit } from "../db/sqlite/invites";
 import {
   claimServerOwner,
-  getServerRole,
+  listMemberRoles,
   setServerRole,
 } from "../db/sqlite/servers";
 import { upsertUser } from "../db/sqlite/users";
@@ -87,7 +87,7 @@ describe("a role that grants itself", () => {
     const result = await applyAutoRoles(user.server_user_id, user.grytUserId);
 
     assert.equal(result?.granted.role_id, "regular");
-    assert.equal(await getServerRole(user.server_user_id), "regular");
+    assert.deepEqual(await listMemberRoles(user.server_user_id), ["regular"]);
   });
 
   it("wants both, not either", async () => {
@@ -95,11 +95,11 @@ describe("a role that grants itself", () => {
     // signed up a month ago and has never spoken.
     const patient = await memberWithHistory(400, 3);
     assert.equal(await applyAutoRoles(patient.server_user_id, patient.grytUserId), null);
-    assert.equal(await getServerRole(patient.server_user_id), "member");
+    assert.deepEqual(await listMemberRoles(patient.server_user_id), ["member"]);
 
     const chatty = await memberWithHistory(1, 500);
     assert.equal(await applyAutoRoles(chatty.server_user_id, chatty.grytUserId), null);
-    assert.equal(await getServerRole(chatty.server_user_id), "member");
+    assert.deepEqual(await listMemberRoles(chatty.server_user_id), ["member"]);
   });
 
   it("does nothing twice", async () => {
@@ -115,7 +115,7 @@ describe("a role that grants itself", () => {
     await setServerRole(mod.server_user_id, "mod");
 
     assert.equal(await applyAutoRoles(mod.server_user_id, mod.grytUserId), null);
-    assert.equal(await getServerRole(mod.server_user_id), "mod");
+    assert.deepEqual(await listMemberRoles(mod.server_user_id), ["mod"]);
   });
 
   it("leaves the owner alone", async () => {
@@ -125,7 +125,7 @@ describe("a role that grants itself", () => {
     await setServerRole(owner.server_user_id, "guest");
 
     assert.equal(await applyAutoRoles(owner.server_user_id, owner.grytUserId), null);
-    assert.equal(await getServerRole(owner.server_user_id), "guest");
+    assert.deepEqual(await listMemberRoles(owner.server_user_id), ["guest"]);
   });
 
   it("records who did it, which is nobody", async () => {
@@ -175,7 +175,7 @@ describe("a server that has configured none of this", () => {
 
     const user = await memberWithHistory(999, 999);
     assert.equal(await applyAutoRoles(user.server_user_id, user.grytUserId), null);
-    assert.equal(await getServerRole(user.server_user_id), "member");
+    assert.deepEqual(await listMemberRoles(user.server_user_id), ["member"]);
   });
 
   it("reads a zero threshold as off, not as immediately", async () => {

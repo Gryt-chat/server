@@ -42,7 +42,7 @@ export interface AuthResult {
  * The caller's standing, and the target's, both resolved the same way.
  *
  * They used to be resolved differently: the handlers read *both* sides with
- * `getServerRole`, which knows nothing about `server_config.owner_gryt_user_id`.
+ * `listMemberRoles`, which knows nothing about `server_config.owner_gryt_user_id`.
  * A config-owner whose roles row said `admin` therefore passed the owner-or-admin
  * gate and was then refused by the handler's own check when acting on an admin —
  * blocked from moderating their own server. Both sides go through

@@ -9,9 +9,10 @@ import {
   getBotById,
   getRoleDefinition,
   getServerConfig,
-  getServerRole,
+  listMemberRoles,
   getUserByServerId,
   listRoleDefinitions,
+  listServerRoles,
 } from "../db";
 import type { RoleDefinitionRecord, ServerConfigRecord } from "../db";
 
@@ -26,8 +27,26 @@ import type { RoleDefinitionRecord, ServerConfigRecord } from "../db";
  * finds until somebody uses the half that says no.
  */
 export interface EffectiveStanding {
+  /**
+   * The one shown next to their name: the highest ranked they hold.
+   *
+   * Every caller that draws a role, writes one to an audit line, or compares
+   * one against a name uses this. It is a presentation choice, not the answer
+   * to what they may do -- that is `permissions`, which is all of them together.
+   */
   roleId: string;
+  /**
+   * Everything they hold, highest ranked first.
+   *
+   * Channel rules need the whole list rather than the top one, because a scope
+   * can name any of them and allow wins. Passing only the top role would have a
+   * channel opened to "contributor" refuse somebody who is a contributor and a
+   * moderator, which reads as a bug in the channel rather than in the rank.
+   */
+  roleIds: string[];
+  /** The highest rank they hold. What every "outranks" comparison uses. */
   rank: number;
+  /** The union of every role's permissions. Roles add, they never subtract. */
   permissions: ReadonlySet<Permission>;
   isOwner: boolean;
 }
@@ -51,19 +70,38 @@ export const BOT_ROLE_ID = "bot";
 
 const NO_STANDING: EffectiveStanding = {
   roleId: FALLBACK_ROLE_ID,
+  roleIds: [FALLBACK_ROLE_ID],
   rank: 0,
   permissions: new Set<Permission>(),
   isOwner: false,
 };
 
-function definitionToStanding(
-  def: RoleDefinitionRecord,
+/**
+ * Several roles, added together.
+ *
+ * Permissions union and rank takes the highest, which is the only combination
+ * that does not surprise: giving somebody a second role can widen what they may
+ * do and can raise where they sit, and can never do the opposite. A role that
+ * took something away would mean an operator handing out a role and watching
+ * somebody lose access, and there would be no order to apply them in that
+ * everyone would agree on.
+ *
+ * `definitions` arrives highest ranked first, so the head is the role shown.
+ */
+function definitionsToStanding(
+  definitions: RoleDefinitionRecord[],
   isOwner: boolean,
 ): EffectiveStanding {
+  const permissions = new Set<Permission>();
+  for (const def of definitions) {
+    for (const p of def.permissions as Permission[]) permissions.add(p);
+  }
+
   return {
-    roleId: def.role_id,
-    rank: def.rank,
-    permissions: new Set(def.permissions as Permission[]),
+    roleId: definitions[0].role_id,
+    roleIds: definitions.map((d) => d.role_id),
+    rank: Math.max(...definitions.map((d) => d.rank)),
+    permissions,
     isOwner,
   };
 }
@@ -87,21 +125,22 @@ export function defaultRoleForTier(
 }
 
 /**
- * The role id somebody actually holds, with the two ways it can be wrong
+ * The role ids somebody actually holds, with the two ways they can be wrong
  * already handled.
  *
  * `server_config.owner_gryt_user_id` wins over the roles table, because the
  * owner is a property of the server and the row is only a cache of it. And a
- * role id whose definition has been deleted resolves to the joiner default for
- * that person's identity tier rather than to a hardcoded name — a public server
- * that deletes "Contributor" should drop those people back to whatever it gives
- * strangers, not silently promote them to `member`.
+ * role id whose definition has been deleted is dropped rather than resolved —
+ * a public server that deletes "Contributor" should not have that name keep
+ * turning up. Somebody left holding nothing by that falls back to the joiner
+ * default for their identity tier rather than to a hardcoded name, so they land
+ * on whatever the server gives strangers instead of being silently promoted.
  */
-async function resolveRoleId(
+async function resolveRoleIds(
   serverUserId: string,
   grytUserId: string | undefined,
   config: ServerConfigRecord | null,
-): Promise<{ roleId: string; isOwner: boolean }> {
+): Promise<{ roleIds: string[]; isOwner: boolean }> {
   const ownerId = config?.owner_gryt_user_id ?? null;
 
   let subjectGrytId = grytUserId;
@@ -110,14 +149,20 @@ async function resolveRoleId(
     subjectGrytId = (await getUserByServerId(serverUserId))?.gryt_user_id;
   }
 
-  if (ownerId && subjectGrytId && ownerId === subjectGrytId) {
-    return { roleId: OWNER_ROLE_ID, isOwner: true };
+  const isOwner = Boolean(ownerId && subjectGrytId && ownerId === subjectGrytId);
+
+  const stored = await listMemberRoles(serverUserId);
+  const live: string[] = [];
+  for (const roleId of stored) {
+    if (await getRoleDefinition(roleId)) live.push(roleId);
   }
 
-  const stored = await getServerRole(serverUserId);
-  if (stored && (await getRoleDefinition(stored))) {
-    return { roleId: stored, isOwner: false };
-  }
+  // The owner's role is not read off the table. It is added to whatever else
+  // they hold, so an owner who is also a moderator keeps both — and an owner
+  // whose row was never written still resolves as one.
+  if (isOwner && !live.includes(OWNER_ROLE_ID)) live.unshift(OWNER_ROLE_ID);
+
+  if (live.length > 0) return { roleIds: live, isOwner };
 
   const tier = subjectGrytId
     ? identityTierOf(subjectGrytId)
@@ -125,7 +170,7 @@ async function resolveRoleId(
         (await getUserByServerId(serverUserId))?.gryt_user_id ?? "",
       );
 
-  return { roleId: defaultRoleForTier(tier, config), isOwner: false };
+  return { roleIds: [defaultRoleForTier(tier, config)], isOwner };
 }
 
 /**
@@ -148,6 +193,7 @@ async function botStanding(grytUserId: string): Promise<EffectiveStanding> {
   if (!bot || bot.status !== "approved") return NO_STANDING;
   return {
     roleId: BOT_ROLE_ID,
+    roleIds: [BOT_ROLE_ID],
     rank: bot.rank,
     permissions: new Set(bot.granted_permissions),
     isOwner: false,
@@ -166,10 +212,20 @@ async function computeStanding(
   if (isBotIdentity(subject)) return botStanding(subject);
 
   const config = await getServerConfig();
-  const { roleId, isOwner } = await resolveRoleId(serverUserId, grytUserId, config);
+  const { roleIds, isOwner } = await resolveRoleIds(serverUserId, grytUserId, config);
 
-  const def = await getRoleDefinition(roleId);
-  if (def) return definitionToStanding(def, isOwner);
+  const definitions: RoleDefinitionRecord[] = [];
+  for (const roleId of roleIds) {
+    const def = await getRoleDefinition(roleId);
+    if (def) definitions.push(def);
+  }
+
+  if (definitions.length > 0) {
+    // Highest rank first, ties broken by the order they were given, so the role
+    // shown next to somebody's name does not move between two reads.
+    definitions.sort((a, b) => b.rank - a.rank);
+    return definitionsToStanding(definitions, isOwner);
+  }
 
   // The owner's row is missing, which the seeder should make impossible.
   // Falling back to "everything" rather than "nothing" is deliberate and is the
@@ -178,6 +234,7 @@ async function computeStanding(
   if (isOwner) {
     return {
       roleId: OWNER_ROLE_ID,
+      roleIds: [OWNER_ROLE_ID],
       rank: Number.MAX_SAFE_INTEGER,
       permissions: new Set(PERMISSIONS),
       isOwner: true,
@@ -230,4 +287,37 @@ export async function getTargetRank(serverUserId: string): Promise<number> {
  */
 export async function listRoles(): Promise<RoleDefinitionRecord[]> {
   return listRoleDefinitions();
+}
+
+/**
+ * Everybody's roles, highest ranked first, in one read.
+ *
+ * The member list and the role editor both need this and used to build it
+ * separately — one keyed a map by member and took whichever row came last,
+ * which with one role each was the only row and with two is the more recently
+ * granted one. Two answers to "which role is this person shown as" is one more
+ * than there should be.
+ *
+ * A role whose definition has been deleted keeps its place at the end rather
+ * than being dropped. This is what is displayed; `getEffectiveStanding` is what
+ * decides, and that one already refuses to resolve it.
+ */
+export async function listRolesByMember(): Promise<Map<string, string[]>> {
+  const rankOf = new Map((await listRoleDefinitions()).map((d) => [d.role_id, d.rank]));
+
+  const byMember = new Map<string, string[]>();
+  for (const row of await listServerRoles()) {
+    const held = byMember.get(row.server_user_id);
+    if (held) held.push(row.role);
+    else byMember.set(row.server_user_id, [row.role]);
+  }
+
+  // Stable: listServerRoles orders by when the role was given, and sort keeps
+  // that order for two roles of equal rank — so the name colour of somebody
+  // holding two roles of the same rank does not move between reads.
+  for (const held of byMember.values()) {
+    held.sort((a, b) => (rankOf.get(b) ?? -1) - (rankOf.get(a) ?? -1));
+  }
+
+  return byMember;
 }

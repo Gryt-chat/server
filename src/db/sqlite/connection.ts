@@ -90,12 +90,28 @@ function createSchema(d: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_users_gryt_id ON users(gryt_user_id);
     CREATE INDEX IF NOT EXISTS idx_users_server_id ON users(server_user_id);
 
+    -- Who holds which role. One row per pair, so somebody can hold several.
+    --
+    -- The primary key used to be server_user_id alone, which made a second role
+    -- unrepresentable rather than merely unimplemented. Servers replacing a
+    -- Discord arrive with roles that stack -- a moderator who is also a
+    -- contributor -- and collapsing those into one on the way in loses the part
+    -- the operator cared about. See migrateRolesToMultiple below for how an
+    -- existing database gets here.
+    --
+    -- Which of somebody's roles is the one shown next to their name is not
+    -- decided here. It is the highest ranked, and rank lives in
+    -- role_definitions, so services/permissions.ts answers it.
     CREATE TABLE IF NOT EXISTS roles (
-      server_user_id TEXT PRIMARY KEY,
+      server_user_id TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT 'member',
       created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (server_user_id, role)
     );
+    -- Every holder of one role: what deleting a role definition asks, and what
+    -- the member list asks once per connect.
+    CREATE INDEX IF NOT EXISTS idx_roles_role ON roles(role);
 
     -- What a role is, as opposed to who holds one. roles.role points at role_id
     -- here, deliberately without a foreign key: a role that is deleted while
@@ -774,6 +790,10 @@ function runMigrations(d: DatabaseSync): void {
 
   d.prepare("UPDATE server_config SET avatar_thumb_px = ?").run(AVATAR_THUMB_PX);
 
+  // Before the built-in roles are seeded, because seeding writes rows through
+  // the normal path and the table has to be the right shape first.
+  migrateRolesToMultiple(d);
+
   seedBuiltInRoles(d);
   backfillRolePermissions(d);
 
@@ -781,6 +801,57 @@ function runMigrations(d: DatabaseSync): void {
   // anything serves a request, because between the columns being ignored and
   // the scopes existing a gated channel would be open to everybody.
   migrateRankGatesToScopes(d);
+}
+
+/**
+ * Give the roles table room for more than one role per member.
+ *
+ * The old table keyed on server_user_id alone. SQLite cannot widen a primary
+ * key in place, so this is the standard rebuild: make the new table, copy every
+ * row into it, swap the names. Every existing row is one role for one person
+ * and moves across unchanged, so a database that has been through this looks
+ * exactly as it did until somebody is given a second role.
+ *
+ * Detected by asking the table what its key is rather than by a version number.
+ * A version number would have to be right about a file this has already run on,
+ * and PRAGMA table_info answers that from the file itself.
+ *
+ * Rolling back to a server that predates this leaves the wider table in place.
+ * Its inserts would then fail for anybody holding two roles, which is loud
+ * rather than silent -- and no worse than the alternative, which is a downgrade
+ * quietly dropping every second role.
+ */
+function migrateRolesToMultiple(d: DatabaseSync): void {
+  const cols = d.prepare("PRAGMA table_info(roles)").all() as unknown as {
+    name: string;
+    pk: number;
+  }[];
+  if (cols.length === 0) return; // No table yet; createSchema made the new one.
+
+  const keyed = cols.filter((c) => c.pk > 0).map((c) => c.name);
+  if (keyed.includes("role")) return; // Already been through this.
+
+  d.exec("BEGIN");
+  try {
+    d.exec(`
+      CREATE TABLE roles_multi (
+        server_user_id TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'member',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (server_user_id, role)
+      );
+      INSERT INTO roles_multi (server_user_id, role, created_at, updated_at)
+        SELECT server_user_id, role, created_at, updated_at FROM roles;
+      DROP TABLE roles;
+      ALTER TABLE roles_multi RENAME TO roles;
+      CREATE INDEX IF NOT EXISTS idx_roles_role ON roles(role);
+    `);
+    d.exec("COMMIT");
+  } catch (err) {
+    d.exec("ROLLBACK");
+    throw err;
+  }
 }
 
 function readSchemaMeta(d: DatabaseSync, key: string): string | null {

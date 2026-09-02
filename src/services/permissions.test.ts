@@ -7,7 +7,7 @@ import { after, before, describe, it } from "node:test";
 import { initSqlite } from "../db/sqlite/connection";
 import {
   claimServerOwner,
-  getServerRole,
+  listMemberRoles,
   setServerRole,
   updateServerConfig,
 } from "../db/sqlite/servers";
@@ -174,6 +174,6 @@ describe("joining defaults", () => {
     assert.equal((await getEffectiveStanding(account.server_user_id)).roleId, "member");
     assert.equal((await getEffectiveStanding(local.server_user_id)).roleId, "guest");
 
-    assert.equal(await getServerRole(account.server_user_id), null, "no row written by a read");
+    assert.deepEqual(await listMemberRoles(account.server_user_id), [], "no row written by a read");
   });
 });
