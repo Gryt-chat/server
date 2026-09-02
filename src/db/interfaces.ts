@@ -590,6 +590,29 @@ export interface ReportRecord {
   resolved_at: Date | null;
 }
 
+/**
+ * A report about a person rather than about one message.
+ *
+ * `status` does not reuse the message queue's `"approved" | "deleted"`. There,
+ * "approved" is a verdict on the message — it stays. Applied to a person that
+ * word reads as approving of them, which is the opposite of what dismissing a
+ * report means, so this says what it does.
+ */
+export interface UserReportRecord {
+  report_id: string;
+  reported_server_user_id: string;
+  /** Snapshot, so the row stays readable after they leave or are renamed. */
+  reported_nickname: string | null;
+  reporter_server_user_id: string;
+  /** Snapshot too — see the table comment; the reporter often leaves. */
+  reporter_nickname: string | null;
+  reason: string;
+  status: "pending" | "dismissed" | "actioned";
+  resolved_by_server_user_id: string | null;
+  created_at: Date;
+  resolved_at: Date | null;
+}
+
 // ── Webhook types ────────────────────────────────────────────────
 
 export interface WebhookRecord {

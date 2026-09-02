@@ -47,7 +47,19 @@ export const PERMISSIONS = [
   "delete_own_messages",
   "attach_files",
   "add_reactions",
-  /** Put a message in front of the moderators. */
+  /**
+   * Put a message, or a person, in front of the moderators.
+   *
+   * Both, under the one permission, and the name is kept for the servers that
+   * already have it set. Splitting them would have meant a sixth backfill
+   * version and a second checkbox for a distinction nobody making the first
+   * choice is thinking about: a server that lets you report what was said
+   * lets you report who said it.
+   *
+   * Channel-scoped for messages. The user report is not — harassment that has
+   * no single message usually has no single channel either — so `user:report`
+   * asks for this at server scope.
+   */
   "report_messages",
   /**
    * Have links in the channel unfurled into a preview.
