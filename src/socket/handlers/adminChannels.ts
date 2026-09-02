@@ -175,6 +175,34 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
         if (!auth) return;
 
         const channelId = (payload.channelId?.trim() || `chan_${randomUUID().slice(0, 10)}`);
+
+        /*
+         * Whether this is a create or an edit, decided before the write.
+         *
+         * A new channel needs a sidebar row or nobody sees it: `server:details`
+         * builds its channel list from the sidebar, and `ensureDefaultSidebarItems`
+         * seeds rows once — on a server whose sidebar is already populated it
+         * returns immediately — so nothing else was ever going to add one.
+         *
+         * The desktop has always sent `server:sidebar:item:upsert` itself right
+         * after this, which is why the gap went unnoticed for so long. Any other
+         * client, or a script, created a channel that exists, answers
+         * `chat:fetch`, accepts `chat:send`, and appears to nobody. GRYT-839.
+         *
+         * On an edit, nothing is added. Removing a channel from the sidebar and
+         * leaving the channel itself is a thing somebody can deliberately do,
+         * and a rename must not undo it.
+         */
+        let isNewChannel = false;
+        try {
+          const existing = await listServerChannels();
+          isNewChannel = !existing.some((c) => c.channel_id === channelId);
+        } catch (e) {
+          // Treated as an edit. A channel that needs its row added by hand is a
+          // smaller problem than a duplicate row, which draws it twice.
+          consola.warn("could not tell whether the channel is new", e);
+        }
+
         await upsertServerChannel({
           channelId, name: payload.name, type: payload.type,
           position: payload.position, description: payload.description ?? null,
@@ -184,6 +212,24 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
           eSportsMode: payload.eSportsMode,
           textInVoice: payload.textInVoice,
         });
+        if (isNewChannel) {
+          try {
+            const items = await listServerSidebarItems();
+            const already = items.some((i) => i.kind === "channel" && i.channel_id === channelId);
+            if (!already) {
+              const end = items.reduce((max, i) => Math.max(max, i.position ?? 0), 0) + 10;
+              await upsertServerSidebarItem({
+                itemId: `sb_ch_${channelId.slice(0, 54)}`,
+                kind: "channel",
+                channelId,
+                position: end,
+              });
+            }
+          } catch (e) {
+            consola.warn("could not add a sidebar row for the new channel", e);
+          }
+        }
+
         // The scope is not touched here — server:channels:scope owns it. A
         // rename must not be able to change who can see the channel.
         resetChannelPermissionCache();
@@ -563,6 +609,33 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
         if (!auth) return;
 
         await upsertServerSidebarItem({ itemId: payload.itemId, kind: payload.kind, position: payload.position, channelId: payload.channelId ?? null, spacerHeight: payload.spacerHeight ?? null, label: payload.label ?? null });
+
+        /*
+         * One row per channel.
+         *
+         * Two rows pointing at the same channel draw it twice in the sidebar,
+         * which is a bug on its own and is also what the fix above would
+         * otherwise cause: the desktop sends `server:channels:upsert` and this
+         * immediately after it, with an item id of its own, so a channel that
+         * has just been given a row here would get a second one.
+         *
+         * The row named in this payload is the one kept — this event is the
+         * explicit instruction, and the row added alongside a channel is not.
+         * Separators and spacers carry no channel, so they are untouched.
+         */
+        if (payload.kind === "channel" && payload.channelId) {
+          try {
+            const items = await listServerSidebarItems();
+            for (const other of items) {
+              if (other.item_id === payload.itemId) continue;
+              if (other.kind !== "channel" || other.channel_id !== payload.channelId) continue;
+              await deleteServerSidebarItem(other.item_id);
+            }
+          } catch (e) {
+            consola.warn("could not clear duplicate sidebar rows", e);
+          }
+        }
+
         insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "sidebar_item_upsert", target: payload.itemId, meta: { kind: payload.kind } }).catch((e) => consola.warn("audit log write failed", e));
         broadcastDetails(ctx);
       } catch (e) {
