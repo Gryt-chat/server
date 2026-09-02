@@ -413,6 +413,40 @@ function createSchema(d: DatabaseSync): void {
     );
     CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status, created_at);
 
+    -- Who a message named, resolved to ids when it was sent.
+    --
+    -- Stored rather than derived, for two reasons. Working it out on read means
+    -- re-parsing every message in every channel to answer "have I been
+    -- mentioned", which is the question asked most often and by every client on
+    -- connect. And it means parsing against *today's* nicknames: somebody who
+    -- renames themselves would collect mentions they never received, and lose
+    -- the ones they did.
+    --
+    -- The row is the fact that it happened. seen_at is the only part that
+    -- changes, and it is per mention rather than per channel because a channel
+    -- being read does not mean the question aimed at you in it was answered.
+    CREATE TABLE IF NOT EXISTS mentions (
+      conversation_id TEXT NOT NULL,
+      message_id TEXT NOT NULL,
+      server_user_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      seen_at TEXT,
+      PRIMARY KEY (message_id, server_user_id),
+      -- The one foreign key in the schema, and it earns its place: a mention of
+      -- a deleted message is a badge that scrolls to a gap. Messages are
+      -- deleted from four places -- the delete handler, the empty-attachment
+      -- prune, a ban with content purge, and deleting a conversation -- and
+      -- the fifth one written later would be the one that forgot. Composite
+      -- because that is the messages primary key.
+      FOREIGN KEY (conversation_id, message_id)
+        REFERENCES messages(conversation_id, message_id) ON DELETE CASCADE
+    );
+    -- The only question this table is asked: what has this person not seen.
+    -- Partial, because the rows already seen are the ones nobody comes back for
+    -- and they are most of the table within a day.
+    CREATE INDEX IF NOT EXISTS idx_mentions_unseen
+      ON mentions(server_user_id, created_at) WHERE seen_at IS NULL;
+
     -- A report about a person rather than about one message.
     --
     -- Its own table rather than a nullable message_id on reports, because the

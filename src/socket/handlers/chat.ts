@@ -28,11 +28,14 @@ import {
   DEFAULT_MAX_ATTACHMENTS_PER_MESSAGE as MAX_ATTACHMENTS_PER_MESSAGE,
   blockersOfSender,
   blockedServerIdsFor,
+  getAllRegisteredUsers,
+  recordMentions,
 } from "../../db";
 import { processProfanity, type CensorStyle, type ProfanityMode } from "../../utils/profanityFilter";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 import { MESSAGE_MAX_LENGTH, MESSAGE_TOO_LONG, SEALED_MAX_LENGTH } from "../../utils/messageLimits";
 import { applyAutoRoles } from "../../services/autoRoles";
+import { findMentions, type MentionableMember } from "../../services/mentions";
 import { mayInChannel } from "../../services/channelPermissions";
 import { broadcastServerUiUpdate } from "../utils/server";
 import { directConversationViews } from "./dm";
@@ -50,6 +53,31 @@ const RL_FETCH: RateLimitRule = { limit: 15, windowMs: 10_000, scorePerAction: 0
 
 const MESSAGE_CACHE_TTL_MS = parseInt(process.env.MESSAGE_CACHE_TTL_MS || "30000");
 const messageCache = new Map<string, { items: MessageRecord[]; fetchedAt: number }>();
+
+/*
+ * The member list a message's mentions are matched against.
+ *
+ * Cached because it is read on the way out of every message that contains an
+ * `@`, and it is the whole users table. Thirty seconds is the same order as the
+ * message cache above, and the cost of being stale is small in one direction
+ * only: somebody who joined in the last half minute is not matched until the
+ * entry expires, and nobody is matched who is not a member.
+ */
+const MENTIONABLE_TTL_MS = 30_000;
+let mentionableCache: { members: MentionableMember[]; fetchedAt: number } | null = null;
+
+async function getMentionableMembers(): Promise<MentionableMember[]> {
+  const now = Date.now();
+  if (mentionableCache && now - mentionableCache.fetchedAt < MENTIONABLE_TTL_MS) {
+    return mentionableCache.members;
+  }
+  const members = (await getAllRegisteredUsers()).map((u) => ({
+    serverUserId: u.server_user_id,
+    nickname: u.nickname,
+  }));
+  mentionableCache = { members, fetchedAt: now };
+  return members;
+}
 
 const NONCE_TTL_MS = 60_000;
 const recentNonces = new Map<string, { message: MessageRecord; createdAt: number }>();
@@ -539,12 +567,63 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           }
         }
 
-        (await deliverableClientIds(created.conversation_id, access, auth.tokenPayload.serverUserId)).forEach((cid) => {
+        const recipients = await deliverableClientIds(
+          created.conversation_id,
+          access,
+          auth.tokenPayload.serverUserId,
+        );
+        recipients.forEach((cid) => {
           const msg = cid === clientId && payload.nonce
             ? { ...enriched, nonce: payload.nonce }
             : enriched;
           io.sockets.sockets.get(cid)?.emit("chat:new", msg);
         });
+
+        /*
+         * Who this message named, written down.
+         *
+         * After delivery, deliberately: being mentioned is not worth making
+         * everybody else's message slower, and a parse that threw must not be
+         * able to stop one arriving. The row can be a moment late; the message
+         * cannot.
+         *
+         * Sealed messages are skipped because there is nothing to read. The
+         * server holds ciphertext, and parsing it would find nothing — which
+         * is the correct outcome and is worth saying out loud rather than
+         * leaving as an accident of `finalText` being empty.
+         *
+         * A message with no `@` in it cannot mention anybody, and most of them
+         * have none, so the member list is never read for those.
+         */
+        if (finalText?.includes("@")) {
+          try {
+            const named = findMentions(finalText, await getMentionableMembers());
+            if (named.length > 0) {
+              const stored = await recordMentions({
+                conversationId: created.conversation_id,
+                messageId: created.message_id,
+                senderServerUserId: auth.tokenPayload.serverUserId,
+                serverUserIds: named,
+              });
+
+              // Told now if they are here, and left in the table if they are
+              // not. The row is what makes it survive being offline; this is
+              // only what makes it arrive without a refresh.
+              const online = new Set(stored);
+              for (const [cid, info] of Object.entries(clientsInfo)) {
+                if (!info?.serverUserId || !online.has(info.serverUserId)) continue;
+                if (!recipients.includes(cid)) continue;
+                io.sockets.sockets.get(cid)?.emit("mention:new", {
+                  conversationId: created.conversation_id,
+                  messageId: created.message_id,
+                  createdAt: created.created_at,
+                });
+              }
+            }
+          } catch (err) {
+            consola.warn("recording mentions failed", created.message_id, err);
+          }
+        }
 
         // After the message is out, not before: a promotion must never be the
         // reason somebody's message is slow, and it must not be able to stop

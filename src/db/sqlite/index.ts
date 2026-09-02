@@ -16,4 +16,5 @@ export * from "./tokens";
 export * from "./reports";
 export * from "./userReports";
 export * from "./blocks";
+export * from "./mentions";
 export * from "./webhooks";
