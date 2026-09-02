@@ -124,3 +124,17 @@ describe("mintClientToken", () => {
     assert.equal(payload.split("|")[4], "");
   });
 });
+
+describe("an empty secret", () => {
+  // GRYT-786. SERVER_PASSWORD defaulted to empty and this was the only thing
+  // that read it, so the signing key on an ordinary deployment was a value
+  // anybody can guess. HMAC accepts an empty key perfectly happily, which is
+  // why the refusal has to be written down rather than relied upon.
+  it("is refused, because HMAC would accept it", () => {
+    assert.throws(() => mintClientToken("", "u", "r", [CAP_SPEAK]), /empty secret/);
+  });
+
+  it("does not stop a real secret working", () => {
+    assert.ok(mintClientToken(SECRET, "u", "r", [CAP_SPEAK]).startsWith(`${TOKEN_VERSION_2}.`));
+  });
+});

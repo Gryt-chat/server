@@ -19,6 +19,7 @@ import { FALLBACK_ROLE_ID, isValidRoleId } from "../../constants/permissions";
 import { normalizeCensorStyle } from "../../utils/profanityFilter";
 import { fromIso, getSqliteDb, toIso, type SQLInputValue } from "./connection";
 import { getUserByGrytId } from "./users";
+import { randomBytes } from "crypto";
 
 const VALID_PROFANITY_MODES: ProfanityMode[] = ["off", "flag", "censor", "block"];
 
@@ -94,6 +95,48 @@ function rowToConfig(r: Record<string, unknown>): ServerConfigRecord {
 }
 
 const SERVER_CONFIG_ID = "config";
+
+/**
+ * The key this server signs SFU client tokens with.
+ *
+ * Generated once and kept, because the SFU memorises what a server registers
+ * under its id and never forgets it. A value that changed per boot would be
+ * refused as "already registered with different password" on every restart.
+ *
+ * `SERVER_PASSWORD` still wins when it is set, so a deployment that chose a
+ * value keeps it and nothing re-registers under a new key. It is only the
+ * deployments that never set one, which is most of them, that get a generated
+ * secret instead of the empty string.
+ *
+ * Not exposed on `ServerConfigRecord` and not returned by `getServerConfig`.
+ * The only caller is the SFU client at boot.
+ */
+export function getOrCreateSfuSecret(): string {
+  const db = getSqliteDb();
+
+  const row = db
+    .prepare(`SELECT sfu_secret FROM server_config WHERE id = ?`)
+    .get(SERVER_CONFIG_ID) as { sfu_secret?: string | null } | undefined;
+
+  const existing = (row?.sfu_secret || "").trim();
+  if (existing) return existing;
+
+  // 32 bytes rather than a passphrase. Nobody types this and nobody reads it
+  // out, so there is no reason for it to be shorter than the hash it keys.
+  const secret = randomBytes(32).toString("hex");
+
+  // The row is created by `createServerConfigIfNotExists` before this runs, so
+  // an UPDATE is enough. If it somehow is not there yet, nothing is written and
+  // the caller sees an empty string, which the SFU client refuses loudly rather
+  // than signing with.
+  db.prepare(`UPDATE server_config SET sfu_secret = ? WHERE id = ?`).run(secret, SERVER_CONFIG_ID);
+
+  const stored = db
+    .prepare(`SELECT sfu_secret FROM server_config WHERE id = ?`)
+    .get(SERVER_CONFIG_ID) as { sfu_secret?: string | null } | undefined;
+
+  return (stored?.sfu_secret || "").trim();
+}
 
 export async function getServerConfig(): Promise<ServerConfigRecord | null> {
   const db = getSqliteDb();
