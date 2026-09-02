@@ -182,4 +182,22 @@ describe("what the backfill will and will not do", () => {
       );
     }
   });
+
+  /**
+   * Version 6, spelled out.
+   *
+   * The sweep above only asks whether an entry exists. This asks what it does,
+   * because the whole point of the split is that an upgrade takes nothing away:
+   * uploading a picture was part of `change_avatar`, so everybody who could
+   * already do it keeps being able to, and the operator decides afterwards.
+   */
+  it("hands picture uploads to whoever could already set an avatar", () => {
+    const withAvatar = backfillFor(["change_avatar"], 5, 6);
+    assert.deepEqual(withAvatar, ["upload_avatar_image"]);
+
+    // And to nobody else. A guest that could not set an avatar does not
+    // acquire the ability to upload one by upgrading.
+    const withoutAvatar = backfillFor(["read_messages", "view_members"], 5, 6);
+    assert.deepEqual(withoutAvatar, []);
+  });
 });
