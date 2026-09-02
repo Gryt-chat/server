@@ -413,6 +413,33 @@ function createSchema(d: DatabaseSync): void {
     );
     CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status, created_at);
 
+    -- A report about a person rather than about one message.
+    --
+    -- Its own table rather than a nullable message_id on reports, because the
+    -- two are aggregated differently: the message queue groups by message and
+    -- counts reporters, this one groups by the person reported. Sharing a
+    -- table would have meant every query in either path filtering on a kind
+    -- column it did not otherwise care about.
+    --
+    -- reason is required. A message report needs none, because the message is
+    -- the evidence. A report about a person with nothing attached says only
+    -- that somebody is unhappy, and a moderator cannot act on that.
+    --
+    -- reported_nickname is a snapshot, for the same reason the message queue
+    -- snapshots the sender's: the row has to stay readable after they leave.
+    CREATE TABLE IF NOT EXISTS user_reports (
+      report_id TEXT PRIMARY KEY,
+      reported_server_user_id TEXT NOT NULL,
+      reported_nickname TEXT,
+      reporter_server_user_id TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      resolved_by_server_user_id TEXT,
+      resolved_at TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_user_reports_status ON user_reports(status, created_at);
+
     CREATE TABLE IF NOT EXISTS webhooks (
       webhook_id TEXT PRIMARY KEY,
       token TEXT NOT NULL,

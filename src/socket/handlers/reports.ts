@@ -1,7 +1,7 @@
 import consola from "consola";
 import { mayViewChannel } from "../../services/channelPermissions";
 import type { HandlerContext, EventHandlerMap } from "./types";
-import { requireAuth, requireOutranks } from "../middleware/auth";
+import { requireAuth, requireOutranks, requirePermission } from "../middleware/auth";
 import { evictUser, resolveGrytUserId } from "../../moderation/evict";
 import { syncAllClients, broadcastMemberList } from "../utils/clients";
 import {
@@ -16,11 +16,25 @@ import {
   insertServerAudit,
   banUser,
   getFilesByIds,
+  insertUserReport,
+  hasUserReportedUser,
+  getAggregatedPendingUserReports,
+  resolveUserReportsFor,
 } from "../../db";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 
 const RL_REPORT: RateLimitRule = { limit: 10, windowMs: 60_000, scorePerAction: 2, maxScore: 10, scoreDecayMs: 5_000 };
 const RL_REPORT_ADMIN: RateLimitRule = { limit: 30, windowMs: 60_000, scorePerAction: 1, maxScore: 15, scoreDecayMs: 3_000 };
+
+/**
+ * How much a reporter may write about a person.
+ *
+ * Long enough for what happened and where, short enough that the queue stays
+ * readable and that the field is not a place to paste a log. Trimmed and
+ * required: a report about somebody with nothing attached tells a moderator to
+ * go and look, without saying where.
+ */
+const REASON_MAX = 1000;
 
 export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
   const { io, socket, clientId, serverId, clientsInfo, sfuClient } = ctx;
@@ -102,6 +116,95 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
+    /**
+     * Report a person, rather than one thing they said.
+     *
+     * The message queue answers "this line is over it". This answers the case
+     * that has no single line — somebody following you between channels, or
+     * whose every message is fine on its own. `chat:report` cannot express
+     * that, and before this there was nowhere for it to go.
+     *
+     * No rank check. Reporting somebody who outranks you is exactly the report
+     * that must not be refused, the same reasoning as blocking. The moderator
+     * side is where hierarchy applies, and `requireOutranks` is on it.
+     *
+     * **Nothing reaches the reported person.** No event, no marker, no error
+     * that names a reason — same as a block. A report that announces itself
+     * invites the retaliation it exists to stop.
+     */
+    "user:report": async (payload: {
+      accessToken: string;
+      serverUserId: string;
+      reason: string;
+    }) => {
+      try {
+        const rl = rlCheck("user:report", RL_REPORT);
+        if (!rl.allowed) {
+          socket.emit("chat:error", {
+            error: "rate_limited",
+            retryAfterMs: rl.retryAfterMs,
+            message: `Too fast. Wait ${Math.ceil((rl.retryAfterMs || 0) / 1000)}s.`,
+          });
+          return;
+        }
+
+        const reason = typeof payload?.reason === "string" ? payload.reason.trim() : "";
+        if (!payload?.serverUserId || !payload?.accessToken || !reason) {
+          socket.emit("chat:error", "Invalid report payload");
+          return;
+        }
+        if (reason.length > REASON_MAX) {
+          socket.emit("chat:error", `Keep the reason under ${REASON_MAX} characters.`);
+          return;
+        }
+
+        const auth = await requireAuth(socket, payload, { permission: "report_messages" });
+        if (!auth) return;
+
+        if (payload.serverUserId === auth.tokenPayload.serverUserId) {
+          socket.emit("chat:error", "You cannot report yourself");
+          return;
+        }
+
+        const target = await getUserByServerId(payload.serverUserId);
+        if (!target) {
+          socket.emit("chat:error", "User not found");
+          return;
+        }
+
+        const alreadyReported = await hasUserReportedUser(
+          payload.serverUserId,
+          auth.tokenPayload.serverUserId,
+        );
+        if (alreadyReported) {
+          socket.emit("report:user_already_reported", { serverUserId: payload.serverUserId });
+          return;
+        }
+
+        await insertUserReport({
+          reported_server_user_id: payload.serverUserId,
+          reported_nickname: target.nickname ?? null,
+          reporter_server_user_id: auth.tokenPayload.serverUserId,
+          reason,
+        });
+
+        socket.emit("report:user_submitted", { serverUserId: payload.serverUserId });
+
+        /* The reason is not written to the audit log. It is somebody's account
+         * of being harassed, and the log is read by everybody holding
+         * `view_audit_log` — a wider set than the reports queue's. The report
+         * row is where it belongs. */
+        insertServerAudit({
+          actorServerUserId: auth.tokenPayload.serverUserId,
+          action: "user_report",
+          target: payload.serverUserId,
+        }).catch((e) => consola.warn("audit log write failed", e));
+      } catch (err) {
+        consola.error("user:report failed", err);
+        socket.emit("chat:error", "Failed to submit report");
+      }
+    },
+
     "reports:list": async (payload: { accessToken: string }) => {
       try {
         const rl = rlCheck("reports:list", RL_REPORT_ADMIN);
@@ -118,6 +221,12 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
         if (!auth) return;
 
         const aggregated = await getAggregatedPendingReports();
+
+        /* Reports about people ride along on the same event rather than
+         * getting one of their own. They are two halves of one queue, a
+         * moderator opens both at once, and a separate event would have meant
+         * a second round trip and a second badge counting the same worry. */
+        const userReports = await getAggregatedPendingUserReports();
 
         // A report names the conversation it came from, and carries a snapshot
         // of the message text. `view_reports` is not `read_messages`, so a
@@ -144,6 +253,19 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
 
         socket.emit("reports:list", {
           serverId,
+          userReports: userReports.map((r) => ({
+            reportedServerUserId: r.reported_server_user_id,
+            reportedNickname: r.reported_nickname,
+            reportCount: r.report_count,
+            reporters: r.reporters,
+            reasons: r.reasons.map((x) => ({
+              reporterServerUserId: x.reporter_server_user_id,
+              reason: x.reason,
+              createdAt: x.created_at,
+            })),
+            firstReportedAt: r.first_reported_at,
+            reportIds: r.report_ids,
+          })),
           reports: visibleReports.map((r) => ({
             messageId: r.message_id,
             conversationId: r.conversation_id,
@@ -333,6 +455,132 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
         }
       } catch (err) {
         consola.error("reports:resolve failed", err);
+        socket.emit("server:error", { error: "resolve_failed", message: "Failed to resolve report." });
+      }
+    },
+
+    /**
+     * Close every open report about one person, with or without acting on them.
+     *
+     * `manage_reports` gets you the card. It does not get you the buttons:
+     * kicking asks for `kick_members` and banning for `ban_members`, the same
+     * permissions the member list asks for. A queue that let a role do more
+     * than the screen next to it would be a way around that screen, which is
+     * how the message queue could once ban the owner.
+     *
+     * `kick` exists so the only alternative to dismissing is not a ban. A
+     * moderator who wants to end today without ending the account has
+     * somewhere to click.
+     */
+    "reports:resolve_user": async (payload: {
+      accessToken: string;
+      reportedServerUserId: string;
+      action: "dismiss" | "kick" | "ban";
+      reason?: string;
+    }) => {
+      try {
+        const rl = rlCheck("reports:resolve_user", RL_REPORT_ADMIN);
+        if (!rl.allowed) {
+          socket.emit("server:error", {
+            error: "rate_limited",
+            retryAfterMs: rl.retryAfterMs,
+            message: `Too fast. Wait ${Math.ceil((rl.retryAfterMs || 0) / 1000)}s.`,
+          });
+          return;
+        }
+
+        if (!payload?.reportedServerUserId || !payload?.action || !payload?.accessToken) {
+          socket.emit("server:error", { error: "invalid_payload", message: "Missing required fields." });
+          return;
+        }
+        if (!["dismiss", "kick", "ban"].includes(payload.action)) {
+          socket.emit("server:error", { error: "invalid_payload", message: "Unknown action." });
+          return;
+        }
+
+        const auth = await requireAuth(socket, payload, { permission: "manage_reports" });
+        if (!auth) return;
+
+        if (payload.action === "dismiss") {
+          const closed = await resolveUserReportsFor(
+            payload.reportedServerUserId,
+            "dismissed",
+            auth.tokenPayload.serverUserId,
+          );
+
+          insertServerAudit({
+            actorServerUserId: auth.tokenPayload.serverUserId,
+            action: "user_report_dismiss",
+            target: payload.reportedServerUserId,
+            meta: { closed },
+          }).catch((e) => consola.warn("audit log write failed", e));
+
+          socket.emit("reports:user_resolved", {
+            reportedServerUserId: payload.reportedServerUserId,
+            action: "dismiss",
+          });
+          return;
+        }
+
+        const action = payload.action;
+        if (!requirePermission(socket, auth, action === "ban" ? "ban_members" : "kick_members")) return;
+        if (!(await requireOutranks(socket, auth, payload.reportedServerUserId, action))) return;
+
+        /* Resolved before the eviction rather than after. Eviction disconnects
+         * sockets and can throw partway through; a report left pending after
+         * the person is already gone puts a card in the queue that no button
+         * can clear. */
+        await resolveUserReportsFor(
+          payload.reportedServerUserId,
+          "actioned",
+          auth.tokenPayload.serverUserId,
+        );
+
+        const targetGrytUserId = await resolveGrytUserId(
+          clientsInfo,
+          payload.reportedServerUserId,
+        );
+
+        if (targetGrytUserId) {
+          const reason =
+            payload.reason?.trim()?.slice(0, REASON_MAX) ||
+            (action === "ban" ? "Banned via report review" : "Kicked via report review");
+
+          /* The ban row is written before the eviction so a reconnect cannot
+           * land in the gap between the two — the same order `server:ban`
+           * uses. */
+          if (action === "ban") {
+            await banUser(targetGrytUserId, auth.tokenPayload.serverUserId, reason);
+          }
+
+          await evictUser({
+            io,
+            clientsInfo,
+            serverId,
+            sfuClient,
+            targetServerUserId: payload.reportedServerUserId,
+            targetGrytUserId,
+            action,
+            reason,
+          });
+        }
+
+        insertServerAudit({
+          actorServerUserId: auth.tokenPayload.serverUserId,
+          action: action === "ban" ? "user_report_ban" : "user_report_kick",
+          target: payload.reportedServerUserId,
+          meta: { evicted: !!targetGrytUserId },
+        }).catch((e) => consola.warn("audit log write failed", e));
+
+        socket.emit("reports:user_resolved", {
+          reportedServerUserId: payload.reportedServerUserId,
+          action,
+        });
+
+        syncAllClients(io, clientsInfo);
+        broadcastMemberList(io, clientsInfo, serverId);
+      } catch (err) {
+        consola.error("reports:resolve_user failed", err);
         socket.emit("server:error", { error: "resolve_failed", message: "Failed to resolve report." });
       }
     },
