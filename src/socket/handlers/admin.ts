@@ -2,6 +2,7 @@ import consola from "consola";
 import { mayViewChannel } from "../../services/channelPermissions";
 import type { HandlerContext, EventHandlerMap } from "./types";
 import { requireAuth, requireOutranks } from "../middleware/auth";
+import { listRolesByMember } from "../../services/permissions";
 import { broadcastServerUiUpdate, sendEmojiQueueStateToSocket } from "../utils/server";
 import { applyServerSettings, settingsView } from "../../settings/serverSettings";
 import { syncAllClients, broadcastMemberList } from "../utils/clients";
@@ -14,6 +15,9 @@ import {
   getServerInvite,
   revokeServerInvite,
   setServerRole,
+  addMemberRole,
+  removeMemberRole,
+  listMemberRoles,
   listServerRoles,
   listRoleDefinitions,
   getRoleDefinition,
@@ -238,6 +242,64 @@ function emitRateLimited(ctx: HandlerContext, rl: { retryAfterMs?: number }) {
 
 export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
   const { io, socket, clientId, serverId, clientsInfo, sfuClient } = ctx;
+
+  /**
+   * Everything that has to be true before one member's roles are changed.
+   *
+   * Three events do the same five checks — replace, add, remove — and the
+   * failure mode of writing them three times is one of them being one check
+   * short, which is a privilege escalation rather than a cosmetic difference.
+   * Each error is emitted here so the wording stays the same too.
+   */
+  async function resolveRoleChange(
+    event: string,
+    payload: { accessToken: string; serverUserId: string; role: string },
+    verb: string,
+  ): Promise<{ targetId: string; roleId: string; actorId: string } | null> {
+    const rl = rlCheck(event, ctx, RL_SETTINGS);
+    if (!rl.allowed) { emitRateLimited(ctx, rl); return null; }
+
+    if (!payload || typeof payload.serverUserId !== "string" || typeof payload.role !== "string") {
+      socket.emit("server:error", { error: "invalid_payload", message: "serverUserId and role required." });
+      return null;
+    }
+
+    const auth = await requireAuth(socket, payload, { permission: "manage_roles" });
+    if (!auth) return null;
+
+    const roleId = payload.role.trim().toLowerCase();
+    if (roleId === OWNER_ROLE_ID) {
+      // The owner comes from server_config, and the row is a cache of it.
+      // Handing it out here would write a row the resolver overrules.
+      socket.emit("server:error", { error: "forbidden", message: "Owner role cannot be reassigned." });
+      return null;
+    }
+
+    const definition = await getRoleDefinition(roleId);
+    if (!definition) {
+      socket.emit("server:error", { error: "unknown_role", message: `No such role: ${roleId}` });
+      return null;
+    }
+
+    const targetId = payload.serverUserId.trim();
+    // Outranking covers acting on yourself as well, so the old same-person
+    // check is gone rather than duplicated.
+    if (!(await requireOutranks(socket, auth, targetId, verb))) return null;
+
+    // Granting a role you do not outrank is granting yourself a promotion one
+    // step removed. Strictly below, matching `requireOutranks`, so an admin
+    // cannot mint a second admin either. Applied to removal as well: the rank
+    // you may not hand out is the rank you may not take away.
+    if (definition.rank >= auth.rank) {
+      socket.emit("server:error", {
+        error: "forbidden",
+        message: "Cannot grant a role at or above your own.",
+      });
+      return null;
+    }
+
+    return { targetId, roleId, actorId: auth.tokenPayload.serverUserId };
+  }
 
   return {
     'server:settings:get': async () => {
@@ -468,62 +530,102 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       try {
         const auth = await requireAuth(socket, payload, { permission: "manage_roles" });
         if (!auth) return;
-        const roles = await listServerRoles();
-        socket.emit("server:roles", { serverId, roles: roles.map((r) => ({ serverUserId: r.server_user_id, role: r.role, updatedAt: r.updated_at })) });
+        // One entry per member rather than one per row. A client that keys a
+        // map by member and takes the last row it sees would otherwise show
+        // whichever role was granted most recently, which is not the one the
+        // member list draws.
+        const byMember = await listRolesByMember();
+        const updatedAt = new Map(
+          (await listServerRoles()).map((r) => [r.server_user_id, r.updated_at]),
+        );
+        socket.emit("server:roles", {
+          serverId,
+          roles: [...byMember].map(([serverUserId, held]) => ({
+            serverUserId,
+            role: held[0],
+            roles: held,
+            updatedAt: updatedAt.get(serverUserId),
+          })),
+        });
       } catch (e) {
         consola.error("server:roles:list failed", e);
         socket.emit("server:error", { error: "roles_failed", message: "Failed to list roles." });
       }
     },
 
+    /*
+     * Replace everything somebody holds with this one role.
+     *
+     * What a demotion means, and what every client sent before more than one
+     * role was representable. `server:roles:add` below is the other half.
+     */
     'server:roles:set': async (payload: { accessToken: string; serverUserId: string; role: string }) => {
       try {
-        const rl = rlCheck("server:roles:set", ctx, RL_SETTINGS);
-        if (!rl.allowed) { emitRateLimited(ctx, rl); return; }
-        if (!payload || typeof payload.serverUserId !== "string" || typeof payload.role !== "string") {
-          socket.emit("server:error", { error: "invalid_payload", message: "serverUserId and role required." });
-          return;
-        }
-        const auth = await requireAuth(socket, payload, { permission: "manage_roles" });
-        if (!auth) return;
+        const change = await resolveRoleChange("server:roles:set", payload, "change the role of");
+        if (!change) return;
 
-        const nextRole = payload.role.trim().toLowerCase();
-        if (nextRole === OWNER_ROLE_ID) {
-          socket.emit("server:error", { error: "forbidden", message: "Owner role cannot be reassigned." });
-          return;
-        }
-
-        const definition = await getRoleDefinition(nextRole);
-        if (!definition) {
-          socket.emit("server:error", { error: "unknown_role", message: `No such role: ${nextRole}` });
-          return;
-        }
-
-        const targetId = payload.serverUserId.trim();
-        // Outranking covers acting on yourself as well, so the old
-        // same-person check is gone rather than duplicated.
-        if (!(await requireOutranks(socket, auth, targetId, "change the role of"))) return;
-
-        // Granting a role you do not outrank is granting yourself a promotion
-        // one step removed. Strictly below, matching `requireOutranks`, so an
-        // admin cannot mint a second admin either.
-        if (definition.rank >= auth.rank) {
-          socket.emit("server:error", {
-            error: "forbidden",
-            message: "Cannot grant a role at or above your own.",
-          });
-          return;
-        }
-
+        const { targetId, roleId: nextRole } = change;
         await setServerRole(targetId, nextRole);
-        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "role_set", target: targetId, meta: { role: nextRole } }).catch((e) => consola.warn("audit log write failed", e));
-        io.to("verifiedClients").emit("server:role:updated", { serverId, serverUserId: targetId, role: nextRole });
+        insertServerAudit({ actorServerUserId: change.actorId, action: "role_set", target: targetId, meta: { role: nextRole } }).catch((e) => consola.warn("audit log write failed", e));
+        io.to("verifiedClients").emit("server:role:updated", { serverId, serverUserId: targetId, role: nextRole, roles: await listMemberRoles(targetId) });
         // The target's own permission list is part of server details, so it has
         // to be re-sent — otherwise a demotion only takes effect on their next
         // reconnect, and the UI keeps offering what the server now refuses.
         broadcastServerUiUpdate("other");
       } catch (e) {
         consola.error("server:roles:set failed", e);
+        socket.emit("server:error", { error: "roles_update_failed", message: "Failed to update role." });
+      }
+    },
+
+    /*
+     * Give somebody a role without taking away the ones they have.
+     *
+     * `server:roles:set` replaces the set, which is what a demotion means and
+     * what every client sent before more than one role was representable. This
+     * is the other half: a moderator who is also a contributor is two grants,
+     * not a third role invented to mean both.
+     *
+     * Same gates as set, and for the same reasons — an operator who can add a
+     * role they do not outrank can promote themselves one step removed.
+     */
+    'server:roles:add': async (payload: { accessToken: string; serverUserId: string; role: string }) => {
+      try {
+        const change = await resolveRoleChange("server:roles:add", payload, "give a role to");
+        if (!change) return;
+
+        await addMemberRole(change.targetId, change.roleId);
+        insertServerAudit({ actorServerUserId: change.actorId, action: "role_add", target: change.targetId, meta: { role: change.roleId } }).catch((e) => consola.warn("audit log write failed", e));
+
+        const held = await listMemberRoles(change.targetId);
+        io.to("verifiedClients").emit("server:role:updated", { serverId, serverUserId: change.targetId, role: held[0] ?? change.roleId, roles: held });
+        broadcastServerUiUpdate("other");
+      } catch (e) {
+        consola.error("server:roles:add failed", e);
+        socket.emit("server:error", { error: "roles_update_failed", message: "Failed to update role." });
+      }
+    },
+
+    /*
+     * Take one role away, leaving the rest.
+     *
+     * Removing the last one is allowed. It leaves them on the joiner default
+     * for their identity tier, which is where somebody who has never been given
+     * a role sits — not on nothing.
+     */
+    'server:roles:remove': async (payload: { accessToken: string; serverUserId: string; role: string }) => {
+      try {
+        const change = await resolveRoleChange("server:roles:remove", payload, "take a role from");
+        if (!change) return;
+
+        await removeMemberRole(change.targetId, change.roleId);
+        insertServerAudit({ actorServerUserId: change.actorId, action: "role_remove", target: change.targetId, meta: { role: change.roleId } }).catch((e) => consola.warn("audit log write failed", e));
+
+        const held = await listMemberRoles(change.targetId);
+        io.to("verifiedClients").emit("server:role:updated", { serverId, serverUserId: change.targetId, role: held[0] ?? FALLBACK_ROLE_ID, roles: held });
+        broadcastServerUiUpdate("other");
+      } catch (e) {
+        consola.error("server:roles:remove failed", e);
         socket.emit("server:error", { error: "roles_update_failed", message: "Failed to update role." });
       }
     },

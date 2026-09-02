@@ -197,6 +197,8 @@ const TOKEN_GATES: {
   { event: "server:joinRequests:decide", permission: "manage_join_requests", payload: { grytUserId: "someone", decision: "approved" } },
   { event: "server:roles:list", permission: "manage_roles" },
   { event: "server:roles:set", permission: "manage_roles", payload: { serverUserId: "user_x", role: "member" } },
+  { event: "server:roles:add", permission: "manage_roles", payload: { serverUserId: "user_x", role: "member" } },
+  { event: "server:roles:remove", permission: "manage_roles", payload: { serverUserId: "user_x", role: "member" } },
   { event: "server:roles:definitions:list", permission: "manage_roles" },
   { event: "server:roles:definitions:save", permission: "manage_roles", payload: { roleId: "made-up", name: "Made up" } },
   { event: "server:roles:definitions:delete", permission: "manage_roles", payload: { roleId: "made-up" } },

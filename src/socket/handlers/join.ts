@@ -19,7 +19,8 @@ import {
   carryIdentityForward,
   upsertUser,
   consumeServerInvite,
-  getServerRole,
+  listMemberRoles,
+  addMemberRole,
   setServerRole,
   createRefreshToken,
   effectiveModerationState,
@@ -707,14 +708,20 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
         // edit could quietly widen.
         try {
           if (botRegistration) throw new BotHoldsNoRole();
-          const existingRole = await getServerRole(user.server_user_id);
+          const existingRoles = await listMemberRoles(user.server_user_id);
           // A first-time joiner lands on the default for their identity tier —
           // which is how "guests may read, accounts may talk" is expressed. An
           // existing member keeps whatever they were given; changing the
           // default must not re-sort the people already here.
           const joinRole = defaultRoleForTier(identityTierOf(grytUserId), cfg);
-          if (!existingRole) await setServerRole(user.server_user_id, isOwner ? "owner" : joinRole);
-          else if (isOwner && existingRole !== "owner") await setServerRole(user.server_user_id, "owner");
+          if (existingRoles.length === 0) {
+            await setServerRole(user.server_user_id, isOwner ? "owner" : joinRole);
+          } else if (isOwner && !existingRoles.includes("owner")) {
+            // Added rather than assigned. The owner is allowed to hold other
+            // roles, and replacing the set here would take them away every time
+            // they reconnected.
+            await addMemberRole(user.server_user_id, "owner");
+          }
 
           // A role they earned while they were away lands now. Joining is one
           // of the two moments the answer can change — the other is sending a

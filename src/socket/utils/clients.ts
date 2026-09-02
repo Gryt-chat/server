@@ -5,13 +5,13 @@ import {
   getFilesByIds,
   isConversationId,
   listConversationMemberIds,
-  listServerRoles,
 } from "../../db";
 import { voiceRoomName } from "./voiceRooms";
 import { clientMayReceive, refreshClientPermissions } from "./standing";
 import { isBotIdentity } from "../../auth/identity";
 import { memberIdentity } from "./memberIdentity";
 import { scopedChannelIds, visibleChannelIds } from "../../services/channelPermissions";
+import { listRolesByMember } from "../../services/permissions";
 
 /**
  * Mark a socket as belonging to somebody the server has admitted.
@@ -197,8 +197,9 @@ const pendingMemberListByIO = new WeakMap<Server, ReturnType<typeof setTimeout>>
  */
 export async function buildMemberList(clientsInfo: Clients) {
   const registeredUsers = await getAllRegisteredUsers();
-  const roleRows = await listServerRoles();
-  const roleMap = new Map(roleRows.map((r) => [r.server_user_id, r.role]));
+  // Everybody's roles, highest ranked first. A member can hold several, and the
+  // list carries all of them so a client can draw the rest as chips.
+  const rolesByMember = await listRolesByMember();
 
   // Avatar colours, so a client can tint a voice tile to match the person
   // rather than to a hash of their id. Null until the image worker has
@@ -268,7 +269,11 @@ export async function buildMemberList(clientsInfo: Clients) {
         // Passed through exactly as it was stored. The server never resolves a
         // key — see `utils/wornString.ts`.
         avatarWorn: user.avatar_worn,
-        role: roleMap.get(user.server_user_id) || 'member',
+        // The one their name is coloured by. Kept as a single string because
+        // every client that exists reads this field; `roles` beside it is the
+        // whole set, and a client that does not know about it loses nothing.
+        role: rolesByMember.get(user.server_user_id)?.[0] || 'member',
+        roles: rolesByMember.get(user.server_user_id) ?? [],
         // Read off the id, so it cannot be wrong and cannot be spoofed by
         // anything the member sends. Every surface that shows a name shows this
         // beside it — the one question a reader needs answered instantly is

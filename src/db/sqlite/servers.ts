@@ -316,23 +316,94 @@ export async function updateServerConfig(patch: {
   return updated;
 }
 
-export async function getServerRole(serverUserId: string): Promise<ServerRole | null> {
+/**
+ * Every role somebody holds, oldest first.
+ *
+ * Order is the order they were given, which is not the order they are shown in
+ * -- that is by rank, and rank lives with the definitions. Kept stable anyway,
+ * because it is what breaks a tie between two roles of equal rank, and a tie
+ * broken differently on each read would move somebody's name colour around.
+ */
+export async function listMemberRoles(serverUserId: string): Promise<ServerRole[]> {
   const db = getSqliteDb();
-  const row = db.prepare(`SELECT role FROM roles WHERE server_user_id = ?`).get(serverUserId) as { role: string } | undefined;
-  return row ? normalizeRoleId(row.role) : null;
+  const rows = db
+    .prepare(`SELECT role FROM roles WHERE server_user_id = ? ORDER BY created_at ASC, role ASC`)
+    .all(serverUserId) as unknown as { role: string }[];
+  return rows.map((r) => normalizeRoleId(r.role));
 }
 
+/**
+ * Replace everything somebody holds with this one role.
+ *
+ * The old single-role setter, kept under its own name because that is still
+ * what most callers mean: a moderation action that says "you are a member now"
+ * is replacing the set, not adding to it. Adding is addMemberRole.
+ */
 export async function setServerRole(serverUserId: string, role: ServerRole): Promise<void> {
+  await setMemberRoles(serverUserId, [role]);
+}
+
+/**
+ * Replace everything somebody holds with exactly these.
+ *
+ * One transaction, because the gap between the delete and the insert is a
+ * moment where they hold nothing -- and a permission check landing in it would
+ * resolve them to the joiner default and refuse something they may do.
+ *
+ * An empty list is allowed and means exactly that: no row, which the read path
+ * resolves to the default for their identity tier. It is not the same as
+ * holding the fallback role, and a server that changes its default afterwards
+ * moves them with it.
+ */
+export async function setMemberRoles(serverUserId: string, roles: ServerRole[]): Promise<void> {
+  const db = getSqliteDb();
+  const now = toIso(new Date());
+  const wanted = [...new Set(roles.filter(Boolean))];
+
+  db.exec("BEGIN");
+  try {
+    db.prepare(`DELETE FROM roles WHERE server_user_id = ?`).run(serverUserId);
+    const insert = db.prepare(
+      `INSERT INTO roles (server_user_id, role, created_at, updated_at) VALUES (?, ?, ?, ?)`,
+    );
+    for (const role of wanted) insert.run(serverUserId, role, now, now);
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+}
+
+/** Give somebody a role they may already have, which is not an error. */
+export async function addMemberRole(serverUserId: string, role: ServerRole): Promise<void> {
   const db = getSqliteDb();
   const now = toIso(new Date());
   db.prepare(
-    `INSERT INTO roles (server_user_id, role, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(server_user_id) DO UPDATE SET role = ?, updated_at = ?`
-  ).run(serverUserId, role, now, now, role, now);
+    `INSERT INTO roles (server_user_id, role, created_at, updated_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(server_user_id, role) DO NOTHING`,
+  ).run(serverUserId, role, now, now);
+}
+
+/**
+ * Take one role away, leaving the rest.
+ *
+ * Taking the last one away is allowed. It leaves them on the joiner default
+ * rather than on nothing, which is the same place somebody who has never been
+ * given a role sits.
+ */
+export async function removeMemberRole(serverUserId: string, role: ServerRole): Promise<boolean> {
+  const db = getSqliteDb();
+  const result = db
+    .prepare(`DELETE FROM roles WHERE server_user_id = ? AND role = ?`)
+    .run(serverUserId, role);
+  return Number(result.changes ?? 0) > 0;
 }
 
 export async function listServerRoles(): Promise<ServerRoleRecord[]> {
   const db = getSqliteDb();
-  const rows = db.prepare(`SELECT * FROM roles`).all() as Record<string, unknown>[];
+  // Ordered, because a member holding two roles yields two rows and the
+  // caller breaks a rank tie by which was given first.
+  const rows = db.prepare(`SELECT * FROM roles ORDER BY created_at ASC, role ASC`).all() as Record<string, unknown>[];
   return rows.map((r) => ({
     server_user_id: r.server_user_id as string,
     role: normalizeRoleId(r.role),

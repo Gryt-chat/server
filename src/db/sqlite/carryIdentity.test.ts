@@ -9,7 +9,7 @@ import {
   claimServerOwner,
   getServerConfig,
   setServerRole,
-  getServerRole,
+  listMemberRoles,
 } from "./servers";
 import { carryIdentityForward, getUserByGrytId, upsertUser } from "./users";
 
@@ -39,7 +39,7 @@ describe("carrying an identity forward", () => {
     const now = await getUserByGrytId("account-1");
     assert.equal(now?.server_user_id, local.server_user_id, "same membership");
     assert.equal(now?.nickname, "Ada");
-    assert.equal(await getServerRole(local.server_user_id), "admin", "role kept");
+    assert.deepEqual(await listMemberRoles(local.server_user_id), ["admin"], "role kept");
   });
 
   it("carries ownership with it", async () => {

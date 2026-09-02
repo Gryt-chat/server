@@ -169,7 +169,7 @@ export async function updateRoleDefinition(
 export async function countRoleHolders(roleId: string): Promise<number> {
   const db = getSqliteDb();
   const row = db
-    .prepare(`SELECT COUNT(*) AS cnt FROM roles WHERE role = ?`)
+    .prepare(`SELECT COUNT(DISTINCT server_user_id) AS cnt FROM roles WHERE role = ?`)
     .get(roleId) as { cnt: number };
   return Number(row?.cnt ?? 0);
 }
@@ -180,10 +180,31 @@ export async function reassignRoleHolders(
   toRoleId: string,
 ): Promise<{ moved: number }> {
   const db = getSqliteDb();
-  const result = db
-    .prepare(`UPDATE roles SET role = ?, updated_at = ? WHERE role = ?`)
-    .run(toRoleId, toIso(new Date()), fromRoleId);
-  return { moved: Number(result.changes ?? 0) };
+  const now = toIso(new Date());
+
+  // Two statements rather than one UPDATE, because somebody can hold both roles
+  // already and the primary key is the pair: renaming one onto the other would
+  // fail the whole statement for everybody, and OR REPLACE would drop the
+  // created_at of the role they keep. Insert what is missing, then delete what
+  // was moved.
+  db.exec("BEGIN");
+  let moved = 0;
+  try {
+    db.prepare(
+      `INSERT INTO roles (server_user_id, role, created_at, updated_at)
+       SELECT server_user_id, ?, created_at, ? FROM roles WHERE role = ?
+       ON CONFLICT(server_user_id, role) DO NOTHING`,
+    ).run(toRoleId, now, fromRoleId);
+
+    const removed = db.prepare(`DELETE FROM roles WHERE role = ?`).run(fromRoleId);
+    moved = Number(removed.changes ?? 0);
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+
+  return { moved };
 }
 
 /**
