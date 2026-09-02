@@ -15,6 +15,7 @@ import { adminTokenConfigured } from "./middleware/requireAdminToken";
 import { SFUClient } from "./sfu/client"; // Import SFU client
 import {
   createServerConfigIfNotExists,
+  getOrCreateSfuSecret,
   getRegisteredUserCount,
   getServerConfig,
   initSqlite,
@@ -136,6 +137,9 @@ initSqlite()
     });
     // Now that the config is readable, advertise if `discoverable` allows it.
     await syncMdnsAdvertising(PORT);
+    // And the SFU signing key can be read, which is why this waits for here
+    // rather than running at import time.
+    startSfuClient();
   })
   .then(() => {
     if (!disableS3) startMediaSweep();
@@ -148,27 +152,62 @@ initSqlite()
 // Initialize SFU client if host is configured
 let sfuClient: SFUClient | null = null;
 
-if (process.env.SFU_WS_HOST) {
+/**
+ * Starts the SFU client, once the database can answer.
+ *
+ * This used to run at import time, beside the other startup lines. It cannot
+ * any more: the signing key is now generated and kept in `server_config`, and
+ * `initSqlite()` above is started rather than awaited, so at import time the
+ * database is not there yet. Called from the startup chain instead, which is
+ * also where the config row is created.
+ *
+ * `io` is safe to touch from here even though it is declared further down. The
+ * whole module body runs before any promise callback does.
+ */
+function startSfuClient(): void {
+  if (!process.env.SFU_WS_HOST) {
+    consola.error("No SFU host defined! Server will not send or retrieve streams.");
+    return;
+  }
+
   const serverName =
     process.env.SERVER_NAME?.replace(/\s+/g, "_").toLowerCase() ||
     "unknown_server";
   const port = process.env.PORT || "5000";
   const instanceId = process.env.SERVER_INSTANCE_ID || "default";
   const serverId = `${serverName}_${port}_${instanceId}`;
-  const serverPassword = process.env.SERVER_PASSWORD || "";
 
-  sfuClient = new SFUClient(serverId, serverPassword, process.env.SFU_WS_HOST);
+  // SERVER_PASSWORD is not a password anybody types. Since sfu#26 and
+  // server#104 its only job is the key this server signs SFU client tokens
+  // with. It defaults to empty, nothing asks for a value, and an empty key is
+  // one anybody can guess — so a generated secret is used when it is unset.
+  //
+  // An explicit SERVER_PASSWORD still wins, so a deployment that set one keeps
+  // registering under the same key and nothing has to be restarted.
+  const configured = (process.env.SERVER_PASSWORD || "").trim();
+  const secret = configured || getOrCreateSfuSecret();
+
+  if (!secret) {
+    consola.error(
+      "No SFU signing key and none could be generated, so voice is disabled. " +
+        "This means the server_config row is missing; check the database.",
+    );
+    return;
+  }
+
+  if (!configured) {
+    consola.info("SFU signing key generated and stored; no SERVER_PASSWORD needed.");
+  }
+
+  sfuClient = new SFUClient(serverId, secret, process.env.SFU_WS_HOST);
 
   consola.info(`SFU Client initialized with server ID: ${serverId}`);
 
-  // Connect to SFU server
+  setupSFUSync(io, sfuClient);
+
   sfuClient.connect().catch((error) => {
     consola.error("Failed to connect to SFU:", error);
   });
-} else {
-  consola.error(
-    "No SFU host defined! Server will not send or retrieve streams."
-  );
 }
 
 // Public server info (used by the "Add Server" dialog & site invite page — no auth required)
@@ -405,10 +444,6 @@ const io = new Server(httpServer, {
   pingTimeout: 10_000,
   perMessageDeflate: false,
 });
-
-if (sfuClient) {
-  setupSFUSync(io, sfuClient);
-}
 
 io.on("connection", (socket) => {
   socketConnectionsActive.inc();

@@ -509,6 +509,21 @@ function runMigrations(d: DatabaseSync): void {
     d.exec("ALTER TABLE server_config ADD COLUMN discoverable INTEGER NOT NULL DEFAULT 1");
   }
 
+  // The key this server signs SFU client tokens with, generated on first use.
+  //
+  // It used to be SERVER_PASSWORD, which defaults to empty and which nothing
+  // asks for, so the ordinary deployment signed with a key anybody can guess.
+  // Kept here rather than derived from JWT_SECRET so that rotating the login
+  // secret does not silently take voice down with it: two keys for two jobs.
+  //
+  // Deliberately not on ServerConfigRecord. `rowToConfig` names its fields one
+  // by one and this is not among them, so a column that must never leave the
+  // process cannot ride out on `server:settings:get` because somebody widened a
+  // type. See GRYT-786.
+  if (!hasColumn(d, "server_config", "sfu_secret")) {
+    d.exec("ALTER TABLE server_config ADD COLUMN sfu_secret TEXT");
+  }
+
   // Whether somebody who is not already a member needs an invite. Text rather
   // than a boolean because the third answer — hold them until a moderator says
   // yes — is the one a busy public server actually wants, and adding it as a

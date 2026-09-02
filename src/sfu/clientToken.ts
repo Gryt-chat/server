@@ -95,6 +95,17 @@ function sealed(secret: string, payload: string): string {
 }
 
 /** The same thing with a fresh nonce and the default lifetime. */
+/**
+ * Refuses an empty secret, because HMAC does not.
+ *
+ * This is the function that turns a secret into an entry ticket, so the check
+ * belongs here rather than only at boot: a later caller that finds the secret
+ * somewhere else gets the same refusal without anybody remembering to add it.
+ *
+ * Measured before it was written, against the SFU's own packages: a token
+ * signed with "" is accepted by `auth.Verify` and walks `ValidateClientJoin`
+ * into any room as any user id, holding `speak`. See GRYT-786.
+ */
 export function mintClientToken(
   secret: string,
   userId: string,
@@ -102,6 +113,12 @@ export function mintClientToken(
   capabilities: readonly string[],
   now = Date.now(),
 ): string {
+  if (secret === "") {
+    throw new Error(
+      "Refusing to sign an SFU client token with an empty secret. See GRYT-786.",
+    );
+  }
+
   return signClientTokenV2(
     secret,
     userId,
