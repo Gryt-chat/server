@@ -17,7 +17,7 @@ import { migrateRankGatesToScopes, RANK_GATE_MIGRATION_KEY } from "../db/sqlite/
 import { createRoleDefinition } from "../db/sqlite/roleDefinitions";
 import { createServerConfigIfNotExists, setServerRole } from "../db/sqlite/servers";
 import { upsertUser } from "../db/sqlite/users";
-import { mayInChannel, mayViewChannel, postableChannelIds, resetChannelPermissionCache, scopedChannelIds, visibleChannelIds } from "./channelPermissions";
+import { joinableChannelIds, mayInChannel, mayViewChannel, postableChannelIds, resetChannelPermissionCache, scopedChannelIds, visibleChannelIds } from "./channelPermissions";
 
 /**
  * Resolving a permission where the server-wide answer meets the channel's.
@@ -303,5 +303,56 @@ describe("where somebody may post", () => {
   it("gives a stranger nothing", async () => {
     assert.equal((await postableChannelIds("temp_12345")).size, 0);
     assert.equal((await postableChannelIds(null)).size, 0);
+  });
+});
+
+describe("which voice rooms somebody may enter", () => {
+  /*
+   * A room the low role may see and may not enter. That state has always been
+   * expressible — visibility is `read_messages` and entry is `join_voice` —
+   * and until now nothing told a client about it, so the row looked open and
+   * the refusal came out of the media stack.
+   */
+  const GREENROOM = "greenroom";
+
+  before(async () => {
+    await upsertServerChannel({ channelId: GREENROOM, name: "Green room", type: "voice" });
+    const scope = await createPermissionScope({ isTemplate: false });
+    await replacePermissionRules(scope, [
+      { roleId: "low", permission: "join_voice", effect: "deny" },
+    ]);
+    await setChannelPermissionScope(GREENROOM, scope);
+    resetChannelPermissionCache();
+  });
+
+  it("keeps the room visible and shuts the door", async () => {
+    // Both halves, because either one alone is a different feature: hidden is
+    // not locked, and locked is not hidden.
+    assert.ok((await visibleChannelIds(lowUser)).has(GREENROOM), "the room vanished instead of locking");
+    assert.ok(!(await joinableChannelIds(lowUser)).has(GREENROOM));
+  });
+
+  it("agrees with mayInChannel", async () => {
+    assert.equal(
+      (await joinableChannelIds(lowUser)).has(GREENROOM),
+      await mayInChannel(GREENROOM, lowUser, "join_voice"),
+    );
+  });
+
+  it("leaves a room with no scope alone", async () => {
+    // `low` holds join_voice server-wide only if its definition grants it; what
+    // matters here is that the two answers match, whichever way they go.
+    assert.equal(
+      (await joinableChannelIds(lowUser)).has(OPEN),
+      await mayInChannel(OPEN, lowUser, "join_voice"),
+    );
+  });
+
+  it("lets the owner in anywhere", async () => {
+    assert.ok((await joinableChannelIds(ownerUser)).has(GREENROOM));
+  });
+
+  it("gives a stranger nothing", async () => {
+    assert.equal((await joinableChannelIds("temp_12345")).size, 0);
   });
 });

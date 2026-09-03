@@ -4,7 +4,7 @@ import { Clients } from "../../types";
 import type { JoinPolicy, RoleDefinitionRecord } from "../../db/interfaces";
 import { FALLBACK_ROLE_ID, PERMISSIONS } from "../../constants/permissions";
 import { getEffectiveStanding } from "../../services/permissions";
-import { postableChannelIds, visibleChannelIds } from "../../services/channelPermissions";
+import { joinableChannelIds, postableChannelIds, visibleChannelIds } from "../../services/channelPermissions";
 import { getAcceptedIdentityTiers } from "../../auth/identity";
 import { getVoiceSeatLimit } from "../../utils/voiceSeats";
 import { syncAllClients, broadcastMemberList } from "./clients";
@@ -235,7 +235,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
   // Sidebar items are persisted in DB; bootstrap defaults if missing.
   // We still emit `channels` for backward compatibility (derived from sidebar items).
   let sidebar_items: { id: string; kind: string; position: number; channelId?: string; spacerHeight?: number; label?: string }[] = [];
-  let channels: { id: string; name: string; type: string; description?: string; requirePushToTalk?: boolean; disableRnnoise?: boolean; maxBitrate?: number; eSportsMode?: boolean; textInVoice?: boolean; permissionScopeId?: string | null; canSend?: boolean }[] = [];
+  let channels: { id: string; name: string; type: string; description?: string; requirePushToTalk?: boolean; disableRnnoise?: boolean; maxBitrate?: number; eSportsMode?: boolean; textInVoice?: boolean; permissionScopeId?: string | null; canSend?: boolean; canJoin?: boolean }[] = [];
   try {
     await ensureDefaultSidebarItems();
 
@@ -252,12 +252,14 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
     // enough to know it exists and to guess at what it is for — and the client
     // draws the sidebar from those items, so it would have rendered a gap
     // where the hidden channel sits.
-    const [visible, postable] = await Promise.all([
+    const [visible, postable, joinable] = await Promise.all([
       visibleChannelIds(client.serverUserId, client.grytUserId),
-      // What the client draws a composer for. The gate on `chat:send` is
-      // unchanged and still decides; this only stops the app offering a box
+      // What the client draws a composer for, and what it draws an unlocked
+      // voice room for. The gates on `chat:send` and the voice grant are
+      // unchanged and still decide; these only stop the app offering something
       // that was always going to refuse.
       postableChannelIds(client.serverUserId, client.grytUserId),
+      joinableChannelIds(client.serverUserId, client.grytUserId),
     ]);
     const items = allItems.filter((it) => it.kind !== "channel" || !it.channel_id || visible.has(it.channel_id));
 
@@ -287,6 +289,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
           textInVoice: c.text_in_voice || false,
           permissionScopeId: c.permission_scope_id ?? null,
           canSend: postable.has(c.channel_id),
+          canJoin: joinable.has(c.channel_id),
         }];
       });
 
@@ -308,6 +311,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
         textInVoice: c.text_in_voice || false,
         permissionScopeId: c.permission_scope_id ?? null,
         canSend: postable.has(c.channel_id),
+        canJoin: joinable.has(c.channel_id),
       }));
     }
   } catch (e) {
