@@ -4,7 +4,7 @@ import { Clients } from "../../types";
 import type { JoinPolicy, RoleDefinitionRecord } from "../../db/interfaces";
 import { FALLBACK_ROLE_ID, PERMISSIONS } from "../../constants/permissions";
 import { getEffectiveStanding } from "../../services/permissions";
-import { visibleChannelIds } from "../../services/channelPermissions";
+import { postableChannelIds, visibleChannelIds } from "../../services/channelPermissions";
 import { getAcceptedIdentityTiers } from "../../auth/identity";
 import { getVoiceSeatLimit } from "../../utils/voiceSeats";
 import { syncAllClients, broadcastMemberList } from "./clients";
@@ -235,7 +235,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
   // Sidebar items are persisted in DB; bootstrap defaults if missing.
   // We still emit `channels` for backward compatibility (derived from sidebar items).
   let sidebar_items: { id: string; kind: string; position: number; channelId?: string; spacerHeight?: number; label?: string }[] = [];
-  let channels: { id: string; name: string; type: string; description?: string; requirePushToTalk?: boolean; disableRnnoise?: boolean; maxBitrate?: number; eSportsMode?: boolean; textInVoice?: boolean; permissionScopeId?: string | null }[] = [];
+  let channels: { id: string; name: string; type: string; description?: string; requirePushToTalk?: boolean; disableRnnoise?: boolean; maxBitrate?: number; eSportsMode?: boolean; textInVoice?: boolean; permissionScopeId?: string | null; canSend?: boolean }[] = [];
   try {
     await ensureDefaultSidebarItems();
 
@@ -252,7 +252,13 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
     // enough to know it exists and to guess at what it is for — and the client
     // draws the sidebar from those items, so it would have rendered a gap
     // where the hidden channel sits.
-    const visible = await visibleChannelIds(client.serverUserId, client.grytUserId);
+    const [visible, postable] = await Promise.all([
+      visibleChannelIds(client.serverUserId, client.grytUserId),
+      // What the client draws a composer for. The gate on `chat:send` is
+      // unchanged and still decides; this only stops the app offering a box
+      // that was always going to refuse.
+      postableChannelIds(client.serverUserId, client.grytUserId),
+    ]);
     const items = allItems.filter((it) => it.kind !== "channel" || !it.channel_id || visible.has(it.channel_id));
 
     sidebar_items = items.map((it) => ({
@@ -280,6 +286,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
           eSportsMode: c.esports_mode || false,
           textInVoice: c.text_in_voice || false,
           permissionScopeId: c.permission_scope_id ?? null,
+          canSend: postable.has(c.channel_id),
         }];
       });
 
@@ -300,6 +307,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
         eSportsMode: c.esports_mode || false,
         textInVoice: c.text_in_voice || false,
         permissionScopeId: c.permission_scope_id ?? null,
+        canSend: postable.has(c.channel_id),
       }));
     }
   } catch (e) {
