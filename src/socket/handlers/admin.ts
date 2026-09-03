@@ -190,6 +190,7 @@ async function roleEditorState() {
       isSystem: r.is_system,
       autoGrantAfterDays: r.auto_grant_after_days,
       autoGrantAfterMessages: r.auto_grant_after_messages,
+      grantableByInvite: r.grantable_by_invite,
       memberCount: await countRoleHolders(r.role_id),
     })),
   );
@@ -697,6 +698,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       permissions?: string[];
       autoGrantAfterDays?: number | null;
       autoGrantAfterMessages?: number | null;
+      grantableByInvite?: boolean;
     }) => {
       try {
         const rl = rlCheck("server:roles:definitions:save", ctx, RL_SETTINGS);
@@ -780,6 +782,28 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         const autoGrantAfterDays = normalizeThreshold(payload?.autoGrantAfterDays);
         const autoGrantAfterMessages = normalizeThreshold(payload?.autoGrantAfterMessages);
 
+        // The tick that lets an invite hand this role out. Refused for the same
+        // reasons an invite could not be bound to it, checked here so the flag
+        // can never be set on a role that would fail at binding time — a tick
+        // that saves and then never works is worse than a tick that refuses.
+        let grantableByInvite = existing?.grantable_by_invite ?? false;
+        if (typeof payload?.grantableByInvite === "boolean") {
+          grantableByInvite = payload.grantableByInvite;
+          if (grantableByInvite) {
+            const verdict = mayBindRoleToInvite(
+              { roleId, rank, permissions, grantableByInvite: true },
+              auth.rank,
+            );
+            if (!verdict.ok) {
+              socket.emit("server:error", {
+                error: "role_not_bindable",
+                message: `Cannot make that role invite-grantable: ${INVITE_ROLE_REFUSAL_TEXT[verdict.reason!]}.`,
+              });
+              return;
+            }
+          }
+        }
+
         const saved = existing
           ? await updateRoleDefinition(roleId, {
               name,
@@ -788,6 +812,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
               permissions,
               autoGrantAfterDays,
               autoGrantAfterMessages,
+              grantableByInvite,
             })
           : await createRoleDefinition(roleId, {
               name,
@@ -796,13 +821,14 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
               permissions,
               autoGrantAfterDays,
               autoGrantAfterMessages,
+              grantableByInvite,
             });
 
         insertServerAudit({
           actorServerUserId: auth.tokenPayload.serverUserId,
           action: existing ? "role_definition_update" : "role_definition_create",
           target: roleId,
-          meta: { name, rank, permissions, autoGrantAfterDays, autoGrantAfterMessages },
+          meta: { name, rank, permissions, autoGrantAfterDays, autoGrantAfterMessages, grantableByInvite },
         }).catch((e) => consola.warn("audit log write failed", e));
 
         io.to("verifiedClients").emit("server:roles:definition:updated", { serverId, role: saved });
