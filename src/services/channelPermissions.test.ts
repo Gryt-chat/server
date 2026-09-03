@@ -17,7 +17,7 @@ import { migrateRankGatesToScopes, RANK_GATE_MIGRATION_KEY } from "../db/sqlite/
 import { createRoleDefinition } from "../db/sqlite/roleDefinitions";
 import { createServerConfigIfNotExists, setServerRole } from "../db/sqlite/servers";
 import { upsertUser } from "../db/sqlite/users";
-import { mayInChannel, mayViewChannel, resetChannelPermissionCache, scopedChannelIds, visibleChannelIds } from "./channelPermissions";
+import { mayInChannel, mayViewChannel, postableChannelIds, resetChannelPermissionCache, scopedChannelIds, visibleChannelIds } from "./channelPermissions";
 
 /**
  * Resolving a permission where the server-wide answer meets the channel's.
@@ -246,5 +246,62 @@ describe("the rank gate migration, against a real database", () => {
     // for them exactly as it was before the upgrade.
     assert.equal(await mayViewChannel(OPEN, lowUser), false);
     assert.equal(await mayViewChannel(OPEN, highUser), true, "rank 80 was above the gate and still is");
+  });
+});
+
+describe("where somebody may post", () => {
+  /*
+   * Its own channel and its own scope, because the fixtures above are unhooked
+   * by tests further up the file — `GRANTING` has had its scope removed by the
+   * time this runs, and a test that leans on it passes for the wrong reason.
+   */
+  const PODIUM = "podium-chan";
+
+  before(async () => {
+    await upsertServerChannel({ channelId: PODIUM, name: "Podium", type: "text" });
+    const scope = await createPermissionScope({ isTemplate: false });
+    await replacePermissionRules(scope, [
+      { roleId: "high", permission: "send_messages", effect: "allow" },
+    ]);
+    await setChannelPermissionScope(PODIUM, scope);
+    resetChannelPermissionCache();
+  });
+
+  it("agrees with mayInChannel, channel by channel", async () => {
+    // The property that matters: the list the client draws from and the gate
+    // the send goes through cannot disagree, or a composer appears exactly
+    // where the message will be refused.
+    const postable = await postableChannelIds(highUser);
+    for (const channel of [OPEN, LOCKED, PODIUM]) {
+      assert.equal(
+        postable.has(channel),
+        await mayInChannel(channel, highUser, "send_messages"),
+        channel,
+      );
+    }
+  });
+
+  it("carries a channel-level allow", async () => {
+    // high holds no send_messages server-wide; the scope on PODIUM gives it.
+    const postable = await postableChannelIds(highUser);
+    assert.ok(postable.has(PODIUM));
+    assert.ok(!postable.has(OPEN));
+  });
+
+  it("gives the owner everything", async () => {
+    const postable = await postableChannelIds(ownerUser);
+    for (const channel of [OPEN, LOCKED, PODIUM]) assert.ok(postable.has(channel), channel);
+  });
+
+  it("says nothing about who may see the channel", async () => {
+    // Answering only about send_messages is the point: the payload intersects
+    // this with visibleChannelIds, and folding visibility in here would be the
+    // same rule written twice.
+    assert.ok((await postableChannelIds(lowUser)).has(PODIUM));
+  });
+
+  it("gives a stranger nothing", async () => {
+    assert.equal((await postableChannelIds("temp_12345")).size, 0);
+    assert.equal((await postableChannelIds(null)).size, 0);
   });
 });
