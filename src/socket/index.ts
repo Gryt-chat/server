@@ -1,5 +1,7 @@
 import { sfuRoomId, voiceRoomName } from "./utils/voiceRooms";
 import consola from "consola";
+
+import { addressLabel } from "../utils/addressLabel";
 import { Server, Socket } from "socket.io";
 import { Clients } from "../types";
 import { colors } from "../utils/colors";
@@ -333,12 +335,16 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
   // Keep module-level refs for REST-triggered broadcasts
   setSocketRefs(io, serverId, clientsInfo);
 
-  /* The resolved address rather than the handshake one. Everything public
-     arrives through a tunnel, so `handshake.address` is the tunnel for every
-     client and cannot tell two of them apart — which is the whole point of
-     logging it. getClientIp reads X-Forwarded-For through the configured
-     trusted hops. */
-  consola.info(`Client ${clientId} connected from ${getClientIp(socket)}`);
+  /* A label for the resolved address rather than the address.
+     
+     The resolved one is what tells two clients apart — everything public
+     arrives through a tunnel, so `handshake.address` is the tunnel for all of
+     them — and that is the whole reason this line exists. It also wrote an
+     address into the log for every connection any client ever made, which is
+     more personal data than the ban lines the privacy policy talks about.
+     
+     `addressLabel` keeps the first property and drops the second. */
+  consola.info(`Client ${clientId} connected from ${addressLabel(getClientIp(socket))}`);
 
   if (verboseLogs) {
     const originalEmit = socket.emit;
@@ -449,7 +455,7 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
      * agreeing on one address is a different diagnosis from two stacks
      * disagreeing, and both were consistent with what was written down. */
     consola.info(
-      `Client disconnected: ${clientId} user=${serverUserId || "anonymous"} ip=${getClientIp(socket)} (${reason})`,
+      `Client disconnected: ${clientId} user=${serverUserId || "anonymous"} ip=${addressLabel(getClientIp(socket))} (${reason})`,
     );
     const wasRegistered = serverUserId && !serverUserId.startsWith("temp_");
     const hadVoice = clientInfo?.hasJoinedChannel ?? false;

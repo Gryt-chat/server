@@ -1,5 +1,7 @@
 import consola from "consola";
 
+import { addressLabel } from "./addressLabel";
+
 export type RateLimitKeyParts = {
 	userId?: string;
 	ip?: string;
@@ -57,6 +59,27 @@ class SlidingWindowLimiter {
 		this.scores.clear();
 	}
 
+	/**
+	 * Who the ban is against, for the log, without writing an address down.
+	 *
+	 * The key itself used to be logged, and it ends in the caller's address —
+	 * which made the rate limiter the only part of a Gryt server that recorded
+	 * one. The parts are logged separately now so the address can be labelled
+	 * on its way out; the key is untouched, because it is also the map key and
+	 * changing it would forget every ban in flight.
+	 */
+	private banSubject(parts: RateLimitKeyParts): {
+		event: string;
+		user: string;
+		address: string;
+	} {
+		return {
+			event: parts.event,
+			user: parts.userId || "anonymous",
+			address: addressLabel(parts.ip),
+		};
+	}
+
 	private key(parts: RateLimitKeyParts): string {
 		const uid = parts.userId || "anonymous";
 		const ip = parts.ip || "unknown";
@@ -101,7 +124,7 @@ class SlidingWindowLimiter {
 				const retryAfterMs = Math.max(0, currentScore * scoreDecayMs);
 				if (effective.banMs && !this.bans.has(k)) {
 					this.bans.set(k, now + effective.banMs);
-					consola.warn("🚫 Rate limit ban applied (score-based)", { key: k, score: currentScore, maxScore, banMs: effective.banMs });
+					consola.warn("🚫 Rate limit ban applied (score-based)", { ...this.banSubject(parts), score: currentScore, maxScore, banMs: effective.banMs });
 				}
 				return { 
 					allowed: false, 
@@ -130,7 +153,7 @@ class SlidingWindowLimiter {
 			const retryAfterMs = Math.max(0, (q[0] + effective.windowMs) - now);
 			if (effective.banMs && !this.bans.has(k)) {
 				this.bans.set(k, now + effective.banMs);
-				consola.warn("🚫 Rate limit ban applied (window-based)", { key: k, banMs: effective.banMs });
+				consola.warn("🚫 Rate limit ban applied (window-based)", { ...this.banSubject(parts), banMs: effective.banMs });
 			}
 			return { allowed: false, retryAfterMs, bannedUntil: this.bans.get(k) };
 		}
