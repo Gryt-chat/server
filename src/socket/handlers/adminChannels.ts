@@ -435,7 +435,21 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
       }
     },
 
-    /** One channel's scope and its rules, for the per-channel editor. */
+    /**
+     * One channel's scope and its rules, for the per-channel editor.
+     *
+     * Carries the templates this channel could be pointed at as well — their
+     * names and ids, and nothing else. Choosing a scope for one channel is
+     * `manage_channels`; what a template *says* is server-wide policy and stays
+     * behind `manage_roles` in `server:permissions:templates:list`.
+     *
+     * Without this, somebody holding `manage_channels` and not `manage_roles`
+     * opened the picker, had the template list refused, and was offered only
+     * Everyone and Custom — permitted to point the channel at a template and
+     * unable to discover that any existed. Invisible while the owner holds
+     * everything, and exactly wrong for the split the permissions exist to
+     * express: moderators who arrange channels, one person who sets policy.
+     */
     'server:channels:scope:get': async (payload: { accessToken: string; channelId: string }) => {
       try {
         const auth = await requireAuth(socket, payload, { permission: "manage_channels" });
@@ -445,7 +459,10 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
           return;
         }
 
-        const channels = await listServerChannels();
+        const [channels, templates] = await Promise.all([
+          listServerChannels(),
+          listPermissionTemplates(),
+        ]);
         const channel = channels.find((c) => c.channel_id === payload.channelId);
         const scopeId = channel?.permission_scope_id ?? null;
         const scope = scopeId ? await getPermissionScope(scopeId) : null;
@@ -455,6 +472,14 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
           channelId: payload.channelId,
           permissions: CHANNEL_PERMISSIONS,
           scopeId,
+          // Names to choose from, without what they decide. Somebody who may
+          // point a channel at "Staff only" can already watch what that does;
+          // the rules behind it are the part they may not read.
+          templates: templates.map((t) => ({
+            id: t.scope_id,
+            name: t.name,
+            isSystem: t.is_system,
+          })),
           // The client draws a dropdown from this: null is "Everyone",
           // is_template is the template's name, and neither is "Custom".
           isTemplate: scope?.is_template ?? false,
