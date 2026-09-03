@@ -1,7 +1,7 @@
 import { Server } from "socket.io";
 
+import { sendClientNotice } from "./clientNotices";
 import type { Clients } from "../../types";
-import { postSystemMessage } from "./systemMessages";
 
 /**
  * The first Windows build whose updater can install anything.
@@ -10,8 +10,7 @@ import { postSystemMessage } from "./systemMessages";
  * parse, so those installs find every new release, download it, and install
  * none of them. Installing is the step that fails, so nothing published since
  * can reach them. The only way out is a person double-clicking an installer,
- * and the only way to ask is a message in a channel their client already knows
- * how to render.
+ * and the only way to ask is to tell the client, which renders the asking.
  */
 const FIRST_WORKING_WINDOWS_UPDATER = "1.6.25";
 
@@ -78,51 +77,27 @@ export function needsUpdateReminder(userAgent: string | undefined): boolean {
 }
 
 /**
- * Where the installer comes from.
+ * Tell this person, and only this person, at most once a day.
  *
- * This pointed at GitHub Releases, which is a page of release notes above a
- * collapsed Assets list holding a dozen files across three platforms. The
- * person reading this message is stuck on a client that cannot update itself,
- * and that page asks them to go and identify the .exe.
+ * It used to be a chat message, which meant a notice naming one person was
+ * stored for good and shown to the whole channel. It is a directed notice now:
+ * their sockets only, nothing written down, and the words themselves live in
+ * the client (GRYT-896).
  *
- * gryt.chat/download resolves the current build for the platform in the query
- * and starts the download on arrival. The reminder only ever reaches Windows —
- * `needsUpdateReminder` returns false for anything else — so it can say which.
+ * No nickname parameter any more. The client is rendering this to the person
+ * it is about, so it can say "your client" — there is nobody else in the room
+ * to disambiguate for.
  */
-const INSTALLER_URL = "https://gryt.chat/download?os=windows";
-
-export function formatUpdateReminder(
-  nickname: string,
-  serverUserId: string,
-  version: string,
-): string {
-  return [
-    `[@${nickname}](mention:${serverUserId}) — your Windows client (v${version}) cannot update itself.`,
-    "",
-    "It has been downloading every new release and installing none of them. Installing is the step that fails, so it cannot repair itself.",
-    "",
-    `**[Download the current installer](${INSTALLER_URL})**, then close Gryt, including the tray icon, and run it.`,
-    "",
-    "Updates work on their own again afterwards, and your settings and servers are untouched.",
-    "",
-    "Full instructions: https://docs.gryt.chat/docs/client/updates",
-  ].join("\n");
-}
-
-/**
- * Post the reminder, at most once a day per member.
- *
- * Failures are swallowed by postSystemMessage. A reminder that does not arrive
- * is not worth failing a join over.
- */
-export async function remindOutdatedWindowsClient(
+export function remindOutdatedWindowsClient(
   io: Server,
   clientsInfo: Clients,
   userAgent: string | undefined,
-  nickname: string,
   serverUserId: string,
-): Promise<void> {
+): void {
   if (!needsUpdateReminder(userAgent)) return;
+
+  const version = parseDesktopClient(userAgent)?.version;
+  if (!version) return;
 
   const now = Date.now();
   const last = remindedAt.get(serverUserId);
@@ -131,11 +106,5 @@ export async function remindOutdatedWindowsClient(
 
   remindedAt.set(serverUserId, now);
 
-  const version = parseDesktopClient(userAgent)?.version ?? "unknown";
-
-  await postSystemMessage(
-    io,
-    clientsInfo,
-    formatUpdateReminder(nickname, serverUserId, version),
-  );
+  sendClientNotice(io, clientsInfo, serverUserId, { kind: "outdated_client", version });
 }

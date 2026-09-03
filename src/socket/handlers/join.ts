@@ -827,7 +827,6 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           io,
           clientsInfo,
           socket.handshake.headers["user-agent"],
-          user.nickname,
           user.server_user_id,
         );
       } catch (err) {
