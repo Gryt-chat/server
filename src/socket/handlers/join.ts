@@ -10,7 +10,7 @@ import { defaultRoleForTier } from "../../services/permissions";
 import { broadcastServerUiUpdate } from "../utils/server";
 import { applyAutoRoles } from "../../services/autoRoles";
 import { readServiceState, serviceStateVarName } from "../../config/serviceState";
-import { generateAccessToken, TokenPayload } from "../../utils/jwt";
+import { generateAccessToken, generateFileToken, TokenPayload } from "../../utils/jwt";
 import {
   getServerConfig,
   createServerConfigIfNotExists,
@@ -741,6 +741,10 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
         };
 
         const accessToken = generateAccessToken(tokenPayload);
+        // Reads uploads and nothing else. It goes in the query string of an
+        // `<img src>`, where an Authorization header cannot follow, so it is
+        // deliberately the weaker of the two. See GRYT-740.
+        const fileToken = generateFileToken(tokenPayload);
 
         const refreshTokenRecord = await createRefreshToken({
           grytUserId: user.gryt_user_id,
@@ -769,6 +773,7 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
 
         socket.emit("server:joined", {
           accessToken,
+          fileToken,
           refreshToken: refreshTokenRecord.token_id,
           nickname: user.nickname,
           avatarFileId: user.avatar_file_id || null,

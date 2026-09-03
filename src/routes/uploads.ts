@@ -13,6 +13,7 @@ import { deleteObject, putObject, getObject } from "../storage";
 import { insertFile, insertImageJob, getFile, updateFileRecord, updateUserAvatar, setUserAvatar, getServerConfig, DEFAULT_AVATAR_MAX_BYTES, DEFAULT_UPLOAD_MAX_BYTES } from "../db";
 import { isSealedUpload, storageForUpload } from "./uploadStorage";
 import { requireBearerToken } from "../middleware/requireBearerToken";
+import { verifyFileToken } from "../utils/jwt";
 import { ensurePermission } from "../middleware/requirePermission";
 import { AVATAR_MAX_PX, AVATAR_THUMB_PX } from "../constants/media";
 import { findDominantColor, validateImage, MAX_INPUT_PIXELS } from "../utils/imageValidation";
@@ -658,6 +659,54 @@ uploadsRouter.delete(
   }
 );
 
+/**
+ * Whether the caller may read files on this server at all.
+ *
+ * The credential is in the query string rather than a header, and that is
+ * forced rather than chosen: every one of these URLs ends up in an `<img src>`
+ * — avatars in the member list, pictures in the chat, group icons — and an
+ * image element cannot send an Authorization header. A cookie would reach it,
+ * but the client and the server are usually different origins, so it would need
+ * `SameSite=None; Secure` and stop working on every self-hosted server reached
+ * over plain http on a LAN.
+ *
+ * So it is a token that only reads files, and the checks are the ones
+ * `requireBearerToken` makes: signed by us, minted for this host, and not from
+ * before the last token-version bump. A token from another server verifies
+ * against a different secret; one from this server before a rotation fails on
+ * the version.
+ *
+ * There is no per-file check beyond this on purpose. A file token is only ever
+ * minted for somebody who joined, so holding one is the membership test, and
+ * every file on a server belongs to that server. Narrowing further — this
+ * channel, this conversation — is a real thing to want and is not what
+ * GRYT-740 was about: the hole was that a stranger with a UUID could read
+ * anything at all.
+ */
+async function mayReadFiles(req: Request): Promise<boolean> {
+  const raw = req.query.t;
+  const token = typeof raw === "string" ? raw : null;
+  if (!token) return false;
+
+  const payload = verifyFileToken(token);
+  if (!payload) return false;
+
+  const host = req.headers.host || "unknown";
+  if (payload.serverHost !== host) return false;
+
+  try {
+    const cfg = await getServerConfig();
+    const currentVersion = cfg?.token_version ?? 0;
+    if ((payload.tokenVersion ?? 0) !== currentVersion) return false;
+  } catch {
+    // The config is unreadable, so the version cannot be checked. Refuse rather
+    // than serve: this is the path that had no check at all until GRYT-740.
+    return false;
+  }
+
+  return true;
+}
+
 uploadsRouter.get(
   "/files/:fileId",
   (req: Request, res: Response, next: NextFunction): void => {
@@ -672,6 +721,13 @@ uploadsRouter.get(
 
     Promise.resolve()
       .then(async () => {
+        // Before the lookup, so an unauthenticated caller cannot use the 404 to
+        // learn which file ids exist.
+        if (!(await mayReadFiles(req))) {
+          res.status(401).json({ error: "auth_required", message: "A file token is required to read uploads." });
+          return;
+        }
+
         const fileMeta = await getFile(fileId);
         if (!fileMeta) { res.status(404).json({ error: "File not found" }); return; }
 
@@ -694,7 +750,11 @@ uploadsRouter.get(
           ? (mime.lookup(fileMeta.thumbnail_key || "") || "image/avif")
           : (fileMeta.mime || undefined);
         if (contentType) res.setHeader("Content-Type", contentType);
-        res.setHeader("Cache-Control", "public, max-age=60");
+        // `private`, not `public`. The URL now carries a credential, and a
+        // shared cache keying on it would hand one person's token to whoever
+        // asked for the same URL next. The browser still caches it, which is
+        // what keeps an avatar from being refetched on every render.
+        res.setHeader("Cache-Control", "private, max-age=60");
         res.setHeader("Accept-Ranges", "bytes");
 
         // Defence in depth, on the assumption that something unwanted got past

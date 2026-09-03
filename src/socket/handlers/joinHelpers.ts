@@ -3,7 +3,7 @@ import type { HandlerContext, EventHandlerMap } from "./types";
 import { syncAllClients, broadcastMemberList, verifyClient } from "../utils/clients";
 import { sendServerDetails } from "../utils/server";
 import { postSystemMessage, formatLeaveMessage } from "../utils/systemMessages";
-import { generateAccessToken, verifyAccessToken } from "../../utils/jwt";
+import { generateAccessToken, generateFileToken, verifyAccessToken } from "../../utils/jwt";
 import {
   getServerConfig,
   getUserByServerId,
@@ -210,13 +210,18 @@ export function registerJoinHelpers(ctx: HandlerContext): EventHandlerMap {
           }
           const user = gate.user;
 
-          const newAccessToken = generateAccessToken({
+          const refreshedPayload = {
             grytUserId: record.gryt_user_id,
             serverUserId: record.server_user_id,
             nickname: user.nickname,
             serverHost: socket.handshake.headers.host || "unknown",
             tokenVersion: currentVersion,
-          });
+          };
+          const newAccessToken = generateAccessToken(refreshedPayload);
+          // Re-minted with the access token rather than on its own timer. A
+          // file token outlives one by hours, so a session that keeps refreshing
+          // never reaches the point where its pictures stop loading.
+          const newFileToken = generateFileToken(refreshedPayload);
 
           if (clientsInfo[clientId]) {
             clientsInfo[clientId].accessToken = newAccessToken;
@@ -230,7 +235,7 @@ export function registerJoinHelpers(ctx: HandlerContext): EventHandlerMap {
           await verifyClient(socket, clientsInfo);
           syncAllClients(io, clientsInfo);
           broadcastMemberList(io, clientsInfo, serverId);
-          socket.emit("token:refreshed", { accessToken: newAccessToken });
+          socket.emit("token:refreshed", { accessToken: newAccessToken, fileToken: newFileToken });
         } else if (payload?.accessToken) {
           const decoded = verifyAccessToken(payload.accessToken);
           if (!decoded) {
@@ -260,7 +265,9 @@ export function registerJoinHelpers(ctx: HandlerContext): EventHandlerMap {
             return;
           }
 
-          const newToken = generateAccessToken({ grytUserId, serverUserId, nickname, serverHost, tokenVersion: currentVersion });
+          const renewed = { grytUserId, serverUserId, nickname, serverHost, tokenVersion: currentVersion };
+          const newToken = generateAccessToken(renewed);
+          const newFileToken = generateFileToken(renewed);
           if (clientsInfo[clientId]) {
             clientsInfo[clientId].accessToken = newToken;
             clientsInfo[clientId].grytUserId = grytUserId;
@@ -270,7 +277,7 @@ export function registerJoinHelpers(ctx: HandlerContext): EventHandlerMap {
           await verifyClient(socket, clientsInfo);
           syncAllClients(io, clientsInfo);
           broadcastMemberList(io, clientsInfo, serverId);
-          socket.emit("token:refreshed", { accessToken: newToken });
+          socket.emit("token:refreshed", { accessToken: newToken, fileToken: newFileToken });
         } else {
           socket.emit("token:error", "Invalid refresh payload");
         }
