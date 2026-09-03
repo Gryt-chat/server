@@ -17,6 +17,9 @@ function rowToInvite(r: Record<string, unknown>): ServerInviteRecord {
     uses_consumed: (r.uses_consumed as number) ?? 0,
     revoked: (r.revoked as number) === 1,
     note: (r.note as string) ?? null,
+    granted_role_id: (r.granted_role_id as string) ?? null,
+    granted_role_rank:
+      r.granted_role_rank == null ? null : Number(r.granted_role_rank),
   };
 }
 
@@ -29,6 +32,12 @@ const CUSTOM_CODE_RE = /^[a-z0-9][a-z0-9_-]{1,30}[a-z0-9]$/;
 
 export async function createServerInvite(createdByServerUserId: string | null, opts?: {
   expiresAt?: Date | null; infinite?: boolean; maxUses?: number; note?: string | null; customCode?: string | null;
+  /**
+   * Already validated by the caller against `mayBindRoleToInvite`. Taken as
+   * given here: this layer writes rows, and putting the rule in two places is
+   * how one of them ends up a check short.
+   */
+  grantedRole?: { roleId: string; rank: number } | null;
 }): Promise<ServerInviteRecord> {
   const db = getSqliteDb();
   const now = new Date();
@@ -37,6 +46,8 @@ export async function createServerInvite(createdByServerUserId: string | null, o
   const expiresAt = opts?.expiresAt ?? null;
   const note = (opts?.note ?? null) ? String(opts?.note).slice(0, 200) : null;
   const usesRemaining = infinite ? -1 : maxUses;
+  const grantedRoleId = opts?.grantedRole?.roleId ?? null;
+  const grantedRoleRank = opts?.grantedRole ? opts.grantedRole.rank : null;
 
   const rawCustom = opts?.customCode ? String(opts.customCode).trim().toLowerCase() : null;
   if (rawCustom) {
@@ -44,17 +55,17 @@ export async function createServerInvite(createdByServerUserId: string | null, o
       throw new Error("Custom code must be 3–32 chars, lowercase alphanumeric / hyphens / underscores.");
     const existing = db.prepare(`SELECT 1 FROM invites WHERE code = ?`).get(rawCustom);
     if (existing) throw new Error("That invite code already exists.");
-    db.prepare(`INSERT INTO invites (code, created_by_server_user_id, expires_at, max_uses, uses_remaining, uses_consumed, revoked, note, created_at) VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)`).run(
-      rawCustom, createdByServerUserId, expiresAt ? toIso(expiresAt) : null, maxUses, usesRemaining, note, toIso(now));
-    return { code: rawCustom, created_at: now, created_by_server_user_id: createdByServerUserId, expires_at: expiresAt, max_uses: maxUses, uses_remaining: usesRemaining, uses_consumed: 0, revoked: false, note };
+    db.prepare(`INSERT INTO invites (code, created_by_server_user_id, expires_at, max_uses, uses_remaining, uses_consumed, revoked, note, created_at, granted_role_id, granted_role_rank) VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?)`).run(
+      rawCustom, createdByServerUserId, expiresAt ? toIso(expiresAt) : null, maxUses, usesRemaining, note, toIso(now), grantedRoleId, grantedRoleRank);
+    return { code: rawCustom, created_at: now, created_by_server_user_id: createdByServerUserId, expires_at: expiresAt, max_uses: maxUses, uses_remaining: usesRemaining, uses_consumed: 0, revoked: false, note, granted_role_id: grantedRoleId, granted_role_rank: grantedRoleRank };
   }
 
   for (let i = 0; i < 5; i++) {
     const code = generateInviteCode();
     try {
-      db.prepare(`INSERT INTO invites (code, created_by_server_user_id, expires_at, max_uses, uses_remaining, uses_consumed, revoked, note, created_at) VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)`).run(
-        code, createdByServerUserId, expiresAt ? toIso(expiresAt) : null, maxUses, usesRemaining, note, toIso(now));
-      return { code, created_at: now, created_by_server_user_id: createdByServerUserId, expires_at: expiresAt, max_uses: maxUses, uses_remaining: usesRemaining, uses_consumed: 0, revoked: false, note };
+      db.prepare(`INSERT INTO invites (code, created_by_server_user_id, expires_at, max_uses, uses_remaining, uses_consumed, revoked, note, created_at, granted_role_id, granted_role_rank) VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?)`).run(
+        code, createdByServerUserId, expiresAt ? toIso(expiresAt) : null, maxUses, usesRemaining, note, toIso(now), grantedRoleId, grantedRoleRank);
+      return { code, created_at: now, created_by_server_user_id: createdByServerUserId, expires_at: expiresAt, max_uses: maxUses, uses_remaining: usesRemaining, uses_consumed: 0, revoked: false, note, granted_role_id: grantedRoleId, granted_role_rank: grantedRoleRank };
     } catch { /* collision, retry */ }
   }
   throw new Error("Failed to create invite code (collision)");

@@ -1,5 +1,9 @@
 import consola from "consola";
 import { mayViewChannel } from "../../services/channelPermissions";
+import {
+  INVITE_ROLE_REFUSAL_TEXT,
+  mayBindRoleToInvite,
+} from "../../services/inviteRoles";
 import type { HandlerContext, EventHandlerMap } from "./types";
 import { requireAuth, requireOutranks } from "../middleware/auth";
 import { listRolesByMember } from "../../services/permissions";
@@ -186,6 +190,7 @@ async function roleEditorState() {
       isSystem: r.is_system,
       autoGrantAfterDays: r.auto_grant_after_days,
       autoGrantAfterMessages: r.auto_grant_after_messages,
+      grantableByInvite: r.grantable_by_invite,
       memberCount: await countRoleHolders(r.role_id),
     })),
   );
@@ -404,7 +409,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    'server:invites:create': async (payload: { accessToken: string; infinite?: boolean; maxUses?: number; expiresInHours?: number; note?: string | null; customCode?: string | null }) => {
+    'server:invites:create': async (payload: { accessToken: string; infinite?: boolean; maxUses?: number; expiresInHours?: number; note?: string | null; customCode?: string | null; grantsRole?: string | null }) => {
       try {
         const rl = rlCheck("server:invites:create", ctx, RL_INVITE);
         if (!rl.allowed) { emitRateLimited(ctx, rl); return; }
@@ -419,12 +424,43 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           : null;
         const customCode = typeof payload.customCode === "string" ? payload.customCode.trim() : null;
 
-        const created = await createServerInvite(auth.tokenPayload.serverUserId, { infinite, maxUses, expiresAt, note: payload.note ?? null, customCode: customCode || null });
-        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "invite_create", target: created.code, meta: { infinite, maxUses: created.max_uses, expiresAt: created.expires_at } }).catch((e) => consola.warn("audit log write failed", e));
+        // Binding a role needs more than the permission to make invites.
+        // `create_invite` says you may open a door; it does not say what may
+        // walk through it wearing what. So the role is checked against the
+        // same rules a direct grant goes through, plus the actor's own rank.
+        let grantedRole: { roleId: string; rank: number } | null = null;
+        const wantsRole = typeof payload.grantsRole === "string" ? payload.grantsRole.trim().toLowerCase() : "";
+        if (wantsRole) {
+          if (!auth.permissions.has("manage_roles")) {
+            socket.emit("server:error", { error: "forbidden", message: "Binding a role to an invite needs manage_roles." });
+            return;
+          }
+          const def = await getRoleDefinition(wantsRole);
+          const verdict = mayBindRoleToInvite(
+            def && {
+              roleId: def.role_id,
+              rank: def.rank,
+              permissions: def.permissions,
+              grantableByInvite: def.grantable_by_invite,
+            },
+            auth.rank,
+          );
+          if (!verdict.ok) {
+            socket.emit("server:error", {
+              error: "role_not_bindable",
+              message: `Cannot bind that role: ${INVITE_ROLE_REFUSAL_TEXT[verdict.reason!]}.`,
+            });
+            return;
+          }
+          grantedRole = { roleId: def!.role_id, rank: def!.rank };
+        }
+
+        const created = await createServerInvite(auth.tokenPayload.serverUserId, { infinite, maxUses, expiresAt, note: payload.note ?? null, customCode: customCode || null, grantedRole });
+        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "invite_create", target: created.code, meta: { infinite, maxUses: created.max_uses, expiresAt: created.expires_at, grantsRole: created.granted_role_id, grantsRoleRank: created.granted_role_rank } }).catch((e) => consola.warn("audit log write failed", e));
 
         socket.emit("server:invite:created", {
           serverId,
-          invite: { code: created.code, createdAt: created.created_at, expiresAt: created.expires_at, maxUses: created.max_uses, usesRemaining: created.uses_remaining, usesConsumed: created.uses_consumed, revoked: created.revoked, note: created.note },
+          invite: { code: created.code, createdAt: created.created_at, expiresAt: created.expires_at, maxUses: created.max_uses, usesRemaining: created.uses_remaining, usesConsumed: created.uses_consumed, revoked: created.revoked, note: created.note, grantsRole: created.granted_role_id },
         });
       } catch (e) {
         consola.error("server:invites:create failed", e);
@@ -662,6 +698,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       permissions?: string[];
       autoGrantAfterDays?: number | null;
       autoGrantAfterMessages?: number | null;
+      grantableByInvite?: boolean;
     }) => {
       try {
         const rl = rlCheck("server:roles:definitions:save", ctx, RL_SETTINGS);
@@ -745,6 +782,28 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         const autoGrantAfterDays = normalizeThreshold(payload?.autoGrantAfterDays);
         const autoGrantAfterMessages = normalizeThreshold(payload?.autoGrantAfterMessages);
 
+        // The tick that lets an invite hand this role out. Refused for the same
+        // reasons an invite could not be bound to it, checked here so the flag
+        // can never be set on a role that would fail at binding time — a tick
+        // that saves and then never works is worse than a tick that refuses.
+        let grantableByInvite = existing?.grantable_by_invite ?? false;
+        if (typeof payload?.grantableByInvite === "boolean") {
+          grantableByInvite = payload.grantableByInvite;
+          if (grantableByInvite) {
+            const verdict = mayBindRoleToInvite(
+              { roleId, rank, permissions, grantableByInvite: true },
+              auth.rank,
+            );
+            if (!verdict.ok) {
+              socket.emit("server:error", {
+                error: "role_not_bindable",
+                message: `Cannot make that role invite-grantable: ${INVITE_ROLE_REFUSAL_TEXT[verdict.reason!]}.`,
+              });
+              return;
+            }
+          }
+        }
+
         const saved = existing
           ? await updateRoleDefinition(roleId, {
               name,
@@ -753,6 +812,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
               permissions,
               autoGrantAfterDays,
               autoGrantAfterMessages,
+              grantableByInvite,
             })
           : await createRoleDefinition(roleId, {
               name,
@@ -761,13 +821,14 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
               permissions,
               autoGrantAfterDays,
               autoGrantAfterMessages,
+              grantableByInvite,
             });
 
         insertServerAudit({
           actorServerUserId: auth.tokenPayload.serverUserId,
           action: existing ? "role_definition_update" : "role_definition_create",
           target: roleId,
-          meta: { name, rank, permissions, autoGrantAfterDays, autoGrantAfterMessages },
+          meta: { name, rank, permissions, autoGrantAfterDays, autoGrantAfterMessages, grantableByInvite },
         }).catch((e) => consola.warn("audit log write failed", e));
 
         io.to("verifiedClients").emit("server:roles:definition:updated", { serverId, role: saved });

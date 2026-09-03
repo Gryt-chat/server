@@ -583,6 +583,25 @@ function runMigrations(d: DatabaseSync): void {
       ON channel_permission_rules (scope_id);
   `);
 
+  // A role an invite is allowed to hand out, off for every role until somebody
+  // ticks it. Rank alone would make every role below the creator silently
+  // grantable the moment it existed, which is the opposite of a default that
+  // hands out nothing.
+  if (!hasColumn(d, "role_definitions", "grantable_by_invite")) {
+    d.exec("ALTER TABLE role_definitions ADD COLUMN grantable_by_invite INTEGER NOT NULL DEFAULT 0");
+  }
+
+  // The role an invite grants, and the rank that role carried when it was
+  // bound. The snapshot is the whole defence against the role being edited
+  // upward afterwards: without it the link hands out whatever the role has
+  // grown into, and nothing anywhere failed a check.
+  if (!hasColumn(d, "invites", "granted_role_id")) {
+    d.exec("ALTER TABLE invites ADD COLUMN granted_role_id TEXT");
+  }
+  if (!hasColumn(d, "invites", "granted_role_rank")) {
+    d.exec("ALTER TABLE invites ADD COLUMN granted_role_rank INTEGER");
+  }
+
   if (!hasColumn(d, "server_config", "lan_open")) {
     d.exec("ALTER TABLE server_config ADD COLUMN lan_open INTEGER NOT NULL DEFAULT 0");
   }

@@ -373,6 +373,31 @@ export const BUILT_IN_ROLES: readonly BuiltInRole[] = [
   { id: "guest", name: "Guest", rank: 10, color: null, permissions: GUEST_PERMISSIONS },
 ];
 
+/**
+ * The permissions that can be used to acquire more permissions.
+ *
+ * These are the four the owner keeps to themselves — see ADMIN_PERMISSIONS
+ * above, where the reasoning is written out. Named again here as a set because
+ * "does this role carry a permission that grants permissions" is a question
+ * asked away from role editing: an invite that hands out a role is a role grant
+ * nobody watches happen, so it has to ask it too.
+ */
+export const ESCALATION_PERMISSIONS: ReadonlySet<string> = new Set([
+  "manage_roles",
+  "manage_server",
+  "replace_identity",
+  "manage_bots",
+]);
+
+/**
+ * Roles that read as "an administrator" and are only ever given by hand.
+ *
+ * `admin` holds none of ESCALATION_PERMISSIONS, so a permission test alone
+ * would let an invite hand it out. Owner is here for completeness; it is
+ * refused by id everywhere else too.
+ */
+export const ADMIN_ONLY_ROLE_IDS: ReadonlySet<string> = new Set(["owner", "admin"]);
+
 const SYSTEM_ROLE_IDS: ReadonlySet<string> = new Set(BUILT_IN_ROLES.map((r) => r.id));
 
 export function isSystemRole(roleId: string): boolean {

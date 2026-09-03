@@ -1,5 +1,6 @@
 import consola from "consola";
 import type { HandlerContext, EventHandlerMap } from "./types";
+import { applyInviteRole } from "../../services/inviteRoles";
 import { syncAllClients, broadcastMemberList, countOtherSessions, verifyClient } from "../utils/clients";
 import { sendServerDetails } from "../utils/server";
 import { remindOutdatedWindowsClient } from "../utils/outdatedClient";
@@ -716,6 +717,17 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           const joinRole = defaultRoleForTier(identityTierOf(grytUserId), cfg);
           if (existingRoles.length === 0) {
             await setServerRole(user.server_user_id, isOwner ? "owner" : joinRole);
+            // A role bound to the invite they arrived on, if it still passes
+            // the rules. Only reachable here: the invite block above runs for
+            // `!isActiveMember`, so a bound role can only ever land on a first
+            // join and never on a reconnect carrying the same stored code.
+            //
+            // Added rather than assigned, so an invite can raise somebody above
+            // the tier default and never below it. `autoRoles` takes the same
+            // line for the same reason.
+            if (!isOwner && usedInviteCode) {
+              await applyInviteRole(usedInviteCode, user.server_user_id);
+            }
           } else if (isOwner && !existingRoles.includes("owner")) {
             // Added rather than assigned. The owner is allowed to hold other
             // roles, and replacing the set here would take them away every time
