@@ -323,6 +323,13 @@ export interface RoleDefinitionRecord {
   permissions: Permission[];
   is_system: boolean;
   /**
+   * Whether an invite may be bound to this role. Off until somebody ticks it,
+   * so nothing is invite-grantable by default. Never settable on the owner or
+   * admin roles, or on a role carrying a permission that grants permissions —
+   * see `services/inviteRoles.ts`, which is where the rules live.
+   */
+  grantable_by_invite: boolean;
+  /**
    * What this role asks of somebody before it grants itself to them.
    *
    * Both null means it never does. Both set means both have to be true — a
@@ -496,6 +503,13 @@ export interface ServerInviteRecord {
   max_uses: number;
   uses_remaining: number;
   uses_consumed: number;
+  /** The role this invite grants on a first join, or null for none. */
+  granted_role_id: string | null;
+  /**
+   * The rank that role carried when it was bound. A role that has climbed
+   * since is not the role that was agreed to, so the grant is refused.
+   */
+  granted_role_rank: number | null;
   revoked: boolean;
   note: string | null;
 }

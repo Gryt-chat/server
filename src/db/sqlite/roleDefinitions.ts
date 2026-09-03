@@ -42,6 +42,7 @@ function rowToDefinition(r: Record<string, unknown>): RoleDefinitionRecord {
     name: (r.name as string) || (r.role_id as string),
     color: (r.color as string) ?? null,
     rank: Number(r.rank ?? 0),
+    grantable_by_invite: Number(r.grantable_by_invite ?? 0) === 1,
     permissions: parsePermissions(r.permissions),
     is_system: (r.is_system as number) === 1,
     auto_grant_after_days: positiveOrNull(r.auto_grant_after_days),
@@ -74,6 +75,7 @@ export interface RoleDefinitionInput {
   name: string;
   color?: string | null;
   rank: number;
+  grantableByInvite?: boolean;
   permissions: Permission[];
   autoGrantAfterDays?: number | null;
   autoGrantAfterMessages?: number | null;
@@ -87,8 +89,8 @@ export async function createRoleDefinition(
   const now = toIso(new Date());
   const result = db
     .prepare(
-      `INSERT OR IGNORE INTO role_definitions (role_id, name, color, rank, permissions, is_system, auto_grant_after_days, auto_grant_after_messages, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO role_definitions (role_id, name, color, rank, permissions, is_system, auto_grant_after_days, auto_grant_after_messages, created_at, updated_at, grantable_by_invite)
+       VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`,
     )
     .run(
       roleId,
@@ -100,6 +102,7 @@ export async function createRoleDefinition(
       positiveOrNull(input.autoGrantAfterMessages),
       now,
       now,
+      input.grantableByInvite ? 1 : 0,
     );
 
   if (result.changes === 0) throw new Error(`Role "${roleId}" already exists`);
@@ -129,6 +132,7 @@ export async function updateRoleDefinition(
     name: patch.name ?? existing.name,
     color: patch.color === undefined ? existing.color : patch.color,
     rank: patch.rank ?? existing.rank,
+    grantableByInvite: patch.grantableByInvite ?? existing.grantable_by_invite,
     permissions: patch.permissions
       ? normalizePermissions(patch.permissions)
       : existing.permissions,
@@ -145,7 +149,7 @@ export async function updateRoleDefinition(
   };
 
   db.prepare(
-    `UPDATE role_definitions SET name = ?, color = ?, rank = ?, permissions = ?, auto_grant_after_days = ?, auto_grant_after_messages = ?, updated_at = ? WHERE role_id = ?`,
+    `UPDATE role_definitions SET name = ?, color = ?, rank = ?, permissions = ?, auto_grant_after_days = ?, auto_grant_after_messages = ?, updated_at = ?, grantable_by_invite = ? WHERE role_id = ?`,
   ).run(
     next.name,
     next.color,
@@ -154,6 +158,7 @@ export async function updateRoleDefinition(
     next.autoGrantAfterDays,
     next.autoGrantAfterMessages,
     toIso(new Date()),
+    next.grantableByInvite ? 1 : 0,
     roleId,
   );
 
