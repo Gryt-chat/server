@@ -1,4 +1,5 @@
 import consola from "consola";
+import { getAcceptedIdentityTiers } from "../../auth/identity";
 import { mayViewChannel } from "../../services/channelPermissions";
 import {
   INVITE_ROLE_REFUSAL_TEXT,
@@ -176,6 +177,22 @@ async function roleEditorState() {
       account: config?.default_role_account ?? FALLBACK_ROLE_ID,
       local: config?.default_role_local ?? FALLBACK_ROLE_ID,
     },
+    /*
+     * Which identities this server admits, so the editor can stop offering a
+     * setting that does nothing (GRYT-907).
+     *
+     * The guest default only applies to somebody arriving with a self-signed
+     * key, and `GRYT_IDENTITY_TIERS` decides whether anybody can. Without this
+     * the editor had a live dropdown and a footnote underneath explaining that
+     * the dropdown might not be used — which is a worse way of saying it than
+     * turning the control off.
+     *
+     * Sent from the same place the rest of the editor's state comes from
+     * rather than fetched separately: it is already on `/api/server-info` and
+     * in the challenge, and a second round trip for one array is not worth the
+     * extra failure mode.
+     */
+    identityTiers: getAcceptedIdentityTiers(),
   };
 }
 
@@ -662,12 +679,80 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
 
         const existing = await getRoleDefinition(roleId);
 
-        // The owner role is what the fail-open path in services/permissions
-        // falls back to, and it is the only thing standing between a mistake in
-        // this editor and a server nobody can administer. It is readable and
-        // not editable.
+        /*
+         * The owner role is what the fail-open path in services/permissions
+         * falls back to, and it is the only thing standing between a mistake in
+         * this editor and a server nobody can administer. Its name, rank and
+         * permissions stay unwritable for that reason.
+         *
+         * **Its colour is not part of that** (GRYT-906). A colour cannot lock
+         * anybody out, cannot move anybody above anybody, and cannot grant
+         * anything. Refusing it was the blanket rule catching something the
+         * rule was not written for.
+         *
+         * Before the two rank checks below, and that is not incidental: the
+         * owner role's rank is the owner's own, so `existing.rank >= auth.rank`
+         * refuses the owner editing their own role.
+         *
+         * Which is why this needs its own gate. `manage_roles` alone would let
+         * a delegated admin recolour the owner so the owner reads as an
+         * ordinary member — small, but social engineering for no benefit. Rank
+         * is the check the rest of this file uses for "you are not above this",
+         * and it is the one used here.
+         */
         if (roleId === OWNER_ROLE_ID) {
-          socket.emit("server:error", { error: "forbidden", message: "The owner role cannot be edited." });
+          const colourOnly =
+            payload?.color !== undefined &&
+            payload?.name === undefined &&
+            payload?.rank === undefined &&
+            payload?.permissions === undefined &&
+            payload?.autoGrantAfterDays === undefined &&
+            payload?.autoGrantAfterMessages === undefined &&
+            payload?.grantableByInvite === undefined;
+
+          if (!colourOnly || !existing) {
+            socket.emit("server:error", {
+              error: "forbidden",
+              message: "Only the owner role's colour can be changed.",
+            });
+            return;
+          }
+
+          if (auth.rank < existing.rank) {
+            socket.emit("server:error", {
+              error: "forbidden",
+              message: "Cannot edit a role at or above your own.",
+            });
+            return;
+          }
+
+          const saved = await updateRoleDefinition(roleId, {
+            name: existing.name,
+            color: normalizeRoleColor(payload?.color, existing.color ?? null),
+            rank: existing.rank,
+            permissions: existing.permissions,
+            autoGrantAfterDays: existing.auto_grant_after_days,
+            autoGrantAfterMessages: existing.auto_grant_after_messages,
+            grantableByInvite: existing.grantable_by_invite,
+          });
+
+          // Null means the row went between the read and the write. Nothing to
+          // broadcast, and a client told a role updated when it did not would
+          // draw a colour the server does not hold.
+          if (!saved) {
+            socket.emit("server:error", { error: "roles_failed", message: "Failed to save the role." });
+            return;
+          }
+
+          insertServerAudit({
+            actorServerUserId: auth.tokenPayload.serverUserId,
+            action: "role_definition_update",
+            target: roleId,
+            meta: { color: saved.color },
+          }).catch((e) => consola.warn("audit log write failed", e));
+
+          io.to("verifiedClients").emit("server:roles:definition:updated", { serverId, role: saved });
+          broadcastServerUiUpdate("other");
           return;
         }
 
