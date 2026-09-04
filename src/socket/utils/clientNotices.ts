@@ -4,25 +4,17 @@ import { Server } from "socket.io";
 import type { Clients } from "../../types";
 
 /**
- * Something the server needs one particular person to see.
+ * Something the server needs one particular person to see. Not a chat message:
+ * the reminder this replaces went through `postSystemMessage`, so a notice
+ * naming one person was stored for good and shown to the whole channel.
  *
- * Not a chat message. The reminder this replaces was posted through
- * `postSystemMessage`, which writes a row into the messages table and
- * broadcasts it — so a notice addressed to one person by name was stored for
- * good and shown to everybody in the channel. The whole server learned that
- * somebody's Windows install was broken, and nobody could delete it.
+ * **The server sends a kind and some values. It never sends a sentence.** A
+ * panel in app furniture carrying text the server chose is a phishing kit —
+ * "Your Gryt session has expired, sign in at …". Sending no text makes it
+ * impossible rather than harder.
  *
- * **The server sends a kind and some values. It never sends a sentence.**
- *
- * That is the whole security property. A panel rendered in app furniture,
- * carrying text the server chose, addressed to one person, is a phishing kit:
- * "Your Gryt session has expired, sign in at …". Attribution and link-stripping
- * would make that harder. Sending no text at all makes it impossible.
- *
- * The cost is a client release whenever there is something new to say. That is
- * accepted: there is one kind today, and anything genuinely bespoke belongs in
- * `postSystemMessage`, which is public, attributable and deletable — which is
- * the right shape for something a server wants to tell everybody.
+ * The cost is a client release for anything new to say. Anything bespoke
+ * belongs in `postSystemMessage`, which is public and deletable.
  */
 export type ClientNotice = {
   kind: "outdated_client";
@@ -56,15 +48,11 @@ export function isValidNotice(notice: ClientNotice): boolean {
 }
 
 /**
- * Send a notice to one person, on every device they have open.
+ * Send a notice to one person, on every device they have open — the condition
+ * is about their install rather than a connection.
  *
- * Every socket, not just the one that triggered it: the condition is about
- * their install rather than about a connection, and somebody with the desktop
- * app on two machines should see it on the one that is broken. The client
- * decides what to do with a notice it has already dismissed.
- *
- * Nothing is stored. This is state rather than history — it is re-sent on the
- * next join while the condition holds, and simply stops when it does not.
+ * Nothing is stored. State rather than history: re-sent on the next join while
+ * the condition holds, and stops when it does not.
  */
 export function sendClientNotice(
   io: Server,

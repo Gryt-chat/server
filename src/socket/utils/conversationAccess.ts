@@ -2,19 +2,9 @@ import { getConversation, isConversationMember, listConversationMemberIds, listS
 import { mayViewChannel } from "../../services/channelPermissions";
 
 /**
- * Who is allowed to read and write a conversation.
- *
- * Until direct messages existed there was nothing to decide: every value in
- * `messages.conversation_id` was a channel, and a channel is open to every
- * member of the server. The chat events check who the caller is and whether
- * their role lets them read or post here at all, and that was the whole of it —
- * no event asked whether *this* conversation was one of theirs, because the
- * answer was always yes. That holds exactly as long as no private conversation
- * exists, and this file is what has to exist before one does.
- *
- * Both the socket handlers and the REST route go through here, because two
- * copies of an access rule are two chances to disagree, and the REST route is
- * the one somebody forgets.
+ * Who is allowed to read and write a conversation. Both the socket handlers and
+ * the REST route go through here — two copies of an access rule are two chances
+ * to disagree, and the REST route is the one somebody forgets.
  */
 
 export type ConversationAccess =
@@ -34,24 +24,17 @@ export type AccessDenial =
   | "unknown_conversation";
 
 /**
- * What to tell the caller, and the HTTP status that matches.
+ * What to tell the caller, and the matching HTTP status.
  *
- * Deliberately not `forbidden`. That code means "your role does not allow this"
- * everywhere else in the chat events, and `permissionGates.test.ts` reads it as
- * exactly that — a conversation that is not yours is a different answer, and
- * folding the two together leaves a client unable to tell "ask an admin for the
- * permission" from "that is not your conversation".
+ * Deliberately not `forbidden`, which means "your role does not allow this"
+ * everywhere else — a client has to tell that apart from "not your
+ * conversation".
  *
- * `not_a_member` and `unknown_conversation` deliberately say the same thing.
- * Telling them apart turns this into an oracle for whether two particular
- * people have a conversation open, which anybody who can read a member list
- * could then ask, since the id is derived from the pair.
- *
- * A channel hidden by `view_min_rank` answers `unknown_conversation` for the
- * same reason. Anything else — a `forbidden`, a distinct code, even a different
- * message — tells the caller the channel is there, which is the one fact the
- * gate exists to withhold. Guessing an id has to be indistinguishable from
- * guessing wrong.
+ * `not_a_member` and `unknown_conversation` say the same thing on purpose.
+ * Telling them apart makes this an oracle for whether two people have a
+ * conversation open, and the id is derived from the pair. A channel hidden by
+ * `view_min_rank` answers the same: **guessing an id has to be
+ * indistinguishable from guessing wrong.**
  */
 export const DENIAL_RESPONSES: Record<AccessDenial, { error: string; message: string; status: number }> = {
   unauthenticated: { error: "unauthenticated", message: "You are not signed in to this server", status: 401 },
@@ -70,12 +53,8 @@ async function refreshChannelIds(): Promise<Set<string>> {
 }
 
 /**
- * Whether a channel by this id exists.
- *
- * Cached, and on a miss it reads again before answering no. Without the second
- * read a channel created moments ago would be refused for as long as the cache
- * lived, so the person who just made it could not post in it — a cache that
- * makes a wrong answer stick is worse than no cache.
+ * Whether a channel by this id exists. Cached, and on a miss it reads again
+ * before answering no, or a just-created channel is refused to its own maker.
  */
 async function channelExists(channelId: string): Promise<boolean> {
   const now = Date.now();
@@ -93,11 +72,7 @@ export function resetChannelIdCache(): void {
 
 /**
  * Whether this member may touch this conversation, and what kind it is.
- *
- * `serverUserId` must be one the server has already authenticated — the value
- * from a verified token, or the one recorded against a socket that finished
- * joining. A `temp_` id belongs to a socket that has connected but not proved
- * anything yet and is treated as nobody.
+ * `serverUserId` must already be authenticated; a `temp_` id is nobody.
  */
 export async function resolveConversationAccess(
   conversationId: string,

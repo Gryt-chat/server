@@ -19,22 +19,14 @@ import type { EventHandlerMap, HandlerContext } from "./types";
 /**
  * Ringing somebody in a direct message or a group.
  *
- * The call itself is not here, because a call is not a thing this server keeps.
- * It is an SFU room whose id is the conversation id, joined through the same
- * `voice:room:request` every channel goes through — server#88 is what makes
- * that room private to the conversation's members. So there is no `call:accept`
- * in this file: answering a call is joining the room, and the ring is stopped
- * by the join rather than by a separate message that could disagree with it.
+ * The call itself is not here — it is an SFU room whose id is the conversation
+ * id, joined through the ordinary `voice:room:request`. So there is no
+ * `call:accept`: answering is joining, and the join stops the ring rather than
+ * a separate message that could disagree with it.
  *
- * What is genuinely new is reaching somebody who is not looking at the
- * conversation, and then stopping. A voice channel never needs that — you go to
- * it, and whoever is there was already there.
- *
- * Every ring goes to **all** of a person's sockets, and every ending is
- * withdrawn from all of them too. Somebody with a laptop and a phone who
- * answers on the laptop should not be left with a phone ringing in their
- * pocket, and the only way to get that right is to treat the person as the
- * addressee rather than the socket.
+ * Every ring goes to **all** of a person's sockets and every ending is
+ * withdrawn from all of them, or answering on the laptop leaves the phone
+ * ringing in a pocket.
  */
 
 const RL_RING: RateLimitRule = { limit: 6, windowMs: 60_000, scorePerAction: 2, maxScore: 8, scoreDecayMs: 5000 };
@@ -64,10 +56,8 @@ export function registerCallHandlers(ctx: HandlerContext): EventHandlerMap {
   }
 
   /**
-   * Tell everybody the ring reached that it has stopped, and why.
-   *
-   * The caller is told too. They are the one person who is not being rung, and
-   * without this their client would sit on "ringing…" after a decline.
+   * Tell everybody the ring reached that it stopped, and why. The caller too —
+   * they are not being rung, and would otherwise sit on "ringing…".
    */
   function withdraw(ring: CallRing, reason: RingEnd, endedBy?: string): void {
     const payload = { conversation_id: ring.conversationId, reason, ended_by: endedBy ?? null };
@@ -77,23 +67,11 @@ export function registerCallHandlers(ctx: HandlerContext): EventHandlerMap {
 
   return {
     /**
-     * Ring everybody else in a conversation.
-     *
-     * Three permissions, because this is three things at once.
-     *
-     * It happens in a direct message, so `send_direct_messages` — a role that
-     * has had direct messages taken away does not get them back through the
-     * call button.
-     *
-     * The person starting it is about to be in a voice room, so `join_voice`.
-     * Somebody who may not join voice ringing a call they cannot enter is a
-     * call that can only be answered into an empty room.
-     *
-     * And starting a call is its own act, so `start_calls` (GRYT-712). This is
-     * the one an owner reaches for to say who may place a call without saying
-     * anything about who may take one — answering is `join_voice`, and it is
-     * deliberately not this. Every role that could ring before the release
-     * holds it, by backfill.
+     * Ring everybody else in a conversation. Three permissions, because this is
+     * three things at once: `send_direct_messages`, so the call button is not a
+     * way back into DMs a role lost; `join_voice`, or the call can only be
+     * answered into an empty room; and `start_calls` (GRYT-712), which says who
+     * may place one without saying anything about who may take one.
      */
     'call:ring': async (payload: { accessToken: string; conversationId: string }) => {
       try {
@@ -169,13 +147,8 @@ export function registerCallHandlers(ctx: HandlerContext): EventHandlerMap {
     },
 
     /**
-     * Say no.
-     *
-     * Ends the ring for everybody rather than for the person declining. In a
-     * one-to-one there is nobody else, and in a group the alternative is a ring
-     * that keeps going at the people who have not answered while the caller has
-     * already been told no — which reads, on the caller's screen, as somebody
-     * declining and the call carrying on anyway.
+     * Say no. Ends the ring for everybody: otherwise a group keeps ringing at
+     * the people who have not answered while the caller has been told no.
      */
     'call:decline': async (payload: { accessToken: string; conversationId: string }) => {
       try {
@@ -207,11 +180,8 @@ export function registerCallHandlers(ctx: HandlerContext): EventHandlerMap {
     },
 
     /**
-     * Give up before anybody answers.
-     *
-     * Only the person who started it. Anybody else in the conversation saying
-     * "stop ringing" is a decline, which says something different to the
-     * caller.
+     * Give up before anybody answers. Only the person who started it —
+     * anybody else saying "stop ringing" is a decline.
      */
     'call:cancel': async (payload: { accessToken: string; conversationId: string }) => {
       try {
@@ -240,15 +210,9 @@ export function registerCallHandlers(ctx: HandlerContext): EventHandlerMap {
 }
 
 /**
- * Stop the rings a person started, because they are no longer there.
- *
- * Called when somebody joins the call they were ringing about — answering ends
- * the ring, including on their own other devices — and when a caller's last
- * socket goes away.
- *
- * Exported as a plain function rather than an event because both callers are
- * elsewhere: the join is in the voice handler and the disconnect is in
- * `socket/index.ts`. Ringing state is this file's, so ending it is too.
+ * Stop the rings a person started. Called when they join the call they were
+ * ringing about, and when their last socket goes away. A plain function
+ * because both callers live elsewhere.
  */
 export function endRingsFor(
   io: HandlerContext["io"],

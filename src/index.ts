@@ -153,16 +153,9 @@ initSqlite()
 let sfuClient: SFUClient | null = null;
 
 /**
- * Starts the SFU client, once the database can answer.
- *
- * This used to run at import time, beside the other startup lines. It cannot
- * any more: the signing key is now generated and kept in `server_config`, and
- * `initSqlite()` above is started rather than awaited, so at import time the
- * database is not there yet. Called from the startup chain instead, which is
- * also where the config row is created.
- *
- * `io` is safe to touch from here even though it is declared further down. The
- * whole module body runs before any promise callback does.
+ * Starts the SFU client, once the database can answer. Not at import time: the
+ * signing key lives in `server_config`, and `initSqlite()` is started rather
+ * than awaited. `io` is safe to touch even though it is declared below.
  */
 function startSfuClient(): void {
   if (!process.env.SFU_WS_HOST) {
@@ -177,13 +170,9 @@ function startSfuClient(): void {
   const instanceId = process.env.SERVER_INSTANCE_ID || "default";
   const serverId = `${serverName}_${port}_${instanceId}`;
 
-  // SERVER_PASSWORD is not a password anybody types. Since sfu#26 and
-  // server#104 its only job is the key this server signs SFU client tokens
-  // with. It defaults to empty, nothing asks for a value, and an empty key is
-  // one anybody can guess — so a generated secret is used when it is unset.
-  //
-  // An explicit SERVER_PASSWORD still wins, so a deployment that set one keeps
-  // registering under the same key and nothing has to be restarted.
+  // SERVER_PASSWORD is not a password anybody types — it is the key this
+  // server signs SFU client tokens with, and an empty one is guessable, so a
+  // generated secret is used when it is unset. An explicit value still wins.
   const configured = (process.env.SERVER_PASSWORD || "").trim();
   const secret = configured || getOrCreateSfuSecret();
 
@@ -280,11 +269,9 @@ app.get("/info", httpRateLimit("http:public", RL_HTTP_PUBLIC), async (_req, res)
     // omitted rather than the endpoint being closed.
     ...(isMember ? { version: process.env.SERVER_VERSION || "1.0.0" } : {}),
     lanOpen,
-    // What this server asks of somebody who is not a member yet. Unauthenticated
-    // on purpose: the whole point is that a client can say "you don't need an
-    // account to join this one" before anybody tries. Neither field tells a
-    // caller anything they could not learn by attempting the join and reading
-    // the refusal.
+    // Unauthenticated on purpose, so a client can say "you don't need an
+    // account for this one" before anybody tries. Neither field says anything
+    // a failed join would not.
     identityTiers: getAcceptedIdentityTiers(),
     joinPolicy,
   });
@@ -317,12 +304,9 @@ app.get("/icon", httpRateLimit("http:public", RL_HTTP_PUBLIC), async (req, res) 
       return;
     }
 
-    // Revalidate rather than cache blind. This used to be max-age=60, which
-    // meant clearing an icon left every client showing the old one for up to a
-    // minute — a reload does not bypass a fresh cache entry, so it looked like
-    // the server was still serving it. The key is a fresh uuid per upload, so
-    // it doubles as an ETag: unchanged icons still cost one 304 rather than a
-    // transfer, and a cleared one is noticed immediately.
+    // Revalidate rather than cache blind: with max-age a cleared icon kept
+    // showing for a minute, and a reload does not bypass a fresh entry. The
+    // key is a fresh uuid per upload, so it doubles as an ETag.
     const etag = `"${iconKey}"`;
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("ETag", etag);
@@ -340,27 +324,20 @@ app.get("/icon", httpRateLimit("http:public", RL_HTTP_PUBLIC), async (req, res) 
   }
 });
 
-// API routes (all /api/* routes require Bearer token auth except /api/server/icon which has its own)
 // Limits go in front of the routers, so a refused request never reaches body
 // parsing, signature checking or an outbound fetch. `webhooks` carries its own,
 // keyed per webhook rather than per address, and is left alone.
-// These three were mounted bare. The comment above has said "limits go in front
-// of the routers" since #106, and these were the routers it did not cover.
 //
-// /api/server matters most of the three: its only routes write a server icon,
-// and multer buffered an anonymous 25 MB body into the heap before anything
-// checked a token (GRYT-788). The auth check moved in front of multer in the
-// same change, so this is the second half rather than the fix.
+// /api/server matters most here: its routes write a server icon, and multer
+// buffered an anonymous 25 MB body into the heap before anything checked a
+// token (GRYT-788).
 app.use("/api/server", httpRateLimit("http:server", RL_HTTP_UPLOAD), serverRouter);
 app.use("/api/messages", httpRateLimit("http:api", RL_HTTP_API), messagesRouter);
-// Reading a file and writing one are the same mount, so they need different
-// budgets: a busy channel legitimately fetches hundreds of attachments as it
-// scrolls, while writing that many is not a thing anybody does by hand.
+// Reading and writing a file share a mount and need different budgets: a busy
+// channel fetches hundreds of attachments while scrolling.
 //
-// The order matters and so does the skip. Express runs every mount that
-// matches, so without it `/api/uploads/files/<id>` would be charged to the
-// upload budget as well as the file one, and scrolling would trip a limit meant
-// for uploading.
+// The order matters and so does the skip. Express runs every matching mount, so
+// without it a file read is charged to the upload budget too.
 const limitUploadWrites = httpRateLimit("http:upload", RL_HTTP_UPLOAD);
 app.use("/api/uploads/files", httpRateLimit("http:file", RL_HTTP_FILE));
 app.use(
@@ -426,12 +403,9 @@ const io = new Server(httpServer, {
     // reaches a socket without passing that.
     origin: (_origin, callback) => callback(null, true),
   },
-  // The single decision point for who may open a socket.
-  //
-  // It has to be here rather than in `cors.origin` because that callback is
-  // handed the origin and nothing else, and the question "is this origin the
-  // same host the request was sent to" cannot be answered without the request.
-  // That question is the whole of the native-client case.
+  // Here rather than in `cors.origin`, which is handed the origin and nothing
+  // else — "is this origin the host the request was sent to" needs the request,
+  // and that question is the whole of the native-client case.
   allowRequest: (req, callback) => {
     const origin = req.headers.origin;
     // No origin at all is a non-browser client — curl, a bot, the SFU. Those
@@ -473,17 +447,11 @@ function isLoopbackHost(host: string): boolean {
   );
 }
 
-// The management API, on its own listener.
-//
-// A separate port on purpose. The main one is bound to whatever HOST says,
-// which defaults to 0.0.0.0 and is meant to be reachable — so mounting
-// management there would put it wherever the server is, including the public
-// internet for anybody forwarding a port. This one is only ever reached
-// through the Compose file's `127.0.0.1:<port>:<port>` publish, which Docker
-// enforces at the host before anything reaches the container.
-//
-// It does not start at all unless GRYT_ADMIN_TOKEN is set, so a server run any
-// other way has exactly the surface it had before.
+// The management API, on its own listener. The main port is bound to HOST,
+// which defaults to 0.0.0.0, so mounting management there would put it wherever
+// the server is. This one is reached only through the Compose file's
+// `127.0.0.1:<port>:<port>` publish, and does not start without
+// GRYT_ADMIN_TOKEN.
 if (adminTokenConfigured()) {
   const managementApp = express();
   managementApp.use("/management", managementRouter);
@@ -494,26 +462,16 @@ if (adminTokenConfigured()) {
 }
 
 /*
- * Metrics get a port of their own, and it is not the one the world talks to.
- *
- * They used to be served from the main app at /metrics, with no authentication,
- * which meant every deployment behind a reverse proxy or a tunnel published its
- * full Prometheus register to anybody who asked: socket counts, per-route
- * timings, memory, garbage collection. Not message content, but more than a
- * stranger has any business reading, and it undid the care taken elsewhere —
- * /info deliberately withholds the version from non-members, and /metrics gave
- * it away.
+ * Metrics get a port of their own, not the one the world talks to. Served from
+ * the main app they published the whole Prometheus register — socket counts,
+ * per-route timings, memory — to anybody behind a proxy or a tunnel.
  *
  * A separate port rather than a token, because a token is only safe for people
- * who set one. The monitoring stack in the Compose file is opt-in
- * (profiles: ["monitoring"]), so most deployments run no Prometheus at all and
- * would never have set it — they would have kept the exposure and gained
- * nothing. This way the default is closed for them without anybody doing
- * anything.
+ * who set one, and the monitoring stack is opt-in.
  *
- * Prometheus reaches it as `server:<port>` over the Compose network, which
- * needs no published port. Publishing this one, or running the server with host
- * networking, puts it back on the public internet — so don't.
+ * **Publishing this port, or running the server with host networking, puts it
+ * back on the public internet.** Prometheus reaches it as `server:<port>` over
+ * the Compose network and needs no published port.
  */
 const metricsPort = Number(process.env.METRICS_PORT || 9091);
 if (metricsPort > 0) {
@@ -526,16 +484,10 @@ if (metricsPort > 0) {
     consola.success(`Metrics on ${metricsPort} (container-only; do not publish this port)`);
   });
 
-  // A port for telemetry being unavailable is not a reason to refuse to run a
-  // chat server. Without this the listen error is an unhandled 'error' event,
-  // which takes the process down and puts it in a restart loop — so the first
-  // deployment to run two servers on one host with host networking lost the
-  // second one entirely, and the logs said EADDRINUSE rather than anything
-  // about metrics.
-  //
-  // Two servers sharing a host share its ports, so a collision here is ordinary
-  // rather than exceptional, and the answer is to say so and carry on. Metrics
-  // are still recorded either way; they are simply not served.
+  // A telemetry port being unavailable is not a reason to refuse to run a chat
+  // server. Unhandled, this listen error takes the process down in a restart
+  // loop — which is how the second of two host-networked servers on one box
+  // was lost, with the logs saying EADDRINUSE and nothing about metrics.
   metricsServer.on("error", (err: NodeJS.ErrnoException) => {
     const because = err.code === "EADDRINUSE"
       ? `port ${metricsPort} is already in use, most likely by another Gryt server on this host`
@@ -547,17 +499,9 @@ if (metricsPort > 0) {
 }
 
 /**
- * The addresses this server answers on, as something a person can act on.
- *
- * IPv4 in full with the interface name, IPv6 as a count. A host has a couple
- * of IPv4 addresses and can easily have thirty IPv6 ones, nearly all
- * link-local, and printing them all buries the two anybody is looking for.
- *
- * Loopback is kept deliberately. "127.0.0.1 and nothing else" is a real state
- * and it is the one worth spotting, so filtering it would hide the diagnosis.
- *
- * A bind to one specific address rather than the wildcard is reported as
- * exactly that, since in that case the list would be a lie.
+ * The addresses this server answers on. IPv4 in full, IPv6 as a count, since a
+ * host can have thirty of those and nearly all are link-local. Loopback is kept
+ * deliberately: "127.0.0.1 and nothing else" is the state worth spotting.
  */
 function reachableAddresses(port: number, host: string): string[] {
   if (host !== "0.0.0.0" && host !== "::") {
@@ -593,11 +537,8 @@ httpServer.listen(PORT, HOST, () => {
   if (process.env.SFU_WS_HOST)
     consola.info("SFU host set to " + process.env.SFU_WS_HOST);
   consola.success(`Signaling server started at ${HOST}:${PORT}`);
-  // Where, not just what it was told to bind. `0.0.0.0:5000` is the bind spec,
-  // and nobody can type it into a browser or a router — so an address missing
-  // from the list below, a VPN adapter that came up after this process for
-  // instance, is invisible at exactly the moment somebody is trying to work
-  // out why a friend cannot reach them. GRYT-482.
+  // Where, not what it was told to bind: nobody can type `0.0.0.0:5000` into a
+  // router while working out why a friend cannot reach them (GRYT-482).
   for (const line of reachableAddresses(PORT, HOST)) consola.info(line);
   console.log(`🔌 WEBSOCKET SERVER READY:`, {
     host: HOST,

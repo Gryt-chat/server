@@ -1,32 +1,20 @@
 /**
  * Accepting SVG without handing it to a browser as a document, or to a decoder.
  *
- * SVG is worth having for avatars and server icons: one file of a couple of
- * kilobytes stays sharp at every size the UI asks for, where a raster needs a
- * set of them and still goes soft when someone's display disagrees.
+ * An SVG is a document rather than a picture, so three things carry the safety
+ * and all three have to stay true. Drawn through `<img>`, a browser runs no
+ * script and fetches no external references. Fetched directly, the response
+ * carries `Content-Security-Policy: default-src 'none'; sandbox` — **that
+ * header is load-bearing and has to be on every file response.** Downloaded and
+ * opened from disk, no header applies, and what helps is that the copy on disk
+ * is the sanitised one.
  *
- * It is also a document rather than a picture, so the reasoning about how it is
- * safe has to be written down rather than assumed:
- *
- *   - Rendered through <img>, which is how every avatar and icon in the client
- *     is drawn, a browser does not run script in an SVG and does not fetch its
- *     external references. That covers displaying it.
- *   - Fetched directly — someone opens the file URL — the response carries
- *     `Content-Security-Policy: default-src 'none'; sandbox`, and a sandbox with
- *     no tokens blocks scripts. That covers "open it in your browser", but only
- *     for as long as that header is on every file response. It is load-bearing.
- *   - Downloaded and opened from disk, no header applies. Nothing served can fix
- *     that, and it is equally true of any file anyone sends you. What helps is
- *     that the copy on disk is the sanitised one, which is this module.
- *
- * So sanitising is not what makes the common paths safe; the <img> element and
- * the CSP already do. It is what keeps the uncommon ones from being sharp, and
- * what stops a future component that inlines an icon from being an XSS bug on
- * its first day.
+ * So sanitising is not what makes the common paths safe. It covers the uncommon
+ * ones, and a future component that inlines an icon.
  *
  * Nothing here rasterises. sharp renders SVG through librsvg, and pointing a
  * memory-unsafe parser at stranger-supplied bytes is the risk that made the
- * image worker a review-required path. Storing the vector means never doing it.
+ * image worker a review-required path.
  */
 
 import createDOMPurify from "dompurify";
@@ -48,12 +36,9 @@ export type SvgValidationResult =
   | { valid: false; reason: string };
 
 /**
- * Dimensions for an SVG, which does not have to state any.
- *
- * viewBox first: it is what actually defines the coordinate space, and it is
- * present on essentially everything a design tool exports. width/height are a
- * fallback and may carry units, so anything non-numeric is ignored rather than
- * guessed at.
+ * Dimensions for an SVG, which does not have to state any. viewBox first, since
+ * it defines the coordinate space; width/height may carry units, so anything
+ * non-numeric is ignored rather than guessed at.
  */
 function readDimensions(el: Element): { width: number; height: number } | null {
   const viewBox = el.getAttribute("viewBox");
@@ -75,11 +60,8 @@ function readDimensions(el: Element): { width: number; height: number } | null {
 }
 
 /**
- * Sanitise an uploaded SVG and report its dimensions.
- *
- * Returns the cleaned markup to store. The original bytes are deliberately not
- * kept — there is no reason to hold a version of the file that we decided was
- * unsafe to serve.
+ * Sanitise an uploaded SVG and report its dimensions. The original bytes are
+ * deliberately not kept.
  */
 export function sanitizeSvg(buffer: Buffer): SvgValidationResult {
   if (buffer.length > MAX_SVG_BYTES) {
@@ -111,13 +93,8 @@ export function sanitizeSvg(buffer: Buffer): SvgValidationResult {
     return { valid: false, reason: "That SVG could not be read." };
   }
 
-  // Refuse rather than quietly repair.
-  //
-  // Sanitising decides what is safe — an allowlist, so anything it has never
-  // heard of is dropped rather than waved through — but the answer to "we found
-  // something" should be to say so. Silently storing a modified file means an
-  // avatar the uploader did not choose, or an attachment a recipient believes
-  // is the sender's file and is not. And an SVG carrying <script> is not an
+  // Refuse rather than quietly repair: storing a modified file means an avatar
+  // the uploader did not choose, and an SVG carrying <script> is not an
   // innocent file that needs fixing.
   //
   // BODY is jsdom's wrapper and is removed from every parse, clean or not.

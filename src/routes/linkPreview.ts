@@ -35,14 +35,9 @@ export interface LinkPreviewData {
    */
   oembedUrl: string | null;
   /**
-   * What the page answered with.
-   *
-   * A client needs to tell "this site publishes no metadata" from "this page
-   * is private or gone", because the second has an honest thing to say and the
-   * first only has a hostname. A private GitHub repo is the case that prompted
-   * it: GitHub 404s to anyone not signed in, and its 404 page carries GitHub's
-   * *own* metadata, so parsing that gives a card titled "Build software
-   * better, together" for a link to somebody's repository.
+   * What the page answered with, so a client can tell "publishes no metadata"
+   * from "private or gone". A private GitHub repo 404s with GitHub's own
+   * metadata, which parses into a card titled "Build software better, together".
    */
   status: number | null;
 }
@@ -52,16 +47,12 @@ const CACHE_TTL_MS = 60 * 60 * 1000;
 const MAX_CACHE_SIZE = 500;
 
 /**
- * How much of a page to read before giving up on finding its `<head>`.
+ * How much of a page to read before giving up on its `<head>`. Measured
+ * 2026-09-03: MDN closes at 5.9 KB and GitHub at 32 KB, but Modrinth's
+ * `og:title` sits at byte 246,740 and YouTube's at 699,799.
  *
- * This was 50 KB, which is plenty for most of the web and not enough for some
- * of the sites people paste most. Measured 2026-09-03: MDN closes its head at
- * 5.9 KB, Steam at 8.3 KB, GitHub at 32 KB — but Modrinth's `og:title` sits at
- * byte 246,740 and YouTube's at 699,799. Under the old cap those two returned
- * nothing at all and drew a card with a hostname and an empty grey box.
- *
- * The read stops at `</head>` regardless, so this only decides how long to
- * keep going for a page that never closes one. Almost nothing reaches it.
+ * The read stops at `</head>` regardless, so this only bounds a page that never
+ * closes one.
  */
 const MAX_BYTES = 1_048_576;
 

@@ -56,13 +56,8 @@ const RL_JOIN: RateLimitRule = {
 };
 
 /**
- * How often one address may ask to be let in.
- *
- * The queue is keyed on identity, so nobody builds a backlog on their own by
- * asking twice. What that does not bound is a script minting a fresh local
- * identity per attempt — those cost nothing to make, and each one is a new row
- * and a new line in somebody's moderation queue. Ten an hour is far more than a
- * person needs and far less than a queue-flooder wants.
+ * How often one address may ask to be let in. The queue is keyed on identity,
+ * which does not bound a script minting a fresh local identity per attempt.
  */
 const RL_JOIN_REQUEST: RateLimitRule = {
   limit: 10, windowMs: 60 * 60_000, banMs: 10 * 60_000,
@@ -70,23 +65,12 @@ const RL_JOIN_REQUEST: RateLimitRule = {
 };
 
 /**
- * How many people one invite may bring in per hour.
+ * How many people one invite may bring in per hour. `RL_JOIN` is keyed on IP
+ * and scales straight up with the number of addresses, so once a link is
+ * public the invite itself is the only thing left to limit.
  *
- * `RL_JOIN` above is keyed on IP, which bounds one machine and nothing else —
- * measured at 19 arrivals in 47ms from a single address before it bit, and it
- * scales straight up with the number of addresses. An invite link is meant to
- * be shared, so once it is public the only thing left to limit is the invite
- * itself.
- *
- * Sixty an hour, as a sliding window, so it is a burst allowance rather than a
- * trickle: thirty people joining a LAN party in the same minute all get in,
- * which is the case invites exist for. What it stops is the same link admitting
- * thousands unattended.
- *
- * A server running an event bigger than this raises it. That is a better
- * default than picking a number nobody can exceed, because the cost of being
- * too tight is somebody's party not working and the cost of being too loose is
- * a cleanup job.
+ * A sliding window, so thirty people joining a LAN party in one minute all get
+ * in. A server running a bigger event raises it.
  */
 function inviteArrivalRule(): RateLimitRule {
   const raw = parseInt(process.env.GRYT_INVITE_MAX_JOINS_PER_HOUR || "", 10);
@@ -95,11 +79,7 @@ function inviteArrivalRule(): RateLimitRule {
 }
 
 
-/**
- * Said once per process, not once per join, because a server in this state
- * hits it on every single connection and a log that scrolls is a log nobody
- * reads.
- */
+/** Once per process: a server in this state hits it on every connection. */
 let warnedLanOpenBehindProxy = false;
 function warnLanOpenBehindProxy(ip: string): void {
   if (warnedLanOpenBehindProxy) return;
@@ -119,30 +99,16 @@ function warnLanOpenBehindProxy(ip: string): void {
 
 
 /**
- * Sentinel for "this member is a bot, so there is no role to assign".
- *
- * A class rather than a flag because the role block it skips is already inside
- * a try that swallows and logs, and an early return would have to be threaded
- * back out through it. Caught by name so a real failure still gets logged.
+ * "This member is a bot, so there is no role to assign". A throw rather than a
+ * flag because the block it skips sits inside a try that swallows and logs.
  */
 class BotHoldsNoRole extends Error {}
 
 /**
- * Whether a bot is allowed in, and under which registration.
- *
- * Four ways this goes, and only one of them admits anybody:
- *
- * - **Approved already** — the ordinary case, every restart after the first.
- *   Whatever the bot declared this time is ignored entirely. That is the whole
- *   anti-escalation property: a bot whose image has been taken over cannot
- *   change the question after it has been answered.
- * - **Presenting a claim token** — a registration an operator wrote before the
- *   bot existed. Binding is atomic, so two bots racing one token end with one
- *   claimed and one refused.
- * - **Never seen, and the server takes knocks** — its declaration is recorded
- *   and it is turned away. Nothing is granted; an operator still has to answer.
- * - **Pending, denied, or knocking at a server that does not take knocks** —
- *   refused.
+ * Whether a bot is allowed in, and under which registration. Only an
+ * already-approved bot gets in, and what it declares this time is ignored
+ * entirely — a bot whose image has been taken over cannot change the question
+ * after it has been answered.
  */
 async function admitBot(
   botId: string,
@@ -297,14 +263,10 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    // Step 2: Client responds to the challenge with a signed assertion
-    // and an identity certificate. Server verifies both and completes the join.
-    // `note` rides here rather than on the challenge deliberately. The
-    // challenge binds what the client must not be able to change between the
-    // two steps — the nickname it will be admitted under, the invite it claimed.
-    // A note is a message to a moderator; nothing downstream trusts it, so
-    // binding it would mean widening the challenge for no property gained.
-    // The client knows to ask for one because `/info` publishes `joinPolicy`.
+    // Step 2: the client answers the challenge with a signed assertion and a
+    // certificate. `note` rides here rather than on the challenge because the
+    // challenge binds only what the client must not change between the two
+    // steps, and nothing downstream trusts a note.
     'server:verify': async (payload: {
       certificate?: string;
       assertion?: string;
@@ -361,12 +323,9 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
             throw new Error("Assertion subject does not match certificate subject");
           }
 
-          // `grytUserId`, not `sub`. The two differ for an account vouched for
-          // by anything other than the primary issuer, and this is the value
-          // every table keys on — so a CA that is trusted for its own users
-          // cannot name somebody else's (GRYT-267). The checks above and the
-          // link below stay on `sub`, which is what the client signed and the
-          // only value it knows.
+          // `grytUserId`, not `sub`: they differ for an account vouched for by
+          // a secondary issuer, and this is what every table keys on, so a CA
+          // trusted for its own users cannot name somebody else's (GRYT-267).
           grytUserId = cert.grytUserId;
           suggestedNickname = cert.preferredUsername;
           identityTier = cert.tier;
@@ -388,11 +347,9 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           const message = e instanceof Error ? e.message : String(e);
           consola.warn(`Identity verification failed for ${clientId}:`, message);
 
-          // The detail stays in the log. What goes to the client is which half
-          // failed, which is enough for it to act: a rejected assertion usually
-          // means its certificate and signing key have drifted apart, and it can
-          // renew and retry without troubling anyone. Telling it only
-          // "sign in again" sent people to do the one thing that cannot help.
+          // Which half failed, so a client whose certificate and signing key
+          // have drifted apart can renew and retry. "Sign in again" sent people
+          // to do the one thing that cannot help.
           const reason =
             e instanceof IdentityVerificationError ? e.reason : "unknown";
           // Only set when the verifier could tell that the clock was the
@@ -413,20 +370,12 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        // Real, and then wanted. The certificate verified, so this is genuinely
-        // whoever it says it is — this asks whether the operator admits that
-        // kind of identity at all.
+        // Whether the operator admits this kind of identity at all. Unlike the
+        // ban refusal below this says exactly what is wrong, and leaks nothing:
+        // the accepted tiers are already in `server:info`.
         //
-        // Unlike the ban refusal below, this one says exactly what is wrong.
-        // Nothing leaks: the accepted tiers are already advertised in
-        // `server:info` before anyone tries, and somebody turned away for
-        // having no account can only act on it if they are told so.
-        // Bots are admitted by the registry, not by GRYT_IDENTITY_TIERS.
-        //
-        // Keeping them off that switch is most of the point of giving them
-        // their own tier: adding one bot used to mean accepting every anonymous
-        // joiner on the server, which is a far larger decision than the operator
-        // thought they were making, and it needed a restart to make it.
+        // Bots come from the registry, not GRYT_IDENTITY_TIERS. Otherwise
+        // adding one bot means accepting every anonymous joiner, and a restart.
         let botRegistration: Awaited<ReturnType<typeof getBotById>> = null;
         if (identityTier === "bot") {
           const outcome = await admitBot(
@@ -465,11 +414,8 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           ? botRegistration.nickname
           : (challenge.nickname || suggestedNickname || "User").trim();
 
-        // The other half of not being mistaken for a bot: a person must not be
-        // able to take a bot-shaped name. The BOT tag comes from the identity
-        // rather than the name, so somebody calling themselves "BOT_helper"
-        // never gets the badge — they only get the benefit of the doubt from
-        // anyone reading quickly, which is the whole trick.
+        // A person must not be able to take a bot-shaped name. The badge comes
+        // from the identity, so the trick is only on whoever reads quickly.
         if (!botRegistration && looksLikeABotName(nickname)) {
           socket.emit("server:error", {
             error: "nickname_reserved",
@@ -480,15 +426,9 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
         }
         let cfg = await getServerConfig().catch(() => null);
 
-        // Stays ahead of invite consumption so a banned user does not burn an
-        // invite code on a join that was never going to succeed.
-        //
-        // The refusal is deliberately uninformative. Telling somebody they are
-        // banned confirms both that the ban exists and that this identity is
-        // known here, which is a moderation decision leaking to the person it
-        // was made about — and it invites arguing with the message rather than
-        // with a moderator. The real reason is in the audit log, and the
-        // moderator who acted already told them if they wanted to.
+        // Stays ahead of invite consumption so a banned user does not burn a
+        // code on a join that was never going to succeed. The refusal is
+        // deliberately uninformative; the real reason is in the audit log.
         const identity = await checkIdentityAllowed(grytUserId);
         if (!identity.ok) {
           consola.info(`Join refused for ${grytUserId}: ${identity.code}`);
@@ -523,19 +463,14 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
             const carry = await carryIdentityForward(priorSub, grytUserId);
             if (carry.status === "carried") {
               consola.info(`Linked ${priorSub} to ${grytUserId} on join`);
-              // `cfg` was read before the carry-over, and the carry-over is the
-              // one thing in this handler that can change who owns the server.
-              // Leaving it stale sends `isOwner: false` to somebody who owns
-              // the server in the database — no owner UI until they rejoin,
-              // which is the exact case this feature exists to fix.
+              // `cfg` was read before the carry-over, which is the one thing
+              // here that can change who owns the server. Stale, it sends
+              // `isOwner: false` to somebody who does own it.
               cfg = await getServerConfig().catch(() => cfg);
             } else if (carry.status === "account_already_member") {
-              // Both identities are members here, so nothing moves and the
-              // guest membership stays behind with whatever it holds. Worth a
-              // line: it is the one outcome where somebody asked to bring an
-              // identity across, was refused for a good reason, and is told
-              // nothing. Somebody reading the log after "where did my roles
-              // go" needs to find this.
+              // Both identities are already members, so nothing moves and
+              // nobody is told. This line is what answers "where did my roles
+              // go" afterwards.
               consola.info(
                 `Not linking ${priorSub} to ${grytUserId}: both are members here, so the guest membership was left as it is`,
               );
@@ -552,13 +487,9 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
         let claimedOwnerGrytUserId: string | null | undefined;
         let usedInviteCode: string | undefined;
 
-        // Bots skip the invite and join-policy gate entirely, and have to.
-        //
-        // Their admission *is* the registration: an operator answered them by
-        // name and said what they may do. Making an approved bot also carry an
-        // invite means an approved bot cannot join a server whose policy is
-        // `invite`, which is the default — found by running one against exactly
-        // that and watching it be turned away with "Invite required".
+        // Bots skip the invite and join-policy gate, and have to: their
+        // admission *is* the registration. Requiring an invite too means an
+        // approved bot cannot join a server on the default policy.
         if (!isActiveMember && !botRegistration) {
           const ip = getClientIp();
           const inviteKey = getInviteCooldownKey(ip, grytUserId);
@@ -628,11 +559,9 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
             if (cfg?.lan_open && isPrivateIp(ip) && !clientAddressIsOwn()) {
               warnLanOpenBehindProxy(ip);
             }
-            // The claim stays ahead of the policy check, and has to. It is what
-            // makes the first person through the door the owner, and on an open
-            // server that person arrives without an invite like everybody else
-            // — admitting them before claiming would leave the server ownerless
-            // and unconfigurable.
+            // Ahead of the policy check, and has to be: the first person
+            // through the door arrives without an invite, and claiming after
+            // would leave the server ownerless and unconfigurable.
             const claimed = await claimServerOwner(grytUserId);
             claimedOwnerGrytUserId = claimed.owner;
             const policy = normalizeJoinPolicy(cfg?.join_policy);
@@ -717,14 +646,10 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           const joinRole = defaultRoleForTier(identityTierOf(grytUserId), cfg);
           if (existingRoles.length === 0) {
             await setServerRole(user.server_user_id, isOwner ? "owner" : joinRole);
-            // A role bound to the invite they arrived on, if it still passes
-            // the rules. Only reachable here: the invite block above runs for
-            // `!isActiveMember`, so a bound role can only ever land on a first
-            // join and never on a reconnect carrying the same stored code.
-            //
-            // Added rather than assigned, so an invite can raise somebody above
-            // the tier default and never below it. `autoRoles` takes the same
-            // line for the same reason.
+            // A role bound to the invite, if it still passes the rules. Only
+            // reachable on a first join, never on a reconnect carrying the same
+            // stored code. Added rather than assigned, so an invite can raise
+            // somebody above the tier default and never below it.
             if (!isOwner && usedInviteCode) {
               await applyInviteRole(usedInviteCode, user.server_user_id);
             }

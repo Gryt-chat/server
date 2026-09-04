@@ -60,13 +60,9 @@ class SlidingWindowLimiter {
 	}
 
 	/**
-	 * Who the ban is against, for the log, without writing an address down.
-	 *
-	 * The key itself used to be logged, and it ends in the caller's address —
-	 * which made the rate limiter the only part of a Gryt server that recorded
-	 * one. The parts are logged separately now so the address can be labelled
-	 * on its way out; the key is untouched, because it is also the map key and
-	 * changing it would forget every ban in flight.
+	 * Who the ban is against, for the log, without writing an address down. The
+	 * key ends in the caller's address, so the parts are logged separately —
+	 * the key itself is untouched, being also the map key.
 	 */
 	private banSubject(parts: RateLimitKeyParts): {
 		event: string;

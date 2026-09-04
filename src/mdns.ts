@@ -13,18 +13,12 @@ declare module "bonjour-service" {
 const AVAHI_SERVICE_DIR = "/etc/avahi/services";
 
 /**
- * Where this server writes its avahi advertisement.
+ * Where this server writes its avahi advertisement. One file per server: two
+ * on one host share this directory, both wrote `gryt.service`, and the second
+ * to start overwrote the first with nothing erroring (GRYT-227).
  *
- * One file per server, because two servers on one host share this directory —
- * which is exactly what `network_mode: host` plus the bundled compose file
- * gives you. Both used to write `gryt.service`, so the second to start
- * overwrote the first and only one of them was discoverable. Nothing errored
- * and both worked fine by address, so it looked like flaky mDNS rather than
- * one server quietly replacing another's advertisement. GRYT-227.
- *
- * Keyed on the port as well as the instance id. SERVER_INSTANCE_ID defaults to
- * "default" when it is unset, so on its own it would collide for exactly the
- * deployment this is fixing; two servers on one host cannot share a port.
+ * Keyed on the port as well as the instance id — SERVER_INSTANCE_ID defaults to
+ * "default", so on its own it collides for exactly this deployment.
  */
 function avahiServicePath(serverId: string, port: number): string {
   const slug = `${serverId}-${port}`.replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -32,11 +26,8 @@ function avahiServicePath(serverId: string, port: number): string {
 }
 
 /**
- * Remove the shared file older versions wrote.
- *
- * Best effort and deliberately quiet: another server may still be running the
- * old build and using it, in which case failing to delete it is correct, and
- * complaining about a file we no longer own would be noise.
+ * Remove the shared file older versions wrote. Quiet on failure: another server
+ * may still be on the old build and using it.
  */
 function removeLegacyServiceFile(): void {
   try {
@@ -73,14 +64,10 @@ export function advertiseMdns(port: number): void {
 }
 
 /**
- * Advertise, or stop advertising, to match the server's `discoverable` setting.
+ * Advertise, or stop, to match `discoverable` — a server withholding its
+ * details over /info while broadcasting them to the LAN meant very little.
  *
- * A server with `discoverable` off already withholds its details from strangers
- * over /info. Broadcasting name, port and instance id to the whole LAN anyway
- * made that setting mean very little, so mDNS follows the same flag.
- *
- * Pass the port once at startup; later calls reuse it, which lets the admin
- * handler re-sync after the setting changes without knowing about the listener.
+ * Pass the port once at startup; later calls reuse it.
  */
 export async function syncMdnsAdvertising(port?: number): Promise<void> {
   if (typeof port === "number") advertisedPort = port;

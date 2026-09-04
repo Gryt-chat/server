@@ -197,19 +197,10 @@ export async function sendInfo(socket: Socket, clientsInfo: Clients | undefined,
     // server" when both are favourable.
     joinPolicy,
     /**
-     * Whether this server carries DM key bindings, so a client can say what it
-     * will get before joining (GRYT-720).
-     *
-     * A constant, not a setting. There is nothing for an operator to decide:
-     * either the code stores and relays the column or it does not, and a
-     * version that does cannot be asked to stop. It is here rather than
-     * inferred from `version` because a version string is a fact about a
-     * release and this is a question about behaviour, and reading one off the
-     * other means every client shipping a table of which versions had which
-     * feature.
-     *
-     * A server too old to know the field sends nothing, and an absent value
-     * means no — which is correct, and needs no fallback list anywhere.
+     * Whether this server carries DM key bindings (GRYT-720). A constant, not a
+     * setting — either the code relays the column or it does not. Here rather
+     * than inferred from `version`, which would make every client ship a table
+     * of which versions had which feature. Absent means no.
      */
     encryptedDirectMessages: true,
   };
@@ -246,12 +237,9 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
 
     const channelById = new Map(allChannels.map((c) => [c.channel_id, c]));
 
-    // Both arrays below are derived from `items`, so the filter goes here
-    // rather than on either one of them. Filtering `channels` alone would have
-    // left the channel's id, position and label in `sidebar_items`, which is
-    // enough to know it exists and to guess at what it is for — and the client
-    // draws the sidebar from those items, so it would have rendered a gap
-    // where the hidden channel sits.
+    // Both arrays below derive from `items`, so the filter goes here.
+    // Filtering `channels` alone leaves the id, position and label in
+    // `sidebar_items`, and the client draws the sidebar from those.
     const [visible, postable, joinable] = await Promise.all([
       visibleChannelIds(client.serverUserId, client.grytUserId),
       // What the client draws a composer for, and what it draws an unlocked
@@ -397,14 +385,9 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
       role,
       permissions,
       /**
-       * Every permission this build knows about, alongside the ones this
-       * caller holds.
-       *
-       * Without it a newer client cannot tell "the server denied this" from
-       * "the server has never heard of this". Both look like an absence in
-       * `permissions`, and reading the second as a denial is how a client that
-       * learns about `read_messages` before its server does blanks out every
-       * channel on it.
+       * Every permission this build knows about, so a newer client can tell
+       * "denied" from "never heard of it" — both look like an absence in
+       * `permissions`, and reading the second as a denial blanks every channel.
        */
       permission_catalogue: PERMISSIONS,
       roles: roleDefinitions.map((r) => ({

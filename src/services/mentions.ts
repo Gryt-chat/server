@@ -1,27 +1,16 @@
 /**
- * Who a message mentions.
+ * Who a message mentions. **These are `remarkMention.ts`'s rules, restated, and
+ * the two have to agree exactly** — a name drawn as a mention that notified
+ * nobody looks like it worked.
  *
- * The client has decided what a mention is since before the server had an
- * opinion — `remarkMention.ts` matches `@nickname` against the live member
- * list and draws a span around it. This has to agree with that exactly, or the
- * two disagree about which words are highlighted and which ones reach somebody:
- * a name drawn as a mention that notified nobody is worse than no mentions at
- * all, because it looks like it worked.
- *
- * So the rules below are the client's rules, restated:
- *
- * - `@` followed by a nickname, compared case-insensitively
- * - not preceded by a word character, so `foo@ada` is an email, not a mention
+ * - `@` followed by a nickname, case-insensitive
+ * - not preceded by a word character, so `foo@ada` is an email
  * - not followed by one, so `@ada` does not match inside `@adams`
- * - at the same position the longest nickname wins, so "Ada Lovelace" beats
- *   "Ada" when both are members
- * - scanning left to right, and the text after a match is not rescanned for
- *   the part already consumed
+ * - longest nickname wins at the same position
+ * - left to right, and text after a match is not rescanned
  *
- * Nicknames are resolved to ids here, at send time, on purpose. A nickname is
- * not stable — people rename themselves, and `nickname_change_count` exists
- * because of it — so a mention stored as text would follow the name rather
- * than the person, and start pointing at whoever took the name next.
+ * Resolved to ids at send time, because a nickname is not stable — stored as
+ * text a mention would point at whoever took the name next.
  */
 
 export interface MentionableMember {

@@ -14,19 +14,13 @@ import { syncMdnsAdvertising } from "../mdns";
 import { VALID_CENSOR_STYLES, type CensorStyle } from "../utils/profanityFilter";
 
 /**
- * Applying a settings change, in one place.
+ * Applying a settings change, in one place — the socket handler and the CLI's
+ * management endpoint both come through here.
  *
- * This used to live inside the socket handler, which was fine while a socket
- * was the only way to change a setting. It is not any more: the CLI manages a
- * server it runs on the same machine, through a management endpoint, and two
- * copies of this logic would drift on the first change either one forgot.
- *
- * Validation is not the reason it has to be shared. The side effects are.
- * Writing the row is a small part of what happens when a setting changes:
- * turning discovery off has to withdraw the mDNS advertisement, changing the
- * system channel has to drop a cache, and every connected client has to be
- * told. A caller that only wrote the row would leave a server that believes it
- * is hidden and is still broadcasting itself on the network.
+ * The side effects are why, not the validation. Turning discovery off has to
+ * withdraw the mDNS advertisement, changing the system channel drops a cache,
+ * and every client has to be told. A caller that only wrote the row would leave
+ * a server that believes it is hidden and is still broadcasting itself.
  */
 
 export interface SettingsPatch {
@@ -104,17 +98,13 @@ export async function applyServerSettings(
 
   const lanOpen: boolean | undefined = typeof patch.lanOpen === "boolean" ? patch.lanOpen : undefined;
 
-  // Only the two values mean anything, and anything else is dropped rather
-  // than coerced — a typo should leave the policy alone, not silently reset it.
-  // Checked against the shared list rather than a second copy of it. The copy
-  // is what broke: this knew "open" and "invite" while everything else knew
-  // three, so "request" was dropped here without an error and the whole
-  // join-request path was unreachable (GRYT-792).
+  // Against the shared list, not a second copy: the copy knew "open" and
+  // "invite" while everything else knew three, so "request" was dropped with no
+  // error and the join-request path was unreachable (GRYT-792).
   //
-  // Still `undefined` for anything unrecognised, which means "not being
-  // changed" — deliberately not the normaliser, which answers `invite` for
-  // junk. Failing shut is right when reading a stored column and wrong here,
-  // where it would silently rewrite a typo into a real policy change.
+  // `undefined` for anything unrecognised means "not being changed" —
+  // deliberately not the normaliser, which answers `invite` for junk and would
+  // rewrite a typo into a real policy change.
   const joinPolicy: JoinPolicy | undefined = isJoinPolicy(patch.joinPolicy)
     ? patch.joinPolicy
     : undefined;

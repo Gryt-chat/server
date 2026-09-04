@@ -1,13 +1,10 @@
 /**
  * What a page says about itself, read out of its `<head>`.
  *
- * This is regex over HTML rather than a parse, which is the wrong tool in
- * general and a defensible one here: the input is the first stretch of a
- * remote document, only `<meta>` and `<link>` matter, and adding a real parser
- * would mean handing untrusted markup to a dependency for the sake of tags
- * that are flat by definition. The regexes below are written to survive the
- * variation that actually shows up — either attribute order, single or double
- * quotes, an unquoted value, XHTML's self-closing slash.
+ * Regex over HTML rather than a parse: only `<meta>` and `<link>` matter and
+ * both are flat, so a real parser would mean handing untrusted markup to a
+ * dependency for nothing. The regexes handle either attribute order, both
+ * quote styles, unquoted values and XHTML's self-closing slash.
  */
 
 export interface PageMetadata {
@@ -112,11 +109,9 @@ function extractTitleTag(html: string): string | null {
 }
 
 /**
- * `href` off the first `<link>` whose rel is one of `rels`.
- *
- * Tag-at-a-time rather than one regex over the whole document, because a
- * `<link>` carries several attributes in any order and matching across tag
- * boundaries picks up the rel from one tag and the href from the next.
+ * `href` off the first `<link>` whose rel is one of `rels`. Tag at a time:
+ * matching across tag boundaries takes the rel from one and the href from the
+ * next.
  */
 function extractLinkHref(html: string, rels: string[]): string | null {
   const tags = html.match(/<link\b[^>]*>/gi);
@@ -155,12 +150,8 @@ function asDimension(raw: string | null): number | null {
 }
 
 /**
- * The favicon, preferring what the page declares over the conventional path.
- *
- * `apple-touch-icon` comes first because it has to be a real raster image at a
- * usable size, where `/favicon.ico` is often 16px and sometimes an HTML 404.
- * The conventional path is still the last resort, since a site that declares
- * nothing usually does have one sitting there.
+ * The favicon. `apple-touch-icon` first, since it has to be a real raster image
+ * at a usable size where `/favicon.ico` is often 16px and sometimes an HTML 404.
  */
 function extractFavicon(html: string, baseUrl: string): string | null {
   const href =
@@ -189,11 +180,9 @@ function sanitizeThemeColor(raw: string | null): string | null {
 }
 
 /**
- * The JSON oEmbed endpoint a page advertises.
- *
- * Separate from `extractLinkHref` because the rel is the generic "alternate"
- * and the `type` is what tells it apart from an RSS feed, so the match has to
- * see both attributes on the same tag.
+ * The JSON oEmbed endpoint a page advertises. Separate from `extractLinkHref`
+ * because the rel is the generic "alternate" and only `type` tells it apart
+ * from an RSS feed, so the match needs both attributes on one tag.
  */
 function extractOEmbedHref(html: string): string | null {
   const tags = html.match(/<link\b[^>]*>/gi);
@@ -246,11 +235,8 @@ export function parsePageMetadata(html: string, baseUrl: string): PageMetadata {
 }
 
 /**
- * The charset a response declares, so the body is decoded as what it is.
- *
- * A page served as Windows-1252 but decoded as UTF-8 turns every curly quote in
- * a title into a replacement character, which is the sort of thing that only
- * shows up once it is in front of somebody.
+ * The charset a response declares. Windows-1252 decoded as UTF-8 turns every
+ * curly quote in a title into a replacement character.
  */
 export function charsetFromContentType(contentType: string): string {
   const m = contentType.match(/charset\s*=\s*["']?([\w-]+)/i);

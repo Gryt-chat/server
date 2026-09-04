@@ -1,11 +1,7 @@
 /**
- * Avatar sizes, in one place.
- *
- * The image worker needs the thumbnail size too, and there is no package shared
- * between the two repositories to put it in. Rather than write the number down
- * twice and hope, the server records it in `server_config.avatar_thumb_px` on
- * every start — see runMigrations — and the worker reads that. Change it here
- * and the worker follows on its next run.
+ * Avatar sizes. The image worker needs the thumbnail size and shares no package
+ * with this one, so the server records it in `server_config.avatar_thumb_px` on
+ * every start and the worker reads that.
  */
 
 /**

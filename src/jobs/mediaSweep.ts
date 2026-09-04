@@ -63,34 +63,19 @@ export async function runMediaSweep(): Promise<{ deleted: number; errors: number
 }
 
 /**
- * Delete named files now, without waiting for the next sweep (GRYT-139).
+ * Delete named files now, without waiting for the sweep (GRYT-139). The sweep's
+ * grace period runs from upload and protects a file not yet attached to a
+ * message — so it holds exactly the content a moderator is trying to remove,
+ * for up to half an hour, still fetchable by anyone with the URL.
  *
- * The sweep already removes anything nothing points at, so a purge's
- * attachments do go eventually. What it will not do is go quickly for the case
- * that matters most: its grace period is measured from when a file was
- * uploaded, and exists to protect an upload that has not been attached to a
- * message yet. Somebody banned for what they just posted has files minutes old,
- * so the grace period holds exactly the content a moderator is trying to remove
- * — for up to half an hour, still fetchable by anyone holding the URL.
- *
- * That reasoning does not apply to these. They were attached to a message that
- * has just been deleted, so there is no upload in flight to protect, and the
- * caller has already confirmed nothing else references them.
- *
- * Failures are logged and stepped over rather than thrown. A ban that fails
- * because S3 was briefly unhappy would be worse than a file that survives, and
- * the file does not survive for long: it is orphaned, so the next sweep finds
- * it by the ordinary rule.
+ * Failures are logged and stepped over. A ban that fails because S3 was
+ * unhappy is worse than a file that survives, and it survives only until the
+ * next sweep finds it orphaned.
  */
 /**
- * Which of `fileIds` nothing points at any more.
- *
- * Separate from the delete so the selection can be asserted on its own: getting
- * this wrong either leaves rubbish in storage or removes a file somebody else's
- * message still shows, and only one of those is visible from the outside.
- *
- * Reads the same two sources as the periodic sweep, messages and avatars, so it
- * cannot select something the sweep would have kept.
+ * Which of `fileIds` nothing points at any more. Separate from the delete so
+ * the selection can be asserted on its own. Reads the same two sources as the
+ * periodic sweep, so it cannot select something the sweep would have kept.
  */
 export async function unreferencedAmong(fileIds: string[]): Promise<string[]> {
   if (fileIds.length === 0) return [];
