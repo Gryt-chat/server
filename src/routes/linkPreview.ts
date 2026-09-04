@@ -10,6 +10,7 @@ import {
   parsePageMetadata,
 } from "../utils/pageMetadata";
 import { checkPreviewUrl } from "../utils/previewUrlSafety";
+import { resolverFor } from "../utils/linkResolvers";
 
 export interface LinkPreviewData {
   url: string;
@@ -130,6 +131,50 @@ async function readHead(res: Response, charset: string): Promise<string> {
   return html;
 }
 
+/**
+ * How much JSON a resolver may read. Their design endpoint answers 86 KB for
+ * one model, most of which is instances and comments that get thrown away, so
+ * this is generous rather than tight — but it is still a bound on a response
+ * from somebody else's server.
+ */
+const MAX_JSON_BYTES = 512 * 1024;
+
+/**
+ * The one door a resolver has to the network (GRYT-913).
+ *
+ * Handed in rather than imported by `linkResolvers.ts`, so a resolver cannot
+ * quietly reach the network another way and that module stays testable without
+ * one. Everything guarding the ordinary path applies here: the same
+ * hop-by-hop host check, the same abort signal, a size cap, and a refusal to
+ * parse anything that does not call itself JSON.
+ */
+function jsonFetcher(signal: AbortSignal) {
+  return async (target: string): Promise<unknown> => {
+    const fetched = await fetchFollowingSafely(target, signal, "application/json");
+    if ("blocked" in fetched) return null;
+
+    const { res } = fetched;
+    if (!res.ok || !(res.headers.get("content-type") || "").includes("json")) {
+      await res.body?.cancel().catch(() => {});
+      return null;
+    }
+
+    if (Number(res.headers.get("content-length") || 0) > MAX_JSON_BYTES) {
+      await res.body?.cancel().catch(() => {});
+      return null;
+    }
+
+    const text = await res.text();
+    if (text.length > MAX_JSON_BYTES) return null;
+
+    try {
+      return JSON.parse(text);
+    } catch {
+      return null;
+    }
+  };
+}
+
 async function fetchPreview(url: string): Promise<LinkPreviewData> {
   const empty: LinkPreviewData = { url, ...EMPTY_PAGE_METADATA, status: null };
 
@@ -137,6 +182,29 @@ async function fetchPreview(url: string): Promise<LinkPreviewData> {
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
   try {
+    /*
+     * A site-specific answer first, where there is one.
+     *
+     * Only for a host that has a resolver and a URL it recognises, so this
+     * costs nothing on the rest of the web. A resolver returning null — the id
+     * was not found, the request failed, the shape was not what it expected —
+     * falls through to the ordinary fetch below, which is what happened before
+     * this existed.
+     *
+     * `status: 200` because the card came from somewhere that answered. The
+     * client reads that field to tell "publishes no metadata" from "gone", and
+     * the HTML page's own 403 is not the answer to what happened here.
+     */
+    const resolver = resolverFor(new URL(url));
+    if (resolver) {
+      try {
+        const resolved = await resolver.resolve(new URL(url), jsonFetcher(controller.signal));
+        if (resolved) return { ...empty, ...resolved, url, status: 200 };
+      } catch (err) {
+        consola.warn(`[link-preview] resolver ${resolver.id} failed for ${url}`, err);
+      }
+    }
+
     const fetched = await fetchFollowingSafely(
       url,
       controller.signal,
