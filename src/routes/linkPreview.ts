@@ -175,6 +175,32 @@ function jsonFetcher(signal: AbortSignal) {
   };
 }
 
+/**
+ * The image's real size, when whoever gave us the URL did not say.
+ *
+ * The card sets `aspect-ratio` from these and leaves a gap the right shape
+ * while the picture loads; without them the message reflows underneath
+ * somebody as it arrives.
+ *
+ * Only when neither is known. Most of the web sets `og:image:width`, and
+ * skipping the request saves a round trip on every preview that does — a
+ * resolver, which builds its own image URL, never does.
+ */
+async function measureIfUnsized(
+  meta: Pick<LinkPreviewData, "image" | "imageWidth" | "imageHeight">,
+): Promise<{ imageWidth: number | null; imageHeight: number | null }> {
+  const { image, imageWidth, imageHeight } = meta;
+  if (!image || imageWidth !== null || imageHeight !== null) {
+    return { imageWidth, imageHeight };
+  }
+
+  const checked = await checkPreviewUrl(image);
+  if (!checked.ok) return { imageWidth, imageHeight };
+
+  const measured = await fetchRemoteImageMetadata(image);
+  return { imageWidth: measured.width, imageHeight: measured.height };
+}
+
 async function fetchPreview(url: string): Promise<LinkPreviewData> {
   const empty: LinkPreviewData = { url, ...EMPTY_PAGE_METADATA, status: null };
 
@@ -199,7 +225,13 @@ async function fetchPreview(url: string): Promise<LinkPreviewData> {
     if (resolver) {
       try {
         const resolved = await resolver.resolve(new URL(url), jsonFetcher(controller.signal));
-        if (resolved) return { ...empty, ...resolved, url, status: 200 };
+        if (resolved) {
+          const card = { ...empty, ...resolved, url, status: 200 };
+          // Measured here too. A resolver builds its own image URL, so there is
+          // never an `og:image:width` to take the size from, and a card with no
+          // aspect ratio reflows the message under somebody as it loads.
+          return { ...card, ...(await measureIfUnsized(card)) };
+        }
       } catch (err) {
         consola.warn(`[link-preview] resolver ${resolver.id} failed for ${url}`, err);
       }
@@ -230,20 +262,9 @@ async function fetchPreview(url: string): Promise<LinkPreviewData> {
     const html = await readHead(res, charsetFromContentType(contentType));
     const meta = parsePageMetadata(html, finalUrl);
 
-    let { imageWidth, imageHeight } = meta;
-    // Only measure the image when the page has not already said how big it is.
-    // Most of the web sets og:image:width, and skipping the request saves a
-    // round trip on every preview that does.
-    if (meta.image && imageWidth === null && imageHeight === null) {
-      const checkedImage = await checkPreviewUrl(meta.image);
-      if (checkedImage.ok) {
-        const measured = await fetchRemoteImageMetadata(meta.image);
-        imageWidth = measured.width;
-        imageHeight = measured.height;
-      }
-    }
+    const measured = await measureIfUnsized(meta);
 
-    return { url, ...meta, imageWidth, imageHeight, status: res.status };
+    return { url, ...meta, ...measured, status: res.status };
   } finally {
     clearTimeout(timeout);
   }
