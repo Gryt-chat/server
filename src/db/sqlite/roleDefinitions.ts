@@ -213,17 +213,12 @@ export async function reassignRoleHolders(
 }
 
 /**
- * Delete a role, moving whoever held it onto `reassignTo` first.
+ * Delete a role, moving whoever held it onto `reassignTo` first. A dangling id
+ * already resolves to the fallback on read, but leaving one has the member list
+ * and the role editor disagree about what somebody is.
  *
- * The reassignment is not strictly necessary — a dangling id already resolves
- * to the fallback role on read — but leaving rows pointing at a role that no
- * longer exists means the member list and the role editor disagree about what
- * somebody is, and the disagreement only shows up as a permission that used to
- * work and now does not.
- *
- * System roles are refused. The join defaults and the owner point at them, and
- * the seeder would put the row back on the next restart anyway, so allowing it
- * would be a delete that silently undoes itself.
+ * System roles are refused: the seeder would put the row back on the next
+ * restart, so allowing it is a delete that silently undoes itself.
  */
 export async function deleteRoleDefinition(
   roleId: string,

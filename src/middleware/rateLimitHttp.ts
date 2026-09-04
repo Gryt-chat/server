@@ -1,21 +1,12 @@
 /**
- * Rate limiting for the HTTP surface.
+ * Rate limiting for the HTTP surface, which had exactly one limit — on the
+ * webhook endpoint — while everything else was open. `/api/link-preview` was
+ * the worst of them: it fetches a URL the caller chooses from inside this
+ * network, an SSRF probe and an outbound amplifier in one endpoint.
  *
- * Socket events have been limited for a long time — 24 call sites, sliding
- * window plus a decaying score. HTTP had exactly one limit, on the webhook
- * endpoint, and everything else was open: uploads, avatars, the server icon,
- * emoji and its bulk importers, link previews, oEmbed, media metadata, file
- * serving, `/info`, `/icon` and `/metrics`.
- *
- * `/api/link-preview` was the worst of them. It fetches a URL the caller
- * chooses, from inside this network, with no limit at all — an SSRF probe and
- * an outbound amplifier in the same endpoint.
- *
- * This deliberately reuses `utils/rateLimiter` rather than adding
- * `express-rate-limit`. One implementation means one place to reason about the
- * window, the ban and the key, and the socket side already had to solve all
- * three. It also inherits the known limitation: counters live in memory, so a
- * restart clears them.
+ * Reuses `utils/rateLimiter` rather than adding `express-rate-limit`, so there
+ * is one place to reason about the window, the ban and the key. It inherits the
+ * known limitation: counters live in memory, so a restart clears them.
  */
 import type { NextFunction, Request, Response } from "express";
 
@@ -23,13 +14,10 @@ import { resolveClientIp, trustedProxyHops } from "../config/clientAddress";
 import { checkRateLimit, type RateLimitRule } from "../utils/rateLimiter";
 
 /**
- * The address to count against.
- *
- * Goes through `resolveClientIp` rather than reading `x-forwarded-for`
- * directly, so `GRYT_TRUSTED_PROXY_HOPS` governs it exactly as it governs the
- * socket side. Behind a proxy with hops unset, every caller collapses into one
- * bucket and the first heavy user rate-limits everybody — which is a
- * misconfiguration to fix rather than something to work around here.
+ * The address to count against. Through `resolveClientIp`, so
+ * `GRYT_TRUSTED_PROXY_HOPS` governs it as it governs the socket side — with
+ * hops unset behind a proxy every caller collapses into one bucket, which is a
+ * misconfiguration to fix rather than work around here.
  */
 export function requestIp(req: Request): string {
   return resolveClientIp(

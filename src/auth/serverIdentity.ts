@@ -112,11 +112,9 @@ async function load(): Promise<ServerIdentity> {
  * Replace this server's identity key, leaving a statement signed by the outgoing
  * key that names its replacement (GRYT-54).
  *
- * Deliberate rotation only. The statement is signed by the key being retired, so
- * anyone who already holds that key can sign one too — rotating away from a key
- * you believe is compromised does not lock the holder out, and clients pinned to
- * it should be re-verified by hand instead. SSH's known_hosts has the same
- * property.
+ * **Deliberate rotation only.** Anyone holding the retired key can sign such a
+ * statement too, so rotating away from a compromised key does not lock the
+ * holder out — clients pinned to it have to be re-verified by hand.
  */
 export async function rotateServerIdentity(): Promise<{ from: string; to: string }> {
   const current = await initServerIdentity();
@@ -182,12 +180,10 @@ export async function getServerPublicJwk(): Promise<JWK> {
  * Sign a proof of possession of the server identity key, bound to a nonce the
  * client chose for this connection.
  *
- * The public key travels in the protected header so a client joining for the
- * first time has something to pin. That embedded key proves nothing on its own
- * — the JWT is self-signed, and an impostor can produce an equally valid one
- * over a key it generated. It only means anything once the client has a pinned
- * key to check the signature against. That is the trust-on-first-use
- * assumption, the same one SSH makes on a first connection.
+ * The public key travels in the protected header so a first-time client has
+ * something to pin. **That embedded key proves nothing on its own** — the JWT
+ * is self-signed and an impostor can produce an equally valid one. It means
+ * something only once the client has a pinned key to check against.
  */
 export async function signServerProof(clientNonce: string): Promise<string> {
   const { privateKey, publicJwk, keyId } = await initServerIdentity();

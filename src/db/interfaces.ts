@@ -7,32 +7,18 @@ import type { CensorStyle, ProfanityMode } from "../utils/profanityFilter";
 export type { CensorStyle, ProfanityMode };
 
 /**
- * What a server asks of somebody who is not already a member.
+ * What a server asks of somebody who is not already a member. `invite` is the
+ * default, `open` lets anyone the server accepts walk in, and `request` sits
+ * between: anybody may ask, nobody gets in until an admin says so.
  *
- * `invite` is the default and was the only behaviour before this existed: an
- * invite code, or a private IP when `lan_open` is set. `open` lets anyone the
- * server already accepts walk in — which is what makes "you don't need an
- * account to join this server" mean anything for a public server.
- *
- * Deliberately not about identity tiers. Which identities a server takes is
- * `GRYT_IDENTITY_TIERS`; this is how hard it is to get in once you have one.
- * Keeping them apart means "accounts walk in, guests need an invite" is a
+ * **Deliberately not about identity tiers**, which are `GRYT_IDENTITY_TIERS`.
+ * Keeping them apart makes "accounts walk in, guests need an invite" a
  * combination rather than a special case.
- *
- * `request` sits between the other two: anybody may ask, nobody gets in until
- * an admin says so. It is the answer to a server that wants to be findable
- * without being unattended — `open` lets anyone walk in, and `invite` makes a
- * shareable link the whole security model.
  */
 /**
- * How somebody gets in.
- *
- * A list rather than a union of string literals, because two places need to
- * check a value against it — the normaliser that reads the column, and the
- * settings patch that writes it — and when they each carried their own copy
- * they drifted: the patch validator knew only "open" and "invite", so
- * `join_policy: "request"` was implemented throughout the server and could not
- * be selected from the client or the management API (GRYT-792).
+ * A list rather than a union, because the normaliser that reads the column and
+ * the settings patch that writes it both check against it. With their own
+ * copies they drifted, and `request` could not be selected at all (GRYT-792).
  */
 export const JOIN_POLICIES = ["invite", "open", "request"] as const;
 
@@ -44,13 +30,10 @@ export function isJoinPolicy(v: unknown): v is JoinPolicy {
 }
 
 /**
- * Somebody asking to be let in, on a `request` server.
- *
- * One row per identity, so asking repeatedly does not build a queue. `status`
- * is kept after the decision rather than deleting the row: an approval has to
- * outlive the connection that asked for it, because the person is told to come
- * back rather than held open, and a denial that vanished would let them ask
- * again immediately.
+ * Somebody asking to be let in, on a `request` server. One row per identity, so
+ * asking repeatedly builds no queue. The row is kept after the decision: an
+ * approval outlives the connection that asked, and a vanished denial would let
+ * them ask again immediately.
  */
 export interface ServerJoinRequestRecord {
   gryt_user_id: string;
@@ -90,16 +73,10 @@ export interface UserRecord {
   nickname_change_count: number;
   nickname_changed_at: Date | null;
   /**
-   * What this member says their DM public key is (GRYT-720).
-   *
-   * A compact JWT the client signed with the identity key it joined on,
-   * carrying its X25519 public key. Opaque here on purpose: nothing on this
-   * server reads it, verifies it or acts on it. The point of the feature is
-   * that this server cannot read the messages, so a server that vouched for
-   * the binding would be vouching for something a member has to check anyway.
-   *
-   * Null for anybody who has not sent one, which is every row written before
-   * this and every client older than the feature.
+   * What this member says their DM public key is (GRYT-720). **Opaque here on
+   * purpose** — nothing on this server reads, verifies or acts on it, because a
+   * server vouching for the binding would be vouching for what a member has to
+   * check anyway. Null for anybody who has not sent one.
    */
   dm_key_binding: string | null;
   /**
@@ -113,22 +90,15 @@ export interface UserRecord {
 // ── Conversation types ───────────────────────────────────────────
 
 /**
- * A conversation that is not a channel.
- *
- * Channels are not rows here. `messages.conversation_id` holds channel ids and
- * these ids alike, and which one an id is decides who may read it — a channel
- * is open to the whole server, one of these is open to the people listed in
- * `conversation_members` and to nobody else.
+ * A conversation that is not a channel. `messages.conversation_id` holds both
+ * kinds of id, and which one it is decides who may read it.
  */
 export interface ConversationRecord {
   conversation_id: string;
   /**
-   * Two people, or more than two.
-   *
-   * The distinction is not only how many rows are in `conversation_members`.
-   * A `dm` has an id derived from its pair, which is what makes opening it
-   * idempotent from either end; a `group` has a random one, because a derived
-   * id cannot survive somebody being added.
+   * A `dm` has an id derived from its pair, which makes opening it idempotent
+   * from either end. A `group` has a random one, because a derived id cannot
+   * survive somebody being added.
    */
   kind: "dm" | "group";
   /** What a group is called, when somebody named it. Always null on a `dm`. */
@@ -207,21 +177,13 @@ export interface FileRecord {
 
 // ── Server config types ──────────────────────────────────────────
 
-// All three sit at 100MB, which is what Cloudflare allows through on Free and
-// Pro. Anything larger is refused at the edge before it reaches us, so a higher
-// default would only produce a confusing failure for anyone behind a tunnel —
-// which is how Gryt is normally reached. Raise them per server if you front it
-// yourself; uploads additionally accept 0, meaning no limit at all.
+// 100MB is what Cloudflare allows through on Free and Pro, so a higher default
+// only produces a confusing failure for anyone behind a tunnel. Raise them per
+// server if you front it yourself; uploads also accept 0, meaning no limit.
 //
-// Avatars and emoji were 5MB. They are re-encoded on the way in and only the
-// re-encoded result is stored, so the number governs which source files are
-// accepted rather than what is kept. What bounds the memory is MAX_INPUT_PIXELS
-// in utils/imageValidation, not these.
-// Sized for what people actually send, not for the largest thing that could be
-// made to work. A default is what almost every server runs on, and 100MB of it
-// was storage nobody asked for on a box that may have no backups. An operator
-// who wants more says so; one who never opens the settings gets something
-// survivable.
+// Avatars and emoji are re-encoded on the way in, so these govern which source
+// files are accepted rather than what is kept. **What bounds the memory is
+// MAX_INPUT_PIXELS in utils/imageValidation, not these.**
 export const DEFAULT_AVATAR_MAX_BYTES = 8 * 1024 * 1024;
 export const DEFAULT_UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
 export const DEFAULT_EMOJI_MAX_BYTES = 2 * 1024 * 1024;
@@ -255,19 +217,13 @@ export interface ServerConfigRecord {
   lan_open: boolean;
   join_policy: JoinPolicy;
   /**
-   * Which role somebody lands on the first time they join, split by how they
-   * proved who they are.
+   * Which role somebody lands on first, split by how they proved who they are —
+   * an account is durable, a local key is regenerable in two seconds. A public
+   * server hands the first `member` and the second `guest`, which one column
+   * cannot express.
    *
-   * Two columns rather than one because the whole point of the split is that a
-   * server can trust the two differently: an account is a durable identity a CA
-   * vouched for, a local key is regenerable in two seconds. A public server
-   * hands the first `member` and the second `guest`, and that combination is
-   * not expressible with a single default.
-   *
-   * Both default to `member`, which is what every server did before these
-   * columns existed. Turning a server into a read-only-for-strangers one is a
-   * decision an operator makes in the role editor, not something an upgrade
-   * does to them.
+   * Both default to `member`. Making a server read-only for strangers is a
+   * decision in the role editor, not something an upgrade does.
    */
   default_role_account: string;
   default_role_local: string;
@@ -280,16 +236,11 @@ export interface ServerConfigRecord {
 }
 
 /**
- * Which role somebody holds, as a `role_definitions.role_id`.
+ * Which role somebody holds, as a `role_definitions.role_id`. A bare string,
+ * since a server defines its own roles.
  *
- * A bare string rather than the four names it used to be. The four are still
- * there — seeded as system roles — but a server can now define its own, and a
- * union that had to be widened every time somebody added "Contributor" would
- * not be a type, it would be a schema.
- *
- * Nothing validates the value here. What a role *means* lives in
- * `role_definitions`, and an id with no definition behind it resolves to the
- * fallback role rather than being rejected on read — see `normalizeRoleId`.
+ * Nothing validates it here. An id with no definition resolves to the fallback
+ * role rather than being rejected on read — see `normalizeRoleId`.
  */
 export type ServerRole = string;
 
@@ -301,18 +252,13 @@ export interface ServerRoleRecord {
 }
 
 /**
- * A role, as opposed to somebody holding one.
+ * A role, as opposed to somebody holding one. `rank` answers who may act on
+ * whom; `permissions` answers what the holder may do at all. **Deliberately
+ * independent** — a rank-90 auditor holding nothing but `view_audit_log`
+ * outranks the moderators without gaining any of their powers.
  *
- * `rank` answers who may act on whom — kick, ban, mute and role assignment all
- * refuse against an equal or higher rank. `permissions` answers what the holder
- * may do at all. They are deliberately independent: a bot with `send_messages`
- * and rank 5 is below everybody and can still talk, and a rank-90 auditor with
- * nothing but `view_audit_log` outranks the moderators without gaining any of
- * their powers.
- *
- * `is_system` marks the five that ship with the server. They can be renamed,
- * recoloured and re-permissioned; they cannot be deleted, because the join
- * defaults and the owner fall back to them.
+ * `is_system` marks the five that ship. They can be renamed, recoloured and
+ * re-permissioned, and cannot be deleted: the defaults fall back to them.
  */
 export interface RoleDefinitionRecord {
   role_id: string;
@@ -330,16 +276,11 @@ export interface RoleDefinitionRecord {
    */
   grantable_by_invite: boolean;
   /**
-   * What this role asks of somebody before it grants itself to them.
+   * What this role asks before granting itself. Both null means never; both set
+   * means **both have to be true** — time alone is how a trusted tier lands on
+   * an account that signed up a month ago and never spoke.
    *
-   * Both null means it never does. Both set means both have to be true — a
-   * fortnight *and* fifty messages, not either. The other reading, where time
-   * alone is enough, is how a public server's trusted tier ends up on an
-   * account that signed up a month ago and has never spoken.
-   *
-   * Only ever a promotion. A member already holding a role of equal or higher
-   * rank is left alone, and nothing here ever takes a role away: somebody who
-   * goes quiet does not slide back down.
+   * Only ever a promotion; nothing here takes a role away.
    */
   auto_grant_after_days: number | null;
   auto_grant_after_messages: number | null;
@@ -351,17 +292,13 @@ export interface RoleDefinitionRecord {
 export type BotStatus = "pending" | "approved" | "denied";
 
 /**
- * A bot, and what an operator agreed to let it do.
+ * A bot, and what an operator agreed to let it do. `requested_permissions` is
+ * **written once and never rewritten** — a bot coming back asking for more is
+ * asking a question already answered. `granted_permissions` is its entire
+ * permission set; bots hold no roles, so no role edit can widen one.
  *
- * `requested_permissions` is what the bot said it wanted, written once when the
- * row was created and never rewritten — a bot that comes back asking for more
- * is asking a question that has already been answered. `granted_permissions` is
- * the operator's answer, and it is the bot's entire permission set: bots do not
- * hold roles, so no edit to a role can widen what one may do.
- *
- * `bot_id` is null on a registration created before the bot exists; `claim_token`
- * is null on one that arrived by knocking, and is cleared the moment a
- * registration is claimed.
+ * `bot_id` is null before the bot exists; `claim_token` is null on a knock and
+ * is cleared the moment a registration is claimed.
  */
 export interface BotRecord {
   registration_id: string;
@@ -372,12 +309,9 @@ export interface BotRecord {
   requested_permissions: Permission[];
   granted_permissions: Permission[];
   /**
-   * How high a bot sits for the checks about acting on people.
-   *
-   * Zero by default, and zero means it cannot kick, ban or mute anybody, since
-   * those all want a strictly higher rank than the target. A bot that only
-   * deletes spam does not need it — deleting a message is not acting on a
-   * person — so most bots should stay here.
+   * How high a bot sits for the checks about acting on people. Zero means it
+   * cannot kick, ban or mute anybody, which is where most bots should stay:
+   * deleting a message is not acting on a person.
    */
   rank: number;
   status: BotStatus;
@@ -426,14 +360,11 @@ export interface ServerChannelRecord {
    */
   post_min_rank: number | null;
   /**
-   * Which permission scope decides what each role may do here.
+   * Which permission scope decides what each role may do here. Null means the
+   * channel has no opinion.
    *
-   * Null means the channel has no opinion and every role gets what its
-   * server-wide definition gives it, which is every channel until somebody
-   * narrows one.
-   *
-   * Never resolve a permission by reading this. `channelPermissions.ts` is the
-   * one answer and every path goes through it — the comment there says why.
+   * **Never resolve a permission by reading this.** `channelPermissions.ts` is
+   * the one answer and every path goes through it.
    */
   permission_scope_id: string | null;
   /**
@@ -605,12 +536,9 @@ export interface ReportRecord {
 }
 
 /**
- * A report about a person rather than about one message.
- *
- * `status` does not reuse the message queue's `"approved" | "deleted"`. There,
- * "approved" is a verdict on the message — it stays. Applied to a person that
- * word reads as approving of them, which is the opposite of what dismissing a
- * report means, so this says what it does.
+ * A report about a person rather than a message. `status` deliberately does not
+ * reuse the message queue's "approved", which applied to a person reads as
+ * approving of them.
  */
 export interface UserReportRecord {
   report_id: string;

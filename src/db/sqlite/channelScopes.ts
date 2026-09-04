@@ -98,15 +98,12 @@ export async function renamePermissionTemplate(scopeId: string, name: string): P
 }
 
 /**
- * Replace a scope's rules wholesale.
+ * Replace a scope's rules wholesale. The editor sends the matrix it is showing,
+ * so a rule absent from the payload has been set back to inherit and its row
+ * has to go — applying only what is present makes inherit unreachable.
  *
- * The editor sends the matrix it is showing, so a rule that has gone from the
- * payload has been set back to inherit and its row has to go. Applying only the
- * rules present would make "inherit" unreachable once anything else was set,
- * which is the same shape of bug as a gate that could be set and never cleared.
- *
- * One transaction, because a half-applied matrix is a channel with permissions
- * nobody chose.
+ * One transaction: a half-applied matrix is a channel with permissions nobody
+ * chose.
  */
 export async function replacePermissionRules(
   scopeId: string,

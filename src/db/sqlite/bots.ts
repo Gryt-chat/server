@@ -5,19 +5,14 @@ import type { BotRecord, BotStatus } from "../interfaces";
 import { fromIso, fromIsoNullable, getSqliteDb, toIso } from "./connection";
 
 /**
- * The bot registry.
+ * The bot registry. One row per bot an operator has been asked about, whether
+ * or not they said yes.
  *
- * One row per bot an operator has been asked about, whether or not they said
- * yes. Two things live here that deliberately do not live anywhere else:
- *
- * - **What the bot asked for**, written once and never rewritten. A bot whose
- *   image has been taken over must not be able to change the question after it
- *   has been answered, so `requested_permissions` is set when the row is created
- *   and every later declaration is dropped on the floor. `updateRequest` does
- *   not exist, and its absence is the feature.
- * - **What the operator agreed to**, which is the bot's whole permission set.
- *   Not a role: a bot does not share a tier with anything else, so editing a
- *   role can never be a way to widen what a bot may do.
+ * - **What the bot asked for**, written once and never rewritten, so a bot
+ *   whose image has been taken over cannot change the question after it has
+ *   been answered. `updateRequest` does not exist, and its absence is the point.
+ * - **What the operator agreed to**, which is the bot's whole permission set —
+ *   not a role, so no role edit can widen what a bot may do.
  */
 
 const NAME_MAX = 32;

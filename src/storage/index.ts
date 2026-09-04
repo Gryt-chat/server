@@ -9,16 +9,11 @@ interface PutObjectCommon {
 
 /**
  * Store an object either from memory or from a file already on disk.
+ * `sourcePath` exists so a large upload never has to be held in RAM — nothing
+ * between the socket and the bucket materialises the whole file.
  *
- * `sourcePath` exists so a large upload never has to be held in RAM. multer
- * writes the request to a temp file, we hand the path down here, and the
- * backend streams it: S3 in multipart chunks, the filesystem backend with a
- * copy. Nothing between the socket and the bucket materialises the whole file.
- *
- * The two are mutually exclusive, and the union enforces that at compile time
- * rather than leaving a runtime "exactly one of these" check to be forgotten.
- * Callers holding a Buffer — anything sharp has just re-encoded, a generated
- * thumbnail, a sanitised SVG — keep passing `body` and are unaffected.
+ * The union makes the two mutually exclusive at compile time rather than
+ * leaving a runtime "exactly one of these" check to be forgotten.
  */
 export type PutObjectParams =
   | (PutObjectCommon & { body: Buffer | Uint8Array | Blob | string; sourcePath?: never })

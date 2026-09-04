@@ -99,16 +99,10 @@ export async function upsertUser(
   if (existing) {
     const newAvatar = opts?.avatarFileId ?? existing.avatar_file_id ?? null;
 
-    // The stored nickname wins on a rejoin. `nickname` here is whatever the
-    // connecting client happens to hold, and a client with no nickname set
-    // sends the literal default "Unknown" — so overwriting meant signing in
-    // from a fresh install renamed you on every server you had ever joined.
-    // That is how live rows ended up reading "Unknown".
-    //
-    // Renaming yourself on a server stays an explicit act: `profile:update`
-    // from Settings, which is also what the "sync to all" button drives. The
-    // token reconnect path in joinHelpers.ts already read the name from here
-    // rather than from the client; this makes the two paths agree.
+    // The stored nickname wins on a rejoin. A client with none set sends the
+    // literal default "Unknown", so overwriting meant a fresh install renamed
+    // you on every server you had ever joined — which is how live rows ended up
+    // reading "Unknown". Renaming stays an explicit `profile:update`.
     db.prepare(
       `UPDATE users SET avatar_file_id = ?, last_seen = ?, is_active = 1 WHERE gryt_user_id = ?`
     ).run(newAvatar, toIso(now), grytUserId);
@@ -149,17 +143,12 @@ export async function upsertUser(
 }
 
 /**
- * Record what a member says their DM public key is.
+ * Record what a member says their DM public key is. Not parsed, verified or
+ * trusted — see `UserRecord.dm_key_binding`. Null clears it.
  *
- * Stored whole and handed back whole. Not parsed, not verified, not trusted —
- * see the note on `UserRecord.dm_key_binding`. Null clears it, which is what a
- * client does when it has no identity to sign one with any more.
- *
- * Last write wins. A member who signs in from a second device sends the same
- * binding, because the key is derived from a seed both devices have; a member
- * whose seed changed sends a different one, and every peer who had pinned the
- * old key will refuse it and say so. That refusal is the feature, so nothing
- * here tries to smooth it over by keeping both.
+ * Last write wins. A changed seed sends a different binding and every peer who
+ * pinned the old key refuses it. **That refusal is the feature**, so nothing
+ * here smooths it over by keeping both.
  */
 export async function setUserDmKeyBinding(
   serverUserId: string,
@@ -203,14 +192,9 @@ export async function getRegisteredUserCount(): Promise<number> {
 }
 
 /**
- * Rename a member, counting it only when the name actually changes.
- *
- * The guard is the whole point. The client sends `profile:update` on things
- * that are not renames — saving an unrelated setting, syncing a profile across
- * servers — and counting those would make the number say "this person keeps
- * changing who they are" about somebody who has never renamed once. A signal
- * that fires without cause is worse than no signal, because the member list
- * presents it as a reason for suspicion.
+ * Rename a member, **counting it only when the name actually changes**. The
+ * client sends `profile:update` for things that are not renames, and the member
+ * list presents this count as a reason for suspicion.
  */
 export async function updateUserNickname(serverUserId: string, nickname: string): Promise<void> {
   const db = getSqliteDb();
@@ -233,17 +217,10 @@ export async function setUserAvatar(serverUserId: string, avatarFileId: string |
 }
 
 /**
- * Set or clear the look this member's owl is drawn in.
- *
- * Deliberately not folded into `setUserAvatar`. Designing an owl uploads a
- * picture too — it is what an older client and the voice tile's dominant colour
- * both read — so an upload cannot be taken to mean somebody has stopped using a
- * designed look. The client knows which of the two happened and says so; the
- * server would have to guess, and it would guess wrong on every save from the
- * editor.
- *
- * Null clears it, and clearing is a real thing somebody does: it is going back
- * to an uploaded picture, or back to the owl their name draws.
+ * Set or clear the look this member's owl is drawn in. Deliberately not folded
+ * into `setUserAvatar`: designing an owl uploads a picture too, so an upload
+ * cannot mean somebody stopped using a designed look. The client knows which
+ * happened; the server would guess wrong on every save from the editor.
  */
 export async function setUserWorn(serverUserId: string, worn: string | null): Promise<void> {
   const db = getSqliteDb();
@@ -291,22 +268,13 @@ export async function setUserInactive(serverUserId: string): Promise<void> {
 }
 
 /**
- * What happened when a membership was asked to move (GRYT-285).
+ * What happened when a membership was asked to move (GRYT-285). The two ways of
+ * not carrying are not the same thing:
  *
- * This used to be a boolean, and the two ways of not carrying are not the same
- * thing at all:
- *
- * - `no_prior_membership` is ordinary. Somebody made an account before ever
- *   joining this particular server, so there was nothing to carry. Nothing is
- *   wrong and nobody needs telling.
- * - `account_already_member` is the collision. Both identities are already
- *   members here, and the guest membership stays where it is — with its roles,
- *   its history and anything it owns — while the person continues as their
- *   account. Nothing is lost, but something is left behind, and a caller that
- *   cannot tell this apart from "nothing to do" cannot say so.
- *
- * Naming them is what lets the join handler log the difference, and is the
- * shape the per-server claim flow needs to report a result back to the client.
+ * - `no_prior_membership` is ordinary — nothing to carry, nobody to tell.
+ * - `account_already_member` is the collision. The guest membership stays where
+ *   it is with its roles and history, so something is left behind, and a caller
+ *   that cannot tell this from "nothing to do" cannot say so.
  */
 export type CarryIdentityResult =
   | { status: "carried" }
@@ -315,15 +283,11 @@ export type CarryIdentityResult =
 
 /**
  * Move a membership from a local identity to the account that proved it owns
- * the key.
+ * the key. Reuses `replaceUserIdentity`, which also carries ownership across
+ * and revokes the old refresh tokens.
  *
- * Reuses `replaceUserIdentity`, which is the moderator-driven version of the
- * same move — it carries ownership across and revokes the old refresh tokens,
- * both of which are wanted here too.
- *
- * Never merges. Two rows would have to become one, and there is no correct way
- * to reconcile two sets of roles and two histories of messages, so a collision
- * is reported rather than resolved.
+ * **Never merges.** There is no correct way to reconcile two sets of roles and
+ * two histories, so a collision is reported rather than resolved.
  */
 export async function carryIdentityForward(
   priorGrytUserId: string,
