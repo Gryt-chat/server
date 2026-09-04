@@ -180,6 +180,13 @@ describe("their summary, which is rich text", () => {
   it("comes out as one line of prose", () => {
     assert.equal(summaryToText("<p>SKOL</p><p>&nbsp;</p><p>die Box</p>"), "SKOL die Box");
     assert.equal(summaryToText("a<br>b"), "a b");
+    /* Not only <p> and <br>. A summary is a WYSIWYG field, so it carries
+       links, images and spans, and any tag left in reaches the card as
+       literal markup. */
+    assert.equal(
+      summaryToText('<a href="https://x.test">click</a> and <img src="y"> <span>more</span>'),
+      "click and more",
+    );
     assert.equal(summaryToText("&amp; &lt;b&gt; &quot;x&quot;"), '& <b> "x"');
   });
 
