@@ -1,5 +1,6 @@
 import type { HandlerContext, EventHandlerMap } from "./types";
 import { getUserByServerId } from "../../db";
+import { effectiveModerationState } from "../../db/sqlite/users";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 import { mayViewChannel } from "../../services/channelPermissions";
 import { resolveConversationAccess } from "../utils/conversationAccess";
@@ -74,6 +75,11 @@ export function registerTypingHandlers(ctx: HandlerContext): EventHandlerMap {
 
 			const user = await getUserByServerId(userId);
 			if (!user) return;
+
+			// A muted member is not going to say anything, so the room is not
+			// told they are about to. Read off the row already fetched rather
+			// than through `textMuteFor`, which would read it a second time.
+			if (effectiveModerationState(user).isServerMuted) return;
 
 			// Resolved before the timer is set, so a guessed id for a hidden
 			// channel or somebody else's DM never reaches anyone — and never
