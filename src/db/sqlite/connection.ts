@@ -611,38 +611,25 @@ function runMigrations(d: DatabaseSync): void {
   }
 
   // The key this server signs SFU client tokens with, generated on first use.
+  // Not derived from JWT_SECRET, so rotating the login secret does not silently
+  // take voice down with it.
   //
-  // It used to be SERVER_PASSWORD, which defaults to empty and which nothing
-  // asks for, so the ordinary deployment signed with a key anybody can guess.
-  // Kept here rather than derived from JWT_SECRET so that rotating the login
-  // secret does not silently take voice down with it: two keys for two jobs.
-  //
-  // Deliberately not on ServerConfigRecord. `rowToConfig` names its fields one
-  // by one and this is not among them, so a column that must never leave the
-  // process cannot ride out on `server:settings:get` because somebody widened a
-  // type. See GRYT-786.
+  // **Deliberately not on ServerConfigRecord.** `rowToConfig` names its fields
+  // one by one, so this cannot ride out on `server:settings:get` because
+  // somebody widened a type (GRYT-786).
   if (!hasColumn(d, "server_config", "sfu_secret")) {
     d.exec("ALTER TABLE server_config ADD COLUMN sfu_secret TEXT");
   }
 
-  // Whether somebody who is not already a member needs an invite. Text rather
-  // than a boolean because the third answer — hold them until a moderator says
-  // yes — is the one a busy public server actually wants, and adding it as a
-  // second flag later would leave two columns that can disagree.
+  // Whether a non-member needs an invite. Text rather than a boolean because
+  // the third answer — hold them until a moderator says yes — is what a busy
+  // public server wants, and a second flag later would be two columns that can
+  // disagree. Defaults to 'invite'.
   //
-  // Defaults to 'invite', which is what every server did before the column
-  // existed.
-  // How often somebody has renamed themselves here, and when they last did.
-  //
-  // A count and a timestamp rather than the old names. What answers "is this
-  // the person I think it is" is that the account became this name an hour ago,
-  // not what it used to be called — and past names are the part somebody may
-  // have had a good reason to leave behind. Anything that wants the names
-  // themselves should be gated on a role and is not this.
-  //
-  // Existing rows start at zero, which reads as "never renamed". That is wrong
-  // for anyone who has, and there is nothing to backfill from; a count that
-  // only starts now is worth more than no count at all.
+  // Then: how often somebody has renamed themselves, and when. A count and a
+  // timestamp rather than the old names, which are the part somebody may have
+  // had a good reason to leave behind. Existing rows start at zero, which reads
+  // as "never renamed" and is wrong for anyone who has.
   if (!hasColumn(d, "users", "nickname_change_count")) {
     d.exec("ALTER TABLE users ADD COLUMN nickname_change_count INTEGER NOT NULL DEFAULT 0");
   }
@@ -729,54 +716,33 @@ function runMigrations(d: DatabaseSync): void {
     d.exec("ALTER TABLE role_definitions ADD COLUMN auto_grant_after_messages INTEGER");
   }
 
-  // Whether a bot nobody has heard of may leave a knock at the door.
-  //
-  // `request` writes one pending row per bot identity and admits nothing; an
-  // operator still has to approve it. `disabled` refuses outright, for a server
-  // that only ever wants bots it set up itself with a claim token.
-  //
-  // Defaults to `request` rather than `disabled`, which is the one place this
-  // change widens anything. What it widens is a rate-limited row in a table that
-  // grants nothing — the same shape as a join request, which is already how a
-  // stranger asks to be let in.
+  // Whether an unknown bot may knock. `request` writes one pending row per bot
+  // identity and admits nothing; `disabled` refuses outright. Defaults to
+  // `request`, which widens only a rate-limited row in a table that grants
+  // nothing.
   if (!hasColumn(d, "server_config", "bot_join_policy")) {
     d.exec("ALTER TABLE server_config ADD COLUMN bot_join_policy TEXT NOT NULL DEFAULT 'request'");
   }
 
-  // What somebody's owl is wearing, as the short string `@gryt/owl` encodes.
+  // What somebody's owl is wearing, as `@gryt/owl` encodes it. Drawn on the
+  // client at the size it is shown, unlike `avatar_file_id`.
   //
-  // The avatar it describes is drawn on the client, every time, at the size it
-  // is shown. That is the difference from `avatar_file_id`, which is a picture
-  // somebody uploaded: a designed owl kept as a PNG stops following palette
-  // changes and never gets sharper than the raster it was saved at.
+  // Null means no designed look. **That is not the same as the string for a
+  // look with every slot empty**, which is somebody who took everything off and
+  // draws differently from the owl their seed would have picked.
   //
-  // Null means there is no designed look — every row that predates this, and
-  // everybody who uploaded a picture instead. That is not the same as the string
-  // for a look with every slot empty, which is somebody who took everything off
-  // and draws differently from the owl their seed would have picked.
-  //
-  // Never parsed here. See `utils/wornString.ts` for why the server checks the
-  // shape and stops there.
+  // Never parsed here — see `utils/wornString.ts`.
   if (!hasColumn(d, "users", "avatar_worn")) {
     d.exec("ALTER TABLE users ADD COLUMN avatar_worn TEXT");
   }
 
-  // Whether members can open direct messages with each other here.
+  // Whether members can open DMs here. Off means no conversation can be opened
+  // and none can be posted in; the rows stay, so turning it back on does not
+  // throw away history. Defaults to on.
   //
-  // A server that stores DMs is storing private messages between two of its
-  // members on behalf of both, and an operator who did not sign up for that
-  // needs a way to say no. Off means no conversation can be opened and no
-  // message can be sent to one that already exists; the rows stay, because
-  // turning the setting back on should not have thrown away history.
-  //
-  // Defaults to on, which matches every other feature arriving switched on,
-  // and an operator who wants it off can say so before inviting anybody.
-  // What a group is called, when somebody has named it.
-  //
-  // Only groups. A one-to-one conversation is named after the person you are
-  // talking to, which is not a string this table should be holding: it changes
-  // when they rename themselves, and a copy here would go stale. NULL on a
-  // group means the clients build a name from who is in it.
+  // Then: what a group is called. **Only groups** — a one-to-one is named after
+  // the other person, and a copy here would go stale when they rename
+  // themselves. NULL means the clients build a name from who is in it.
   if (!hasColumn(d, "conversations", "name")) {
     d.exec("ALTER TABLE conversations ADD COLUMN name TEXT");
   }
@@ -790,15 +756,10 @@ function runMigrations(d: DatabaseSync): void {
     d.exec("ALTER TABLE conversations ADD COLUMN icon_file_id TEXT");
   }
 
-  // When somebody took this conversation out of their own sidebar.
-  //
-  // On the membership row rather than the conversation, because it is one
-  // person's answer: hiding a conversation says nothing about whether the
-  // other party wants it in theirs. NULL means visible, which is what every
-  // row written before this column existed meant.
-  //
-  // Nothing is deleted. The messages stay, and the conversation comes back on
-  // its own when a new one arrives — see `clearConversationHidden`.
+  // When somebody took this conversation out of their own sidebar. On the
+  // membership row rather than the conversation, since it is one person's
+  // answer. Nothing is deleted, and a new message brings it back — see
+  // `clearConversationHidden`.
   if (!hasColumn(d, "conversation_members", "hidden_at")) {
     d.exec("ALTER TABLE conversation_members ADD COLUMN hidden_at TEXT");
   }
@@ -807,36 +768,22 @@ function runMigrations(d: DatabaseSync): void {
     d.exec("ALTER TABLE server_config ADD COLUMN allow_dms INTEGER NOT NULL DEFAULT 1");
   }
 
-  // What a member says their DM public key is (GRYT-720).
+  // What a member says their DM public key is (GRYT-720). Stored whole, handed
+  // back whole, and nothing here reads it — a server that verified the binding
+  // would assert what a client has to check for itself.
   //
-  // A compact JWT the client signs with the identity key it joined on, carrying
-  // its X25519 public key. Stored whole and handed back whole. Nothing here
-  // reads it, and that is the design rather than a shortcut: the point of the
-  // feature is that this server cannot read the messages, and a server that
-  // verified the binding would be asserting something a client must check for
-  // itself anyway. Members pin what they are given and refuse a change.
-  //
-  // One column rather than a key and a signature side by side, so there is no
-  // way to hand out one member's key with another's signature.
-  //
-  // NULL for everybody who has not sent one, which is every row written before
-  // this and every client older than the feature. No DM key means no encrypted
-  // message, which is what happens today.
+  // **One column rather than a key and a signature side by side**, so there is
+  // no way to hand out one member's key with another's signature.
   if (!hasColumn(d, "users", "dm_key_binding")) {
     d.exec("ALTER TABLE users ADD COLUMN dm_key_binding TEXT");
   }
 
-  // A message this server cannot read (GRYT-729).
+  // A message this server cannot read (GRYT-729). The whole envelope, stored
+  // untouched. When it is set `text` is null and there is nothing to filter,
+  // search, moderate or export — which is why the handler refuses a sealed
+  // message on a channel, where there is no fixed set of keys to seal to.
   //
-  // The whole sealed envelope, stored and handed back untouched. When it is set
-  // `text` is null and there is nothing here to filter, search, moderate or
-  // export — which is the feature rather than a regression, and is why the
-  // handler refuses one on a channel: a channel is a room with a member list,
-  // not a pair of people, and there is no key to seal to.
-  //
-  // Null for every message written before this and every one sent in the clear.
-  // A conversation is a mix of both for as long as it takes everybody to
-  // update, and each message says which it was.
+  // A conversation is a mix of both until everybody has updated.
   if (!hasColumn(d, "messages", "sealed")) {
     d.exec("ALTER TABLE messages ADD COLUMN sealed TEXT");
   }
@@ -857,22 +804,15 @@ function runMigrations(d: DatabaseSync): void {
 }
 
 /**
- * Give the roles table room for more than one role per member.
+ * Give the roles table room for more than one role per member. SQLite cannot
+ * widen a primary key in place, so this is the standard rebuild.
  *
- * The old table keyed on server_user_id alone. SQLite cannot widen a primary
- * key in place, so this is the standard rebuild: make the new table, copy every
- * row into it, swap the names. Every existing row is one role for one person
- * and moves across unchanged, so a database that has been through this looks
- * exactly as it did until somebody is given a second role.
+ * Detected by asking the table what its key is rather than by a version number,
+ * which would have to be right about a file this has already run on.
  *
- * Detected by asking the table what its key is rather than by a version number.
- * A version number would have to be right about a file this has already run on,
- * and PRAGMA table_info answers that from the file itself.
- *
- * Rolling back to a server that predates this leaves the wider table in place.
- * Its inserts would then fail for anybody holding two roles, which is loud
- * rather than silent -- and no worse than the alternative, which is a downgrade
- * quietly dropping every second role.
+ * **Rolling back leaves the wider table in place**, and an old build's inserts
+ * then fail for anybody holding two roles — loud rather than silently dropping
+ * every second role.
  */
 function migrateRolesToMultiple(d: DatabaseSync): void {
   const cols = d.prepare("PRAGMA table_info(roles)").all() as unknown as {
@@ -924,21 +864,13 @@ const PERMISSION_SCHEMA_KEY = "permission_schema_version";
 
 /**
  * Give existing roles the permissions that did not exist when they were
- * written.
+ * written. A build that adds one changes no stored role, so the release that
+ * made reading a permission would leave every role unable to read. The seeder
+ * cannot fix it: it only inserts missing roles and must never overwrite what an
+ * operator chose.
  *
- * A role is a stored list of permission strings, so a build that adds a
- * permission changes no row — and on the release that made reading a
- * permission, every role on every existing server would have become a role that
- * cannot read. The seeder cannot fix that: it only inserts roles that are
- * missing, and it must never overwrite permissions an operator chose.
- *
- * So each new permission names the one it was carved out of, and whoever holds
- * that keeps doing what they were already doing. Grants only, never removals,
- * and stamped so it runs once — though `backfillFor` skips what a role already
- * has, so running it twice would change nothing either.
- *
- * A brand-new database gets stamped at the current version after the seeder has
- * already written the right sets, so this is a no-op there.
+ * **Grants only, never removals.** Stamped so it runs once, though
+ * `backfillFor` skips what a role already has.
  */
 function backfillRolePermissions(d: DatabaseSync): void {
   const stamped = Number(readSchemaMeta(d, PERMISSION_SCHEMA_KEY) ?? 0);
@@ -982,17 +914,12 @@ function backfillRolePermissions(d: DatabaseSync): void {
 }
 
 /**
- * Write the five roles that ship with the server, if they are missing.
+ * Write the five roles that ship with the server, if they are missing. **INSERT
+ * OR IGNORE, never a replace** — these rows are editable, so this brings back a
+ * deleted row without touching the permissions an operator chose.
  *
- * INSERT OR IGNORE rather than a replace: these rows are editable, and running
- * this on every start is what makes a role somebody deleted by hand come back —
- * but only the row, never the permissions an operator chose. A build that adds
- * a sixth built-in gets it on the next start without a version stamp to
- * maintain.
- *
- * The one thing that is rewritten every start is `is_system`, because that flag
- * is this file's opinion and not the operator's: a build that promotes a role
- * to built-in has to be able to say so.
+ * `is_system` is rewritten every start, because that flag is this file's
+ * opinion rather than the operator's.
  */
 function seedBuiltInRoles(d: DatabaseSync): void {
   const now = new Date().toISOString();

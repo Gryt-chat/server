@@ -7,16 +7,12 @@ export interface MentionRecord {
 }
 
 /**
- * Record that a message named these people.
+ * Record that a message named these people. `INSERT OR IGNORE`, so an edit that
+ * re-parses the same message does not double up or reset a mention somebody has
+ * already read.
  *
- * `INSERT OR IGNORE` because the primary key is the pair, and an edit that
- * re-parses the same message must not double up or reset a mention somebody
- * has already read. First mention wins, which is also the honest reading: they
- * were told once.
- *
- * The sender is dropped here rather than by the caller. Every path that stores
- * a message has to make the same exclusion, and one that forgets would send
- * somebody a notification for their own sentence.
+ * The sender is dropped here rather than by the caller: a path that forgot
+ * would notify somebody about their own sentence.
  */
 export async function recordMentions(args: {
   conversationId: string;
@@ -86,14 +82,9 @@ export async function countUnseenMentions(
 }
 
 /**
- * Mark what they have read.
- *
- * By conversation rather than by message, because that is how somebody reads:
- * they open a channel and catch up. Passing no conversation clears everything,
- * which is what a "mark all read" is.
- *
- * Already-seen rows are left alone rather than re-stamped, so the time recorded
- * stays the first time they saw it.
+ * Mark what they have read, by conversation rather than by message. No
+ * conversation clears everything. Already-seen rows are left alone, so the time
+ * recorded stays the first time they saw it.
  */
 export async function markMentionsSeen(
   serverUserId: string,

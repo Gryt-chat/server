@@ -1,18 +1,13 @@
 import { getSqliteDb, toIso } from "./connection";
 
 /**
- * Who somebody does not want to hear from.
+ * Who somebody does not want to hear from. A personal act rather than a
+ * moderator one: no permission, works against somebody who outranks you, and
+ * the row is nobody's business but the blocker's.
  *
- * A personal act rather than a moderator one, which is what makes it a
- * different table from `bans`: it needs no permission, it works against
- * somebody who outranks you, and the row is nobody's business but the
- * blocker's.
- *
- * **Every function here takes gryt ids, not server ids.** Same reasoning as
- * `bans`: a block keyed on `server_user_id` would last until the blocked
- * person rejoined with a fresh local identity, which is one tap. Callers hold
- * `server_user_id` far more often, so `blockedGrytIdsFor` and
- * `blockersOfSender` exist to be called with what a caller has.
+ * **Every function here takes gryt ids, not server ids.** One keyed on
+ * `server_user_id` would last until the blocked person rejoined with a fresh
+ * local identity, which is one tap.
  */
 
 export interface BlockedPerson {
@@ -101,14 +96,9 @@ export async function eitherHasBlocked(
 }
 
 /**
- * The `server_user_id`s whose owners have blocked this sender.
- *
- * The delivery question, asked the way delivery has it: a sender's server id
- * in, the server ids of everybody who does not want their message out. Both
- * sides are translated through `users` here rather than at every call site.
- *
- * A `Set` rather than an array because the caller filters a recipient list
- * against it once per message.
+ * The `server_user_id`s whose owners have blocked this sender — the delivery
+ * question in the ids delivery has, translated here rather than at every call
+ * site.
  */
 export async function blockersOfSender(senderServerUserId: string): Promise<Set<string>> {
   const db = getSqliteDb();

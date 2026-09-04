@@ -4,21 +4,14 @@ import type { ConversationRecord } from "../interfaces";
 import { fromIso, fromIsoNullable, getSqliteDb, toIso } from "./connection";
 
 /**
- * Conversations that are not channels.
+ * Conversations that are not channels: visible only to the people listed in
+ * `conversation_members`.
  *
- * `messages` has always been keyed on `conversation_id` rather than a channel
- * id, and until now every value in that column happened to be a channel. This
- * table is the other kind: a conversation that exists on its own and is visible
- * only to the people listed against it in `conversation_members`.
- *
- * Nothing here is cross-server, and that is deliberate rather than unfinished.
- * A direct message is filed under `server_user_id`, which is this server's own
- * pseudonym for somebody — see `socket/utils/memberIdentity.ts` for why the
- * account id it is derived from is never handed out. Two servers therefore
- * cannot tell they are hosting the same pair of people, and a DM opened on one
- * has no relationship to a DM opened on the other. That is the whole design:
- * the alternative needs either a central store of everybody's private messages
- * or servers that know about each other, and Gryt wants neither.
+ * **Nothing here is cross-server, deliberately.** A DM is filed under
+ * `server_user_id`, this server's own pseudonym for somebody, so two servers
+ * cannot tell they host the same pair of people. The alternative needs either a
+ * central store of everybody's private messages or servers that know about each
+ * other.
  */
 
 /** The prefix every direct-message conversation id carries. */
@@ -35,49 +28,34 @@ const DM_PREFIX = "dm_";
 export const MAX_CONVERSATION_MEMBERS = 10;
 
 /**
- * The id of the direct message between two members, derived from the pair.
+ * The id of the direct message between two members, derived from the pair so
+ * both sides reach the same one without asking each other. Sorted first.
  *
- * Derived rather than random so that both sides arrive at the same id without
- * asking each other, and so opening the same DM twice — from two devices, or
- * from both ends at once — cannot produce two conversations holding half the
- * history each. Sorted first, because "Alice opened it" and "Bob opened it"
- * have to give the same answer.
- *
- * **This id is not a secret and must never be treated as one.** Anybody who
- * knows both `server_user_id`s can compute it, and member lists carry those.
- * Access is decided by `conversation_members`, never by whether the caller
- * could name the id — which is exactly the mistake `chat:fetch` used to make
- * for channels.
+ * **This id is not a secret and must never be treated as one.** Anybody with
+ * both `server_user_id`s can compute it, and member lists carry those. Access
+ * is decided by `conversation_members`, never by naming the id — which is
+ * exactly the mistake `chat:fetch` used to make for channels.
  */
 export function directConversationId(a: string, b: string): string {
   const pair = [a, b].sort();
-  // The separator is a NUL, written as an escape. It has to be a byte that
-  // cannot occur in a server_user_id, or ["ab", "c"] and ["a", "bc"] hash to
-  // the same conversation — two different pairs sharing one id, and one
-  // pair reading the other's messages.
+  // A NUL, written as an escape. It has to be a byte that cannot occur in a
+  // server_user_id, or ["ab", "c"] and ["a", "bc"] hash to the same
+  // conversation and one pair reads the other's messages.
   //
-  // It was a raw NUL in the source until 2026-08-29, which made grep and
-  // git treat this file as binary and made the character invisible in every
-  // diff and review. Any editor or formatter that dropped it would have
-  // changed the id of every existing one-to-one conversation — each one
-  // silently becoming a new, empty conversation — with nothing in the diff
-  // to see. The escape is the same byte and cannot go missing unnoticed.
+  // Raw in the source it made git treat this file as binary, so an editor that
+  // dropped it would have changed the id of every existing conversation with
+  // nothing visible in the diff. The escape cannot go missing unnoticed.
   const digest = createHash("sha256").update(pair.join("\0")).digest("hex");
   return `${DM_PREFIX}${digest.slice(0, 32)}`;
 }
 
 /**
- * Whether an id names a conversation rather than a channel.
+ * Whether an id names a conversation rather than a channel. A prefix test, not
+ * a lookup: the member list is rebuilt on every voice state change.
  *
- * A prefix test rather than a lookup, because the callers are on the hot path —
- * the member list is rebuilt and rehashed on every voice state change, and a
- * database read per member per broadcast is not affordable there.
- *
- * Safe in the direction that matters. Every conversation id is written by
- * `directConversationId` or `createGroupConversation`, and both carry the
- * prefix, so this can never answer "channel" for a conversation. The reverse is
- * possible — an admin may name a channel `dm_something` — and costs that
- * channel's id being left out of the member list. Cosmetic, against a leak.
+ * Safe in the direction that matters — every conversation id carries the
+ * prefix, so this can never answer "channel" for one. The reverse costs a
+ * channel named `dm_something` its place in the member list.
  */
 export function isConversationId(id: string): boolean {
   return id.startsWith(DM_PREFIX);
@@ -137,17 +115,12 @@ export interface ConversationSummary extends ConversationRecord {
 }
 
 /**
- * Every conversation this member is party to and has not hidden, most recently
- * used first.
+ * Every conversation this member is party to and has not hidden, most recent
+ * first. `created_at` is the fallback so a DM opened and never used still
+ * appears rather than sorting below everything.
  *
- * Ordered on `last_message_at` with a fallback to `created_at` so a DM that was
- * opened and never used still appears, rather than sorting below everything as
- * an empty date would put it.
- *
- * Hidden rows are filtered here rather than at the handler, so there is one
- * place that decides what a person's list contains. `hidden_at` is on the
- * membership row, so this is the caller's own answer and not the other
- * party's — see the migration in `connection.ts`.
+ * Hidden rows are filtered here rather than at the handler, so one place
+ * decides what a person's list contains.
  */
 export async function listConversationsForUser(serverUserId: string): Promise<ConversationSummary[]> {
   const db = getSqliteDb();
@@ -177,19 +150,13 @@ export async function listConversationsForUser(serverUserId: string): Promise<Co
  * than generated — the insert simply loses the race harmlessly.
  */
 /**
- * Start a group conversation with the people given.
+ * Start a group conversation. **A random id, not a derived one** — a hashed one
+ * cannot survive membership changing, since adding somebody would change the id
+ * and the conversation would read as a different one with no history.
  *
- * A random id, not a derived one. `directConversationId` hashes the pair,
- * which is what makes a one-to-one idempotent from either end — and that
- * property cannot survive membership changing: adding somebody would change
- * the id, and the conversation would read as a different one with no history.
- * So a group is assigned an id once and keeps it.
- *
- * Adding somebody to a one-to-one therefore does not convert it. The caller
- * makes a new group instead, and the pair conversation stays exactly as it
- * was — see `dm:group:create`. That is a privacy decision as much as a
- * technical one: the history of a conversation between two people should not
- * become readable by a third because somebody tapped "add".
+ * So adding somebody to a one-to-one makes a new group and leaves the pair
+ * conversation alone: its history should not become readable by a third because
+ * somebody tapped add.
  */
 export async function createGroupConversation(
   createdBy: string,
@@ -242,13 +209,9 @@ export async function addConversationMember(
 }
 
 /**
- * Take yourself out of a group for good.
- *
- * Not the same as hiding it. Hiding is your own sidebar and a message brings
- * it back; leaving removes the membership row, so nothing arrives afterwards
- * and the history stops being readable to you. Only ever the caller's own row
- * — nobody removes anybody else, which keeps a moderation model out of a
- * conversation that has no moderators.
+ * Take yourself out of a group for good. Not hiding: the membership row goes,
+ * so nothing arrives afterwards and the history stops being readable. Only ever
+ * the caller's own row — a conversation has no moderators.
  */
 export async function leaveConversation(
   conversationId: string,
@@ -323,16 +286,12 @@ export async function openDirectConversation(
  * a handler can decline to tell everybody about a no-op.
  */
 /**
- * Take the conversation between two people out of one of their sidebars.
+ * Take the conversation between two people out of one of their sidebars, when
+ * somebody blocks. The blocked person's list is untouched and nothing is
+ * deleted.
  *
- * Called when somebody blocks: the blocker stops seeing it and the blocked
- * person's own list is untouched, which is the same act the blocker could have
- * performed by hand. Nothing is deleted — unblocking and saying something puts
- * it back with its history intact.
- *
- * Only the direct conversation. A group both of them are in is not between
- * them, and removing somebody from a group because one member blocked another
- * would be a block with a blast radius.
+ * **Only the direct conversation.** Touching a group both are in would be a
+ * block with a blast radius.
  */
 export async function hideConversationsBetween(
   blockerServerUserId: string,
@@ -365,17 +324,12 @@ export async function setConversationHidden(
 }
 
 /**
- * Un-hide a conversation for everybody in it.
+ * Un-hide a conversation for everybody in it, when a message lands. Hiding is
+ * "not in my sidebar", and without this a hidden conversation would silently
+ * swallow everything sent afterwards. Blocking is the feature that means the
+ * other thing — see `hideConversationsBetween`.
  *
- * Called when a message lands. Hiding is "not in my sidebar", not "never speak
- * to me again" — without this a hidden conversation would swallow every
- * message somebody sent afterwards, silently, and the only sign would be the
- * unread count on a row that is not there.
- *
- * Blocking is the feature that does mean the other thing, and it is not this
- * one; it is on the roadmap as its own item and needs its own decisions.
- *
- * Returns the members it un-hid, so a caller can tell whose list just changed.
+ * Returns the members it un-hid, so a caller can tell whose list changed.
  */
 export async function clearConversationHidden(conversationId: string): Promise<string[]> {
   const db = getSqliteDb();
@@ -399,19 +353,13 @@ export async function touchConversation(conversationId: string, at: Date = new D
 }
 
 /**
- * Drop conversations nobody is still a member of, and their messages.
+ * Drop conversations nobody is still a member of, and their messages. The
+ * retention rule, deliberately not a timer: once the last participant leaves
+ * nobody can ever open it, so keeping it means holding private messages on
+ * behalf of people who have both gone.
  *
- * The retention rule, and it is deliberately not a timer. A conversation lives
- * as long as at least one participant is still a member of this server; when
- * the last of them leaves there is nobody who can ever open it again, so
- * keeping it would only mean the server holding private messages on behalf of
- * people who have both gone.
- *
- * Leaving is `is_active = 0` rather than a delete — the row stays so that
- * rejoining keeps roles and history — so this joins against that rather than
- * looking for missing users.
- *
- * Returns the ids it removed, for the caller to log.
+ * Leaving is `is_active = 0` rather than a delete, so this joins against that
+ * rather than looking for missing users.
  */
 export async function purgeOrphanedConversations(): Promise<string[]> {
   const db = getSqliteDb();

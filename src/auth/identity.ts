@@ -18,48 +18,33 @@ import { BUNDLED_IDENTITY_JWKS } from "./bundledJwks";
 /**
  * Who vouches for the key a certificate carries.
  *
- * `account` is a certificate from a trusted CA — today that is id.gryt.chat,
- * which issues only after Keycloak has authenticated somebody, so the `sub` is
- * a durable account that survives losing the device.
+ * `account` comes from a trusted CA, so the `sub` is durable and survives
+ * losing the device. `local` is signed by the key it describes — the key *is*
+ * the identity, which is enough to prove the same person came back and cannot
+ * survive the key being lost; see the ban note on `identityTierAccepted`.
  *
- * `local` is a certificate signed by the very key it describes. Nobody vouches
- * for it; the key is the identity. That is enough to join a server, because
- * joining only ever needed proof that the same person came back, and a
- * challenge-response over P-256 proves that on its own. What it cannot do is
- * survive the key being lost, and it costs nothing to mint another — see the
- * ban note on `identityTierAccepted`.
- *
- * `bot` is the same cryptography as `local` and a deliberately separate tier.
- * A bot is not a person and must never be able to look like one: it lands in
- * its own `sub` namespace, it is admitted by its own gate rather than by
- * `GRYT_IDENTITY_TIERS`, and every surface that shows a member shows that it is
- * one. Sharing the `local` tier would have been less code and would have meant
- * a bot and a guest were the same kind of thing to every check that asked.
+ * `bot` is the same cryptography as `local` and a deliberately separate tier:
+ * its own `sub` namespace, its own gate rather than `GRYT_IDENTITY_TIERS`, and
+ * a marker on every surface. Sharing `local` would make a bot and a guest the
+ * same kind of thing to every check that asked.
  */
 export type IdentityTier = "account" | "local" | "bot";
 
 /**
- * The `iss` a self-signed certificate must carry.
- *
- * Certificates are dispatched on `iss` rather than by trying each verifier in
- * turn, so a certificate is only ever checked the one way its issuer claims.
- * Falling back from the CA path to the self-signed path on failure would mean a
- * certificate that fails CA verification gets a second chance at being accepted
- * under rules it chose for itself.
+ * The `iss` a self-signed certificate must carry. Certificates are **dispatched
+ * on `iss`, never tried against each verifier in turn** — falling back from the
+ * CA path would give a failed certificate a second chance under rules it chose
+ * for itself.
  */
 const SELF_ISSUER = "gryt:self";
 
 /**
- * The `iss` a bot's certificate must carry.
+ * The `iss` a bot's certificate must carry. Cryptographically identical to
+ * `gryt:self`, and a separate issuer on purpose: dispatching on it decides the
+ * tier at verification time rather than leaving something downstream to ask.
  *
- * Cryptographically identical to `gryt:self` — a key signing for itself — and a
- * separate issuer on purpose. Dispatching on it is what puts a bot in its own
- * `sub` namespace, and doing that at verification time means the tier is
- * decided by which door the certificate came through rather than by anything
- * downstream having to remember to ask.
- *
- * A holder of one key can therefore be a person *or* a bot but never both at
- * once under the same id, and cannot move between them by changing a field.
+ * So one key is a person *or* a bot, never both, and cannot move between them
+ * by changing a field.
  */
 const BOT_ISSUER = "gryt:bot";
 
@@ -73,30 +58,20 @@ const BOT_ISSUER = "gryt:bot";
 const DELEGATED_ISSUER = "gryt:delegated";
 
 /**
- * Prefix on the `sub` of every self-signed identity.
- *
- * Keeps the two tiers in separate namespaces for good. `gryt_user_id` is one
- * column, and bans, roles, ownership and message attribution are all keyed on
- * it, so an identity that could choose a `sub` in the CA's namespace could
- * inherit whatever an account holder had left there. Prefixing makes that
- * impossible by construction rather than by validation, and it means the tier
- * can be read back off any stored id without a schema change.
+ * Prefix on the `sub` of every self-signed identity. Bans, roles, ownership and
+ * attribution all key on one column, so an identity that could choose a `sub`
+ * in the CA's namespace would inherit whatever an account holder left there.
+ * Disjoint by construction rather than by validation.
  */
 const LOCAL_SUB_PREFIX = "key:";
 
 /**
- * Prefix on the `sub` of every bot identity.
+ * Prefix on the `sub` of every bot identity. Loud and upper case, because this
+ * is what somebody reads in an audit entry, and the question it has to answer
+ * instantly is "was that a person". Disjoint by shape, like the local prefix.
  *
- * Loud, and upper case, because this string is what a person sees in an audit
- * entry, a database row or a support conversation, and the one question it has
- * to answer instantly is "was that a person". Same construction as the local
- * prefix: it makes the namespaces disjoint by shape rather than by validation,
- * so a bot can never hold an id a person could hold and no lookup is needed to
- * tell them apart.
- *
- * Note the underscore rather than a colon. It is not a typo — it is there so
- * that a `BOT_…` id reads as one word when it turns up in the middle of a
- * sentence, and so that nothing which splits on `:` can lose the marker.
+ * The underscore rather than a colon is deliberate: nothing that splits on `:`
+ * can lose the marker.
  */
 const BOT_SUB_PREFIX = "BOT_";
 
@@ -122,16 +97,11 @@ export function isBotIdentity(sub: string | null | undefined): boolean {
 export { BOT_SUB_PREFIX };
 
 /**
- * Names a person may not take, because a bot would be mistaken for them or
- * they for a bot.
+ * Names a person may not take. The badge comes from the identity, so nobody
+ * gets it by naming themselves "BOT_helper" — they only get the benefit of the
+ * doubt from whoever reads quickly, which is the whole trick.
  *
- * The BOT tag a client renders comes from the identity, not from the name, so a
- * person calling themselves "BOT_helper" never actually gets the badge. They do
- * get the benefit of the doubt from anyone reading quickly, which is the whole
- * attack — and it costs nothing to refuse.
- *
- * Deliberately loose on the separator and the case: `BOT_x`, `bot-x`, `Bot x`
- * and `[BOT] x` are all the same trick.
+ * Loose on separator and case: `BOT_x`, `bot-x`, `Bot x` and `[BOT] x`.
  */
 const BOT_LOOKALIKE = /^\s*\[?\s*bot\s*\]?\s*([_\-–—:.]|\s)/i;
 
@@ -152,12 +122,9 @@ function parseTier(value: string): IdentityTier | null {
 }
 
 /**
- * Which tiers this server admits, from `GRYT_IDENTITY_TIERS`.
- *
- * Defaults to `account` alone, so a server that has not been told to accept
- * anything else behaves exactly as it did before this existed. An unparseable
- * or empty value falls back to the same default rather than to something more
- * permissive.
+ * Which tiers this server admits, from `GRYT_IDENTITY_TIERS`. Defaults to
+ * `account` alone, and an unparseable or empty value falls back to the same
+ * rather than to something more permissive.
  */
 export function getAcceptedIdentityTiers(): IdentityTier[] {
   const raw = process.env.GRYT_IDENTITY_TIERS || "";
@@ -173,19 +140,13 @@ export function getAcceptedIdentityTiers(): IdentityTier[] {
 
 /**
  * Whether a verified certificate is one this server is willing to admit.
+ * Separate from `verifyCertificate`, which answers whether it is real: the join
+ * path reads as "is this real" then "do we take it", and neither check can be
+ * mistaken for the other.
  *
- * Deliberately separate from verification. `verifyCertificate` answers whether
- * a certificate is real, which is a question about cryptography and has one
- * answer everywhere. This answers whether the operator wants it, which is
- * policy and differs per server. Keeping them apart means the join path reads
- * as "is this real" then "do we take it", and neither check can be mistaken for
- * the other.
- *
- * A `local` identity is regenerable in about two seconds, so a ban keyed on its
- * `sub` holds only until somebody bothers to clear their browser data. Servers
- * that accept this tier are choosing to lean on the entry gate — invites,
- * `lan_open`, approval — rather than on bans. That is a real trade, and it is
- * why this is off unless an operator turns it on.
+ * **A `local` identity is regenerable in seconds, so a ban keyed on its `sub`
+ * holds until somebody clears their browser data.** Servers accepting that tier
+ * lean on the entry gate rather than on bans, which is why it is off by default.
  */
 export function identityTierAccepted(tier: IdentityTier): boolean {
   return getAcceptedIdentityTiers().includes(tier);
@@ -210,15 +171,12 @@ function getTrustedCertificateIssuers(): string[] {
 }
 
 /**
- * The issuer whose users are stored under a bare `sub` (GRYT-267).
+ * The issuer whose users are stored under a bare `sub` (GRYT-267). Every other
+ * trusted issuer has its name written into the id, so two CAs can never mean
+ * the same user; one has to own the unqualified namespace or every existing row
+ * needs rewriting. The first configured issuer owns it.
  *
- * Every other trusted issuer gets its name written into the id, so two CAs can
- * never mean the same user. One of them has to own the unqualified namespace or
- * every existing row would have to be rewritten, and that is a migration across
- * `users`, `bans`, `server_config.owner_gryt_user_id` and `refresh_tokens` on
- * live servers with no off-box backups. The first configured issuer owns it.
- *
- * **Reordering `GRYT_TRUSTED_CERT_ISSUERS` changes who that is**, which would
+ * **Reordering `GRYT_TRUSTED_CERT_ISSUERS` changes who that is** and would
  * silently re-point every account identity on the server. Add to the end of the
  * list, never to the front.
  */
@@ -227,12 +185,9 @@ function getPrimaryCertificateIssuer(): string {
 }
 
 /**
- * Separates the issuer from the `sub` in a qualified id.
- *
- * Not valid in a URL host and not produced by Keycloak, which mints UUIDs. A
- * `sub` containing it is refused outright rather than escaped: the only reason a
- * CA would send one is to try to look like a different issuer, and there is no
- * legitimate use to protect.
+ * Separates the issuer from the `sub` in a qualified id. Not valid in a URL host
+ * and not produced by Keycloak. A `sub` containing it is refused rather than
+ * escaped — the only reason to send one is to look like a different issuer.
  */
 const ISSUER_SEPARATOR = "|";
 
@@ -291,30 +246,16 @@ function getBundledIdentityJwks(normalizedIssuer: string) {
 }
 
 /**
- * Verify a certificate against the shipped keys, and only ask the CA if they
- * do not contain the one it names (GRYT-721).
+ * Verify against the shipped keys, and only ask the CA if they do not hold the
+ * one the certificate names (GRYT-721). Fetching the JWKS told the identity
+ * service which servers exist and, paired with a certificate request from the
+ * same address, who runs them.
  *
- * Fetching the JWKS told the identity service which servers exist and, by
- * pairing a fetch with a certificate request from the same address, who runs
- * them. The keys are public and the same for everybody, so shipping them costs
- * nothing and removes both — a server that never asks cannot be handed a
- * different answer either.
- *
- * ## The fallback is narrow on purpose
- *
- * Only `JWKSNoMatchingKey`, which means the certificate names a `kid` this
- * build has never heard of. That is what a CA key rotation looks like from
- * here, and the whole reason not to hard-fail: an old build would otherwise
- * refuse every account holder the day a key rolled.
- *
- * A signature that fails against a key we *do* hold is not retried. The
- * certificate is forged, the remote set would reject it too, and retrying would
- * let anybody who can reach a join endpoint make this server fetch a URL by
- * sending a bad certificate.
- *
- * Claims failures — expired, wrong issuer, wrong algorithm — are not retried
- * either. The keys are not the problem and a second attempt fails identically,
- * one round trip later.
+ * **The fallback is only `JWKSNoMatchingKey`** — a `kid` this build has never
+ * heard of, which is what a CA key rotation looks like from here. A signature
+ * that fails against a key we *do* hold is not retried: the certificate is
+ * forged, and retrying would let anybody reaching a join endpoint make this
+ * server fetch a URL. Claims failures are not retried either.
  */
 async function verifyAgainstIdentityJwks(
   certJwt: string,
@@ -348,17 +289,12 @@ export interface VerifiedCertificate {
    */
   sub: string;
   /**
-   * What to store, and the only thing that should ever reach the database
-   * (GRYT-267).
+   * **What to store, and the only thing that should ever reach the database**
+   * (GRYT-267). The `sub` for key-derived tiers; for an account it carries the
+   * issuer, unless that issuer is the primary one.
    *
-   * For the local and delegated tiers this is the `sub`, which is derived from a
-   * key and already cannot collide. For an account it carries the issuer that
-   * vouched for it, unless that issuer is the primary one.
-   *
-   * Kept separate from `sub` rather than replacing it because the two answer
-   * different questions, and a single field would have to be right for both at
-   * once — which is exactly the confusion that let a second CA name somebody
-   * else's user.
+   * Separate from `sub` because one field having to be right for both questions
+   * at once is what let a second CA name somebody else's user.
    */
   grytUserId: string;
   preferredUsername?: string;
@@ -368,46 +304,29 @@ export interface VerifiedCertificate {
 }
 
 /**
- * How far a clock may be out before a proof bound to a server nonce is refused.
+ * How far a clock may be out before a nonce-bound proof is refused. Generous,
+ * because the number buys nothing here: `consumeChallenge` deletes the nonce on
+ * first read and times it out on this server's own clock, so the replay window
+ * is 60 seconds whatever the other end says.
  *
- * Generous, because on this path the number buys nothing. `consumeChallenge`
- * deletes the nonce on first read and refuses it past `NONCE_TTL_MS`, measured
- * on this server's own clock, so the replay window is 60 seconds whatever the
- * other end's clock says. The `exp` on an assertion is a second 60-second
- * window measured by a clock we do not control, guarding against a replay the
- * nonce has already made impossible, and it was refusing real joins to do it.
- *
- * Twelve hours rather than a few minutes because the common cause is not drift.
- * A machine dual-booting Windows and Linux disagrees with itself by its whole
- * UTC offset: one writes local time to the RTC and the other reads it as UTC.
- * That is hours, and minutes of tolerance would not have helped the person who
- * reported this.
+ * Twelve hours because the common cause is not drift — a machine dual-booting
+ * Windows and Linux disagrees with itself by its whole UTC offset.
  */
 const NONCE_BOUND_CLOCK_TOLERANCE = "12 hours";
 
 /**
- * The same, for a certificate.
- *
- * Much smaller, because a certificate's expiry is a real one: it is how long
- * the holder may keep using a credential, so widening it postpones the moment a
- * rotated or withdrawn identity stops working. Two minutes covers a machine
- * that is merely unsynchronised. A machine that is hours out is told so instead.
+ * The same, for a certificate. Much smaller, because a certificate's expiry is
+ * real — widening it postpones the moment a withdrawn identity stops working.
  */
 const CERTIFICATE_CLOCK_TOLERANCE = "2 minutes";
 
 /**
- * Which half of the exchange failed.
+ * Which half of the exchange failed, so a client can renew a stale certificate
+ * instead of showing "please sign in again" to somebody it cannot help
+ * (GRYT-78). It leaks nothing — the caller supplied both halves.
  *
- * Sent to the client so it can decide whether to repair itself. Nothing here
- * tells a caller anything they could not already work out: they supplied both
- * the certificate and the assertion, so they can tell which one is bad by
- * changing one and trying again. What it does buy is a client that renews a
- * stale certificate on its own instead of showing "please sign in again" to
- * someone for whom signing in again cannot help — see GRYT-78.
- *
- * The reason stays coarse on purpose. The exact message goes to the server log,
- * where it is useful, and not over the wire, where it only invites reading the
- * verifier's internals.
+ * **Coarse on purpose.** The exact message goes to the server log, not over the
+ * wire, where it would only invite reading the verifier's internals.
  */
 export type IdentityFailureReason =
   | "certificate_rejected"
@@ -418,14 +337,8 @@ export class IdentityVerificationError extends Error {
   readonly reason: IdentityFailureReason;
   /**
    * How far the other end's clock is from ours, when that is what went wrong.
-   *
-   * Positive means their clock is behind ours, which is the sign the client's
-   * own skew message already uses in the other direction. Undefined for every
-   * failure that is not about time.
-   *
-   * It goes over the wire because it is the one number that turns "would not
-   * accept your identity" into something the person reading it can act on. It
-   * says nothing they could not measure themselves by reading their own clock.
+   * Positive means their clock is behind ours. Undefined for anything that is
+   * not about time. It says nothing they could not read off their own clock.
    */
   readonly skewMs?: number;
 
@@ -439,14 +352,8 @@ export class IdentityVerificationError extends Error {
 
 /**
  * The gap between what a proof thought the time was and what we think it is.
- *
- * Read from `iat` when the signer set one, and inferred from `exp` otherwise by
- * assuming the lifetime the signer uses. Positive means their clock is behind
- * ours.
- *
- * Best effort: a proof that will not decode has no skew to report. Called only
- * once a verification has already failed, so the cost of decoding twice is paid
- * on the error path.
+ * From `iat`, or inferred from `exp` by assuming the signer's lifetime. Best
+ * effort, and only called once a verification has already failed.
  */
 function clockSkewOf(
   jwt: string,
@@ -471,12 +378,9 @@ function clockSkewOf(
 }
 
 /**
- * Is this an EC P-256 public key, and only a public key?
- *
- * The `d` check is the one that matters. A certificate carrying a private key
- * would still verify, and we would then hold signing material for somebody
- * else's identity — which is not an attack on us so much as a thing we must
- * never accept and never store.
+ * Is this an EC P-256 public key, and only a public key? **The `d` check is the
+ * one that matters**: a certificate carrying a private key still verifies, and
+ * we would then hold signing material for somebody else's identity.
  */
 function assertPublicP256Jwk(value: unknown): JWK {
   if (!value || typeof value !== "object") {
@@ -493,18 +397,12 @@ function assertPublicP256Jwk(value: unknown): JWK {
 }
 
 /**
- * Verify a certificate that vouches for itself.
+ * Verify a certificate that vouches for itself. The signature proves only that
+ * whoever made it held that private key, which is the whole claim.
  *
- * The signature is checked against the key the certificate carries, which
- * proves only that whoever made it held that private key. That is the whole
- * claim being made, and it is exactly as strong as the assertion check that
- * follows it.
- *
- * The `sub` is computed here from the key and the one in the payload is
- * ignored. This is the line that makes the tier safe: reading `sub` off a
- * self-signed payload would let anybody claim any identity on the server simply
- * by writing it down, including an existing account's. Deriving it means a
- * self-signed identity can only ever be the one key it can prove it holds.
+ * **The `sub` is computed from the key and the payload's is ignored.** That is
+ * what makes the tier safe: reading it off the payload would let anybody claim
+ * any identity, including an existing account's, by writing it down.
  */
 async function verifySelfSignedCertificate(
   certJwt: string,
@@ -566,24 +464,17 @@ const SELF_SIGNING_KINDS = [
 ];
 
 /**
- * Verify a certificate where a key you hold vouches for a key on a device.
+ * Verify a certificate where a key you hold vouches for a key on a device. The
+ * identity is the *signing* key: `sub` comes from it, and the `jwk` handed back
+ * is the device key it names. One person, as many devices as they like.
  *
- * The identity is the *signing* key, not the one being vouched for. So the
- * `sub` is derived from the key that signed the certificate, and the `jwk`
- * handed back — the one the assertion is checked against — is the device key it
- * names. One person can authorise as many devices as they like and every one of
- * them is the same `sub`.
+ * Nothing here for an operator to trust or pin, deliberately. An
+ * `authorized_keys` equivalent only matters when the identity is something its
+ * holder writes down — deriving `sub` from the signing key means a delegation
+ * can only claim the identity of the key that signed it.
  *
- * There is deliberately nothing here for an operator to trust or pin. It would
- * be natural to expect a delegated certificate to need an `authorized_keys`
- * equivalent, but that is only true when the identity is something its holder
- * writes down, like a username. Deriving `sub` from the signing key means a
- * delegation can only ever claim the identity of the key that signed it — the
- * same property that makes a self-signed certificate safe, one step removed.
- *
- * Revocation is expiry. There is no revocation list and no attempt at one; a
- * delegation is good until its `exp`, so a short one is how you keep a lost
- * device from being you for long.
+ * **Revocation is expiry.** There is no revocation list, so a short `exp` is how
+ * a lost device stops being you.
  */
 async function verifyDelegatedCertificate(
   certJwt: string
@@ -644,22 +535,15 @@ const LINK_ISSUER = "gryt:link";
 
 /**
  * Verify that whoever is joining also holds a local identity they used here
- * before.
+ * before — said by signing with the key that *was* the old identity, which is
+ * the only way worth accepting.
  *
- * Somebody who joined without an account and later makes one arrives with a
- * different `sub` — a Keycloak id where there was a key thumbprint — and to the
- * server is a stranger with a familiar nickname. This is how they say "that was
- * me", in the only way worth accepting: by signing with the key that *was* the
- * old identity.
- *
- * Deliberately proved to each server rather than carried in the certificate.
- * Local keys are per-server, so a certificate naming prior identities would
- * have to list every server the holder has joined — telling the CA and every
- * server that reads it their whole server list, which is the opposite of what
- * per-server keys are for.
+ * Proved to each server rather than carried in the certificate: local keys are
+ * per-server, so a certificate naming prior identities would list every server
+ * the holder has joined.
  *
  * Bound to the same nonce and audience as the assertion, so a proof lifted from
- * one join cannot be replayed into another, or at a different server.
+ * one join cannot be replayed into another or at a different server.
  */
 export async function verifyIdentityLink(
   linkJwt: string,

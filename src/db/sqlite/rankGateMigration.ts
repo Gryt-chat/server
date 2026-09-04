@@ -1,31 +1,17 @@
 import type { DatabaseSync } from "node:sqlite";
 
 /**
- * Turn the two rank columns into permission scopes, once.
+ * Turn the two rank columns into permission scopes, once. The translation is
+ * exact: a gate at 60 denies the permission to every role below 60 and says
+ * nothing about the rest, and roles at or above get no row, so they inherit.
  *
- * `post_min_rank` and `view_min_rank` said "rank N and above". Scopes say
- * "these roles, this permission, allow or deny", which can express the same
- * thing and a good deal more — so the rank columns go, and what somebody
- * already configured has to survive the change without them having to redo it.
+ * **The columns are deliberately not dropped.** A server rolled back to a build
+ * that reads `post_min_rank` would find it NULL and quietly reopen a channel
+ * meant to be locked. Nothing on this side reads them after this runs.
  *
- * The translation is exact rather than approximate. A gate at 60 denies the
- * permission to every role below 60 and says nothing about the rest, which is
- * precisely what the rank compare did. Roles at or above the gate get no row,
- * so they inherit, which is also what the compare did.
- *
- * ## Why the columns are not dropped
- *
- * SQLite could drop them. If it did, a server rolled back to a build that still
- * reads `post_min_rank` would find it NULL and quietly reopen a channel that
- * was meant to be locked. Leaving the value in place means a rollback still
- * enforces the gate it had. Nothing on this side reads them after this runs.
- *
- * ## Why it runs once
- *
- * The marker is the whole safety property. Run it twice and the second pass
- * sees the same rank values and rebuilds scopes for channels whose permissions
- * somebody has since edited by hand, throwing that away. So it checks
- * `schema_meta` first and writes the marker inside the same transaction.
+ * **The marker is the safety property.** A second pass would see the same rank
+ * values and rebuild scopes over permissions somebody has since edited by hand,
+ * so `schema_meta` is checked and written inside the same transaction.
  */
 
 export const RANK_GATE_MIGRATION_KEY = "channel_rank_gates_migrated";

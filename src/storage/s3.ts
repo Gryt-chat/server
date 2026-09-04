@@ -78,15 +78,10 @@ export function multipartPlan(size: number): { partSize: number; queueSize: numb
 }
 
 /**
- * Streams a file from disk in multipart chunks.
- *
- * Not PutObjectCommand with a read stream, which would be the smaller change.
- * Two reasons. A single PUT is capped at 5 GB by S3, so it cannot back an
- * unlimited setting however much memory we save. And the SDK cannot retry a
- * request whose body is a consumed stream, so one transient network error part
- * way through a large upload would fail the whole thing with no second attempt.
- * Upload splits into parts, retries them individually, and aborts the multipart
- * upload on failure so no orphaned parts are left being billed for.
+ * Streams a file from disk in multipart chunks. Not `PutObjectCommand` with a
+ * read stream: a single PUT is capped at 5 GB, and the SDK cannot retry a
+ * request whose body is a consumed stream. Upload retries parts individually
+ * and aborts on failure, so no orphaned parts are left being billed for.
  */
 async function putObjectFromPath(params: { bucket: string; key: string; sourcePath: string; contentType?: string; aclPublicRead?: boolean; }): Promise<void> {
   const client = getS3();

@@ -210,20 +210,13 @@ export async function removeReactionFromMessage(conversationId: string, messageI
 }
 
 /**
- * Removes every trace of a user from the message history.
+ * Removes every trace of a user from the message history. The other half of
+ * deleting their messages is the reactions they left on everybody else's, which
+ * live as JSON on each message and have to be rewritten row by row.
  *
- * Deleting their messages is the obvious half. The other half is the
- * reactions they left on everybody else's, which live as JSON on each
- * message rather than in a table of their own — so they cannot be removed
- * with a DELETE and have to be rewritten row by row.
- *
- * A reaction whose last user was this person disappears entirely rather than
- * lingering with a count of zero.
- *
- * Returns what changed so the callers can tell connected clients: deleted
- * messages by id, and the messages whose reactions were rewritten. Also the
- * files those messages carried, so the caller can take them out of storage
- * without waiting for the sweep (GRYT-139).
+ * Returns what changed, so callers can tell connected clients — and the files
+ * those messages carried, so they can leave storage without waiting for the
+ * sweep (GRYT-139).
  */
 export async function purgeUserContent(senderServerUserId: string): Promise<{
   deletedMessages: Array<{ conversation_id: string; message_id: string }>;

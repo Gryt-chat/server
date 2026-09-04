@@ -40,14 +40,9 @@ export function normalizeJoinPolicy(v: unknown): JoinPolicy {
 }
 
 /**
- * A stored role id, in the shape ids are compared in.
- *
- * It used to reject anything outside the four names and hand back `member`,
- * which is no longer possible: a server defines its own roles and this module
- * cannot know their ids without reading a second table on every lookup. So it
- * only normalises the case and shape, and an id with no definition behind it is
- * resolved to the fallback role where roles are *used* rather than where they
- * are read — see `resolveRole` in services/permissions.
+ * A stored role id, in the shape ids are compared in. Case and shape only —
+ * this module cannot know a server's own role ids without a second read, so an
+ * id with no definition is resolved where roles are *used*: see `resolveRole`.
  */
 /**
  * Anything unrecognised reads as `disabled`, never as `request`.
@@ -97,19 +92,12 @@ function rowToConfig(r: Record<string, unknown>): ServerConfigRecord {
 const SERVER_CONFIG_ID = "config";
 
 /**
- * The key this server signs SFU client tokens with.
+ * The key this server signs SFU client tokens with. Generated once and kept:
+ * the SFU memorises what a server registers under its id, so a value that
+ * changed per boot is refused as "already registered with different password".
  *
- * Generated once and kept, because the SFU memorises what a server registers
- * under its id and never forgets it. A value that changed per boot would be
- * refused as "already registered with different password" on every restart.
- *
- * `SERVER_PASSWORD` still wins when it is set, so a deployment that chose a
- * value keeps it and nothing re-registers under a new key. It is only the
- * deployments that never set one, which is most of them, that get a generated
- * secret instead of the empty string.
- *
- * Not exposed on `ServerConfigRecord` and not returned by `getServerConfig`.
- * The only caller is the SFU client at boot.
+ * `SERVER_PASSWORD` still wins when set. **Not on `ServerConfigRecord` and not
+ * returned by `getServerConfig`** — the only caller is the SFU client at boot.
  */
 export function getOrCreateSfuSecret(): string {
   const db = getSqliteDb();
@@ -344,16 +332,12 @@ export async function setServerRole(serverUserId: string, role: ServerRole): Pro
 }
 
 /**
- * Replace everything somebody holds with exactly these.
+ * Replace everything somebody holds with exactly these. **One transaction** —
+ * the gap between the delete and the insert is a moment where they hold
+ * nothing, and a permission check landing in it would refuse them.
  *
- * One transaction, because the gap between the delete and the insert is a
- * moment where they hold nothing -- and a permission check landing in it would
- * resolve them to the joiner default and refuse something they may do.
- *
- * An empty list is allowed and means exactly that: no row, which the read path
- * resolves to the default for their identity tier. It is not the same as
- * holding the fallback role, and a server that changes its default afterwards
- * moves them with it.
+ * An empty list means no row, which the read path resolves to the default for
+ * their tier. Not the same as holding the fallback role.
  */
 export async function setMemberRoles(serverUserId: string, roles: ServerRole[]): Promise<void> {
   const db = getSqliteDb();
@@ -413,13 +397,9 @@ export async function listServerRoles(): Promise<ServerRoleRecord[]> {
 }
 
 /**
- * A ban is in force when it exists and has not expired.
- *
- * Expiry is a predicate rather than a background job on purpose: a sweeper is a
- * second thing that can fail, and a ban that outlives its expiry because a
- * timer did not fire is worse than one row of garbage. `listBans` clears the
- * dead rows out as a side effect of the admin UI opening, which is often enough
- * for a table that holds tens of rows.
+ * A ban is in force when it exists and has not expired. A predicate rather than
+ * a sweeper: a ban outliving its expiry because a timer did not fire is worse
+ * than a row of garbage. `listBans` clears dead rows as a side effect.
  */
 const ACTIVE_BAN_PREDICATE = `gryt_user_id = ? AND (expires_at IS NULL OR expires_at > ?)`;
 
