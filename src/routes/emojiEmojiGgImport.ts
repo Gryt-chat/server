@@ -1,33 +1,18 @@
 /**
- * Importing emojis from emoji.gg.
+ * Importing emojis from emoji.gg. Same shape as the BetterTTV routes next door,
+ * except this reads HTML: the JSON API returns about 5,400 emojis, a slice of
+ * the site, and none of the ones this was built for are in it.
  *
- * The same shape as the BetterTTV routes next door: metadata endpoints the
- * client uses to build a list you can look at before importing, and a file
- * proxy it downloads through when you do.
+ * Three page shapes, three parsers, because the markup differs:
  *
- * Unlike BetterTTV, this reads HTML. emoji.gg does publish a JSON API, and it
- * is the first thing that was tried — it returns about 5,400 emojis, which is
- * a slice of the site rather than all of it. Neither the emojis on the profile
- * this was built for nor the single emoji used to test it appear in it, so the
- * API cannot answer any of the three questions being asked here. The pages
- * can, so the pages are what is read.
+ *   /user/<name>   lazy-loaded, URL in data-src, name in alt as "<Name> Emoji"
+ *   /pack/<slug>   alt is literally "Emoji", so the name comes from the
+ *                  filename; each image is paired with the /emoji/ link
+ *                  wrapping it, so related-pack thumbnails drop out
+ *   /emoji/<slug>  og:image is the file, og:title is the name
  *
- * Three page shapes, three parsers, because the markup genuinely differs:
- *
- *   /user/<name>   cards are lazy-loaded — the CDN URL is in data-src, and the
- *                  name is in alt as "<Name> Emoji". 25 per page.
- *   /pack/<slug>   images are loaded normally, and alt is the literal string
- *                  "Emoji" for every one of them, so the name has to come from
- *                  the filename. The page also shows other packs further down,
- *                  which is why this pairs each image with the /emoji/ link
- *                  wrapping it rather than taking every emoji image on the
- *                  page — related-pack thumbnails are wrapped in /pack/ links
- *                  and drop out.
- *   /emoji/<slug>  og:image is the file, og:title is the name.
- *
- * All three are page scraping and will break when emoji.gg redesigns. They
- * fail by returning nothing rather than by returning something wrong, and the
- * client says so.
+ * All three break when emoji.gg redesigns. They fail by returning nothing
+ * rather than something wrong.
  */
 import type { Router, Request, Response, NextFunction } from "express";
 
@@ -54,11 +39,8 @@ const SLUG_RE = /^[A-Za-z0-9_-]{1,100}$/;
 const USERNAME_RE = /^[^/?#]{1,64}$/;
 
 /**
- * The only URLs the file proxy will fetch.
- *
- * Anchored, no query string, and no dots in the filename beyond the extension,
- * so this cannot be talked into fetching anything but an emoji file from
- * emoji.gg's CDN. The proxy exists because the client cannot read these
+ * The only URLs the file proxy will fetch. Anchored, no query string, no dots
+ * beyond the extension — the proxy exists because the client cannot read these
  * cross-origin, not to be a general fetcher.
  */
 const CDN_FILE_RE =
@@ -121,12 +103,8 @@ function fileFromUrl(url: string): { slug: string; ext: string } | null {
 }
 
 /**
- * A CDN URL to an emote.
- *
- * The name comes from alt where the page has a real one, and from the filename
- * otherwise — CDN files are named "<id><-|_><name>.<ext>", so dropping the id
- * prefix leaves something readable. Returns null for anything whose filename
- * does not parse, rather than importing a file under a guessed name.
+ * A CDN URL to an emote. The name comes from alt, or from the filename, which
+ * is `<id><-|_><name>.<ext>`. Null rather than a guessed name.
  */
 function toEmote(url: string, altName: string | null): EmojiGgEmote | null {
   const parsed = fileFromUrl(url);

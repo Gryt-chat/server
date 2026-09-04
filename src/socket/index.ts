@@ -43,16 +43,12 @@ const clientsInfo: Clients = {};
 const MAX_CLIENT_NONCE_LENGTH = 256;
 
 /**
- * Put a held voice state onto a socket, and put that socket in the room.
+ * Put a held voice state onto a socket, and put that socket in the room. Shared
+ * by `session:restore` and the SFU sync.
  *
- * Shared by the two things that restore voice: `session:restore`, which runs
- * the moment a client comes back, and the SFU sync, which catches everything
- * else. Both used to be written out longhand, and only one of them existed.
- *
- * `channelId` is passed separately because the two callers know it from
- * different places, and they do not always agree. The sync reads it from the
- * SFU's own room list, which is the better answer — the SFU is where the media
- * actually is, so if the held state says otherwise the held state is stale.
+ * `channelId` is separate because the two callers do not always agree, and the
+ * sync reads it from the SFU's own room list — where the media actually is, so
+ * a held state saying otherwise is stale.
  */
 function applyVoiceState(
   socket: Socket,
@@ -85,11 +81,7 @@ function applyVoiceState(
   });
 }
 
-/**
- * Wire SFU peer_joined / peer_left / sync_response callbacks so the server
- * stays in 1:1 sync with the SFU about who is connected.
- * Call this once after the io server and sfuClient are created.
- */
+/** Wire the SFU callbacks. Call once, after `io` and `sfuClient` exist. */
 export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
   const serverId = getServerIdFromEnv();
 
@@ -159,14 +151,9 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
         for (const uid of room.user_ids) {
           sfuUsers.add(uid);
           userToChannelId.set(uid, channelId);
-          // Only if it is not already known. `trackUserConnection` warns when
-          // it is — which is the right thing to say when a second device tries
-          // to join, and pure noise thirty times a minute from a sync loop.
-          //
-          // It also stamps `connectedAt`, which `onPeerLeft` reads to tell a
-          // stale peer_left from a real one. Re-stamping it every couple of
-          // seconds would keep it permanently inside that window and every
-          // leave would be ignored as stale.
+          // Only if not already known: re-stamping `connectedAt` every couple
+          // of seconds keeps it permanently inside the window `onPeerLeft` uses
+          // to tell a stale leave from a real one, so every leave is ignored.
           if (!sfuClient.getTrackedUser(uid)) {
             sfuClient.trackUserConnection(room.room_id, uid);
           }
@@ -186,13 +173,9 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
         }
       }
 
-      // Put back anyone the SFU is carrying that the socket layer has lost.
-      //
-      // This is the half that was missing, and it is why the whole thing could
-      // only ever be wrong in one direction. Every path here was gated on
-      // `hasJoinedChannel` already being true, so the SFU could take somebody
-      // out of a channel and never put anybody in one — which is exactly the
-      // state a reconnect leaves behind (GRYT-611).
+      // Put back anyone the SFU carries that the socket layer has lost. Every
+      // path here was once gated on `hasJoinedChannel` already being true, so
+      // the sync could only ever take somebody out of a channel (GRYT-611).
       for (const uid of sfuUsers) {
         const alreadyLive = Object.values(clientsInfo).some(
           (ci) => ci.serverUserId === uid && ci.hasJoinedChannel,
@@ -241,11 +224,9 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
         consola.info(`[SFU-Sync] Dropping held voice state for ${uid} — SFU no longer has them`);
         stashedVoiceState.delete(uid);
 
-        // This is where somebody actually leaves now, so this is where the
-        // room gets told. The disconnect handler used to say it the moment a
-        // socket went, which meant a two second network blip played the leave
-        // chime and then the join chime. Here we know the media connection is
-        // really gone, because the SFU has stopped reporting it.
+        // Where somebody actually leaves, so where the room is told. Saying it
+        // on socket disconnect meant a two second blip played the leave chime
+        // and then the join chime.
         const roomName = stashed.voiceChannelId
           ? voiceRoomName(serverId, stashed.voiceChannelId)
           : "";
@@ -290,11 +271,8 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
         }
       }
 
-      // Only when something actually moved. This runs every couple of seconds
-      // now rather than every minute, and `broadcastMemberList` reads three
-      // tables before it works out it has nothing new to say — so an
-      // unconditional call here is three queries a second, for ever, on a
-      // server where nobody is doing anything.
+      // Only when something moved. This runs every couple of seconds, and
+      // `broadcastMemberList` reads three tables before finding nothing to say.
       if (changed) {
         syncAllClients(io, clientsInfo);
         broadcastMemberList(io, clientsInfo, serverId);
@@ -335,15 +313,10 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
   // Keep module-level refs for REST-triggered broadcasts
   setSocketRefs(io, serverId, clientsInfo);
 
-  /* A label for the resolved address rather than the address.
-     
-     The resolved one is what tells two clients apart — everything public
-     arrives through a tunnel, so `handshake.address` is the tunnel for all of
-     them — and that is the whole reason this line exists. It also wrote an
-     address into the log for every connection any client ever made, which is
-     more personal data than the ban lines the privacy policy talks about.
-     
-     `addressLabel` keeps the first property and drops the second. */
+  /* A label rather than the address. The resolved address is what tells two
+     clients apart, since everything public arrives through one tunnel — but
+     logging it wrote an address for every connection anybody ever made, which
+     is more personal data than the ban lines the privacy policy covers. */
   consola.info(`Client ${clientId} connected from ${addressLabel(getClientIp(socket))}`);
 
   if (verboseLogs) {
@@ -414,13 +387,9 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
 
   socket.on("server:info", () => sendInfo(socket, clientsInfo, serverId));
 
-  // Prove this server's identity to the client (GRYT-51).
-  //
-  // Deliberately a connection-level exchange rather than part of the join
-  // handshake. A client that reconnects with a saved access token never joins,
-  // so a proof carried on join would leave that path — the common one — handing
-  // a bearer token to a server nobody has authenticated. Answering here means
-  // every path is covered without each one having to remember to ask.
+  // Prove this server's identity to the client (GRYT-51). Connection-level
+  // rather than part of the join handshake: a client reconnecting on a saved
+  // token never joins, and that is the common path.
   socket.on("server:identify", async (payload: { clientNonce?: string }) => {
     const clientNonce = typeof payload?.clientNonce === "string" ? payload.clientNonce : "";
     if (!clientNonce || clientNonce.length > MAX_CLIENT_NONCE_LENGTH) {
@@ -446,14 +415,9 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
     const clientInfo = clientsInfo[clientId];
     const serverUserId = clientInfo?.serverUserId ?? "";
 
-    /* Who and from where, not just which socket (GRYT-645).
-     *
-     * On 2026-08-27 two clients were dropped by ping timeout on prod and on
-     * beta within five seconds, and the logs could not say whether that was one
-     * uplink, two, or the tunnel — `Client disconnected: <socket id> (reason)`
-     * names a socket that no longer exists and nothing else. Two stacks
-     * agreeing on one address is a different diagnosis from two stacks
-     * disagreeing, and both were consistent with what was written down. */
+    /* Who and from where, not just which socket (GRYT-645). A socket id names
+     * something that no longer exists — two stacks agreeing on one address is a
+     * different diagnosis from two stacks disagreeing. */
     consola.info(
       `Client disconnected: ${clientId} user=${serverUserId || "anonymous"} ip=${addressLabel(getClientIp(socket))} (${reason})`,
     );
@@ -461,14 +425,8 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
     const hadVoice = clientInfo?.hasJoinedChannel ?? false;
 
     /**
-     * Stop ringing on behalf of somebody who has gone.
-     *
-     * Only when this was their last socket. A person with a laptop and a phone
-     * closing one of them has not given up on the call.
-     *
-     * The timer would end it anyway, but thirty seconds of a phone ringing for
-     * a caller who is no longer there is thirty seconds of the other person
-     * deciding whether to answer something that cannot be answered.
+     * Stop ringing for somebody who has gone, but only on their last socket —
+     * closing the laptop while the phone is open is not giving up on the call.
      */
     if (wasRegistered) {
       const stillHere = Object.entries(clientsInfo).some(
@@ -477,14 +435,10 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
       if (!stillHere) endRingsFor(io, clientsInfo, { callerGone: serverUserId });
     }
 
-    // Keep the voice state against the user, whatever took the socket away.
-    //
-    // This used to be gated on `reason === "transport close"`, which is one of
-    // several ways a socket dies and not the interesting one. A ping timeout, a
-    // server restart, a redeploy — all of them dropped the state on the floor
-    // while the media connection carried on working. The SFU decides when this
-    // entry dies now, so there is no reason to be picky about how the socket
-    // went (GRYT-611).
+    // Keep the voice state whatever took the socket away. Gated on
+    // `reason === "transport close"` it dropped on a ping timeout, a restart or
+    // a redeploy while the media connection carried on working. The SFU decides
+    // when this entry dies (GRYT-611).
     if (hadVoice && wasRegistered) {
       consola.info(`[Voice:Stash] Holding voice state for ${serverUserId} (socket gone: ${reason})`);
       stashedVoiceState.set(serverUserId, voiceStateOf(clientInfo));
@@ -543,16 +497,10 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
             serverUserId: tokenPayload.serverUserId,
           });
           if (!gate.ok) {
-            // A banned user reconnecting with a live token used to be restored
-            // in full here, which is most of why a ban did not hold.
-            //
-            // Only a ban says server:kicked, because the client takes the
-            // server out of the sidebar when it hears that. "You are not a
-            // member" reaching here is not necessarily moderation — a stale
-            // token against a rebuilt server looks identical — and deleting
-            // somebody's server entry over an ambiguous signal is not a
-            // recoverable mistake. token:revoked is what this path said before,
-            // and it stops the restore just as firmly.
+            // Only a ban says `server:kicked`, because the client takes the
+            // server out of the sidebar on that. "Not a member" is ambiguous —
+            // a stale token against a rebuilt server looks identical — and
+            // deleting somebody's server entry is not a recoverable mistake.
             if (gate.code === "banned") {
               socket.emit("server:kicked", { action: "ban", reason: gate.message });
               socket.disconnect(true);
@@ -575,13 +523,8 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
           clientsInfo[clientId].isServerMuted = moderation.isServerMuted;
           clientsInfo[clientId].isServerDeafened = moderation.isServerDeafened;
 
-          // Put voice back on the new socket if this user still has state held
-          // against them. The fast path — the SFU sync below is the backstop,
-          // and doing it here means a reconnect is whole by the time the client
-          // hears anything rather than up to one sync tick later.
-          //
-          // No window to be inside any more. The entry exists for exactly as
-          // long as the SFU says the user is connected to it.
+          // The fast path; the SFU sync below is the backstop. Doing it here
+          // means a reconnect is whole by the time the client hears anything.
           const stashed = stashedVoiceState.get(tokenPayload.serverUserId);
           if (stashed) {
             stashedVoiceState.delete(tokenPayload.serverUserId);
@@ -607,16 +550,10 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
     }
   };
 
-  // Session restoration, two ways.
-  //
-  // Older clients put the access token in the socket.io handshake, which means
-  // it arrives before the client has had any chance to check who it is talking
-  // to. A server impersonating this one collects a working bearer token that
-  // it can replay here as that user — a client-impersonation hole reached
-  // through a spoofed server. Kept only so existing installs keep working.
-  //
-  // Current clients hold the token back until the server has proved its
-  // identity (GRYT-51) and then send it here.
+  // Two ways. Older clients put the token in the socket.io handshake, before
+  // they can check who they are talking to — so a server impersonating this one
+  // collects a working bearer token. Kept only so existing installs work.
+  // Current clients hold it back until the server has proved itself (GRYT-51).
   restoreSession(socket.handshake.auth?.accessToken);
 
   socket.on("session:restore", (payload: { accessToken?: string }) => {

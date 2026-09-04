@@ -3,23 +3,18 @@ import { isUserBanned } from "../db/sqlite/servers";
 import type { UserRecord } from "../db/interfaces";
 
 /**
- * The one place a session is allowed or refused.
- *
- * Before this existed the ban check lived at exactly one call site — the fresh
- * `server:verify` join — and every other way of becoming somebody skipped it.
- * A reconnecting client never performs a fresh join, so a banned user could
- * reconnect with a live token, refresh it indefinitely, and keep full access to
- * the HTTP API. A kick lasted about half a second.
+ * The one place a session is allowed or refused. The ban check used to live
+ * only at the fresh `server:verify` join, and a reconnecting client never
+ * performs one — so a banned user could reconnect on a live token and refresh
+ * it indefinitely.
  *
  * **If you assign `clientsInfo[id].grytUserId`, call this first.** That
  * invariant is greppable, which "remember to check bans" was not.
  *
- * There is no separate token-invalidation mechanism, and deliberately so.
- * Checking live state here *is* the invalidation: an access token stays
- * cryptographically valid until it expires, but it stops authorising anything
- * the moment the ban lands. That is why the 15-minute token lifetime is not a
- * 15-minute hole, and why none of this needs to touch `token_version` — which
- * is server-global and would sign every user out to eject one.
+ * There is no separate token invalidation, deliberately: checking live state
+ * here *is* the invalidation, which is why a 15-minute token is not a
+ * 15-minute hole and why nothing needs to touch the server-global
+ * `token_version`.
  */
 
 export type SessionDenialCode = "banned" | "membership_required";
@@ -40,13 +35,9 @@ const DENIAL_MESSAGES: Record<SessionDenialCode, string> = {
 };
 
 /**
- * Whether this Gryt identity is allowed on the server at all.
- *
- * For the fresh-join path, which knows the identity before any server user
- * exists for it, so membership is not yet a question.
- *
- * The ban is keyed on `grytUserId` — the `sub` of the identity certificate —
- * so it survives a reinstall, a new device and a new server user id.
+ * Whether this Gryt identity is allowed on the server at all, for the
+ * fresh-join path where no server user exists yet. Keyed on `grytUserId`, so a
+ * ban survives a reinstall, a new device and a new server user id.
  */
 export async function checkIdentityAllowed(
   grytUserId: string,
@@ -59,13 +50,11 @@ export async function checkIdentityAllowed(
 
 /**
  * Whether this identity may hold a session as this server user right now.
+ * Returns the user record, which every admission path needs anyway.
  *
- * Returns the user record on success so callers do not read it a second time —
- * every admission path needs it anyway, for the nickname if nothing else.
- *
- * Membership is `users.is_active`, which is what makes a kick hold: kicking
- * clears it, and `upsertUser` sets it back on a fresh join, so a kicked user
- * can return by joining again but cannot be restored by a reconnect.
+ * Membership is `users.is_active`: kicking clears it and `upsertUser` sets it
+ * back on a fresh join, so a kicked user can return by joining and cannot be
+ * restored by a reconnect.
  */
 export async function checkSessionAllowed(params: {
   grytUserId: string;

@@ -55,13 +55,9 @@ const MESSAGE_CACHE_TTL_MS = parseInt(process.env.MESSAGE_CACHE_TTL_MS || "30000
 const messageCache = new Map<string, { items: MessageRecord[]; fetchedAt: number }>();
 
 /*
- * The member list a message's mentions are matched against.
- *
- * Cached because it is read on the way out of every message that contains an
- * `@`, and it is the whole users table. Thirty seconds is the same order as the
- * message cache above, and the cost of being stale is small in one direction
- * only: somebody who joined in the last half minute is not matched until the
- * entry expires, and nobody is matched who is not a member.
+ * The member list mentions are matched against. Cached because it is the whole
+ * users table, read on the way out of every message containing an `@`. Stale
+ * in one direction only: a very recent joiner is not matched yet.
  */
 const MENTIONABLE_TTL_MS = 30_000;
 let mentionableCache: { members: MentionableMember[]; fetchedAt: number } | null = null;
@@ -222,27 +218,13 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
 
   /**
    * The connected clients that should hear about something in a conversation.
-   *
-   * Every chat event goes through this now, including the two that used to
-   * call `io.emit` and tell the whole server — reactions and deletions. On a
-   * channel that was invisible, because the whole server could read the channel
-   * anyway. On a direct message it would mean everybody learning that a message
-   * they cannot read was reacted to, by whom, and with what.
+   * Every chat event goes through this, reactions and deletions included —
+   * `io.emit` on a DM tells the whole server about a message they cannot read.
    */
   /**
-   * The same list, minus anybody who has blocked the sender.
-   *
-   * Blocking is enforced at delivery rather than hidden in the client, and this
-   * is where that costs least: `chat:new` is already emitted socket by socket
-   * rather than to a room, so dropping a few from the list changes nothing
-   * about the shape of the send path.
-   *
-   * It also has to be here rather than in the client for direct messages,
-   * which are sealed — the server cannot read one, so the only way to stop it
-   * reaching somebody is not to send it.
-   *
-   * One query per message, against an index on `blocked_gryt_user_id`. On a
-   * server where nobody has blocked anybody it returns an empty set.
+   * The same list, minus anybody who has blocked the sender. Enforced at
+   * delivery rather than in the client, and it has to be for a sealed DM: the
+   * server cannot read one, so not sending it is the only way to stop it.
    */
   async function deliverableClientIds(
     conversationId: string,
@@ -277,10 +259,8 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
   }
 
   /**
-   * Resolve access, and tell the caller no if they do not have it.
-   *
-   * Returns null once it has emitted the refusal, so every call site is one
-   * `if (!access) return;` rather than another copy of the same error shape.
+   * Resolve access, emitting the refusal itself and returning null, so every
+   * call site is one `if (!access) return;`.
    */
   async function requireConversationAccess(
     conversationId: string,
@@ -317,14 +297,9 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         const access = await requireConversationAccess(payload.conversationId, auth.tokenPayload.serverUserId);
         if (!access) return;
 
-        // `send_messages` on the role answers "may this person talk at all".
-        // The channel's scope answers "may they talk *here*", and both have to
-        // be true — which is what makes a read-only #rules or an announcements
-        // channel possible.
-        //
-        // A direct message has no scope, so `mayInChannel` falls through to the
-        // server-wide answer rather than refusing. requireAuth has already
-        // checked that, so this only ever narrows.
+        // Both have to be true: `send_messages` says whether they may talk at
+        // all, the channel scope whether they may talk here. A DM has no scope,
+        // so this falls through to the server-wide answer and only narrows.
         if (!(await mayInChannel(payload.conversationId, auth.tokenPayload.serverUserId, "send_messages", auth.tokenPayload.grytUserId))) {
           socket.emit("chat:error", {
             error: "forbidden",
@@ -360,11 +335,8 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         }
 
         /*
-         * A sealed message and a plaintext one, at once (GRYT-729).
-         *
-         * Refused rather than picking one. A client that sent both would have
-         * put the message in the clear beside the encrypted copy, and whichever
-         * this server chose to keep, the other one was already written down.
+         * Both sealed and plaintext at once (GRYT-729). Refused rather than
+         * picking one: whichever is kept, the other was already written down.
          */
         if (sealed && text) {
           socket.emit("chat:error", "A message is sealed or it is not.");
@@ -387,14 +359,10 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        // Attaching is its own permission, so "you may talk but not upload" is
-        // expressible. Checked here as well as at the upload endpoint because
-        // these are two different doors into the same room: the file is already
-        // stored by the time it is named in a message, and a file id can be
-        // reused from an earlier message.
-        // A cap on how many, not only how large. The size limit is per file, so
-        // without this one message could name a hundred of them and the only
-        // bound was how many the sender managed to upload first.
+        // Checked here as well as at the upload endpoint: the file is already
+        // stored by the time a message names it, and an id can be reused from
+        // an earlier message. The cap is on how many — the size limit is per
+        // file, so one message could otherwise name a hundred.
         if (attachments && attachments.length > MAX_ATTACHMENTS_PER_MESSAGE) {
           socket.emit("chat:error", {
             error: "too_many_attachments",
@@ -423,19 +391,13 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        // `send_messages` got this far, which is the permission for a channel.
-        // Posting into a direct message is its own permission, and checking it
-        // only in `dm:open` would gate making a conversation while leaving every
-        // conversation that already exists open to post in — including to
+        // Checking this only in `dm:open` would gate making a conversation
+        // while leaving every existing one open to post in, including for
         // somebody whose role had the permission taken away.
         /*
-         * Only a conversation can be sealed.
-         *
-         * A channel is a room with a member list rather than a pair of people:
-         * there is no set of keys to seal to, anybody admitted later would find
-         * every message unreadable, and the moderation an operator has over a
-         * channel would go with it. Refused rather than stored, so nothing ends
-         * up in the column that nothing can ever open.
+         * Only a conversation can be sealed. A channel has no fixed set of keys
+         * to seal to, and anybody admitted later would find every message
+         * unreadable. Refused rather than stored in a column nothing can open.
          */
         if (sealed && access.kind !== "dm") {
           socket.emit("chat:error", {
@@ -494,14 +456,9 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           profanityMatches = result.matches;
         }
 
-        // A resend of something already stored. The nonce exists so this does
-        // not post twice, and it has to travel back with the reply: without it
-        // the client that retried cannot tell this is the message it is already
-        // holding, so it draws it a second time and the first one stays pending
-        // forever. The first send attaches it, and for a while this did not.
-        //
-        // Only the sender is told. Everyone else heard about the message when
-        // it was first posted, and had no way to know this one was the same.
+        // A resend of something already stored. The nonce has to travel back
+        // with the reply, or the retrying client cannot tell this is the
+        // message it already holds and draws it twice. Only the sender is told.
         if (payload.nonce && recentNonces.has(payload.nonce)) {
           const cached = recentNonces.get(payload.nonce)!;
           socket.emit("chat:new", { ...cached.message, nonce: payload.nonce });
@@ -541,16 +498,10 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
             consola.warn("touchConversation failed", created.conversation_id, err),
           );
 
-          // A message brings the conversation back to anybody who had hidden
-          // it. Hiding is "not in my sidebar", not "never speak to me again" —
-          // without this the message would be delivered to a row that is not
-          // there, and the only sign of it would be an unread count on
-          // nothing. Blocking is the feature that means the other thing, and
-          // this is not it.
-          //
-          // After the send rather than before, and swallowed on failure, for
-          // the same reason auto-roles are: a sidebar that has not caught up
-          // must never be the reason a message does not arrive.
+          // A message brings back a conversation somebody hid: hiding means
+          // "not in my sidebar", and otherwise the only sign would be an unread
+          // count on nothing. After the send and swallowed on failure — a
+          // sidebar that has not caught up must not stop a message arriving.
           try {
             const restored = await clearConversationHidden(created.conversation_id);
             for (const serverUserId of restored) {
@@ -580,20 +531,9 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         });
 
         /*
-         * Who this message named, written down.
-         *
-         * After delivery, deliberately: being mentioned is not worth making
-         * everybody else's message slower, and a parse that threw must not be
-         * able to stop one arriving. The row can be a moment late; the message
-         * cannot.
-         *
-         * Sealed messages are skipped because there is nothing to read. The
-         * server holds ciphertext, and parsing it would find nothing — which
-         * is the correct outcome and is worth saying out loud rather than
-         * leaving as an accident of `finalText` being empty.
-         *
-         * A message with no `@` in it cannot mention anybody, and most of them
-         * have none, so the member list is never read for those.
+         * Who this message named. After delivery, deliberately: a parse that
+         * threw must not stop a message arriving. Sealed messages are skipped
+         * because the server holds ciphertext and there is nothing to read.
          */
         if (finalText?.includes("@")) {
           try {
@@ -658,11 +598,8 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
             reactions: null,
             ephemeral: true,
           };
-          // `access` belongs to the try block above and this is the catch, so
-          // it is resolved again rather than reached for. Anything other than a
-          // clear yes means the sender alone hears about it: a message that
-          // failed to save is not worth risking handing a private one to the
-          // whole server, and the sender is the only person who needs to know.
+          // Resolved again because `access` belongs to the try above. Anything
+          // but a clear yes means the sender alone hears about it.
           const fallbackAccess = await resolveConversationAccess(
             fallback.conversation_id,
             clientsInfo[clientId]?.serverUserId,
@@ -726,15 +663,10 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         const items = before
           ? await listMessages(payload.conversationId, limit, before)
           : await getMessagesCached(payload.conversationId, limit);
-        /* Blocked senders come out before enrichment rather than after, so
-         * nothing is spent looking up an avatar for a message nobody is going
-         * to see.
-         *
-         * `hasMore` is computed from what is left, which means a page that was
-         * mostly one blocked person's messages comes back short. That is the
-         * honest answer — the alternative is refetching until the page is full,
-         * which turns one query into an unbounded number for whoever has
-         * blocked the most people. */
+        /* Blocked senders come out before enrichment, so nothing is spent on
+         * an avatar nobody will see. `hasMore` counts what is left, so a page
+         * can come back short rather than refetching an unbounded number of
+         * times for whoever has blocked the most people. */
         const hidden = await blockedServerIdsFor(clientsInfo[clientId]?.serverUserId ?? "");
         const visible = hidden.size === 0
           ? items
@@ -844,20 +776,13 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         const deleted = await deleteMessage(payload.conversationId, payload.messageId);
         if (!deleted) { socket.emit("chat:error", "Failed to delete message"); return; }
 
-        // Take the bytes with it, rather than leaving them for the periodic
-        // sweep. The sweep would get there eventually, but its grace period is
-        // measured from upload, so something posted and deleted a minute later
-        // sits in storage for the best part of an hour — and the file route
-        // takes no authentication, so deleting the message does nothing about a
-        // link somebody already has.
+        // Take the bytes with it. The sweep's grace period runs from upload,
+        // so something posted and deleted a minute later would sit in storage
+        // for the best part of an hour, reachable by anyone holding the link.
         //
-        // Banning with content purge already does this. An ordinary delete not
-        // doing it was the inconsistency rather than the design.
-        //
-        // Not awaited: the message is gone either way, and a storage backend
-        // having a bad minute should not turn a successful delete into an error
-        // the person has to retry. A file that survives this is orphaned, so
-        // the sweep still collects it by the ordinary rule.
+        // Not awaited: a storage backend having a bad minute should not turn a
+        // successful delete into an error. Anything left over is orphaned, so
+        // the sweep still collects it.
         const attachmentIds = Array.isArray(message.attachments) ? message.attachments : [];
         if (attachmentIds.length > 0) {
           void deleteUnreferencedFiles(attachmentIds).catch((e) =>

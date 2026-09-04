@@ -1,30 +1,17 @@
 /**
  * Who is being rung, and until when.
  *
- * A call itself is not state. It is an SFU room with people in it, the same as
- * a voice channel — "is there a call" is "does the room have anybody", and
- * joining one is the ordinary join path. Nothing about a call is written down.
+ * A call itself is not state — it is an SFU room with people in it, and "is
+ * there a call" is "does the room have anybody". Ringing is the exception,
+ * because it has to interrupt somebody who is not looking at the conversation.
  *
- * Ringing is the exception, and it is the whole reason this file exists. A
- * channel never has to reach anybody: you go to it, and whoever is there was
- * already there. A call has to interrupt somebody who is not looking at the
- * conversation, and then be answered, refused, or given up on. That is a fact
- * about a moment rather than about the conversation, so it lives in memory and
- * dies with the process.
- *
- * Deliberately not in the database. A ring outlives its usefulness in seconds;
- * a row that survives a restart would ring somebody about a call that ended
- * before the server came back.
+ * In memory, deliberately not in the database: a row that survived a restart
+ * would ring somebody about a call that ended before the server came back.
  */
 
 /**
- * How long a ring lasts before it gives up.
- *
- * Thirty seconds, which is about how long a phone rings before it feels
- * broken. The number matters less than there being one at all: without it a
- * caller who closes their laptop mid-ring leaves the other person's device
- * ringing with nothing on the other end, and the only way out is for them to
- * decline a call that no longer exists.
+ * How long a ring lasts. The number matters less than there being one: a caller
+ * who closes their laptop mid-ring otherwise leaves a device ringing at nothing.
  */
 export const RING_TTL_MS = 30_000;
 
@@ -73,14 +60,9 @@ export function getRing(conversationId: string): CallRing | null {
 }
 
 /**
- * Start ringing a conversation.
- *
- * Returns null when one is already going, so a second caller cannot restart the
- * clock on the first — two people pressing call at once in a group should be
- * one ring, not a ring that never times out.
- *
- * `onExpire` fires only on the timeout. Every other ending is somebody doing
- * something, and the code that does it is where the telling belongs.
+ * Start ringing a conversation. Null when one is already going, so a second
+ * caller cannot restart the clock and leave a ring that never times out.
+ * `onExpire` fires only on the timeout.
  */
 export function startRing(
   ring: Omit<CallRing, "startedAt" | "expiresAt">,
@@ -110,11 +92,8 @@ export function startRing(
 }
 
 /**
- * Stop the ring in this conversation and say what happened to it.
- *
- * Returns the ring that was going, so the caller has the list of people to
- * tell — including the devices of whoever just answered, which is what stops a
- * phone ringing in a pocket after the call was taken on a laptop.
+ * Stop the ring in this conversation. Returns the one that was going, so the
+ * caller has everybody to tell — the answerer's other devices included.
  */
 export function endRing(conversationId: string): CallRing | null {
   const ring = rings.get(conversationId);
@@ -125,12 +104,8 @@ export function endRing(conversationId: string): CallRing | null {
 }
 
 /**
- * Every ring this person started.
- *
- * For a caller who disconnects. Their ring is the one nobody else can end —
- * the people being rung can only decline, which is a different thing to say —
- * so it would otherwise ring on until it timed out at somebody who is no
- * longer there.
+ * Every ring this person started, for when they disconnect. Nobody else can end
+ * it — the people being rung can only decline, which says something different.
  */
 export function ringsFrom(serverUserId: string): CallRing[] {
   return [...rings.values()].filter((r) => r.fromServerUserId === serverUserId).map(strip);

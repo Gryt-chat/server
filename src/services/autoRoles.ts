@@ -12,32 +12,17 @@ import type { RoleDefinitionRecord } from "../db";
 import { getEffectiveStanding } from "./permissions";
 
 /**
- * Roles that hand themselves out.
+ * Roles that hand themselves out, so a public server can have a middle tier
+ * nobody awards by hand. Four decisions, all the conservative reading:
  *
- * A public server wants a tier in the middle that nobody has to award by hand:
- * somebody who has been around a fortnight and posted a bit stops being a
- * stranger and gets to attach files and join voice. Doing that manually does
- * not scale past the point where it starts to matter, and not doing it at all
- * means either trusting everybody on arrival or trusting nobody.
- *
- * Four decisions, all of them the conservative reading:
- *
- * - **Both conditions, not either.** A role asking for fourteen days and fifty
- *   messages needs both. Time alone would hand the tier to an account that
- *   signed up a month ago and has never spoken, which is exactly the account a
- *   patient spammer brings.
- * - **Promotion only.** Nothing here ever removes a role. Somebody who goes
- *   quiet does not slide back down, and a member already at or above the
- *   role's rank is left alone — so an automatic tier can never demote a
- *   moderator who happens not to post much.
- * - **Evaluated when the member is here**, on joining and after they send a
- *   message, rather than by a sweeper. Those are the two moments the answer
- *   can change, and a background job is a second thing that can fail quietly.
- *   The cost is that a promotion earned while away lands the next time they
- *   turn up, which is the moment it starts to matter anyway.
- * - **Audited with no actor**, because nobody performed it. The entry says
- *   which role and what it asked for, so "why is this person suddenly able to
- *   upload" has an answer that does not require reading this file.
+ * - **Both conditions, not either.** Time alone hands the tier to an account
+ *   that signed up a month ago and never spoke — a patient spammer's account.
+ * - **Promotion only.** Nothing here removes a role, and a member already at or
+ *   above the rank is left alone, so this can never demote a quiet moderator.
+ * - **Evaluated when the member is here**, on join and after a message, rather
+ *   than by a sweeper that can fail quietly.
+ * - **Audited with no actor**, because nobody performed it, so "why can this
+ *   person suddenly upload" has an answer.
  */
 
 /** What a role asked for, recorded on the audit entry that granted it. */
@@ -63,11 +48,8 @@ function qualifies(
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 /**
- * Whether any role on this server grants itself at all.
- *
- * Asked first so the common case — a server that has configured none of this,
- * which is every server until somebody opens the editor — costs one read of a
- * five-row table and no message count.
+ * Whether any role grants itself at all. Asked first so a server that has
+ * configured none of this costs one small read and no message count.
  */
 function anyRoleAutoGrants(roles: RoleDefinitionRecord[]): boolean {
   return roles.some(
@@ -81,11 +63,8 @@ export interface AutoGrantResult {
 }
 
 /**
- * Promote somebody if they have earned it, and say so if they did.
- *
- * Returns null in the ordinary case, which is almost every call. Never throws:
- * this runs off the back of joining and of sending a message, and neither
- * should fail because a promotion could not be worked out.
+ * Promote somebody if they have earned it. Never throws — this runs off joining
+ * and off sending a message, and neither should fail over a promotion.
  */
 export async function applyAutoRoles(
   serverUserId: string,

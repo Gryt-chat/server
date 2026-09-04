@@ -7,26 +7,16 @@ import {
 /**
  * Which roles an invite may hand out, and whether it still may.
  *
- * An invite is a stored capability. Every other role grant on this server is
- * checked with the actor in the room — `resolveRoleChange` in the admin handler
- * asks for `manage_roles`, that the actor outranks the target, and that the role
- * is strictly below the actor's own rank. An invite defers the grant to a moment
- * nobody is present for, which breaks two of those three:
+ * An invite is a stored capability, granted at a moment nobody is present for,
+ * which breaks two of the checks `resolveRoleChange` makes with the actor in
+ * the room. The creator can be demoted and still hold a link that mints
+ * moderators. And the role can move under the invite — bind a rank-10 role,
+ * then edit it to rank 90 with everything ticked, and the link grants
+ * near-owner with no check ever failed.
  *
- * - The creator can lose standing. An admin makes an invite granting moderator
- *   and is demoted a week later. Nothing revisits the invite, so a former admin
- *   holds a link that still mints moderators.
- * - The role can move under the invite. Somebody with `manage_roles` binds a
- *   rank-10 role to a link, then edits that role to rank 90 with everything
- *   ticked. The link now grants near-owner, and no check was ever failed.
- *
- * The second one needs no demotion and no second account, which is why a
- * creation-time check on its own is decoration. So the rules below are applied
- * twice: once when the invite is made, and again when it is redeemed, against
- * the world as it is then.
- *
- * Pure, and in its own file, so the rules can be read and tested without a
- * socket, a database or a join.
+ * **So the rules below are applied twice**: once when the invite is made, and
+ * again when it is redeemed, against the world as it is then. A creation-time
+ * check on its own is decoration.
  */
 
 export interface RoleFacts {
@@ -54,11 +44,8 @@ const OK: InviteRoleVerdict = { ok: true };
 const no = (reason: InviteRoleRefusal): InviteRoleVerdict => ({ ok: false, reason });
 
 /**
- * The rules that hold whatever the moment.
- *
- * Checked at creation and again at redemption, because every one of them can
- * stop being true in between: a role's permissions can be widened, its flag
- * cleared, or the role deleted outright.
+ * The rules that hold whatever the moment. Every one can stop being true
+ * between creation and redemption, so both ends check them.
  */
 function alwaysTrue(role: RoleFacts | null): InviteRoleVerdict {
   if (!role) return no("unknown_role");
@@ -78,11 +65,9 @@ function alwaysTrue(role: RoleFacts | null): InviteRoleVerdict {
 }
 
 /**
- * May this actor bind this role to an invite they are creating?
- *
- * Strictly below the actor's own rank, matching `resolveRoleChange`: binding a
- * role you do not outrank is granting yourself a promotion two steps removed,
- * and the extra step is the only difference.
+ * May this actor bind this role to an invite? Strictly below their own rank,
+ * matching `resolveRoleChange` — binding a role you do not outrank is granting
+ * yourself a promotion two steps removed.
  */
 export function mayBindRoleToInvite(
   role: RoleFacts | null,
@@ -95,18 +80,12 @@ export function mayBindRoleToInvite(
 }
 
 /**
- * May this invite still grant the role it was bound to?
+ * May this invite still grant the role it was bound to? `rankAtCreation` is
+ * what was agreed to, so a role that has climbed since is refused rather than
+ * honoured at the new height. Falling is fine.
  *
- * `rankAtCreation` is the rank the role carried when somebody with the standing
- * to do it agreed to hand it out. A role that has climbed since is not the role
- * that was agreed to, so the grant is refused rather than honoured at the new
- * height. Falling is fine: a role that has been demoted grants less than was
- * agreed, which nobody needs protecting from.
- *
- * Deliberately does not consult the creator's standing today. Their rank is not
- * a stable thing to hang a link on — they may have left — and the snapshot plus
- * the rules above already bound what the link can do without needing them to
- * still exist.
+ * Deliberately does not consult the creator's standing today — they may have
+ * left, and the snapshot already bounds what the link can do.
  */
 export function mayRedeemInviteRole(
   role: RoleFacts | null,
@@ -130,13 +109,9 @@ export const INVITE_ROLE_REFUSAL_TEXT: Record<InviteRoleRefusal, string> = {
 };
 
 /**
- * Grant the role an invite was bound to, if it still may.
- *
- * Separate from the pure rules above because this one reaches the database, and
- * because the interesting part is what it does when the answer is no: it writes
- * an audit row and carries on. A refusal here means somebody arrived expecting
- * a role and did not get it, which is indistinguishable from the feature being
- * broken unless it is written down somewhere an operator can find it.
+ * Grant the role an invite was bound to, if it still may. On a refusal it
+ * writes an audit row and carries on — somebody arriving without the role they
+ * expected is indistinguishable from the feature being broken otherwise.
  */
 export async function applyInviteRole(
   inviteCode: string,

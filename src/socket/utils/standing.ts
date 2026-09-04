@@ -3,16 +3,11 @@ import { getEffectiveStanding, hasPermission } from "../../services/permissions"
 import type { Clients } from "../../types";
 
 /**
- * Whether the person behind a socket may do something.
+ * Whether the person behind a socket may do something, for the events that
+ * carry no access token. An unidentified socket is refused.
  *
- * For the events that carry no access token — history fetches, the voice state
- * stream, the member list — where the socket's identity is what `clientsInfo`
- * recorded when it joined. An unidentified socket is refused.
- *
- * Reads the database every time, deliberately. There is a cached copy of the
- * same answer below and it is not used here: a stale cache that says yes is a
- * permission that outlives its removal, and the cost of being right is one
- * lookup on a table with five rows.
+ * **Reads the database every time.** The cached copy below is not used here: a
+ * stale cache saying yes is a permission that outlives its removal.
  */
 export async function socketMay(
   clientsInfo: Clients,
@@ -26,17 +21,13 @@ export async function socketMay(
 }
 
 /**
- * Whether this socket has said who it is yet.
+ * Whether this socket has said who it is yet. `socketMay` answers false for a
+ * `temp_` socket, correctly, but that is the same false it gives a refusal —
+ * one is a decision and the other is a moment.
  *
- * A socket is given `temp_<id>` at connection and keeps it until
- * `session:restore` or a join finishes. `socketMay` answers false for one of
- * those, correctly — a placeholder holds no permissions — but false is the same
- * answer it gives somebody who has been refused, and the two are not the same
- * thing. One is a decision and the other is a moment.
- *
- * Callers that only gate an action can keep using `socketMay` and treat both as
- * no. Callers that *report* the refusal need this: telling a client it is
- * forbidden when the truth is "not yet" makes it stop asking (GRYT-647).
+ * Callers that gate an action can treat both as no. Callers that *report* the
+ * refusal need this: "forbidden" when the truth is "not yet" makes a client
+ * stop asking (GRYT-647).
  */
 export function socketIsIdentified(
   clientsInfo: Clients,
@@ -48,19 +39,12 @@ export function socketIsIdentified(
 
 /**
  * The same answer, cached on the socket, for deciding who a broadcast goes to.
+ * Refreshed whenever the server rebroadcasts its details, which already happens
+ * on every role change, definition edit and settings update.
  *
- * Chat messages and member lists go out to every connected socket, and asking
- * the database per socket per message is the wrong shape. So the standing is
- * cached when somebody joins and refreshed whenever the server rebroadcasts its
- * details — which is already what happens on every role change, definition
- * edit and settings update.
- *
- * **Delivery only.** Nothing authorises against this. The worst a stale entry
- * can do is send one message to somebody who just lost `read_messages`, or
- * withhold one from somebody who just gained it, and the next refresh corrects
- * it. That is a very different failure from a stale entry deciding whether a
- * ban sticks, which is why the two are separate functions rather than one with
- * a flag.
+ * **Delivery only. Nothing authorises against this.** The worst a stale entry
+ * does is send one message to somebody who just lost `read_messages`. That is
+ * why this and `socketMay` are two functions rather than one with a flag.
  */
 export async function refreshClientPermissions(
   clientsInfo: Clients,

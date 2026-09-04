@@ -86,28 +86,16 @@ interface ParsedVersion {
 /**
  * A version this code is willing to compare, or null.
  *
- * `1.0.48-1-gafa06e4` is what `git describe` gives for a build that is not
- * sitting exactly on a tag, and embedded builds produced exactly that for a
- * while. The old parser split on "." and did `(part || 0)`, so
- * Number("48-1-gafa06e4") became NaN, NaN is falsy, and the patch component
- * quietly became 0. The whole version compared as 1.0.0 and every comparison
- * said an update was available, whatever was installed. GRYT-306.
- *
- * Refusing to parse is the honest answer. A caller that cannot compare should
- * say nothing rather than guess low.
- *
- * It refused too much, though (GRYT-722). `1.6.15-beta.1` is a version this
- * project publishes, and refusing it meant an embedded prerelease fell down
- * `detectChannel`'s unparseable branch, called itself stable, and took the
- * newest *stable* release as `latest` — a version older than the one running.
- * `updateAvailable` then compared null and came out false, so a server on a
- * beta stopped being offered updates at all. Quieter than GRYT-306 and harder
- * to notice.
+ * Two bugs shaped this. `git describe` gives `1.0.48-1-gafa06e4` off a tag, and
+ * a parser doing `(part || 0)` turned that into 1.0.0, so every comparison said
+ * an update was available (GRYT-306). Then refusing too much sent
+ * `1.6.15-beta.1` down the unparseable branch, where it called itself stable
+ * and took the newest *stable* release as latest — so a beta server stopped
+ * being offered updates (GRYT-722).
  *
  * So: plain releases, and the `-<stage>.<n>` shape the workflows produce.
- * Deliberately a closed set of stages rather than the semver grammar. Full
- * semver would read `1.0.48-1-gafa06e4` as a valid prerelease of 1.0.48 and
- * compare it, which is exactly the door GRYT-306 closed.
+ * **A closed set of stages rather than the semver grammar** — full semver reads
+ * `1.0.48-1-gafa06e4` as a valid prerelease and compares it.
  */
 export function parseVersion(v: string): ParsedVersion | null {
 	const m = /^(\d+)\.(\d+)\.(\d+)(?:-([a-z]+)\.(\d+))?$/.exec(v.trim());
@@ -189,15 +177,9 @@ async function fetchSfuCurrentVersion(): Promise<string | null> {
 }
 
 /**
- * Ask the image worker what it is.
- *
- * The worker is a separate process — its own container under Docker, a forked
- * process under the desktop app — so the server cannot know its version at
- * build time and has to ask. Same shape as the SFU check above it.
- *
- * IMAGE_WORKER_URL is how it is found. Unset means no answer rather than an
- * error: plenty of deployments have no worker, and a server that shouted about
- * it would be wrong more often than right.
+ * Ask the image worker what it is — a separate process, so the server cannot
+ * know at build time. IMAGE_WORKER_URL unset means no answer rather than an
+ * error: plenty of deployments have no worker.
  */
 async function fetchWorkerCurrentVersion(): Promise<string | null> {
 	const url = process.env.IMAGE_WORKER_URL;

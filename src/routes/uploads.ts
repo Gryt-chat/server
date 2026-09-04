@@ -19,13 +19,7 @@ import { AVATAR_MAX_PX, AVATAR_THUMB_PX } from "../constants/media";
 import { findDominantColor, validateImage, MAX_INPUT_PIXELS } from "../utils/imageValidation";
 import { sanitizeSvg } from "../utils/svgSanitize";
 
-/**
- * Takes the path multer already wrote, rather than a buffer.
- *
- * It used to write the buffer back out to a temp file so ffmpeg had something
- * to open. With the upload on disk from the start that round trip is gone, and
- * with it the only reason a video had to fit in memory.
- */
+/** Takes multer's path, so a video never has to fit in memory. */
 async function extractVideoThumbnail(inputPath: string, fileId: string): Promise<Buffer | null> {
   const outputPath = join(tmpdir(), `gryt-thumb-${fileId}.jpg`);
   try {
@@ -51,27 +45,13 @@ async function extractVideoThumbnail(inputPath: string, fileId: string): Promise
 }
 
 /**
- * Types a browser may render straight from this endpoint.
+ * Types a browser may render straight from this endpoint. Everything else is a
+ * download.
  *
- * Everything else is sent as a download. The list is raster images, video and
- * audio — formats a browser decodes as media and cannot execute.
- *
- * SVG is on the list now, and it is the one entry that needs justifying, since
- * an SVG is a document rather than a picture. Three things have to hold, and do:
- *
- *   1. Everything stored as image/svg+xml has been through sanitizeSvg() —
- *      script, event handlers, foreignObject and external references are gone
- *      before it is written. An SVG that predates that, or arrives another way,
- *      is not covered by this reasoning.
- *   2. The client only ever draws these through <img>, where a browser does not
- *      run script or fetch subresources. There is no dangerouslySetInnerHTML in
- *      the client, so none of them is inlined into the DOM.
- *   3. Opened directly as a document, the CSP two lines below applies: a sandbox
- *      with no tokens blocks scripts. That header is what makes this safe rather
- *      than merely usually-safe, so it is not optional.
- *
- * Serving it as a download instead would be safer still and would also stop
- * avatars rendering, since an attachment cannot be an <img> source.
+ * **SVG is on the list, and three things have to stay true for that.** Anything
+ * stored as image/svg+xml has been through sanitizeSvg(); the client only draws
+ * these through `<img>`, never innerHTML; and the CSP two lines below sandboxes
+ * one opened directly as a document. That header is not optional.
  */
 function isInlineSafe(contentType: string | undefined): boolean {
   if (!contentType) return false;
@@ -88,25 +68,14 @@ function isInlineSafe(contentType: string | undefined): boolean {
 // written and deleted for no benefit.
 
 /**
- * An image has to be decoded to be validated, and decoding means holding it.
- * Generic files and videos have no such requirement and are not subject to
- * this — it is a validation ceiling, not an upload one. 64 MB is far past any
- * real photograph and far below anything that threatens the process.
+ * A validation ceiling, not an upload one: validating an image means decoding
+ * it, and decoding means holding it. Files and videos are not subject to this.
  */
 const IMAGE_VALIDATION_MAX_BYTES = 64 * 1024 * 1024;
 
 /**
- * multer for the general upload route, writing to disk and enforcing the
- * server's own configured limit.
- *
- * There used to be two independent ceilings — a fixed 200 MB here and whatever
- * the server was configured for — and the lower one silently won. An operator
- * who set 500 MB got 200, with nothing saying so. Now there is one number, it
- * is the operator's, and multer refuses the request as it streams rather than
- * after a large file has already landed on disk.
- *
- * Zero means unlimited, which is what makes the unlimited branch in the
- * enforcement code below reachable for the first time.
+ * multer for the general upload route. One ceiling, the operator's, refused as
+ * it streams rather than after the file has landed. Zero means unlimited.
  */
 function uploadToDisk(field: string) {
   return function bufferUploadToDisk(req: Request, res: Response, next: NextFunction): void {
@@ -122,18 +91,10 @@ function uploadToDisk(field: string) {
 }
 
 /**
- * Buffer an avatar, refusing an oversized one before it is in memory.
- *
- * The avatar path keeps the file in memory because it is re-encoded rather than
- * streamed to storage, and the size check used to run *after* multer had
- * finished. So a file was buffered in full and then rejected: the configured
- * limit governed what was stored, and nothing governed what was allocated. A
- * member with `change_avatar` could make the process hold the multer ceiling,
- * repeatedly.
- *
- * Same shape as `uploadToDisk`: read the configured limit first, hand it to
- * multer, let multer refuse. The check further down stays, because it is what
- * produces the readable error.
+ * Buffer an avatar, refusing an oversized one **before** it is in memory. This
+ * path re-encodes rather than streaming, so a check after multer finished meant
+ * the limit governed what was stored and nothing governed what was allocated.
+ * The check further down stays; it is what produces the readable error.
  */
 function uploadAvatarToMemory(field: string) {
   return function bufferAvatarToMemory(req: Request, res: Response, next: NextFunction): void {
@@ -149,10 +110,8 @@ function uploadAvatarToMemory(field: string) {
 }
 
 /**
- * Deletes the temp file multer wrote, on every exit path including the ones
- * that threw. Without this an upload that fails validation leaves its bytes on
- * the host's disk, which is the failure mode that turns a disk-backed upload
- * route into a disk-filling one.
+ * Deletes multer's temp file on every exit path, including the ones that threw.
+ * Otherwise a failed validation leaves its bytes on the host's disk.
  */
 async function discardTemp(file: Express.Multer.File | undefined): Promise<void> {
   if (!file?.path) return;
@@ -212,24 +171,12 @@ uploadsRouter.post(
         const maxBytes = (typeof cfg?.upload_max_bytes === "number" ? cfg.upload_max_bytes : DEFAULT_UPLOAD_MAX_BYTES);
         const hasLimit = typeof maxBytes === "number" && maxBytes > 0;
 
-        // Applies to everything, images included.
+        // Applies to images too. Exempting them on the assumption the image
+        // worker shrinks them was never a limit: the worker runs after the
+        // original is written, and a desktop-hosted server has no worker.
         //
-        // Images used to be exempt, on the assumption that the image worker
-        // would shrink them afterwards. That was never a size limit, for two
-        // reasons: the worker only runs after the original has been written, so
-        // the full-size file lands on the host's disk regardless; and a server
-        // hosted from the desktop app had no worker at all until GRYT-68, so
-        // nothing ever shrank anything. Whoever hosted for their friends had an
-        // uncapped write channel into their own storage and no way to see it.
-        //
-        // The cost is that a photo above the limit is now refused rather than
-        // accepted and quietly resized. That is the honest behaviour: the limit
-        // is what the server says it is, and it says so before taking the file.
-        //
-        // Belt and braces. multer already refused anything over the limit as
-        // it streamed, so reaching this with an oversized file means the
-        // setting changed between the two reads. Cheap to keep, and it is the
-        // only check if that ever stops being true.
+        // Belt and braces — multer already refused as it streamed, so getting
+        // here means the setting changed between the two reads.
         if (hasLimit && file.size > maxBytes) {
           res.status(413).json({
             error: "file_too_large",
@@ -266,11 +213,8 @@ uploadsRouter.post(
             width: svg.width,
             height: svg.height,
             thumbnail_key: null,
-            // Through the decision rather than off the request, so there is one
-            // place the client's filename can reach a row. This branch is
-            // unreachable for a sealed upload anyway — `treatAsSvg` is false for
-            // one — but two sources for the same field is how the sealed path
-            // gets it wrong later.
+            // Through the decision rather than off the request, so there is
+            // one place the client's filename can reach a row.
             original_name: storage.originalName,
             created_at: new Date(),
           });
@@ -280,15 +224,10 @@ uploadsRouter.post(
         }
 
         if (storage.validateAsImage) {
-          // Anything claiming to be an image has to actually decode as one of
-          // the raster formats we allow. This route previously took the mime
-          // straight from the request and stored the bytes untouched, so an
-          // SVG carrying <script> was kept verbatim and served back inline.
-          //
-          // Validating means decoding, and decoding means holding it, so this
-          // is the one path that still reads the whole file. Refusing an
-          // absurd "image" is better than handing it to sharp: a file this
-          // size claiming to be a PNG is not a photograph.
+          // Anything claiming to be an image has to decode as one of the
+          // raster formats we allow — the mime off the request is a claim, and
+          // taking it meant an SVG carrying <script> was served back inline.
+          // A file this size claiming to be a PNG is not a photograph.
           if (file.size > IMAGE_VALIDATION_MAX_BYTES) {
             res.status(413).json({
               error: "file_too_large",
@@ -366,16 +305,9 @@ uploadsRouter.post(
   "/avatar",
   requireBearerToken,
   /*
-   * `upload_avatar_image`, not `change_avatar`.
-   *
-   * This endpoint only ever receives a picture. An owl is a string on the
-   * profile — the client draws it, and `resolveAvatarSrc` prefers the drawn one
-   * over any uploaded file — so a member without this permission still gets
-   * every owl, and only the PNG that would have accompanied it is skipped.
-   *
-   * That is what makes the split enforceable rather than declared. There is no
-   * flag here saying "this upload is an owl" for a modified client to lie
-   * about: the owl never needed the endpoint.
+   * `upload_avatar_image`, not `change_avatar`. This endpoint only ever
+   * receives a picture — an owl is a string on the profile and never came
+   * through here, so there is no flag for a modified client to lie about.
    */
   (req: Request, res: Response, next: NextFunction): void => {
     ensurePermission(req, res, "upload_avatar_image")
@@ -468,13 +400,9 @@ uploadsRouter.post(
         width = validation.width;
         height = validation.height;
 
-        // Dimensions, not bytes. Anything over the byte limit was refused above,
-        // so what is left to catch here is the modestly-sized animated avatar
-        // with large dimensions, which would otherwise be stored exactly as
-        // uploaded and served at full size to every viewer (GRYT-66).
-        //
-        // The byte comparison stays as a guard rather than a decision: it is
-        // redundant only for as long as the check above sits before this one.
+        // Dimensions, not bytes: what is left to catch is the modestly-sized
+        // animated avatar with large dimensions (GRYT-66). The byte comparison
+        // is redundant only while the check above sits before this one.
         const withinBounds =
           file.size <= maxBytes &&
           (width ?? 0) <= AVATAR_MAX_PX &&
@@ -662,26 +590,15 @@ uploadsRouter.delete(
 /**
  * Whether the caller may read files on this server at all.
  *
- * The credential is in the query string rather than a header, and that is
- * forced rather than chosen: every one of these URLs ends up in an `<img src>`
- * — avatars in the member list, pictures in the chat, group icons — and an
- * image element cannot send an Authorization header. A cookie would reach it,
- * but the client and the server are usually different origins, so it would need
- * `SameSite=None; Secure` and stop working on every self-hosted server reached
- * over plain http on a LAN.
+ * The credential is in the query string because these URLs end up in `<img
+ * src>` and an image element cannot send an Authorization header. A cookie
+ * would need `SameSite=None; Secure` and would stop working on every
+ * self-hosted server reached over plain http on a LAN.
  *
- * So it is a token that only reads files, and the checks are the ones
- * `requireBearerToken` makes: signed by us, minted for this host, and not from
- * before the last token-version bump. A token from another server verifies
- * against a different secret; one from this server before a rotation fails on
- * the version.
- *
- * There is no per-file check beyond this on purpose. A file token is only ever
- * minted for somebody who joined, so holding one is the membership test, and
- * every file on a server belongs to that server. Narrowing further — this
- * channel, this conversation — is a real thing to want and is not what
- * GRYT-740 was about: the hole was that a stranger with a UUID could read
- * anything at all.
+ * No per-file check beyond this, on purpose. A file token is only minted for
+ * somebody who joined, so holding one is the membership test. Narrowing to a
+ * channel or conversation is a real thing to want and was not GRYT-740, where
+ * the hole was a stranger with a UUID reading anything at all.
  */
 async function mayReadFiles(req: Request): Promise<boolean> {
   const raw = req.query.t;

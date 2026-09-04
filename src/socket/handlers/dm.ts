@@ -25,16 +25,11 @@ import { requireAuth } from "../middleware/auth";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
 /**
- * Opening and listing direct messages.
+ * Opening and listing direct messages. Sending, editing and history are not
+ * here — once a DM exists it goes through the same `chat:*` events, gated by
+ * `socket/utils/conversationAccess.ts`.
  *
- * Sending, editing, reacting and fetching history are not here — a DM is a
- * conversation like any other once it exists, so it goes through the same
- * `chat:*` events, and `socket/utils/conversationAccess.ts` is what decides
- * whether the caller is party to it. This file is only the two things that are
- * specific to DMs: making one, and listing the ones you are in.
- *
- * These conversations are local to this server and are not related to a DM the
- * same two people may have on another one. See `db/sqlite/conversations.ts`.
+ * These conversations are local to this server. See `db/sqlite/conversations.ts`.
  */
 
 const RL_OPEN: RateLimitRule = { limit: 10, windowMs: 60_000, scorePerAction: 1, maxScore: 10, scoreDecayMs: 3000 };
@@ -52,36 +47,22 @@ export interface DirectConversationView {
   kind: "dm" | "group";
   /** What a group was named, or null to read it off `members`. Null on a `dm`. */
   name: string | null;
-  /**
-   * A picture somebody uploaded for the group.
-   *
-   * Null means draw one from the name rather than "no picture" — a group with
-   * no upload gets the same treatment a server with no icon does, which is why
-   * nothing is stored for it.
-   */
+  /** Null means draw one from the name, not "no picture". */
   icon_file_id: string | null;
   created_at: string;
   last_message_at: string | null;
   /** Everybody but you, in the order the server holds them. */
   members: ConversationParticipant[];
   /**
-   * The first of `members`.
-   *
-   * Redundant, and kept on purpose: it is what a client written before groups
-   * existed reads, and dropping it would turn every one of those into a crash
-   * on `other.nickname` rather than a client that simply does not know what a
-   * group is. On a group it names one arbitrary person, which reads oddly on
-   * an old build and does not break it.
+   * The first of `members`. Redundant and kept on purpose — a client written
+   * before groups reads it, and dropping it crashes on `other.nickname`.
    */
   other: ConversationParticipant;
 }
 
 /**
- * One member's direct messages, as the client sees them.
- *
- * Outside the handler closure because the chat path needs it as well: a
- * message arriving in a conversation somebody had hidden brings it back, and
- * the row it comes back as is this one.
+ * One member's direct messages, as the client sees them. Outside the handler
+ * closure because the chat path needs it too, to un-hide a conversation.
  */
 export async function directConversationViews(serverUserId: string): Promise<DirectConversationView[]> {
   const conversations = await listConversationsForUser(serverUserId);
@@ -138,12 +119,7 @@ async function broadcastConversation(
 export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandlerMap {
   const { io, socket, clientId, clientsInfo, getClientIp } = ctx;
 
-  /**
-   * Everybody currently connected as this member.
-   *
-   * A person can have the desktop app and a phone open at once, and both should
-   * see a conversation appear.
-   */
+  /** Everybody currently connected as this member — desktop and phone both. */
   function socketIdsFor(serverUserId: string): string[] {
     return Object.entries(clientsInfo)
       .filter(([, ci]) => ci.serverUserId === serverUserId)
@@ -154,12 +130,9 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
 
   return {
     /**
-     * Open the direct message with another member, or return the existing one.
-     *
-     * The caller names the person they want to talk to and nothing else. Their
-     * own side of the conversation is taken from the verified token, never from
-     * the payload — a client that could name both ends could open a
-     * conversation between two other people and then be a member of it.
+     * Open the DM with another member, or return the existing one. The caller's
+     * own side comes from the verified token, never the payload — naming both
+     * ends would open a conversation between two other people and join it.
      */
     'dm:open': async (payload: { accessToken: string; targetServerUserId: string }) => {
       try {
@@ -207,15 +180,9 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
           return;
         }
 
-        /* Either direction. Asking one way round would let the blocked person
-         * open the conversation the block exists to prevent, and the blocker
-         * would find it in their list.
-         *
-         * The refusal is `unknown_member`, the same answer somebody who left
-         * the server gets, and it is deliberately not its own error. A code
-         * that means "they have blocked you" is a code a client would render,
-         * and telling somebody they have been blocked invites exactly what the
-         * block is for. */
+        /* Either direction, or the blocked person opens the conversation the
+         * block exists to prevent. The refusal is `unknown_member` on purpose:
+         * a code meaning "they blocked you" is one a client would render. */
         if (await eitherHasBlocked(auth.tokenPayload.grytUserId, targetUser.gryt_user_id)) {
           socket.emit("dm:error", { error: "unknown_member", message: "That person is not a member of this server" });
           return;
@@ -246,12 +213,9 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
     },
 
     /**
-     * Take a conversation out of your own sidebar, or put it back.
-     *
-     * Nothing is deleted and nobody else is affected — `hidden_at` is on the
-     * caller's own membership row. A message arriving in the conversation
-     * brings it back on its own, which is why this is not a way to stop
-     * somebody talking to you.
+     * Take a conversation out of your own sidebar, or put it back. `hidden_at`
+     * is on the caller's own row, and a new message brings it back — so this is
+     * not a way to stop somebody talking to you.
      */
     'dm:setHidden': async (payload: { accessToken: string; conversationId: string; hidden: boolean }) => {
       try {
@@ -299,12 +263,8 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
     },
 
     /**
-     * Start a group conversation.
-     *
-     * Adding somebody to a one-to-one does not happen. This makes a new
-     * conversation with a new id, and the pair conversation stays exactly as
-     * it was — the history two people built is not something a third should
-     * inherit because somebody tapped "add". Discord draws the same line.
+     * Start a group conversation. Adding somebody to a one-to-one does not
+     * happen: this makes a new id, and the pair conversation stays as it was.
      */
     'dm:group:create': async (payload: { accessToken: string; memberIds: string[]; name?: string; iconFileId?: string }) => {
       try {
@@ -417,11 +377,8 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
     },
 
     /**
-     * Leave a group for good.
-     *
-     * Not hiding. Hiding is your own sidebar and a message brings it back;
-     * this drops the membership, so nothing arrives afterwards and the history
-     * stops being yours to read.
+     * Leave a group for good. Not hiding — this drops the membership, so
+     * nothing arrives afterwards and the history stops being yours to read.
      */
     'dm:group:leave': async (payload: { accessToken: string; conversationId: string }) => {
       try {
@@ -468,15 +425,8 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
     },
 
     /**
-     * Change what a group is called and what it looks like.
-     *
-     * One event rather than two, because the screen that changes either
-     * changes both, and a client that sent them separately would draw a group
-     * renamed but not re-pictured for one round trip.
-     *
-     * Both are `null`-able and both mean "go back to the drawn one": a group
-     * with no name reads off its members, and a group with no upload is drawn
-     * from that name.
+     * Change what a group is called and what it looks like, in one event. Both
+     * are nullable and both mean "back to the drawn one".
      */
     'dm:group:update': async (payload: { accessToken: string; conversationId: string; name?: string | null; iconFileId?: string | null }) => {
       try {

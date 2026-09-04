@@ -78,13 +78,9 @@ function rlCheck(event: string, ctx: HandlerContext, rule: RateLimitRule) {
 const MAX_BAN_MINUTES = 525_600;
 
 /**
- * When a ban should lift, from a duration in minutes.
- *
- * Absent, null, or anything that is not a usable number means permanent, which
- * keeps every existing caller — none of which send this field — behaving as it
- * did. A garbled number is treated as permanent rather than rejected: refusing
- * the whole ban because the duration was malformed would be the wrong way to
- * fail for a moderation action someone is taking right now.
+ * When a ban should lift. Anything unusable means permanent rather than
+ * rejected — refusing a moderation action over a malformed duration fails the
+ * wrong way.
  */
 function resolveBanExpiry(expiresInMinutes?: number | null): Date | null {
   if (expiresInMinutes === undefined || expiresInMinutes === null) return null;
@@ -105,18 +101,10 @@ function resolveMuteExpiry(expiresInMinutes?: number | null): Date | null {
 }
 
 /**
- * Tells the SFU what this user's audio should be doing.
- *
- * Both arguments used to be wrong here. The room was built as
- * `${serverUserId}:${streamID}`, which is not a room the SFU has ever heard
- * of — the registered id is `${serverId}_${voiceChannelId}` (voice.ts, where
- * the room is created) — and the user was the *socket id* rather than the
- * server user id. So the call went out, matched nothing, and the only thing
- * actually silencing anyone was their own client choosing to honour the
- * `server:muted` event. A modified client simply kept talking.
- *
- * This mirrors the equivalent call in voice.ts on purpose: same room shape,
- * same user id, same effective-state OR.
+ * Tells the SFU what this user's audio should be doing. The room is
+ * `${serverId}_${voiceChannelId}` and the user is the server user id — both
+ * were once wrong here, so the call matched nothing and only a cooperating
+ * client was ever muted. Mirrors the equivalent call in voice.ts.
  */
 function pushSfuAudioState(
   sfuClient: HandlerContext["sfuClient"],
@@ -135,20 +123,10 @@ function pushSfuAudioState(
     .catch((e) => consola.error("Failed to update SFU audio state:", e));
 }
 
+/** `#rrggbb` only — the value goes straight into a style on every client. */
 /**
- * A colour a client is willing to render, or null.
- *
- * `#rrggbb` only. The value goes straight into a style on every client that
- * shows the role, so anything that is not obviously a colour is dropped rather
- * than passed through and hoped about.
- */
-/**
- * One half of an automatic-grant condition, as it arrives from a client.
- *
- * `undefined` means "leave it alone" and is passed straight through; anything
- * that is not a positive number becomes null, which is off. A cap because
- * these are two number fields on a form and there is no reading of "grant this
- * after nine hundred million messages" worth storing.
+ * `undefined` means leave it alone; anything that is not a positive number
+ * becomes null, which is off. Capped because it arrives from a form.
  */
 function normalizeThreshold(value: unknown): number | null | undefined {
   if (value === undefined) return undefined;
@@ -166,13 +144,9 @@ function normalizeRoleColor(value: unknown, fallback: string | null): string | n
 }
 
 /**
- * Everything the role editor needs, in one payload.
- *
- * The permission catalogue rides along rather than being written down in the
- * client. A client built against an older server would otherwise show a
- * permission list missing whatever the server has since added, with no sign
- * that anything was missing — and the editor saves the whole set, so the
- * missing ones would be dropped on the next save.
+ * Everything the role editor needs. The permission catalogue rides along: an
+ * older client would otherwise show a short list with no sign it was short,
+ * and the editor saves the whole set, so the rest would be dropped.
  */
 async function roleEditorState() {
   const [definitions, config] = await Promise.all([
@@ -206,11 +180,8 @@ async function roleEditorState() {
 }
 
 /**
- * The bots an operator can see, without the one thing they must not see twice.
- *
  * `claim_token` is deliberately absent. It is shown once, in the reply to
- * `server:bots:register`, and never again — a token that can be re-read from a
- * list is a token that lives as long as the list does.
+ * `server:bots:register` — one that can be re-read lives as long as the list.
  */
 async function botsView() {
   const [bots, cfg] = await Promise.all([listBots(), getServerConfig()]);
@@ -250,11 +221,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
 
   /**
    * Everything that has to be true before one member's roles are changed.
-   *
-   * Three events do the same five checks — replace, add, remove — and the
-   * failure mode of writing them three times is one of them being one check
-   * short, which is a privilege escalation rather than a cosmetic difference.
-   * Each error is emitted here so the wording stays the same too.
+   * Three events share it, because one of them being a check short is a
+   * privilege escalation rather than a cosmetic difference.
    */
   async function resolveRoleChange(
     event: string,
@@ -321,12 +289,9 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         const isOwner = !!(cfg.owner_gryt_user_id && cfg.owner_gryt_user_id === client.grytUserId);
         const view = settingsView(cfg, serverId, isOwner);
 
-        // This event asks only that you have joined, so every member receives
-        // it — and `systemChannelId` is a channel id. If the system channel is
-        // one somebody cannot see, naming it here undoes the rest of the work.
-        // Blanked rather than the whole payload refused: the other twenty
-        // settings are theirs to read, and a client that cannot resolve the id
-        // draws nothing, which is what it should draw.
+        // Every member receives this, and `systemChannelId` is a channel id —
+        // naming a channel somebody cannot see undoes the rest of the work.
+        // Blanked rather than refused, since the other settings are theirs.
         if (
           view.systemChannelId &&
           !(await mayViewChannel(view.systemChannelId, client.serverUserId, client.grytUserId))
@@ -491,9 +456,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
 
     // ── Join requests ────────────────────────────────────────────
     //
-    // Only meaningful while join_policy is "request", but readable whatever it
-    // is: switching away from request should not hide a queue somebody is still
-    // owed a decision on.
+    // Readable whatever the join policy is: switching away from `request`
+    // should not hide a queue somebody is still owed a decision on.
 
     'server:joinRequests:list': async (payload: { accessToken: string }) => {
       try {
@@ -589,12 +553,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    /*
-     * Replace everything somebody holds with this one role.
-     *
-     * What a demotion means, and what every client sent before more than one
-     * role was representable. `server:roles:add` below is the other half.
-     */
+    /* Replace everything somebody holds with this one role — a demotion. */
     'server:roles:set': async (payload: { accessToken: string; serverUserId: string; role: string }) => {
       try {
         const change = await resolveRoleChange("server:roles:set", payload, "change the role of");
@@ -615,15 +574,9 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
     },
 
     /*
-     * Give somebody a role without taking away the ones they have.
-     *
-     * `server:roles:set` replaces the set, which is what a demotion means and
-     * what every client sent before more than one role was representable. This
-     * is the other half: a moderator who is also a contributor is two grants,
-     * not a third role invented to mean both.
-     *
-     * Same gates as set, and for the same reasons — an operator who can add a
-     * role they do not outrank can promote themselves one step removed.
+     * Give somebody a role without taking away the ones they have. Same gates
+     * as set: an operator who can add a role they do not outrank can promote
+     * themselves one step removed.
      */
     'server:roles:add': async (payload: { accessToken: string; serverUserId: string; role: string }) => {
       try {
@@ -643,11 +596,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
     },
 
     /*
-     * Take one role away, leaving the rest.
-     *
-     * Removing the last one is allowed. It leaves them on the joiner default
-     * for their identity tier, which is where somebody who has never been given
-     * a role sits — not on nothing.
+     * Take one role away. Removing the last is allowed: it leaves them on the
+     * joiner default for their tier, not on nothing.
      */
     'server:roles:remove': async (payload: { accessToken: string; serverUserId: string; role: string }) => {
       try {
@@ -682,13 +632,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    /**
-     * Create a role, or edit one that exists.
-     *
-     * One event for both because the editor does not know which it is doing:
-     * the same form saves a role that was created three seconds ago and one
-     * that has been there since the server was set up.
-     */
+    /** Create a role, or edit one — the editor does not know which it is doing. */
     'server:roles:definitions:save': async (payload: {
       accessToken: string;
       roleId: string;
@@ -904,13 +848,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    /**
-     * Which role people land on when they join, per identity tier.
-     *
-     * The setting that makes a public server possible: accounts get one role,
-     * keys-with-no-account get another, and neither has to be handed out by a
-     * moderator watching the door.
-     */
+    /** Which role people land on when they join, per identity tier. */
     'server:roles:defaults:set': async (payload: {
       accessToken: string;
       accountRoleId?: string;
@@ -986,12 +924,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
     },
 
     /**
-     * Answer a bot that knocked.
-     *
-     * `permissions` is what the operator ticked, and the registry intersects it
-     * with what the bot asked for — an operator cannot grant something that was
-     * never requested, which is what stops "approve" from being a blank cheque
-     * on a screen somebody is clicking through quickly.
+     * Answer a bot that knocked. The registry intersects what the operator
+     * ticked with what the bot asked for, so "approve" is never a blank cheque.
      */
     'server:bots:decide': async (payload: {
       accessToken: string;
@@ -1060,10 +994,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
     },
 
     /**
-     * Write down what a bot may do before there is a bot.
-     *
-     * The unattended path: the operator decides everything up front and hands
-     * the token to whoever is deploying it. The token is shown once, here.
+     * Write down what a bot may do before there is a bot. The token is shown
+     * once, here.
      */
     'server:bots:register': async (payload: {
       accessToken: string;
@@ -1174,12 +1106,9 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
     },
 
     /**
-     * Withdraw a bot's registration.
-     *
-     * Takes effect at the next thing it tries, because standing is resolved
-     * from the registry on every check — there is no cached grant to expire.
-     * The membership row is left alone; removing that is a kick or a ban, and
-     * revoking permission has to work whether or not it is connected.
+     * Withdraw a bot's registration. Takes effect at the next thing it tries —
+     * standing is resolved from the registry on every check. The membership row
+     * is left alone; removing that is a kick or a ban.
      */
     'server:bots:revoke': async (payload: { accessToken: string; registrationId: string }) => {
       try {
@@ -1304,15 +1233,9 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
     },
 
     /**
-     * How a member got in, for the moderator about to remove them.
-     *
-     * Admin-gated and asked for by id rather than broadcast, because the
-     * member list goes to everybody and an invite code in it would be a way
-     * for any member to collect working codes.
-     *
-     * The answer is what makes GRYT-177's question worth asking: banning
-     * somebody who arrived on a still-live invite achieves little on its own,
-     * since an identity with no account costs nothing to replace.
+     * How a member got in, for the moderator about to remove them. Asked for by
+     * id rather than broadcast: the member list goes to everybody, and an
+     * invite code in it would let any member collect working codes.
      */
     'server:member:invite': async (payload: { accessToken: string; targetServerUserId?: string }) => {
       try {
@@ -1380,11 +1303,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           reason: payload.reason,
         });
 
-        // Erase what they wrote, if asked. Defaults to on, because a ban is
-        // usually about the content as much as the person — but it is a choice,
-        // since unban can restore access and cannot restore a thread. Replies
-        // to a deleted message lose their context for everybody, not just for
-        // the person banned.
+        // Erase what they wrote, if asked. A choice rather than automatic:
+        // unban restores access and cannot restore a thread.
         const purge = payload.deleteContent !== false;
         if (purge) {
           const { deletedMessages, updatedReactions, orphanedAttachmentIds } =
@@ -1401,26 +1321,17 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
             sender_server_user_id: targetId,
             affected_conversations: affectedConversations,
           });
-          // No per-message broadcast for the reactions they left on other
-          // people's messages. The client already holds those messages and can
-          // strip the id itself from the purge event — emitting one
-          // chat:reaction each would mean hundreds of broadcasts for a
-          // prolific reactor, to say something the client can work out.
+          // No per-message broadcast for their reactions: the client holds
+          // those messages and strips the id from the purge event itself.
           consola.info(
             `Purged ${deletedMessages.length} messages, ${updatedReactions.length} reactions and ${files.deleted} file(s) for ${targetId}`,
           );
         }
 
-        // Close the door they came through, if asked.
-        //
-        // A ban is keyed on the identity, and an identity with no account
-        // behind it costs nothing to replace — so somebody banned can come
-        // straight back on a new key, presenting the same invite they used the
-        // first time. Verified against a live server: it takes seconds.
-        //
-        // This does not make the ban durable, nothing can. It closes the one
-        // case where a moderator's decision is undone by a link they had
-        // forgotten was still live.
+        // Close the door they came through, if asked. A ban is keyed on the
+        // identity, and one with no account behind it costs seconds to replace
+        // — so a banned user can return on the same invite. This does not make
+        // the ban durable; it closes the forgotten-live-link case.
         let revokedInvite: string | null = null;
         if (payload.revokeInvite) {
           try {
@@ -1629,17 +1540,12 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         const before = typeof payload.before === "string" ? new Date(payload.before) : undefined;
         const items = await listServerAudit(limit, before && Number.isFinite(before.getTime()) ? before : undefined);
 
-        // `view_audit_log` is its own permission and interfaces.ts describes
-        // exactly the case that makes this a leak: "a rank-90 auditor with
-        // nothing but view_audit_log". Rank does not gate the audit log, so an
-        // auditor below a channel's scope would otherwise read that channel's
-        // id out of `target` — and its name out of `meta`, which channel_upsert
-        // records. Entries about a channel they cannot see are dropped whole
-        // rather than redacted, because a redacted row still says one exists.
-        // mayViewChannel answers true for anything that is not a channel, which
-        // is most targets here — user ids, role ids, webhook ids. So this asks
-        // one question per row and only narrows the channel ones. It reads a
-        // cache rather than the database, so the per-row call is cheap.
+        // Rank does not gate the audit log, so an auditor holding nothing but
+        // `view_audit_log` would otherwise read a hidden channel's id out of
+        // `target` and its name out of `meta`. Rows are dropped whole rather
+        // than redacted, because a redacted row still says one exists.
+        // mayViewChannel answers true for non-channel targets and reads a
+        // cache, so the per-row call is cheap.
         const allowed = await Promise.all(
           items.map((it) =>
             it.target

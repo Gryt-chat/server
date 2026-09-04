@@ -1,18 +1,10 @@
 /**
- * Whether this server is in service, and the long story behind the name
- * (GRYT-281).
+ * Whether this server is in service (GRYT-281). Called `GRYT_AUTH_MODE` once,
+ * which read as a switch for whether members needed an account and never was —
+ * that is `GRYT_IDENTITY_TIERS` alone. All it ever did was reject every join.
  *
- * The setting used to be `GRYT_AUTH_MODE`, whose values were `required` and
- * `disabled`. It read like it controlled whether members needed an account, and
- * every comment and doc page said so, but it never did any such thing: joining
- * without an account is decided by `GRYT_IDENTITY_TIERS` alone, and the two do
- * not interact. All this ever did was reject every join, which is a maintenance
- * switch wearing a security name.
- *
- * So it is `GRYT_SERVER_ENABLED` now, and it takes the words a person would
- * guess. The old name and the old values still work, silently, because a rename
- * that takes somebody's server offline on upgrade would be a worse bug than the
- * one being fixed.
+ * The old name and values still work silently: a rename that took somebody's
+ * server offline on upgrade would be the worse bug.
  */
 
 const TRUTHY = new Set(["true", "on", "yes", "1", "enabled", "required"]);

@@ -4,25 +4,14 @@ import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 import { broadcastMemberList } from "../utils/clients";
 
 /**
- * Where a member leaves their DM public key (GRYT-720).
+ * Where a member leaves their DM public key (GRYT-720). It goes in a column and
+ * comes back out in the member list, and **nothing on this side reads it** —
+ * a server that verified the binding would be vouching for the thing every
+ * member has to check itself, and would invite somebody to rely on it.
  *
- * The client signs a short JWT with the identity key it joined on, carrying its
- * X25519 public key, and sends it here. It goes in a column and comes back out
- * in the member list. Nothing on this side reads it.
- *
- * That is the whole design rather than a shortcut. The feature exists so this
- * server cannot read the messages, and a server that verified the binding would
- * be vouching for something every member has to check for itself anyway — so
- * verifying here would buy nothing and would invite somebody to rely on it.
- * Members pin what they are handed and refuse a change; see `server-pins.ts` on
- * the client, which does the same three moves for server keys.
- *
- * ## What is checked, and why only this much
- *
- * A length cap and a shape that could plausibly be a compact JWT. Both are
- * about this server's own storage rather than about anybody's security: without
- * them a member could park a megabyte of anything in a column that goes out to
- * every other member on every member-list broadcast.
+ * The length cap and JWT shape check are about this server's storage, not
+ * anybody's security: without them a member could park a megabyte in a column
+ * that goes out on every member-list broadcast.
  */
 
 /**

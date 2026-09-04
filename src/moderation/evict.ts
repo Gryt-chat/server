@@ -23,28 +23,20 @@ export async function resolveGrytUserId(
 }
 
 /**
- * Removes a user from the server, now, in a way that holds.
+ * Removes a user from the server, now, in a way that holds. Disconnecting the
+ * socket alone bought half a second — socket.io reconnects, `token:refresh`
+ * mints a new access token, the retry loop rejoins. So it is three things:
  *
- * Disconnecting the socket was all this used to do, and it bought about half a
- * second: the client kept its refresh token, socket.io reconnected on its own,
- * `token:refresh` minted a new access token, and the retry loop rejoined. So
- * eviction is three things, not one:
+ *   - `setUserInactive`, which the session gate reads on every admission path,
+ *     closing the 15-minute access-token window without touching the
+ *     server-global `token_version`
+ *   - `revokeUserRefreshTokens`, so no new access token is minted
+ *   - disconnecting the sockets, which makes it immediate
  *
- *   - `setUserInactive` stops existing access tokens authorising anything,
- *     because the session gate reads `is_active` on every admission path. This
- *     is what closes the 15-minute access-token window without any token
- *     surgery, and without touching the server-global `token_version`.
- *   - `revokeUserRefreshTokens` stops a new access token being minted.
- *   - disconnecting the sockets makes it immediate rather than eventual.
+ * A kick stops there. **A ban's `bans` row is written by the caller first**, so
+ * eviction cannot race a reconnect into the gap.
  *
- * A kick stops there, and `upsertUser` sets `is_active` back on a fresh join,
- * so the user can return by joining again. A ban additionally writes the `bans`
- * row that the gate refuses on, and the caller writes that first so eviction
- * cannot race a reconnect into the gap.
- *
- * Sockets are matched on the Gryt identity as well as the server user id, so
- * every session that identity holds goes, not only the ones that happened to
- * finish a join.
+ * Sockets are matched on the Gryt identity as well as the server user id.
  */
 export async function evictUser(params: {
   io: SocketIoServer;
@@ -72,15 +64,10 @@ export async function evictUser(params: {
     if (!ci) continue;
     if (ci.serverUserId !== targetServerUserId && ci.grytUserId !== targetGrytUserId) continue;
 
-    // Take them out of voice before the socket goes.
-    //
-    // Disconnecting the socket does not touch the media path: socket.io and the
-    // SFU peer connection are separate, and the disconnect handler only calls
-    // untrackUserConnection, which deletes a local Map entry and tells the SFU
-    // nothing. So what actually stopped a kicked user talking was their own
-    // client honouring `server_voice_disconnect` and tearing itself down —
-    // exactly the honour system server mute was running on before GRYT-130. A
-    // client that ignores it keeps talking to everyone still in the room.
+    // Take them out of voice before the socket goes. Disconnecting does not
+    // touch the media path — socket.io and the SFU peer connection are
+    // separate — so what stopped a kicked user talking was their own client
+    // honouring the event. One that ignores it keeps talking to the room.
     if (ci.hasJoinedChannel && ci.voiceChannelId) {
       const roomId = sfuRoomId(serverId, ci.voiceChannelId);
       if (sfuClient) {

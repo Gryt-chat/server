@@ -48,21 +48,12 @@ export function originIsHost(origin: string, host: string): boolean {
  * Electron production builds load from http://127.0.0.1:15738 or send
  * `Origin: "null"` (file://).
  *
- * `requestHost` is the Host header of the request being judged, and it is what
- * lets a native app in. React Native's WebSocket sets `Origin` from the URL it
- * is opening — dial `chat.example.com` and it sends
- * `Origin: http://chat.example.com` — so the phone arrives claiming an origin
- * that is the server itself.
+ * `requestHost` is what lets a native app in. React Native's WebSocket sets
+ * `Origin` from the URL it opens, so the phone arrives claiming the server
+ * itself — which is same-origin, and not what CORS was ever about.
  *
- * Accepting that is not a hole. CORS exists to stop *one* site reading another
- * through a browser; an origin naming the same host it is being sent to is
- * same-origin, which the rule was never about. A page served from this server
- * could do all of this already.
- *
- * It is deliberately the exact host rather than a wildcard or a suffix match:
- * `chat.example.com` does not get to speak for `evil.example`, a different port
- * on the same machine is a different origin, and every other origin is still
- * checked against the list.
+ * **The exact host, never a wildcard or a suffix match**: `chat.example.com`
+ * does not speak for `evil.example`, and a different port is a different origin.
  */
 export function isOriginAllowed(
   origin: string,

@@ -1,44 +1,19 @@
 /**
  * What a member of this server is allowed to do.
  *
- * Roles used to be a ladder of four names — owner, admin, mod, member — and
- * every gate in the codebase asked where on that ladder somebody stood. That
- * works right up until a server wants a tier that is *not* on the ladder: a
- * guest who may read and nothing else, a contributor who may talk but not
- * upload, a bot that may only react. None of those are "a bit less than mod".
- *
- * So a role now carries a set of these instead, and the gates ask for the one
- * thing they need. The ladder survives as `rank`, which is only about who may
- * act on whom — see `outranks` in the middleware. Capability and hierarchy are
- * genuinely different questions and conflating them is what made a guest tier
- * impossible to express.
+ * A role carries a set of these and each gate asks for the one thing it needs.
+ * `rank` is separate and is only about who may act on whom — see `outranks` in
+ * the middleware. Capability and hierarchy are different questions.
  */
 export const PERMISSIONS = [
   // ── Text ──────────────────────────────────────────────────────────
-  /**
-   * See what has been said, live and in history.
-   *
-   * The floor. Everything else in this group assumes it, and a role without it
-   * is somebody who is in the server and cannot see it — which is a real thing
-   * to want for a quarantine tier, and is why reading is a permission rather
-   * than the absence of one.
-   */
+  /** See what has been said. A role without it is in the server and blind. */
   "read_messages",
   "send_messages",
   /**
-   * Open a direct message with another member, and post in one.
-   *
-   * Separate from `send_messages` because the two are genuinely different
-   * things to want. A server running a public event wants open channels and
-   * no DMs between strangers; a quiet server wants the opposite of neither.
-   * `allow_dms` on `server_config` is the whole-server switch, and this is
-   * the per-role one — a server with DMs off has them off for everybody,
-   * whatever any role says.
-   *
-   * Reading an existing conversation is not gated on this. Losing the
-   * permission stops you starting or continuing one; it does not reach back
-   * and hide what was already said, the same way turning `allow_dms` off
-   * does not.
+   * Start or post in a DM. `allow_dms` on `server_config` is the whole-server
+   * switch and wins over any role. Reading an existing conversation is not
+   * gated on this — losing it does not hide what was already said.
    */
   "send_direct_messages",
   /** Edit a message you sent. Somebody else's is `manage_messages`. */
@@ -48,78 +23,34 @@ export const PERMISSIONS = [
   "attach_files",
   "add_reactions",
   /**
-   * Put a message, or a person, in front of the moderators.
-   *
-   * Both, under the one permission, and the name is kept for the servers that
-   * already have it set. Splitting them would have meant a sixth backfill
-   * version and a second checkbox for a distinction nobody making the first
-   * choice is thinking about: a server that lets you report what was said
-   * lets you report who said it.
-   *
-   * Channel-scoped for messages. The user report is not — harassment that has
-   * no single message usually has no single channel either — so `user:report`
-   * asks for this at server scope.
+   * Report a message or a person, both. Channel-scoped for messages;
+   * `user:report` asks for it at server scope.
    */
   "report_messages",
-  /**
-   * Have links in the channel unfurled into a preview.
-   *
-   * Reader-side, not sender-side: the preview is fetched by the client that is
-   * displaying the message, through this server. Turning it off for a role
-   * stops that role's clients asking, which is the only place the server has
-   * any say.
-   */
+  /** Unfurl links. Reader-side: the displaying client fetches the preview. */
   "use_link_previews",
 
   // ── Voice ─────────────────────────────────────────────────────────
   /** Enter a voice channel at all. Without it the channel is not joinable. */
   "join_voice",
-  /**
-   * Be unmuted once in. Somebody with `join_voice` and not this is in the room
-   * and cannot be heard — which is a listener, and the reason the two are
-   * separate permissions rather than one.
-   */
+  /** Be unmuted once in. `join_voice` without this is a listener. */
   "speak",
   "share_video",
   "share_screen",
   /**
-   * Ring somebody. Answering is `join_voice`, and that asymmetry is the point.
-   *
-   * A server that wants calling limited — to a paying tier, to a role, to
-   * anybody but an account that arrived this morning — has nothing to say
-   * without this. The alternative was taking `send_direct_messages` away, which
-   * stops the conversation as well as the call.
-   *
-   * Only starting one. Everybody who may enter a voice room may still be rung
-   * and pick up: a permission covering both would leave somebody unable to
-   * answer a call placed to them, which is not a thing anyone wants to
-   * configure.
+   * Start a call. Answering one is `join_voice`, deliberately — gating both
+   * would leave somebody unable to pick up a call placed to them.
    */
   "start_calls",
 
   // ── Self and other members ────────────────────────────────────────
   "change_nickname",
-  /**
-   * Choose an avatar: the owl, and clearing one.
-   *
-   * Everything a Gryt client can draw from a string rather than store. It costs
-   * the server a column and nothing else, which is why it is separate from the
-   * permission below.
-   */
+  /** Choose an owl, or clear one. A string the client draws, not a file. */
   "change_avatar",
   /**
-   * Upload a picture to use as one.
-   *
-   * Split from `change_avatar` because they are different asks. Designing an
-   * owl is a string; uploading a picture puts a file a stranger chose on the
-   * server, in front of everybody, at the size of every member list. On a
-   * public server that is the one worth earning, and gating both together
-   * would have meant a day-old account either keeping the default owl or
-   * getting the run of both.
-   *
-   * A member without this still gets every owl. The client stores the string
-   * and draws it; only the PNG that goes with it is skipped, and no Gryt
-   * client renders that PNG while a worn string is set.
+   * Upload a picture to use as one. Split from `change_avatar` because this
+   * one puts a stranger's file in front of everybody. A member without it
+   * still gets every owl.
    */
   "upload_avatar_image",
   /** See who else is here. */
@@ -156,23 +87,13 @@ export const PERMISSIONS = [
   "manage_webhooks",
   /** Edit role definitions, and assign roles to members. */
   "manage_roles",
-  /**
-   * Answer a bot at the door, and decide what it may do.
-   *
-   * Separate from `manage_roles` because it is a different question. A role is
-   * given to somebody who is already here; approving a bot is deciding whether
-   * a piece of software joins at all, and the two are not obviously the same
-   * person's job on a large server.
-   */
+  /** Answer a bot at the door, and decide what it may do. */
   "manage_bots",
   /** Server name, description, icon, limits, join policy, the lot. */
   "manage_server",
   /**
-   * Hand an existing membership to a different identity.
-   *
-   * Its own permission rather than part of `manage_server`, because it is the
-   * one action here that makes somebody else's account into somebody else's
-   * account. Owner-only by default.
+   * Hand an existing membership to a different identity. Owner-only by
+   * default: it is the one action that makes an account into another account.
    */
   "replace_identity",
   "view_audit_log",
@@ -183,24 +104,12 @@ export const PERMISSIONS = [
 export type Permission = (typeof PERMISSIONS)[number];
 
 /**
- * The permissions a single channel can have an opinion about.
+ * The permissions a single channel can have an opinion about — a deliberate
+ * subset, since `ban_members` means the same thing wherever you stand.
  *
- * A deliberate subset, not the whole catalogue. Most of what is above is about
- * the server rather than a place in it — `ban_members` and `manage_server` mean
- * the same thing wherever you stand, and offering them per channel would put
- * twenty-six rows nobody can act on into the matrix and invite somebody to set
- * one and wonder why nothing happened.
- *
- * What is here is everything that answers "what may this role do *here*":
- * reading and writing, the things attached to a message, and the four that
- * decide what you may do in a voice room.
- *
- * `read_messages` carries more weight than the rest. Denied at channel scope it
- * does not grey the channel out — the server stops naming the channel at all,
- * so the member has no way to learn it exists. See services/channelPermissions.
- *
- * `manage_messages` is here because moderating one channel and not another is a
- * real thing to want, and it is the permission somebody hands to a helper.
+ * `read_messages` denied at channel scope does not grey the channel out: the
+ * server stops naming it, so the member cannot learn it exists. See
+ * services/channelPermissions.
  */
 export const CHANNEL_PERMISSIONS = [
   "read_messages",
@@ -234,12 +143,8 @@ export function isPermission(value: unknown): value is Permission {
 }
 
 /**
- * Keep only the permissions this build knows about.
- *
- * A role edited by a newer server, or a hand-edited row, can name something
- * that does not exist here. Dropping it is the fail-shut answer: an unknown
- * string can never satisfy a gate anyway, and keeping it around would mean the
- * editor shows a permission nobody can explain.
+ * Keep only the permissions this build knows about. A role edited by a newer
+ * server can name one that does not exist here; dropping it fails shut.
  */
 export function normalizePermissions(value: unknown): Permission[] {
   if (!Array.isArray(value)) return [];
@@ -253,19 +158,9 @@ export function normalizePermissions(value: unknown): Permission[] {
 // ── Built-in roles ──────────────────────────────────────────────────
 
 /**
- * The roles every server starts with.
- *
- * `owner`, `admin`, `mod` and `member` are the four that already existed, with
- * the permission sets that reproduce what they could do before this file — so
- * an upgraded server behaves on Tuesday exactly as it did on Monday. `guest` is
- * new and empty: it is the read-only tier a public server hands to somebody who
- * arrived without an account, and it is seeded rather than left to be invented
- * because "read-only" is the one set an operator should not have to get right
- * by hand.
- *
- * Built-ins can be renamed, recoloured and re-permissioned like any other role.
- * What they cannot be is deleted, because the defaults and the owner fall back
- * to them — see `isSystemRole`.
+ * The roles every server starts with. They can be renamed, recoloured and
+ * re-permissioned like any other role, but not deleted — the defaults and the
+ * owner fall back to them. See `isSystemRole`.
  */
 export interface BuiltInRole {
   id: string;
@@ -278,13 +173,9 @@ export interface BuiltInRole {
 const EVERY_PERMISSION = PERMISSIONS;
 
 /**
- * What anybody who has been let in can do, whatever else their role says.
- *
- * Not enforced as a floor — a role really can have none of these, and then its
- * holders are in the server and cannot see it. It is the set every role gets on
- * *upgrade*, because before these permissions existed there was no gate on any
- * of them: reading, seeing who is here, reporting a message and unfurling a
- * link were open to every member, guests included. See PERMISSION_BACKFILLS.
+ * Not a floor — a role really can have none of these. It is the set every role
+ * gets on *upgrade*, since none of them were gated before. See
+ * PERMISSION_BACKFILLS.
  */
 const OPEN_TO_EVERYONE = [
   "read_messages",
@@ -293,12 +184,7 @@ const OPEN_TO_EVERYONE = [
   "use_link_previews",
 ] as const satisfies readonly Permission[];
 
-/**
- * The read-only tier.
- *
- * Seeded with the four above rather than with nothing, which is what it held
- * when reading was not yet a permission. "Read-only" has to include reading.
- */
+/** The read-only tier. Seeded with the four above; read-only includes reading. */
 const GUEST_PERMISSIONS = OPEN_TO_EVERYONE;
 
 /** What a plain member could do before permissions existed. */
@@ -321,17 +207,9 @@ const MEMBER_PERMISSIONS = [
 ] as const satisfies readonly Permission[];
 
 /**
- * Everything a member has, plus what the old `mod` gates allowed.
- *
- * Shorter than it looks like it should be, and deliberately so. `mod` gated
- * exactly `server:kick`, `server:mute` and `server:deafen`; bans, reports, join
- * requests and the audit log were all `admin`. Handing moderators the rest
- * because the name suggests it would be this change quietly widening what a
- * role can do, which is the one thing it must not do — an operator who wants
- * that ticks two boxes.
- *
- * `disconnect_members` is here because `voice:disconnect:user` was a `mod`
- * gate too, under the same permission mute used to carry.
+ * Deliberately shorter than the name suggests. `mod` gated exactly kick, mute
+ * and deafen; bans, reports, join requests and the audit log were `admin`.
+ * Adding the rest would widen what the role can do, which this must not.
  */
 const MOD_PERMISSIONS = [
   ...MEMBER_PERMISSIONS,
@@ -342,29 +220,21 @@ const MOD_PERMISSIONS = [
 ] as const satisfies readonly Permission[];
 
 /**
- * Everything except the three that were owner-only.
- *
- * `manage_roles` and `manage_server` stay owner-only: an admin who could grant
- * `manage_roles` could grant themselves everything, which makes the owner's
- * authority advisory. `replace_identity` joins them because it sat inside
- * `manage_server` and handing somebody else's membership to a new key is not a
- * thing to acquire by upgrade. An owner who wants any of it ticks the box.
+ * Everything except the three that stay owner-only. An admin who could grant
+ * `manage_roles` could grant themselves everything, which would make the
+ * owner's authority advisory. `replace_identity` is the same shape.
  */
 const ADMIN_PERMISSIONS = EVERY_PERMISSION.filter(
   (p) =>
     p !== "manage_roles" &&
     p !== "manage_server" &&
     p !== "replace_identity" &&
-    // Owner-only to begin with. Approving a bot is granting permissions to
-    // something nobody in the room can vouch for, and it should start where the
-    // other two grant-shaped powers already are.
+    // Owner-only to begin with: approving a bot grants permissions to
+    // something nobody in the room can vouch for.
     p !== "manage_bots",
 ) as Permission[];
 
-/**
- * Ranks are spaced so a custom role can be slotted between two built-ins
- * without renumbering anything.
- */
+/** Spaced so a custom role slots between two built-ins without renumbering. */
 export const BUILT_IN_ROLES: readonly BuiltInRole[] = [
   { id: "owner", name: "Owner", rank: 100, color: null, permissions: EVERY_PERMISSION },
   { id: "admin", name: "Admin", rank: 80, color: null, permissions: ADMIN_PERMISSIONS },
@@ -374,13 +244,9 @@ export const BUILT_IN_ROLES: readonly BuiltInRole[] = [
 ];
 
 /**
- * The permissions that can be used to acquire more permissions.
- *
- * These are the four the owner keeps to themselves — see ADMIN_PERMISSIONS
- * above, where the reasoning is written out. Named again here as a set because
- * "does this role carry a permission that grants permissions" is a question
- * asked away from role editing: an invite that hands out a role is a role grant
- * nobody watches happen, so it has to ask it too.
+ * The permissions that can be used to acquire more permissions. A set of its
+ * own because the question is asked away from role editing too — an invite
+ * that hands out a role is a role grant nobody watches happen.
  */
 export const ESCALATION_PERMISSIONS: ReadonlySet<string> = new Set([
   "manage_roles",
@@ -390,11 +256,8 @@ export const ESCALATION_PERMISSIONS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Roles that read as "an administrator" and are only ever given by hand.
- *
- * `admin` holds none of ESCALATION_PERMISSIONS, so a permission test alone
- * would let an invite hand it out. Owner is here for completeness; it is
- * refused by id everywhere else too.
+ * Only ever given by hand. `admin` holds none of ESCALATION_PERMISSIONS, so a
+ * permission test alone would let an invite hand it out.
  */
 export const ADMIN_ONLY_ROLE_IDS: ReadonlySet<string> = new Set(["owner", "admin"]);
 
@@ -411,10 +274,8 @@ export const FALLBACK_ROLE_ID = "member";
 export const OWNER_ROLE_ID = "owner";
 
 /**
- * A role id is chosen by whoever creates the role and ends up in a column that
- * other rows point at, so it is kept to the shape of a slug rather than
- * accepting anything. Lowercase because ids are compared exactly and a role
- * called `Trusted` that is sometimes `trusted` is two roles.
+ * Slug-shaped, and lowercase: ids are compared exactly, so a role called
+ * `Trusted` that is sometimes `trusted` is two roles.
  */
 export const ROLE_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 
@@ -426,22 +287,13 @@ export function isValidRoleId(value: unknown): value is string {
 
 /**
  * Which permissions are new since a given schema version, and who should
- * already have them.
+ * already have them. A build that adds a permission does not change any stored
+ * role, so without this the release that made reading a permission would leave
+ * every existing role unable to read.
  *
- * The problem this solves: role rows store a list of permission strings, and a
- * build that adds a permission does not change any row. So on the release that
- * made reading a permission, every existing role — including the seeded
- * `member` — would have been a role that cannot read. The seeder cannot fix it
- * either, because it only inserts roles that are missing and must never
- * overwrite what an operator has chosen.
- *
- * So each new permission names the one it should follow. `everyone` means it
- * had no gate at all before, and therefore everybody had it. Anything else
- * means it was carved out of that permission, and whoever held the original
- * keeps doing what they were already doing.
- *
- * Grants only. Nothing here removes a permission from a role, so an operator's
- * choices survive an upgrade untouched.
+ * Each new permission names the one it was carved out of, or `everyone` if it
+ * had no gate before. **Grants only** — nothing here takes a permission away,
+ * so an operator's choices survive an upgrade untouched.
  */
 export interface PermissionBackfill {
   version: number;
@@ -450,14 +302,7 @@ export interface PermissionBackfill {
   grantedWith: Permission | "everyone";
 }
 
-/**
- * Bump this when adding a batch, and give the new entries the new number.
- *
- * Version 1 is "roles carry permissions at all" (GRYT-444) — nothing to
- * backfill, the sets were written to match the old gates exactly. Version 2 is
- * this file's expansion (GRYT-453). Version 3 adds `manage_bots` (GRYT-460),
- * version 4 `send_direct_messages`, and version 5 `start_calls` (GRYT-712).
- */
+/** Bump this when adding a batch, and give the new entries the new number. */
 export const PERMISSION_SCHEMA_VERSION = 6;
 
 export const PERMISSION_BACKFILLS: readonly PermissionBackfill[] = [
@@ -467,12 +312,9 @@ export const PERMISSION_BACKFILLS: readonly PermissionBackfill[] = [
   { version: 2, permission: "report_messages", grantedWith: "everyone" },
   { version: 2, permission: "use_link_previews", grantedWith: "everyone" },
 
-  // Editing and deleting your own message needed nothing but the ability to
-  // have sent one.
   { version: 2, permission: "edit_own_messages", grantedWith: "send_messages" },
   { version: 2, permission: "delete_own_messages", grantedWith: "send_messages" },
 
-  // Carved out of permissions that were doing two jobs.
   { version: 2, permission: "deafen_members", grantedWith: "mute_members" },
   { version: 2, permission: "disconnect_members", grantedWith: "mute_members" },
   { version: 2, permission: "view_bans", grantedWith: "ban_members" },
@@ -481,35 +323,21 @@ export const PERMISSION_BACKFILLS: readonly PermissionBackfill[] = [
   { version: 2, permission: "replace_identity", grantedWith: "manage_server" },
   { version: 2, permission: "view_server_status", grantedWith: "view_audit_log" },
 
-  // Version 3 (GRYT-460). Bots did not exist, so nobody had this — and it goes
-  // to whoever holds `manage_server`, which by default is the owner alone.
+  // GRYT-460. Bots did not exist, so this goes to `manage_server` — the owner.
   { version: 3, permission: "manage_bots", grantedWith: "manage_server" },
 
-  // Direct messages arrived already gated on `send_messages`, so on the
-  // release that split them out every role that could talk in a channel
-  // could already DM. Granting it alongside keeps that true rather than
-  // taking something away from roles an operator never edited.
   { version: 4, permission: "send_direct_messages", grantedWith: "send_messages" },
 
-  // Version 5 (GRYT-712). Ringing was gated on being able to DM at all, so
-  // this goes to whoever holds that — every role that could place a call
-  // before the release can still place one after it. An owner who wants
-  // calling restricted takes it off the roles they choose, which is a decision
-  // rather than something an upgrade did to them.
+  // GRYT-712.
   { version: 5, permission: "start_calls", grantedWith: "send_direct_messages" },
 
-  // Version 6 (GRYT-866). Uploading a picture was part of `change_avatar`, so
-  // every role that could set an avatar could already upload one. Granting it
-  // alongside keeps that true: an upgrade takes nothing away, and an operator
-  // who wants pictures earned removes it from the roles they choose.
+  // GRYT-866.
   { version: 6, permission: "upload_avatar_image", grantedWith: "change_avatar" },
 ];
 
 /**
- * The permissions a stored role should gain when moving between two versions.
- *
- * Pure, so the interesting part is testable without a database — which matters,
- * because getting this wrong is a silent privilege change in either direction.
+ * What a stored role should gain moving between two versions. Pure, because
+ * getting it wrong is a silent privilege change in either direction.
  */
 export function backfillFor(
   current: readonly string[],
@@ -524,8 +352,7 @@ export function backfillFor(
     if (held.has(entry.permission)) continue;
     if (entry.grantedWith !== "everyone" && !held.has(entry.grantedWith)) continue;
     gained.push(entry.permission);
-    // Added as we go, so a chain — B carved out of A, C carved out of B — lands
-    // in one pass rather than needing the list in dependency order.
+    // Added as we go, so a chain lands in one pass without ordering the list.
     held.add(entry.permission);
   }
 

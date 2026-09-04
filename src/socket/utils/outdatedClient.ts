@@ -4,13 +4,10 @@ import { sendClientNotice } from "./clientNotices";
 import type { Clients } from "../../types";
 
 /**
- * The first Windows build whose updater can install anything.
- *
- * v1.6.6 through v1.6.24 shipped a PowerShell update helper that failed to
- * parse, so those installs find every new release, download it, and install
- * none of them. Installing is the step that fails, so nothing published since
- * can reach them. The only way out is a person double-clicking an installer,
- * and the only way to ask is to tell the client, which renders the asking.
+ * The first Windows build whose updater can install anything. v1.6.6 through
+ * v1.6.24 shipped a PowerShell helper that failed to parse, so those installs
+ * find and download every release and install none — the only way out is a
+ * person double-clicking an installer.
  */
 const FIRST_WORKING_WINDOWS_UPDATER = "1.6.25";
 
@@ -33,15 +30,13 @@ type DesktopClient = {
 };
 
 /**
- * Read the desktop client out of Electron's default user agent, which Gryt
- * does not override:
+ * Read the desktop client out of Electron's default user agent, which Gryt does
+ * not override:
  *
- *   Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like
- *   Gecko) gryt-chat/1.6.24 Chrome/144.0.7559.220 Electron/40.6.1 Safari/537.36
+ *   … gryt-chat/1.6.24 Chrome/144.0.7559.220 Electron/40.6.1 Safari/537.36
  *
- * The browser build carries neither the gryt-chat token nor the Electron one,
- * so it cannot match — which matters, because a browser user has nothing to
- * install and should never see this.
+ * The browser build carries neither token, so it cannot match — a browser user
+ * has nothing to install and should never see this.
  */
 export function parseDesktopClient(
   userAgent: string | undefined,
@@ -77,16 +72,8 @@ export function needsUpdateReminder(userAgent: string | undefined): boolean {
 }
 
 /**
- * Tell this person, and only this person, at most once a day.
- *
- * It used to be a chat message, which meant a notice naming one person was
- * stored for good and shown to the whole channel. It is a directed notice now:
- * their sockets only, nothing written down, and the words themselves live in
- * the client (GRYT-896).
- *
- * No nickname parameter any more. The client is rendering this to the person
- * it is about, so it can say "your client" — there is nobody else in the room
- * to disambiguate for.
+ * Tell this person, and only this person, at most once a day. Their sockets
+ * only, nothing written down, and the words live in the client (GRYT-896).
  */
 export function remindOutdatedWindowsClient(
   io: Server,

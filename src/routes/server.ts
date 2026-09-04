@@ -29,14 +29,9 @@ const iconMaxMb = Number.isFinite(Number(iconMaxMbRaw))
 const iconMaxBytes = Math.floor(iconMaxMb * 1024 * 1024);
 
 /**
- * How many frames an animated server icon may carry.
- *
- * Eight seconds at 60fps, which is Sivert's call on 2026-08-22 and is meant to
- * be generous rather than tight — the point is to stop a runaway, not to
- * second-guess anybody's sticker. For scale: at 256x256 and quality 80 the
- * worst case is roughly 0.5-0.7 MB at this cap, against about 1.3 kB for the
- * still icon prod is serving today. Real files land lower, because animated
- * WebP predicts between frames.
+ * How many frames an animated server icon may carry. Eight seconds at 60fps,
+ * generous on purpose — the point is to stop a runaway. Worst case at 256x256
+ * is roughly 0.5-0.7 MB, against 1.3 kB for a still icon.
  */
 export const MAX_ICON_FRAMES = 480;
 
@@ -65,15 +60,8 @@ const upload = multer({
 });
 
 /**
- * Drop the object an icon used to live in.
- *
- * Best effort: the config has already been updated by the time this runs, so
- * the icon is gone as far as anyone using the server is concerned. Failing to
- * delete leaves a few kilobytes behind, which is not worth failing the request
- * the owner actually made.
- *
- * Neither replacing nor clearing used to do this, so every icon a server had
- * ever had stayed in the bucket for good.
+ * Drop the object an icon used to live in. Best effort — the config is already
+ * updated, so a failure leaves a few kilobytes rather than failing the request.
  */
 function deletePreviousIcon(bucket: string, key: string | null | undefined): void {
   if (!key) return;
@@ -100,14 +88,9 @@ function sanitizeStoragePathSegment(value: string): string {
 
 serverRouter.post(
   "/icon",
-  // Before multer, not after. multer uses memoryStorage, so with the handler's
-  // own check further down the body was read to completion into the heap and
-  // *then* answered 401 — measured at 20 MB accepted from an anonymous request
-  // against a fresh server, with RSS moving 112 MiB to 138 MiB. /api/server
-  // carries no rate limit either, so that was repeatable by anyone.
-  //
-  // This also gains the ban gate, which the inline check below does not do: a
-  // banned member holding a valid token still got their upload buffered.
+  // Before multer, not after: multer uses memoryStorage, so the handler's own
+  // check read 20 MB from an anonymous request into the heap and *then*
+  // answered 401. This also gains the ban gate the inline check lacks.
   requireBearerToken,
   upload.single("file"),
   async (req: Request, res: Response, next: NextFunction) => {
@@ -243,15 +226,10 @@ serverRouter.post(
         return;
       }
 
-      // An icon is drawn at 38 pixels in the server rail, on every server
-      // somebody has joined. A still one is about 1.3 kB; nothing caps how
-      // long an animated one may be, so a long GIF becomes an animated WebP of
-      // several hundred kilobytes that every client fetches to draw a couple
-      // of centimetres across. GRYT-515.
-      //
-      // Refused rather than truncated. Keeping the first N frames cuts a loop
-      // mid-cycle, which looks broken rather than trimmed, and it ships
-      // something other than what was uploaded without saying so.
+      // An icon is drawn at 38 pixels on every server somebody has joined, so
+      // an uncapped GIF is several hundred kilobytes every client fetches
+      // (GRYT-515). Refused rather than truncated: keeping the first N frames
+      // cuts a loop mid-cycle and ships something other than what was sent.
       const frames = validation.pages ?? 1;
       if (isAnimated && frames > MAX_ICON_FRAMES) {
         res.status(400).json({
@@ -264,17 +242,10 @@ serverRouter.post(
         return;
       }
 
-      // AVIF cannot hold more than one frame. sharp represents an animated
-      // image as its frames stacked into one tall strip, so encoding an
-      // animated input to AVIF writes the whole strip out as a single still —
-      // a 95-frame GIF became a 256x9728 image that the UI then squashed into
-      // the icon slot, showing every frame at once. Long enough animations
-      // failed outright with "heifsave: image too large".
-      //
-      // WebP holds animation, so animated input goes there instead. This is the
-      // same branch emojiProcessing.ts already makes; the icon route was the
-      // only place that read every frame and then chose a format that cannot
-      // store them.
+      // AVIF cannot hold more than one frame, and sharp stacks an animation
+      // into one tall strip — so a 95-frame GIF encoded to AVIF became a
+      // 256x9728 still showing every frame at once. WebP holds animation.
+      // Same branch emojiProcessing.ts makes.
       const outMime = isAnimated ? "image/webp" : "image/avif";
       const outExt = isAnimated ? "webp" : "avif";
 

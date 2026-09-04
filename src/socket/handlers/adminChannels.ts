@@ -46,17 +46,12 @@ function emitRateLimited(ctx: HandlerContext, rl: { retryAfterMs?: number }) {
 }
 
 /**
- * Turn out anybody sitting in a voice channel they can no longer see.
+ * Turn out anybody sitting in a voice channel they can no longer see, or the
+ * gate only decides who may *arrive* — they keep hearing the room and the SFU
+ * keeps routing their audio.
  *
- * Raising `view_min_rank` on a channel somebody is already in has to remove
- * them, or the gate only decides who may *arrive*. They keep hearing the room,
- * the SFU keeps routing their audio, and their own client keeps drawing a
- * channel that has just vanished from everyone else's sidebar.
- *
- * Same eviction the delete path does, and deliberately not shared with it:
- * that one forgets the stashed voice state because the channel is gone, and
- * this one must not, because a rank change or a lowered gate can put them
- * straight back and a reconnect in between should still restore them.
+ * Deliberately not shared with the delete path: that one forgets the stashed
+ * voice state, and this one must not, because a lowered gate can put them back.
  */
 async function evictNewlyHidden(ctx: HandlerContext, channelId: string): Promise<void> {
   const { io, clientsInfo, serverId } = ctx;
@@ -91,12 +86,8 @@ async function evictNewlyHidden(ctx: HandlerContext, channelId: string): Promise
 }
 
 /**
- * The same eviction, across every channel.
- *
- * Editing a template changes every channel pointing at it, so a single save can
- * hide four channels from three roles at once. Walking the channels is cheap
- * next to what it prevents: somebody left sitting in a voice room the server
- * has stopped admitting them to.
+ * The same eviction, across every channel — editing a template can hide four
+ * channels from three roles in one save.
  */
 async function evictNewlyHiddenEverywhere(ctx: HandlerContext): Promise<void> {
   const channels = await listServerChannels().catch(() => []);
@@ -122,18 +113,12 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
     // ── Channels ─────────────────────────────────────────────────
 
     /**
-     * Every channel, gates included, for the channel editor.
+     * Every channel, gates included, for the channel editor. Needs
+     * `manage_channels` — signed-in alone would hand any member the name,
+     * description and gate of every channel hidden from them.
      *
-     * Needs `manage_channels`. It used to need nothing beyond being signed in,
-     * which was harmless while every member could see every channel and is not
-     * once `view_min_rank` exists — it would have handed any member the name,
-     * description and gate of every channel hidden from them, which is more
-     * than the sidebar would have leaked. Only the two admin editors call it.
-     *
-     * Deliberately unfiltered for whoever holds the permission. Managing
-     * channels means knowing which ones are there; an editor that hid rows from
-     * the person editing them would produce an admin who sets a gate twice
-     * because the first one vanished.
+     * Deliberately unfiltered for whoever holds the permission: an editor that
+     * hid rows would produce an admin setting a gate twice.
      */
     'server:channels:list': async (payload: { accessToken: string }) => {
       try {
@@ -177,21 +162,14 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
         const channelId = (payload.channelId?.trim() || `chan_${randomUUID().slice(0, 10)}`);
 
         /*
-         * Whether this is a create or an edit, decided before the write.
+         * Create or edit, decided before the write. A new channel needs a
+         * sidebar row or nobody sees it — `server:details` builds its list from
+         * the sidebar, and nothing else was going to add one. The desktop sent
+         * its own upsert, so any other client created a channel that answers
+         * `chat:fetch`, accepts `chat:send`, and appears to nobody (GRYT-839).
          *
-         * A new channel needs a sidebar row or nobody sees it: `server:details`
-         * builds its channel list from the sidebar, and `ensureDefaultSidebarItems`
-         * seeds rows once — on a server whose sidebar is already populated it
-         * returns immediately — so nothing else was ever going to add one.
-         *
-         * The desktop has always sent `server:sidebar:item:upsert` itself right
-         * after this, which is why the gap went unnoticed for so long. Any other
-         * client, or a script, created a channel that exists, answers
-         * `chat:fetch`, accepts `chat:send`, and appears to nobody. GRYT-839.
-         *
-         * On an edit, nothing is added. Removing a channel from the sidebar and
-         * leaving the channel itself is a thing somebody can deliberately do,
-         * and a rename must not undo it.
+         * On an edit nothing is added: taking a channel out of the sidebar is
+         * deliberate, and a rename must not undo it.
          */
         let isNewChannel = false;
         try {
@@ -316,11 +294,8 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
     // ── Permission scopes and templates ──────────────────────────
 
     /**
-     * Every template, and the rules in each, for the settings editor.
-     *
-     * Templates only. A channel's private "Custom" scope comes down with the
-     * channel in `server:channels:scope:get`, because listing them here would
-     * be a list of unnamed scopes nobody can tell apart.
+     * Every template and its rules. Templates only — a channel's private
+     * "Custom" scope comes down with the channel in `…:scope:get`.
      */
     'server:permissions:templates:list': async (payload: { accessToken: string }) => {
       try {
@@ -365,12 +340,9 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
     },
 
     /**
-     * Create a template, or replace the rules in one.
-     *
-     * `rules` is the whole matrix as the editor is showing it, not a patch. A
-     * cell set back to inherit is a rule that is simply absent from the
-     * payload, and `replacePermissionRules` deletes what is not sent — patching
-     * would leave inherit unreachable once anything else had been set.
+     * Create a template, or replace the rules in one. `rules` is the whole
+     * matrix, not a patch: a cell set back to inherit is simply absent, and
+     * patching would leave inherit unreachable once anything had been set.
      */
     'server:permissions:template:save': async (payload: {
       accessToken: string;
@@ -436,19 +408,13 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
     },
 
     /**
-     * One channel's scope and its rules, for the per-channel editor.
+     * One channel's scope and rules, plus the names and ids of templates it
+     * could point at. Choosing a scope is `manage_channels`; what a template
+     * *says* is policy and stays behind `manage_roles`.
      *
-     * Carries the templates this channel could be pointed at as well — their
-     * names and ids, and nothing else. Choosing a scope for one channel is
-     * `manage_channels`; what a template *says* is server-wide policy and stays
-     * behind `manage_roles` in `server:permissions:templates:list`.
-     *
-     * Without this, somebody holding `manage_channels` and not `manage_roles`
-     * opened the picker, had the template list refused, and was offered only
-     * Everyone and Custom — permitted to point the channel at a template and
-     * unable to discover that any existed. Invisible while the owner holds
-     * everything, and exactly wrong for the split the permissions exist to
-     * express: moderators who arrange channels, one person who sets policy.
+     * Without the names, somebody holding only `manage_channels` was offered
+     * Everyone and Custom — allowed to pick a template, unable to discover one
+     * existed. Invisible while the owner holds everything.
      */
     'server:channels:scope:get': async (payload: { accessToken: string; channelId: string }) => {
       try {
@@ -500,12 +466,8 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
 
     /**
      * Point a channel at a template, at nothing, or at its own custom rules.
-     *
-     * Three shapes in one event because they are one choice in the UI:
-     *   templateId set        pick that template
-     *   custom: true          make (or keep) this channel's private scope and
-     *                         write `rules` into it
-     *   neither               back to inheriting, everyone sees it
+     * `templateId` picks one, `custom: true` writes `rules` into the channel's
+     * private scope, neither goes back to inheriting.
      */
     'server:channels:scope:set': async (payload: {
       accessToken: string;
@@ -636,17 +598,10 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
         await upsertServerSidebarItem({ itemId: payload.itemId, kind: payload.kind, position: payload.position, channelId: payload.channelId ?? null, spacerHeight: payload.spacerHeight ?? null, label: payload.label ?? null });
 
         /*
-         * One row per channel.
-         *
-         * Two rows pointing at the same channel draw it twice in the sidebar,
-         * which is a bug on its own and is also what the fix above would
-         * otherwise cause: the desktop sends `server:channels:upsert` and this
-         * immediately after it, with an item id of its own, so a channel that
-         * has just been given a row here would get a second one.
-         *
-         * The row named in this payload is the one kept — this event is the
-         * explicit instruction, and the row added alongside a channel is not.
-         * Separators and spacers carry no channel, so they are untouched.
+         * One row per channel, or the sidebar draws it twice — which the fix
+         * above would otherwise cause, since the desktop sends this right after
+         * `server:channels:upsert` with an item id of its own. The row named in
+         * this payload wins, being the explicit instruction.
          */
         if (payload.kind === "channel" && payload.channelId) {
           try {

@@ -27,12 +27,8 @@ const RL_REPORT: RateLimitRule = { limit: 10, windowMs: 60_000, scorePerAction: 
 const RL_REPORT_ADMIN: RateLimitRule = { limit: 30, windowMs: 60_000, scorePerAction: 1, maxScore: 15, scoreDecayMs: 3_000 };
 
 /**
- * How much a reporter may write about a person.
- *
- * Long enough for what happened and where, short enough that the queue stays
- * readable and that the field is not a place to paste a log. Trimmed and
- * required: a report about somebody with nothing attached tells a moderator to
- * go and look, without saying where.
+ * How much a reporter may write. Required, not optional: a report with nothing
+ * attached tells a moderator to go and look without saying where.
  */
 const REASON_MAX = 1000;
 
@@ -117,20 +113,14 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
     },
 
     /**
-     * Report a person, rather than one thing they said.
+     * Report a person rather than one thing they said — somebody following you
+     * between channels, whose every message is fine on its own.
      *
-     * The message queue answers "this line is over it". This answers the case
-     * that has no single line — somebody following you between channels, or
-     * whose every message is fine on its own. `chat:report` cannot express
-     * that, and before this there was nowhere for it to go.
-     *
-     * No rank check. Reporting somebody who outranks you is exactly the report
-     * that must not be refused, the same reasoning as blocking. The moderator
-     * side is where hierarchy applies, and `requireOutranks` is on it.
+     * No rank check: reporting somebody who outranks you is exactly the report
+     * that must not be refused. Hierarchy applies on the moderator side.
      *
      * **Nothing reaches the reported person.** No event, no marker, no error
-     * that names a reason — same as a block. A report that announces itself
-     * invites the retaliation it exists to stop.
+     * naming a reason — a report that announces itself invites retaliation.
      */
     "user:report": async (payload: {
       accessToken: string;
@@ -229,16 +219,12 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
          * a second round trip and a second badge counting the same worry. */
         const userReports = await getAggregatedPendingUserReports();
 
-        // A report names the conversation it came from, and carries a snapshot
-        // of the message text. `view_reports` is not `read_messages`, so a
-        // moderator below a channel's scope would otherwise read both out of
-        // the queue — the channel's existence and a line of what was said in
-        // it. Dropped rather than redacted: a row saying "a report from
-        // somewhere you cannot see" still answers the question.
+        // `view_reports` is not `read_messages`, so a moderator below a
+        // channel's scope would otherwise read its existence and a line of what
+        // was said out of the queue. Dropped rather than redacted.
         //
-        // The cost is that a report from a hidden channel reaches only the
-        // moderators who can see that channel. That is the right trade and
-        // worth knowing: if nobody moderating can see it, nobody is told.
+        // The cost: if nobody who can moderate can see the channel, nobody is
+        // told about the report at all.
         const readable = await Promise.all(
           aggregated.map((r) =>
             mayViewChannel(r.conversation_id, auth.tokenPayload.serverUserId, auth.tokenPayload.grytUserId),
@@ -462,17 +448,12 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
     },
 
     /**
-     * Close every open report about one person, with or without acting on them.
+     * Close every open report about one person, with or without acting.
      *
-     * `manage_reports` gets you the card. It does not get you the buttons:
-     * kicking asks for `kick_members` and banning for `ban_members`, the same
-     * permissions the member list asks for. A queue that let a role do more
-     * than the screen next to it would be a way around that screen, which is
-     * how the message queue could once ban the owner.
-     *
-     * `kick` exists so the only alternative to dismissing is not a ban. A
-     * moderator who wants to end today without ending the account has
-     * somewhere to click.
+     * `manage_reports` gets you the card, not the buttons — kicking asks for
+     * `kick_members` and banning for `ban_members`, the same as the member
+     * list. A queue that did more than the screen next to it is how the message
+     * queue could once ban the owner.
      */
     "reports:resolve_user": async (payload: {
       accessToken: string;

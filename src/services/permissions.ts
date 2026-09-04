@@ -18,30 +18,19 @@ import type { RoleDefinitionRecord, ServerConfigRecord } from "../db";
 
 /**
  * Everything the rest of the server needs to know about somebody's standing.
- *
- * Resolved in one place because the three questions are always asked together
- * and used to be answered separately: the middleware worked out a role name,
- * each handler compared it against a name it had written down, and the express
- * routes did their own third version. A moderator who could delete a message
- * over a socket and not over HTTP was that, and it is the kind of gap nobody
- * finds until somebody uses the half that says no.
+ * One place, because three separate answers is how a moderator ends up able to
+ * delete a message over a socket and not over HTTP.
  */
 export interface EffectiveStanding {
   /**
-   * The one shown next to their name: the highest ranked they hold.
-   *
-   * Every caller that draws a role, writes one to an audit line, or compares
-   * one against a name uses this. It is a presentation choice, not the answer
-   * to what they may do -- that is `permissions`, which is all of them together.
+   * The highest ranked they hold, for display. Not the answer to what they may
+   * do — that is `permissions`, which is all of them together.
    */
   roleId: string;
   /**
-   * Everything they hold, highest ranked first.
-   *
-   * Channel rules need the whole list rather than the top one, because a scope
-   * can name any of them and allow wins. Passing only the top role would have a
-   * channel opened to "contributor" refuse somebody who is a contributor and a
-   * moderator, which reads as a bug in the channel rather than in the rank.
+   * Everything they hold, highest ranked first. Channel rules need all of them:
+   * a scope can name any, and allow wins — with only the top role, a channel
+   * opened to "contributor" refuses a contributor who is also a moderator.
    */
   roleIds: string[];
   /** The highest rank they hold. What every "outranks" comparison uses. */
@@ -52,19 +41,12 @@ export interface EffectiveStanding {
 }
 
 /**
- * What somebody with no resolvable standing gets: nothing, and a rank that
- * loses every comparison.
- *
- * Returned when the database cannot be read. Failing shut here is the whole
- * point — a hiccup that made every gate answer "yes" would be a far worse
- * outage than one where nobody can post for a minute.
+ * No resolvable standing: nothing, and a rank that loses every comparison.
+ * Fails shut — a hiccup that made every gate answer yes is the worse outage.
  */
 /**
- * What a bot's role reads as everywhere a role id is shown.
- *
- * Not a row in `role_definitions`, on purpose — there is nothing to edit and
- * nothing to assign. It exists so the member list has something to render, and
- * the client shows the BOT tag rather than this.
+ * What a bot's role reads as. Not a row in `role_definitions`: there is nothing
+ * to edit and nothing to assign.
  */
 export const BOT_ROLE_ID = "bot";
 
@@ -77,16 +59,9 @@ const NO_STANDING: EffectiveStanding = {
 };
 
 /**
- * Several roles, added together.
- *
- * Permissions union and rank takes the highest, which is the only combination
- * that does not surprise: giving somebody a second role can widen what they may
- * do and can raise where they sit, and can never do the opposite. A role that
- * took something away would mean an operator handing out a role and watching
- * somebody lose access, and there would be no order to apply them in that
- * everyone would agree on.
- *
- * `definitions` arrives highest ranked first, so the head is the role shown.
+ * Several roles added together: permissions union, rank takes the highest. A
+ * second role can only ever widen and raise — one that took something away
+ * would have no order to apply it in that everybody agrees on.
  */
 function definitionsToStanding(
   definitions: RoleDefinitionRecord[],
@@ -107,12 +82,9 @@ function definitionsToStanding(
 }
 
 /**
- * Which role a first-time joiner is given, by how they proved who they are.
- *
- * The tier is read off the stored id rather than carried from the join, so this
- * gives the same answer for somebody rejoining months later as it did the day
- * they arrived — which matters, because the default is also what somebody falls
- * back to when the role they held was deleted.
+ * Which role a first-time joiner gets, by how they proved who they are. The
+ * tier is read off the stored id rather than carried from the join, so somebody
+ * whose role was deleted falls back to the same answer months later.
  */
 export function defaultRoleForTier(
   tier: IdentityTier,
@@ -125,16 +97,10 @@ export function defaultRoleForTier(
 }
 
 /**
- * The role ids somebody actually holds, with the two ways they can be wrong
- * already handled.
- *
- * `server_config.owner_gryt_user_id` wins over the roles table, because the
- * owner is a property of the server and the row is only a cache of it. And a
- * role id whose definition has been deleted is dropped rather than resolved —
- * a public server that deletes "Contributor" should not have that name keep
- * turning up. Somebody left holding nothing by that falls back to the joiner
- * default for their identity tier rather than to a hardcoded name, so they land
- * on whatever the server gives strangers instead of being silently promoted.
+ * The role ids somebody actually holds. `server_config.owner_gryt_user_id` wins
+ * over the roles table, and a role whose definition was deleted is dropped —
+ * somebody left with nothing falls back to the joiner default for their tier
+ * rather than to a hardcoded name, so nobody is silently promoted.
  */
 async function resolveRoleIds(
   serverUserId: string,
@@ -174,19 +140,12 @@ async function resolveRoleIds(
 }
 
 /**
- * Somebody's role, rank and permissions.
- *
- * Pass `grytUserId` when the caller already has it — every socket event does,
- * off the access token — and it saves the user lookup the owner check would
- * otherwise need.
+ * Somebody's role, rank and permissions. Pass `grytUserId` when the caller has
+ * it, which saves the lookup the owner check would otherwise need.
  */
 /**
- * A bot's standing, which comes from the registry rather than from a role.
- *
- * The whole point of the separation: a bot holds exactly what an operator
- * agreed to, so no edit to a role can widen it and no amount of asking can
- * either. A bot whose registration has been revoked — or which somehow reaches
- * a check without one — resolves to nothing.
+ * A bot's standing comes from the registry, not a role, so no role edit can
+ * widen it. A revoked or missing registration resolves to nothing.
  */
 async function botStanding(grytUserId: string): Promise<EffectiveStanding> {
   const bot = await getBotById(grytUserId);
@@ -266,12 +225,8 @@ export async function hasPermission(
 }
 
 /**
- * The rank of somebody who is the *target* of an action.
- *
- * Separate from `getEffectiveStanding` only in how it fails: an unreadable
- * target reads as the highest rank there is, so the action is refused. The
- * caller-side version fails the other way for the same reason — both directions
- * end in "no".
+ * The rank of an action's *target*. Differs from `getEffectiveStanding` only in
+ * how it fails: unreadable reads as the highest rank, so the action is refused.
  */
 export async function getTargetRank(serverUserId: string): Promise<number> {
   try {
@@ -290,17 +245,11 @@ export async function listRoles(): Promise<RoleDefinitionRecord[]> {
 }
 
 /**
- * Everybody's roles, highest ranked first, in one read.
+ * Everybody's roles, highest ranked first, in one read — the member list and
+ * the role editor built this separately and disagreed once somebody held two.
  *
- * The member list and the role editor both need this and used to build it
- * separately — one keyed a map by member and took whichever row came last,
- * which with one role each was the only row and with two is the more recently
- * granted one. Two answers to "which role is this person shown as" is one more
- * than there should be.
- *
- * A role whose definition has been deleted keeps its place at the end rather
- * than being dropped. This is what is displayed; `getEffectiveStanding` is what
- * decides, and that one already refuses to resolve it.
+ * A deleted role keeps its place at the end. This is what is displayed;
+ * `getEffectiveStanding` decides, and that one refuses to resolve it.
  */
 export async function listRolesByMember(): Promise<Map<string, string[]>> {
   const rankOf = new Map((await listRoleDefinitions()).map((d) => [d.role_id, d.rank]));
