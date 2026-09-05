@@ -33,6 +33,7 @@ import {
 } from "../../db";
 import { processProfanity, type CensorStyle, type ProfanityMode } from "../../utils/profanityFilter";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
+import { textMuteError, textMuteFor } from "../../moderation/textMute";
 import { MESSAGE_MAX_LENGTH, MESSAGE_TOO_LONG, SEALED_MAX_LENGTH } from "../../utils/messageLimits";
 import { applyAutoRoles } from "../../services/autoRoles";
 import { findMentions, type MentionableMember } from "../../services/mentions";
@@ -293,6 +294,13 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
 
         const auth = await requireAuth(socket, payload, { permission: "send_messages" });
         if (!auth) return;
+
+        // A mute covers text as well as voice (GRYT-917).
+        const sendMute = await textMuteFor(auth.tokenPayload.serverUserId);
+        if (sendMute.muted) {
+          socket.emit("chat:error", textMuteError(sendMute));
+          return;
+        }
 
         const access = await requireConversationAccess(payload.conversationId, auth.tokenPayload.serverUserId);
         if (!access) return;
@@ -836,6 +844,14 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
 
         const auth = await requireAuth(socket, payload);
         if (!auth) return;
+
+        // The same mute as sending. An edit is how four characters become four
+        // million, and it is also how a muted member says something new.
+        const editMute = await textMuteFor(auth.tokenPayload.serverUserId);
+        if (editMute.muted) {
+          socket.emit("chat:error", textMuteError(editMute));
+          return;
+        }
 
         const access = await requireConversationAccess(payload.conversationId, auth.tokenPayload.serverUserId);
         if (!access) return;
