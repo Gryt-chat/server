@@ -225,7 +225,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
 
   // Sidebar items are persisted in DB; bootstrap defaults if missing.
   // We still emit `channels` for backward compatibility (derived from sidebar items).
-  let sidebar_items: { id: string; kind: string; position: number; channelId?: string; spacerHeight?: number; label?: string }[] = [];
+  let sidebar_items: { id: string; kind: string; position: number; channelId?: string; spacerHeight?: number; label?: string; parentItemId?: string }[] = [];
   let channels: { id: string; name: string; type: string; description?: string; requirePushToTalk?: boolean; disableRnnoise?: boolean; maxBitrate?: number; eSportsMode?: boolean; textInVoice?: boolean; permissionScopeId?: string | null; canSend?: boolean; canJoin?: boolean }[] = [];
   try {
     await ensureDefaultSidebarItems();
@@ -251,6 +251,16 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
     ]);
     const items = allItems.filter((it) => it.kind !== "channel" || !it.channel_id || visible.has(it.channel_id));
 
+    /*
+     * `parentItemId` goes out with the rest. Without it the client has folders
+     * it cannot fill: a folder row arrives, its channels arrive, and nothing
+     * says which sits in which.
+     *
+     * A folder is never filtered by the visibility pass above, since that only
+     * drops channels. So a folder whose channels are all hidden from this
+     * person arrives empty rather than arriving broken, and the client decides
+     * whether an empty folder is worth drawing.
+     */
     sidebar_items = items.map((it) => ({
       id: it.item_id,
       kind: it.kind,
@@ -258,6 +268,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
       channelId: it.channel_id ?? undefined,
       spacerHeight: it.spacer_height ?? undefined,
       label: it.label ?? undefined,
+      parentItemId: it.parent_item_id ?? undefined,
     }));
 
     channels = items
