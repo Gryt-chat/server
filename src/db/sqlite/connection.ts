@@ -299,6 +299,7 @@ function createSchema(d: DatabaseSync): void {
       channel_id TEXT,
       spacer_height INTEGER,
       label TEXT,
+      parent_item_id TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -558,6 +559,13 @@ function runMigrations(d: DatabaseSync): void {
 
   if (!hasColumn(d, "channels", "permission_scope_id")) {
     d.exec("ALTER TABLE channels ADD COLUMN permission_scope_id TEXT");
+  }
+
+  // NULL on every existing row, which is the top level, so an upgrade leaves
+  // the sidebar exactly as it was. Nothing is in a folder until somebody drags
+  // it into one.
+  if (!hasColumn(d, "sidebar_items", "parent_item_id")) {
+    d.exec("ALTER TABLE sidebar_items ADD COLUMN parent_item_id TEXT");
   }
 
   // Older databases predate both tables. CREATE TABLE IF NOT EXISTS above only

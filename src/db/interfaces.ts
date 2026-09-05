@@ -411,7 +411,11 @@ export interface ChannelPermissionRuleRecord {
   effect: RuleEffect;
 }
 
-export type ServerSidebarItemKind = "channel" | "separator" | "spacer";
+export type ServerSidebarItemKind =
+  | "channel"
+  | "separator"
+  | "spacer"
+  | "folder";
 
 export interface ServerSidebarItemRecord {
   item_id: string;
@@ -419,7 +423,18 @@ export interface ServerSidebarItemRecord {
   position: number;
   channel_id: string | null;
   spacer_height: number | null;
+  /** The name, for a separator or a folder. Null for the rest. */
   label: string | null;
+  /**
+   * The folder this sits in, or null for the top level.
+   *
+   * **Only a channel may have one.** A folder inside a folder is a tree, and a
+   * tree needs a drop target for every depth; the sidebar has one indent step
+   * and no way to draw a second. Separators and spacers stay at the top level
+   * for the same reason: they divide the list, and a divider inside a folder
+   * divides nothing.
+   */
+  parent_item_id: string | null;
   created_at: Date;
   updated_at: Date;
 }

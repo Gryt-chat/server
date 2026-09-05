@@ -10,6 +10,7 @@ function normalizeSidebarKind(v: unknown): ServerSidebarItemKind {
   const s = String(v || "").toLowerCase();
   if (s === "separator") return "separator";
   if (s === "spacer") return "spacer";
+  if (s === "folder") return "folder";
   return "channel";
 }
 
@@ -41,6 +42,7 @@ function rowToSidebarItem(r: Record<string, unknown>): ServerSidebarItemRecord {
     channel_id: (r.channel_id as string) ?? null,
     spacer_height: r.spacer_height != null ? Number(r.spacer_height) : null,
     label: (r.label as string) ?? null,
+    parent_item_id: (r.parent_item_id as string) ?? null,
     created_at: fromIso(r.created_at as string),
     updated_at: fromIso(r.updated_at as string),
   };
@@ -119,8 +121,37 @@ export async function listServerSidebarItems(): Promise<ServerSidebarItemRecord[
   return rows.map(rowToSidebarItem);
 }
 
+/**
+ * The folder an item may sit in, resolved rather than trusted.
+ *
+ * Answers null unless the id names an item that exists right now and is a
+ * folder. That covers a channel dragged into a folder somebody else deleted a
+ * moment earlier, and it covers a client that sends whatever it likes: the
+ * worst outcome is a channel at the top level, where it is visible. Storing an
+ * id that resolves to nothing would hide it instead, since the sidebar draws
+ * children under their folder and nothing else.
+ */
+function resolveParentFolder(
+  db: ReturnType<typeof getSqliteDb>,
+  itemId: string,
+  kind: ServerSidebarItemKind,
+  parentItemId: string | null | undefined,
+): string | null {
+  if (kind !== "channel") return null;
+  if (parentItemId == null) return null;
+
+  const parent = String(parentItemId).trim().slice(0, 64);
+  if (!parent || parent === itemId) return null;
+
+  const row = db
+    .prepare(`SELECT kind FROM sidebar_items WHERE item_id = ?`)
+    .get(parent) as { kind?: unknown } | undefined;
+
+  return row && normalizeSidebarKind(row.kind) === "folder" ? parent : null;
+}
+
 export async function upsertServerSidebarItem(item: {
-  itemId: string; kind: ServerSidebarItemKind; position?: number; channelId?: string | null; spacerHeight?: number | null; label?: string | null;
+  itemId: string; kind: ServerSidebarItemKind; position?: number; channelId?: string | null; spacerHeight?: number | null; label?: string | null; parentItemId?: string | null;
 }): Promise<void> {
   const db = getSqliteDb();
   const now = toIso(new Date());
@@ -130,18 +161,33 @@ export async function upsertServerSidebarItem(item: {
   const position = typeof item.position === "number" ? Math.max(0, Math.min(100_000, Math.floor(item.position))) : 0;
   const channelId = kind === "channel" ? (item.channelId == null ? null : String(item.channelId).trim().slice(0, 64)) : null;
   const spacerHeight = kind === "spacer" ? (item.spacerHeight == null ? 16 : Math.max(0, Math.min(500, Math.floor(item.spacerHeight)))) : null;
-  const label = kind === "separator" ? (item.label == null ? null : String(item.label).trim().slice(0, 80)) : null;
+  // A folder carries a name for the same reason a separator does, so both read
+  // it out of the same column.
+  const label = kind === "separator" || kind === "folder"
+    ? (item.label == null ? null : String(item.label).trim().slice(0, 80))
+    : null;
+  const parentItemId = resolveParentFolder(db, itemId, kind, item.parentItemId);
 
   db.prepare(
-    `INSERT INTO sidebar_items (item_id, kind, position, channel_id, spacer_height, label, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(item_id) DO UPDATE SET kind=?, position=?, channel_id=?, spacer_height=?, label=?, updated_at=?`
-  ).run(itemId, kind, position, channelId, spacerHeight, label, now, now, kind, position, channelId, spacerHeight, label, now);
+    `INSERT INTO sidebar_items (item_id, kind, position, channel_id, spacer_height, label, parent_item_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(item_id) DO UPDATE SET kind=?, position=?, channel_id=?, spacer_height=?, label=?, parent_item_id=?, updated_at=?`
+  ).run(itemId, kind, position, channelId, spacerHeight, label, parentItemId, now, now, kind, position, channelId, spacerHeight, label, parentItemId, now);
 }
 
+/**
+ * Deleting a folder empties it rather than taking the channels with it.
+ *
+ * The row being removed is one sidebar entry, and a channel's entry is the only
+ * thing that puts it on screen. Cascading would make "remove this folder" mean
+ * "remove these six channels from the sidebar", which is not what the words say
+ * and is not recoverable from the sidebar itself — the channels would still
+ * exist, with no way to reach them.
+ */
 export async function deleteServerSidebarItem(itemId: string): Promise<void> {
   const db = getSqliteDb();
   const norm = String(itemId || "").trim().slice(0, 64);
   if (!norm) return;
+  db.prepare(`UPDATE sidebar_items SET parent_item_id = NULL WHERE parent_item_id = ?`).run(norm);
   db.prepare(`DELETE FROM sidebar_items WHERE item_id = ?`).run(norm);
 }
 
