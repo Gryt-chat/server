@@ -4,6 +4,7 @@ import consola from "consola";
 import { requireBearerToken } from "../middleware/requireBearerToken";
 import { ensurePermission } from "../middleware/requirePermission";
 import { checkPreviewUrl } from "../utils/previewUrlSafety";
+import { fetchFollowingSafely } from "../utils/safePreviewFetch";
 
 type OEmbedOut = {
   html: string;
@@ -118,19 +119,22 @@ function getKnownOEmbedEndpoint(url: string, theme?: string): string | null {
   return null;
 }
 
-const USER_AGENT = "Mozilla/5.0 (compatible; GrytBot/1.0; +https://gryt.chat)";
 const FETCH_TIMEOUT_MS = 6000;
 
 async function fetchJsonWithTimeout(url: string, timeoutMs: number): Promise<unknown> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: { Accept: "application/json", "User-Agent": USER_AGENT },
-      redirect: "follow",
-    });
-    if (!res.ok) throw new Error(`oembed_fetch_failed_${res.status}`);
+    // Through the checked follower: the endpoint passed `checkPreviewUrl`, but a
+    // 302 from it could still land inside the network, so every hop is checked
+    // rather than only the first.
+    const fetched = await fetchFollowingSafely(url, controller.signal, "application/json");
+    if ("blocked" in fetched) throw new Error("oembed_fetch_blocked");
+    const { res } = fetched;
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => {});
+      throw new Error(`oembed_fetch_failed_${res.status}`);
+    }
     return await res.json();
   } finally {
     clearTimeout(timeout);
@@ -153,11 +157,17 @@ async function discoverOEmbedEndpoint(pageUrl: string): Promise<string | null> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const res = await fetch(pageUrl, {
-      signal: controller.signal,
-      headers: { Accept: "text/html,application/xhtml+xml", "User-Agent": USER_AGENT },
-      redirect: "follow",
-    });
+    // `pageUrl` passed `checkPreviewUrl`, but following its redirects blindly is
+    // how a public page walks the fetch onto an internal address. Every hop is
+    // checked, and the endpoint below is resolved against the address actually
+    // landed on rather than the one asked for.
+    const fetched = await fetchFollowingSafely(
+      pageUrl,
+      controller.signal,
+      "text/html,application/xhtml+xml",
+    );
+    if ("blocked" in fetched) return null;
+    const { res, finalUrl } = fetched;
     if (!res.ok) {
       await res.body?.cancel().catch(() => {});
       return null;
@@ -192,7 +202,7 @@ async function discoverOEmbedEndpoint(pageUrl: string): Promise<string | null> {
       const raw = (m?.[1] ?? m?.[2] ?? m?.[3])?.replace(/&amp;/g, "&");
       if (!raw) continue;
       try {
-        return new URL(raw, res.url || pageUrl).href;
+        return new URL(raw, finalUrl).href;
       } catch {
         return null;
       }
