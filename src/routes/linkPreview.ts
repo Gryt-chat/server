@@ -10,6 +10,7 @@ import {
   parsePageMetadata,
 } from "../utils/pageMetadata";
 import { checkPreviewUrl } from "../utils/previewUrlSafety";
+import { fetchFollowingSafely } from "../utils/safePreviewFetch";
 import { resolverFor } from "../utils/linkResolvers";
 
 export interface LinkPreviewData {
@@ -58,54 +59,6 @@ const MAX_CACHE_SIZE = 500;
 const MAX_BYTES = 1_048_576;
 
 const FETCH_TIMEOUT_MS = 8000;
-const MAX_REDIRECTS = 5;
-
-/**
- * Fetch a URL, checking every hop rather than only the one that was asked for.
- *
- * `redirect: "follow"` hands the whole chain to undici, which will happily
- * land on `http://169.254.169.254/` if that is where the third hop points.
- * Following by hand costs a loop and means the check applies to the address
- * actually connected to.
- */
-async function fetchFollowingSafely(
-  startUrl: string,
-  signal: AbortSignal,
-  accept: string,
-): Promise<{ res: Response; finalUrl: string } | { blocked: true }> {
-  let current = startUrl;
-
-  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    const checked = await checkPreviewUrl(current);
-    if (!checked.ok) return { blocked: true };
-
-    const res = await fetch(current, {
-      signal,
-      redirect: "manual",
-      headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; GrytBot/1.0; +https://gryt.chat)",
-        Accept: accept,
-        "Accept-Language": "en;q=0.9,*;q=0.5",
-      },
-    });
-
-    const location = res.headers.get("location");
-    if (res.status >= 300 && res.status < 400 && location) {
-      // Drain the redirect body so the socket goes back to the pool.
-      await res.body?.cancel().catch(() => {});
-      try {
-        current = new URL(location, current).href;
-      } catch {
-        return { blocked: true };
-      }
-      continue;
-    }
-
-    return { res, finalUrl: current };
-  }
-
-  return { blocked: true };
-}
 
 /** Read a response body until the head closes, the cap, or the end. */
 async function readHead(res: Response, charset: string): Promise<string> {
