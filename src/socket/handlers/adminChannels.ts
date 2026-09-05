@@ -582,8 +582,9 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
     },
 
     'server:sidebar:item:upsert': async (payload: {
-      accessToken: string; itemId: string; kind: "channel" | "separator" | "spacer";
+      accessToken: string; itemId: string; kind: "channel" | "separator" | "spacer" | "folder";
       position?: number; channelId?: string | null; spacerHeight?: number | null; label?: string | null;
+      parentItemId?: string | null;
     }) => {
       try {
         const rl = rlCheck("server:sidebar:item:upsert", ctx, RL_SETTINGS);
@@ -595,7 +596,7 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
         const auth = await requireAuth(socket, payload, { permission: "manage_sidebar" });
         if (!auth) return;
 
-        await upsertServerSidebarItem({ itemId: payload.itemId, kind: payload.kind, position: payload.position, channelId: payload.channelId ?? null, spacerHeight: payload.spacerHeight ?? null, label: payload.label ?? null });
+        await upsertServerSidebarItem({ itemId: payload.itemId, kind: payload.kind, position: payload.position, channelId: payload.channelId ?? null, spacerHeight: payload.spacerHeight ?? null, label: payload.label ?? null, parentItemId: payload.parentItemId ?? null });
 
         /*
          * One row per channel, or the sidebar draws it twice — which the fix
@@ -644,7 +645,21 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
       }
     },
 
-    'server:sidebar:reorder': async (payload: { accessToken: string; order: string[] }) => {
+    /*
+     * Order and folder membership arrive together, because one drag changes
+     * both: pulling a channel right puts it in the folder above it, and where
+     * it lands in the list is the same gesture.
+     *
+     * An entry may be a bare id, which is what every client sent before folders
+     * existed and still means "this position, whatever folder it is already in".
+     * Passing `parent_item_id` through on that path is not optional — `upsert`
+     * writes the column every time, so a reorder that left it out would empty
+     * every folder on the next drag of anything.
+     */
+    'server:sidebar:reorder': async (payload: {
+      accessToken: string;
+      order: (string | { itemId: string; parentItemId?: string | null })[];
+    }) => {
       try {
         const rl = rlCheck("server:sidebar:reorder", ctx, RL_SETTINGS);
         if (!rl.allowed) { emitRateLimited(ctx, rl); return; }
@@ -658,10 +673,17 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
         const items = await listServerSidebarItems();
         const byId = new Map(items.map((it) => [it.item_id, it]));
         let pos = 10;
-        for (const id of payload.order) {
-          const it = byId.get(String(id || "").trim());
+        for (const entry of payload.order) {
+          const isObject = typeof entry === "object" && entry !== null;
+          const rawId = isObject ? entry.itemId : entry;
+          const it = byId.get(String(rawId || "").trim());
           if (!it) continue;
-          await upsertServerSidebarItem({ itemId: it.item_id, kind: it.kind, position: pos, channelId: it.channel_id, spacerHeight: it.spacer_height, label: it.label });
+
+          const parentItemId = isObject && "parentItemId" in entry
+            ? entry.parentItemId ?? null
+            : it.parent_item_id;
+
+          await upsertServerSidebarItem({ itemId: it.item_id, kind: it.kind, position: pos, channelId: it.channel_id, spacerHeight: it.spacer_height, label: it.label, parentItemId });
           pos += 10;
         }
         insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "sidebar_reorder", meta: { order: payload.order } }).catch((e) => consola.warn("audit log write failed", e));
