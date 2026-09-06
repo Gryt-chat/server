@@ -16,6 +16,7 @@ import {
   createServerConfigIfNotExists,
   updateServerConfig,
   createServerInvite,
+  getAllRegisteredUsers,
   listServerInvites,
   getServerInvite,
   revokeServerInvite,
@@ -388,6 +389,67 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       } catch (e) {
         consola.error("server:invites:list failed", e);
         socket.emit("server:error", { error: "invites_failed", message: "Failed to list invites." });
+      }
+    },
+
+    /**
+     * How every member got in, for the Members tab (GRYT-923).
+     *
+     * The per-member `server:member:invite` below answers the same question one
+     * at a time, which is right for the ban dialog and wrong for a list: fifty
+     * members would be fifty round trips, each with its own timeout.
+     *
+     * **Gated on `manage_invites`, not `create_invite`.** Who arrived on whose
+     * invite is not something everybody who can mint one should be able to read
+     * off a list — `manage_invites` is already the permission for "see every
+     * invite this server has issued, and revoke them", which is exactly this.
+     * (`server:member:invite` still takes `create_invite`, which looks too
+     * loose; changing it is a behaviour change to an event the ban dialog
+     * depends on, so it is left alone here.)
+     *
+     * Two reads and a join in memory rather than a query per member. Both are
+     * already loaded whole elsewhere in this file, so nothing new reaches the
+     * database layer.
+     */
+    'server:members:invites': async (payload: { accessToken: string }) => {
+      try {
+        const auth = await requireAuth(socket, payload, { permission: "manage_invites" });
+        if (!auth) return;
+
+        const [users, invites] = await Promise.all([
+          getAllRegisteredUsers(),
+          listServerInvites(),
+        ]);
+
+        const byCode = new Map(invites.map((i) => [i.code, i]));
+
+        socket.emit("server:members:invites", {
+          serverId,
+          members: users
+            .filter((u) => u.is_active && u.joined_with_invite_code)
+            .map((u) => {
+              const code = u.joined_with_invite_code as string;
+              const invite = byCode.get(code);
+              return {
+                serverUserId: u.server_user_id,
+                code,
+                /* Null rather than absent when the invite has since been
+                   deleted. The member still came in on that code, and saying
+                   so with nothing beside it is more honest than dropping the
+                   row and implying they arrived some other way. */
+                note: invite?.note ?? null,
+                revoked: invite ? Boolean(invite.revoked) : null,
+                usesConsumed: invite?.uses_consumed ?? null,
+                maxUses: invite?.max_uses ?? null,
+              };
+            }),
+        });
+      } catch (e) {
+        consola.error("server:members:invites failed", e);
+        socket.emit("server:error", {
+          error: "member_invites_failed",
+          message: "Failed to look up how members joined.",
+        });
       }
     },
 

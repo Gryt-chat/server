@@ -191,6 +191,9 @@ const TOKEN_GATES: {
   { event: "reports:resolve_user", permission: "manage_reports", payload: { reportedServerUserId: "user_x", action: "dismiss" } },
   { event: "server:settings:update", permission: "manage_server", payload: { displayName: "x" } },
   { event: "server:invites:list", permission: "manage_invites" },
+  /* manage_invites rather than create_invite, deliberately: minting an invite
+     is not the same as reading who arrived on everybody else's. GRYT-923. */
+  { event: "server:members:invites", permission: "manage_invites" },
   { event: "server:invites:create", permission: "create_invite" },
   { event: "server:invites:revoke", permission: "manage_invites", payload: { code: "abc" } },
   { event: "server:joinRequests:list", permission: "manage_join_requests" },
