@@ -1,6 +1,7 @@
 export { initSqlite } from "./connection";
 export * from "./users";
 export * from "./messages";
+export * from "./threads";
 export * from "./servers";
 export * from "./roleDefinitions";
 export * from "./bots";

@@ -124,6 +124,27 @@ export interface Reaction {
   users: string[];
 }
 
+export type ThreadStatus = "open" | "solved" | "closed";
+
+/**
+ * A thread: a discussion that hangs off one root message in a conversation.
+ * The root stays in the normal timeline; replies carry `thread_id` and are kept
+ * out of it. `reply_count` / `last_message_at` are counters maintained on every
+ * reply and delete. GRYT-981.
+ */
+export interface ThreadRecord {
+  thread_id: string;
+  conversation_id: string;
+  root_message_id: string;
+  title: string | null;
+  created_by: string;
+  status: ThreadStatus;
+  reply_count: number;
+  locked: boolean;
+  created_at: Date;
+  last_message_at: Date;
+}
+
 export interface MessageRecord {
   conversation_id: string;
   message_id: string;
@@ -141,6 +162,13 @@ export interface MessageRecord {
   attachments: string[] | null;
   reactions: Reaction[] | null;
   reply_to_message_id?: string | null;
+  /**
+   * The thread this message belongs to, or null for a normal channel message.
+   * Independent of `reply_to_message_id`: a message in a thread may still quote
+   * another message. Thread replies are filtered out of the channel timeline
+   * (see listMessages) so they never appear twice. GRYT-981.
+   */
+  thread_id?: string | null;
   sender_nickname?: string;
   sender_avatar_file_id?: string;
   /** Whether a bot wrote this. Derived from the sender's id, never stored. */

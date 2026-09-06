@@ -15,6 +15,7 @@ function rowToMessage(r: Record<string, unknown>): MessageRecord {
     attachments: r.attachments ? JSON.parse(r.attachments as string) : null,
     reactions: r.reactions ? JSON.parse(r.reactions as string) : null,
     reply_to_message_id: (r.reply_to_message_id as string) ?? null,
+    thread_id: (r.thread_id as string) ?? null,
   };
 }
 
@@ -24,7 +25,7 @@ export async function insertMessage(record: Omit<MessageRecord, "message_id" | "
   const message_id = record.message_id ?? randomUUID();
 
   db.prepare(
-    `INSERT INTO messages (conversation_id, message_id, sender_server_id, text, sealed, attachments, reactions, reply_to_message_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO messages (conversation_id, message_id, sender_server_id, text, sealed, attachments, reactions, reply_to_message_id, thread_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     record.conversation_id,
     message_id,
@@ -34,6 +35,7 @@ export async function insertMessage(record: Omit<MessageRecord, "message_id" | "
     record.attachments ? JSON.stringify(record.attachments) : null,
     record.reactions ? JSON.stringify(record.reactions) : null,
     record.reply_to_message_id ?? null,
+    record.thread_id ?? null,
     toIso(created_at),
   );
 
@@ -43,11 +45,23 @@ export async function insertMessage(record: Omit<MessageRecord, "message_id" | "
 export async function listMessages(conversationId: string, limit = 50, before?: Date): Promise<MessageRecord[]> {
   const db = getSqliteDb();
   const rows = before
-    ? db.prepare(`SELECT * FROM messages WHERE conversation_id = ? AND created_at < ? ORDER BY created_at DESC, message_id DESC LIMIT ?`).all(conversationId, toIso(before), limit)
-    : db.prepare(`SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at DESC, message_id DESC LIMIT ?`).all(conversationId, limit);
+    ? db.prepare(`SELECT * FROM messages WHERE conversation_id = ? AND thread_id IS NULL AND created_at < ? ORDER BY created_at DESC, message_id DESC LIMIT ?`).all(conversationId, toIso(before), limit)
+    : db.prepare(`SELECT * FROM messages WHERE conversation_id = ? AND thread_id IS NULL ORDER BY created_at DESC, message_id DESC LIMIT ?`).all(conversationId, limit);
   const messages = (rows as Record<string, unknown>[]).map(rowToMessage);
   messages.reverse();
   return messages;
+}
+
+/**
+ * The replies inside a thread, oldest first. The root message is a normal
+ * channel message and is fetched separately by the caller. GRYT-981.
+ */
+export async function listThreadMessages(threadId: string, limit = 200): Promise<MessageRecord[]> {
+  const db = getSqliteDb();
+  const rows = db
+    .prepare(`SELECT * FROM messages WHERE thread_id = ? ORDER BY created_at ASC, message_id ASC LIMIT ?`)
+    .all(threadId, limit) as Record<string, unknown>[];
+  return rows.map(rowToMessage);
 }
 
 export async function deleteMessage(conversationId: string, messageId: string): Promise<boolean> {

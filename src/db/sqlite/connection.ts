@@ -312,6 +312,7 @@ function createSchema(d: DatabaseSync): void {
       attachments TEXT,
       reactions TEXT,
       reply_to_message_id TEXT,
+      thread_id TEXT,
       edited_at TEXT,
       created_at TEXT NOT NULL,
       PRIMARY KEY (conversation_id, message_id)
@@ -321,6 +322,27 @@ function createSchema(d: DatabaseSync): void {
     -- automatic promotion is measured on. Without it that count is a full scan
     -- of the table on every message anybody sends.
     CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_server_id);
+    -- Thread replies are fetched by thread, and filtered out of the channel
+    -- timeline. Both want an index on thread_id. GRYT-981.
+    CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);
+
+    -- A thread hangs off one root message in a conversation. The root stays in
+    -- the timeline; the replies carry messages.thread_id and are kept out of it.
+    -- root_message_id is unique: a message roots at most one thread. GRYT-981.
+    CREATE TABLE IF NOT EXISTS threads (
+      thread_id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL,
+      root_message_id TEXT NOT NULL,
+      title TEXT,
+      created_by TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open',
+      reply_count INTEGER NOT NULL DEFAULT 0,
+      locked INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      last_message_at TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_threads_root ON threads(root_message_id);
+    CREATE INDEX IF NOT EXISTS idx_threads_conv ON threads(conversation_id, last_message_at);
 
     CREATE TABLE IF NOT EXISTS conversations (
       conversation_id TEXT PRIMARY KEY,
@@ -794,6 +816,13 @@ function runMigrations(d: DatabaseSync): void {
   // A conversation is a mix of both until everybody has updated.
   if (!hasColumn(d, "messages", "sealed")) {
     d.exec("ALTER TABLE messages ADD COLUMN sealed TEXT");
+  }
+
+  // The thread a message belongs to (null for a normal message). Additive and
+  // idempotent like the others; the threads table itself is created by
+  // createSchema, which runs CREATE TABLE IF NOT EXISTS on every boot. GRYT-981.
+  if (!hasColumn(d, "messages", "thread_id")) {
+    d.exec("ALTER TABLE messages ADD COLUMN thread_id TEXT");
   }
 
   d.prepare("UPDATE server_config SET avatar_thumb_px = ?").run(AVATAR_THUMB_PX);
