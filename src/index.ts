@@ -37,6 +37,7 @@ import { mediaMetadataRouter } from "./routes/mediaMetadata";
 import { webhooksRouter } from "./routes/webhooks";
 import { startMediaSweep } from "./jobs/mediaSweep";
 import { startEmojiQueueWorker } from "./jobs/emojiQueueWorker";
+import { initPlugins } from "./plugins";
 import {
   metricsMiddleware,
   register,
@@ -147,6 +148,11 @@ initSqlite()
       startEmojiQueueWorker();
     }
   })
+  // Plugins last, and only if GRYT_PLUGINS_DIR is set. After the database
+  // because a plugin reacting to a member joining is no use before there is
+  // one to read, and it never throws — a plugin folder somebody broke must not
+  // be a server that will not start.
+  .then(() => initPlugins())
   .catch((e) => consola.error("SQLite initialization failed", e));
 
 // Initialize SFU client if host is configured

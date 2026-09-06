@@ -41,12 +41,18 @@ export interface PluginEvents {
     userId: string;
     nickname: string | null;
     /** Null when they did not come in through an invite. */
-    invitecode: string | null;
+    inviteCode: string | null;
     at: string;
   };
   "member:left": {
     userId: string;
     nickname: string | null;
+    /**
+     * Why they are gone. A plugin logging arrivals and departures wants to
+     * write a different line for each, and one deciding whether to act wants
+     * to know it was not already handled by a human.
+     */
+    reason: "left" | "kicked" | "banned";
     at: string;
   };
 }

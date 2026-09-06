@@ -10,6 +10,7 @@ import { normalizePermissions } from "../../constants/permissions";
 import { defaultRoleForTier } from "../../services/permissions";
 import { broadcastServerUiUpdate } from "../utils/server";
 import { applyAutoRoles } from "../../services/autoRoles";
+import { pluginEvents } from "../../plugins";
 import { readServiceState, serviceStateVarName } from "../../config/serviceState";
 import { generateAccessToken, generateFileToken, TokenPayload } from "../../utils/jwt";
 import {
@@ -628,6 +629,24 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
         const user = await upsertUser(grytUserId, nickname.trim(), {
           inviteCode: usedInviteCode,
         });
+
+        /*
+         * Plugins hear about an arrival (GRYT-933). `isActiveMember` was read
+         * before any of this, so this fires for somebody new and for somebody
+         * coming back after a kick, and not on the reconnects an active member
+         * makes all day — a plugin greeting people would otherwise greet the
+         * same person every time their wifi dropped.
+         *
+         * `emit` neither throws nor waits, so nothing here can fail a join.
+         */
+        if (!isActiveMember) {
+          pluginEvents().emit("member:joined", {
+            userId: user.server_user_id,
+            nickname: user.nickname ?? null,
+            inviteCode: usedInviteCode ?? null,
+            at: new Date().toISOString(),
+          });
+        }
         const isOwner = ((claimedOwnerGrytUserId ?? cfg?.owner_gryt_user_id) || null) === grytUserId;
         const setupRequired = isOwner && !cfg?.is_configured;
         const tokenVersion = cfg?.token_version ?? 0;

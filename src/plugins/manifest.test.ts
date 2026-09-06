@@ -51,6 +51,16 @@ describe("an ordinary manifest", () => {
     assert.equal(result.manifest.description, undefined);
     assert.equal(result.manifest.author, undefined);
   });
+
+  /* A blank one is absent, not present-and-empty. The required fields cannot
+     tell the difference — "" is falsy and refused either way — so the optional
+     ones are the only place this is visible. */
+  it("treats a blank optional field as absent", () => {
+    const result = readManifest({ ...valid, description: "   ", author: "" });
+    assert.ok(result.ok);
+    assert.equal(result.manifest.description, undefined);
+    assert.equal(result.manifest.author, undefined);
+  });
 });
 
 describe("a manifest that is not one", () => {
@@ -138,24 +148,24 @@ describe("a version that is not short and printable", () => {
 
 describe("what a manifest asked for", () => {
   it("keeps what it recognises", () => {
-    assert.deepEqual(declaredCapabilities(["moderation"]), ["moderation"]);
+    assert.deepEqual(declaredCapabilities(["members:read"]), ["members:read"]);
   });
 
   /* Dropped rather than refused, so a plugin written against a newer Gryt still
      loads here and simply does not get the new part. */
   it("ignores a name this build has never heard of", () => {
-    assert.deepEqual(declaredCapabilities(["moderation", "read-your-email"]), ["moderation"]);
+    assert.deepEqual(declaredCapabilities(["members:read", "read-your-email"]), ["members:read"]);
     assert.deepEqual(declaredCapabilities(["read-your-email"]), []);
   });
 
   it("is nothing at all for anything that is not a list of strings", () => {
-    for (const junk of [undefined, null, "moderation", 42, {}, [null], [{}], [["moderation"]]]) {
+    for (const junk of [undefined, null, "members:read", 42, {}, [null], [{}], [["members:read"]]]) {
       assert.deepEqual(declaredCapabilities(junk), [], `expected nothing from ${JSON.stringify(junk)}`);
     }
   });
 
   it("cannot be padded with repeats", () => {
-    assert.deepEqual(declaredCapabilities(["moderation", "moderation"]), ["moderation"]);
+    assert.deepEqual(declaredCapabilities(["members:read", "members:read"]), ["members:read"]);
   });
 
   /* Written against the catalogue rather than a fixed pair, so it keeps meaning
@@ -171,12 +181,12 @@ describe("what a manifest asked for", () => {
   it("reaches the manifest normalised, not as written", () => {
     const result = readManifest({
       ...valid,
-      capabilities: ["moderation", "messages:read", "moderation", "nonsense"],
+      capabilities: ["members:read", "messages:read", "members:read", "nonsense"],
     });
     assert.ok(result.ok);
     assert.deepEqual(
       result.manifest.capabilities,
-      PLUGIN_CAPABILITIES.filter((c) => c === "messages:read" || c === "moderation"),
+      PLUGIN_CAPABILITIES.filter((c) => c === "messages:read" || c === "members:read"),
     );
   });
 });

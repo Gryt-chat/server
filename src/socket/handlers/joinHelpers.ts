@@ -1,5 +1,6 @@
 import consola from "consola";
 import type { HandlerContext, EventHandlerMap } from "./types";
+import { pluginEvents } from "../../plugins";
 import { syncAllClients, broadcastMemberList, verifyClient } from "../utils/clients";
 import { sendServerDetails } from "../utils/server";
 import { postSystemMessage, formatLeaveMessage } from "../utils/systemMessages";
@@ -142,6 +143,16 @@ export function registerJoinHelpers(ctx: HandlerContext): EventHandlerMap {
         const { nickname, serverUserId } = clientInfo;
 
         await setUserInactive(serverUserId);
+
+        // Plugins hear about it (GRYT-933). Emitted here rather than on a
+        // socket disconnect, which happens every time somebody closes a laptop
+        // lid and is not leaving.
+        pluginEvents().emit("member:left", {
+          userId: serverUserId,
+          nickname: nickname ?? null,
+          reason: "left",
+          at: new Date().toISOString(),
+        });
 
         // A conversation nobody here can open again is one this server is
         // holding on behalf of two people who have both gone. Swept on the way

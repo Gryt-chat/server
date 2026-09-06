@@ -238,6 +238,44 @@ describe("a plugin that throws every time", () => {
     assert.equal(calls, FAILURES_BEFORE_DISABLE);
   });
 
+  /* And the subscription is not kept either. Refusing the call at emit would
+     look the same from the outside while the map filled up with dead handlers
+     from a plugin that re-subscribes on a timer. */
+  it("does not accumulate subscriptions it will never call", () => {
+    const bus = createPluginBus(recorder());
+    bus.subscribe("broken", "message:created", () => {
+      throw new Error("always");
+    });
+    for (let i = 0; i < FAILURES_BEFORE_DISABLE; i++) bus.emit("message:created", message);
+
+    for (let i = 0; i < 5; i++) bus.subscribe("broken", "message:created", () => {});
+
+    assert.deepEqual(bus.stats(), { plugins: [], disabled: ["broken"], subscriptions: 0 });
+  });
+
+  /*
+   * The case the check inside the emit loop exists for, and the only one: the
+   * list was snapshotted before the first handler ran, so a plugin's *second*
+   * handler is still in the snapshot after the first one crossed the threshold
+   * and had its subscriptions removed.
+   */
+  it("stops mid-emit, not just from the next event", () => {
+    const bus = createPluginBus(recorder());
+    let second = 0;
+    bus.subscribe("broken", "message:created", () => {
+      throw new Error("always");
+    });
+    bus.subscribe("broken", "message:created", () => void (second += 1));
+
+    for (let i = 0; i < FAILURES_BEFORE_DISABLE; i++) bus.emit("message:created", message);
+
+    assert.equal(
+      second,
+      FAILURES_BEFORE_DISABLE - 1,
+      "the second handler ran on the emit that disabled the plugin",
+    );
+  });
+
   it("is not disabled by failures spread across several plugins", () => {
     const log = recorder();
     const bus = createPluginBus(log);
