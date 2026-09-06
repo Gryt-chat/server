@@ -10,7 +10,7 @@ import {
   createRoleDefinition,
 } from "../../db/sqlite/roleDefinitions";
 import { createServerConfigIfNotExists, setServerRole } from "../../db/sqlite/servers";
-import { upsertUser } from "../../db/sqlite/users";
+import { setUserInactive, upsertUser } from "../../db/sqlite/users";
 import { generateAccessToken } from "../../utils/jwt";
 import type { Clients } from "../../types";
 import { registerAdminHandlers } from "./admin";
@@ -165,6 +165,31 @@ describe("who came in on what", () => {
     assert.equal(row.revoked, null);
     assert.equal(row.note, null);
     assert.equal(row.usesConsumed, null);
+  });
+
+  /*
+   * Somebody who has left is not a member of this list.
+   *
+   * `is_active = 0` is what leaving sets, and their row stays in `users` so a
+   * return keeps their history. The Members tab is about who is here, and a
+   * departed member appearing beside the current ones would send somebody
+   * revoking an invite over an arrival that is already undone.
+   */
+  it("leaves out anybody who is no longer a member", async () => {
+    const invite = await createServerInvite(null, { maxUses: 1, note: "gone" });
+    const member = await upsertUser("account-left", "Left", { inviteCode: invite.code });
+
+    assert.ok(
+      (await fetchRows()).some((r) => r.serverUserId === member.server_user_id),
+      "should be listed while they are still here",
+    );
+
+    await setUserInactive(member.server_user_id);
+    assert.equal(
+      (await fetchRows()).some((r) => r.serverUserId === member.server_user_id),
+      false,
+      "a member who left is still in the answer",
+    );
   });
 
   it("answers in one emit rather than one per member", async () => {
