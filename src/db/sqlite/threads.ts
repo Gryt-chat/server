@@ -90,6 +90,15 @@ export async function listThreadsByConversation(conversationId: string): Promise
   return rows.map(rowToThread);
 }
 
+/** Distinct people in a thread: the root author plus everyone who replied. */
+export async function countThreadParticipants(threadId: string, rootMessageId: string): Promise<number> {
+  const db = getSqliteDb();
+  const row = db
+    .prepare(`SELECT COUNT(DISTINCT sender_server_id) AS c FROM messages WHERE thread_id = ? OR message_id = ?`)
+    .get(threadId, rootMessageId) as { c: number } | undefined;
+  return Number(row?.c ?? 0);
+}
+
 export async function bumpThreadOnReply(threadId: string, at: Date): Promise<ThreadRecord | null> {
   const db = getSqliteDb();
   const res = db
