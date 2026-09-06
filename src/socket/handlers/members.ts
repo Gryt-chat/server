@@ -47,10 +47,12 @@ export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
     /**
      * What this person says they are doing, in their own words (GRYT-929).
      *
-     * No permission of its own. It says nothing to anybody who cannot already
-     * see the member list, and gating it behind a role would mean a status that
-     * silently does nothing for most people — a moderator takes it down with
-     * the tools they already have for a nickname.
+     * Gated on `set_activity`, which sits beside `change_nickname` for the same
+     * reason: both are a line about yourself that everybody on the server
+     * reads, and an operator who does not want free text under people's names
+     * should be able to take it away. The client hides the control when it is
+     * missing, so a refusal here is a client that is out of step rather than
+     * somebody's ordinary path.
      *
      * Held on the connection rather than stored, so it stops being true when
      * they close the app. That means it does not survive a reconnect and the
@@ -68,6 +70,19 @@ export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
       if (!info.serverUserId || info.serverUserId.startsWith("temp_")) return;
 
       const activity = normaliseActivity(data?.activity);
+
+      /* Checked on the way up only, the same as turning a camera off. A
+         permission taken away mid-session must not leave somebody wearing a
+         status they can no longer remove — the alternative is a line under
+         their name that only a moderator can take down. */
+      if (activity !== null && !(await socketMay(clientsInfo, clientId, "set_activity"))) {
+        socket.emit("server:error", {
+          error: "forbidden",
+          message: "You cannot set a status on this server.",
+          permission: "set_activity",
+        });
+        return;
+      }
       if (info.activity === (activity ?? undefined)) return;
 
       info.activity = activity ?? undefined;
