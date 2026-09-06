@@ -124,6 +124,13 @@ export interface Reaction {
   users: string[];
 }
 
+export interface ForumTag {
+  id: string;
+  name: string;
+  emoji?: string | null;
+  color?: string | null;
+}
+
 export type ThreadStatus = "open" | "solved" | "closed";
 
 /**
@@ -139,6 +146,8 @@ export interface ThreadRecord {
   title: string | null;
   created_by: string;
   status: ThreadStatus;
+  /** Tag ids from the channel's forum_tags this topic carries. GRYT-981 Stage 3. */
+  tags: string[];
   reply_count: number;
   locked: boolean;
   created_at: Date;
@@ -393,6 +402,8 @@ export interface ServerChannelRecord {
    * GRYT-982.
    */
   automated: boolean;
+  /** The tags a forum channel offers its topics. Empty on a normal channel. GRYT-981. */
+  forum_tags: ForumTag[];
   /**
    * Minimum rank required to post. Null means anybody holding send_messages,
    * which is every channel unless an operator narrows it.

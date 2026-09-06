@@ -41,6 +41,7 @@ import {
   listThreadsByConversation,
   countThreadParticipants,
   setThreadStatus,
+  setThreadTags,
 } from "../../db";
 import { processProfanity, type CensorStyle, type ProfanityMode } from "../../utils/profanityFilter";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
@@ -946,6 +947,58 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
+    // Change a topic's tags. The author or a moderator may; unknown tag ids are
+    // dropped against the channel's palette. GRYT-981 Stage 3.
+    'thread:tags:set': async (payload: { conversationId: string; threadId: string; tagIds: string[]; accessToken: string }) => {
+      try {
+        const ip = getClientIp();
+        const userId = clientsInfo[clientId]?.serverUserId;
+        const rl = checkRateLimit("chat:edit", userId, ip, RL_EDIT);
+        if (!rl.allowed) {
+          socket.emit("thread:error", { error: "rate_limited", retryAfterMs: rl.retryAfterMs, message: `Too fast. Wait ${Math.ceil((rl.retryAfterMs || 0) / 1000)}s.` });
+          return;
+        }
+        if (!payload || typeof payload.conversationId !== "string" || typeof payload.threadId !== "string" || !Array.isArray(payload.tagIds) || typeof payload.accessToken !== "string") {
+          socket.emit("thread:error", "Invalid payload");
+          return;
+        }
+        const auth = await requireAuth(socket, payload, { permission: "send_messages" });
+        if (!auth) return;
+        const access = await requireConversationAccess(payload.conversationId, auth.tokenPayload.serverUserId);
+        if (!access) return;
+        const thread = await getThread(payload.threadId);
+        if (!thread || thread.conversation_id !== payload.conversationId) {
+          socket.emit("thread:error", { error: "thread_not_found", message: "That thread no longer exists." });
+          return;
+        }
+        const isAuthor = thread.created_by === auth.tokenPayload.serverUserId;
+        if (!isAuthor && !auth.permissions.has("manage_messages")) {
+          socket.emit("thread:error", { error: "forbidden", message: "Only the topic's author or a moderator can change this.", permission: "manage_messages" });
+          return;
+        }
+        const channel = await getServerChannel(payload.conversationId);
+        const validTagIds = new Set((channel?.forum_tags ?? []).map((t) => t.id));
+        const tags = payload.tagIds.filter((id) => typeof id === "string" && validTagIds.has(id)).slice(0, 20);
+        const updated = await setThreadTags(payload.threadId, tags);
+        if (!updated) { socket.emit("thread:error", "Failed to update the topic."); return; }
+        const upd = {
+          conversation_id: updated.conversation_id,
+          thread_id: updated.thread_id,
+          root_message_id: updated.root_message_id,
+          reply_count: updated.reply_count,
+          last_message_at: updated.last_message_at.toISOString(),
+          status: updated.status,
+          tags: updated.tags,
+        };
+        recipientClientIds(payload.conversationId, access).forEach((cid) =>
+          io.sockets.sockets.get(cid)?.emit("thread:updated", upd),
+        );
+      } catch (err) {
+        consola.error("thread:tags:set failed", err);
+        socket.emit("thread:error", "Failed to update the topic.");
+      }
+    },
+
     // The topic index of a forum channel: every thread as a summary row, with
     // its root preview, author and participant count. Token-less like
     // chat:fetch. GRYT-981 Stage 2.
@@ -988,6 +1041,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
             creator_server_id: t.created_by,
             creator_nickname: root?.sender_nickname ?? null,
             creator_avatar_file_id: root?.sender_avatar_file_id ?? null,
+            tags: t.tags,
             preview: root?.text ? root.text.slice(0, 200) : null,
           };
         }));
@@ -1000,7 +1054,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
 
     // Create a forum topic: one root message and a thread with a title, made
     // together. GRYT-981 Stage 2.
-    'forum:topic:create': async (payload: { conversationId: string; title: string; text?: string; accessToken: string }) => {
+    'forum:topic:create': async (payload: { conversationId: string; title: string; text?: string; accessToken: string; tagIds?: string[] }) => {
       try {
         const ip = getClientIp();
         const userId = clientsInfo[clientId]?.serverUserId;
@@ -1045,11 +1099,14 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           attachments: null,
           reactions: null,
         });
+        const validTagIds = new Set((channel?.forum_tags ?? []).map((t) => t.id));
+        const tags = Array.isArray(payload.tagIds) ? payload.tagIds.filter((id) => validTagIds.has(id)).slice(0, 20) : [];
         const thread = await createThread({
           conversation_id: payload.conversationId,
           root_message_id: created.message_id,
           created_by: auth.tokenPayload.serverUserId,
           title,
+          tags,
         });
         const summary = {
           thread_id: thread.thread_id,

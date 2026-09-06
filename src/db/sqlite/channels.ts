@@ -1,4 +1,4 @@
-import type { ServerChannelRecord, ServerSidebarItemKind, ServerSidebarItemRecord } from "../interfaces";
+import type { ForumTag, ServerChannelRecord, ServerSidebarItemKind, ServerSidebarItemRecord } from "../interfaces";
 import { fromIso, getSqliteDb, intToBool, toIso } from "./connection";
 
 function normalizeChannelType(t: unknown): "text" | "voice" {
@@ -8,6 +8,26 @@ function normalizeChannelType(t: unknown): "text" | "voice" {
 
 function normalizeChannelLayout(v: unknown): "chat" | "forum" {
   return String(v || "").toLowerCase() === "forum" ? "forum" : "chat";
+}
+
+function parseForumTags(v: unknown): ForumTag[] {
+  if (typeof v !== "string" || !v) return [];
+  try {
+    const parsed: unknown = JSON.parse(v);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((t): t is Record<string, unknown> => !!t && typeof t === "object")
+      .map((t) => ({
+        id: String(t.id ?? "").slice(0, 64),
+        name: String(t.name ?? "").slice(0, 40),
+        emoji: t.emoji != null ? String(t.emoji).slice(0, 16) : null,
+        color: t.color != null ? String(t.color).slice(0, 16) : null,
+      }))
+      .filter((t) => t.id && t.name)
+      .slice(0, 40);
+  } catch {
+    return [];
+  }
 }
 
 function normalizeSidebarKind(v: unknown): ServerSidebarItemKind {
@@ -32,6 +52,7 @@ function rowToChannel(r: Record<string, unknown>): ServerChannelRecord {
     text_in_voice: intToBool(r.text_in_voice as number),
     layout: normalizeChannelLayout(r.layout),
     automated: intToBool(r.automated as number),
+    forum_tags: parseForumTags(r.forum_tags),
     post_min_rank: r.post_min_rank != null ? Number(r.post_min_rank) : null,
     view_min_rank: r.view_min_rank != null ? Number(r.view_min_rank) : null,
     permission_scope_id: (r.permission_scope_id as string) ?? null,
@@ -63,7 +84,7 @@ export async function listServerChannels(): Promise<ServerChannelRecord[]> {
 export async function upsertServerChannel(channel: {
   channelId: string; name: string; type: "text" | "voice"; position?: number; description?: string | null;
   requirePushToTalk?: boolean; disableRnnoise?: boolean; maxBitrate?: number | null; eSportsMode?: boolean; textInVoice?: boolean;
-  layout?: "chat" | "forum"; automated?: boolean;
+  layout?: "chat" | "forum"; automated?: boolean; forumTags?: ForumTag[];
 }): Promise<void> {
   const db = getSqliteDb();
   const now = toIso(new Date());
@@ -81,17 +102,18 @@ export async function upsertServerChannel(channel: {
   // is neither, whatever the caller passes.
   const layout = type === "text" && channel.layout === "forum" ? "forum" : "chat";
   const automated = type === "text" && channel.automated ? 1 : 0;
+  const forumTags = Array.isArray(channel.forumTags) ? JSON.stringify(parseForumTags(JSON.stringify(channel.forumTags))) : null;
 
   db.prepare(
     // permission_scope_id is deliberately absent. It is set by
     // setChannelPermissionScope, which also cleans up an orphaned private
     // scope; letting a general channel update carry it would mean every caller
     // that renames a channel could silently change who can see it.
-    `INSERT INTO channels (channel_id, name, type, position, description, require_push_to_talk, disable_rnnoise, max_bitrate, esports_mode, text_in_voice, layout, automated, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(channel_id) DO UPDATE SET name=?, type=?, position=?, description=?, require_push_to_talk=?, disable_rnnoise=?, max_bitrate=?, esports_mode=?, text_in_voice=?, layout=?, automated=?, updated_at=?`
-  ).run(channelId, name, type, position, description, rPtt, dRnn, maxBr, eMode, tiv, layout, automated, now, now,
-    name, type, position, description, rPtt, dRnn, maxBr, eMode, tiv, layout, automated, now);
+    `INSERT INTO channels (channel_id, name, type, position, description, require_push_to_talk, disable_rnnoise, max_bitrate, esports_mode, text_in_voice, layout, automated, forum_tags, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(channel_id) DO UPDATE SET name=?, type=?, position=?, description=?, require_push_to_talk=?, disable_rnnoise=?, max_bitrate=?, esports_mode=?, text_in_voice=?, layout=?, automated=?, forum_tags=?, updated_at=?`
+  ).run(channelId, name, type, position, description, rPtt, dRnn, maxBr, eMode, tiv, layout, automated, forumTags, now, now,
+    name, type, position, description, rPtt, dRnn, maxBr, eMode, tiv, layout, automated, forumTags, now);
 }
 
 export async function getServerChannel(channelId: string): Promise<ServerChannelRecord | null> {

@@ -4,6 +4,7 @@ import consola from "consola";
 import { randomUUID } from "crypto";
 import type { HandlerContext, EventHandlerMap } from "./types";
 import { requireAuth } from "../middleware/auth";
+import type { ForumTag } from "../../db/interfaces";
 import { syncAllClients, broadcastMemberList, invalidateBroadcastDedupe } from "../utils/clients";
 import { sendServerDetails } from "../utils/server";
 import {
@@ -136,6 +137,7 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
             textInVoice: c.text_in_voice || false,
             layout: c.layout,
             automated: c.automated || false,
+            forumTags: c.forum_tags,
             permissionScopeId: c.permission_scope_id ?? null,
           })),
         });
@@ -150,7 +152,7 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
       description?: string | null; position?: number;
       requirePushToTalk?: boolean; disableRnnoise?: boolean; maxBitrate?: number | null;
       eSportsMode?: boolean; textInVoice?: boolean;
-      layout?: "chat" | "forum"; automated?: boolean;
+      layout?: "chat" | "forum"; automated?: boolean; forumTags?: ForumTag[];
     }) => {
       try {
         const rl = rlCheck("server:channels:upsert", ctx, RL_SETTINGS);
@@ -194,6 +196,7 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
           textInVoice: payload.textInVoice,
           layout: payload.layout,
           automated: payload.automated,
+          forumTags: payload.forumTags,
         });
         if (isNewChannel) {
           try {
@@ -566,7 +569,7 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
             channelId: ch.channel_id, name: ch.name, type: ch.type, description: ch.description, position: pos,
             requirePushToTalk: ch.require_push_to_talk, disableRnnoise: ch.disable_rnnoise,
             maxBitrate: ch.max_bitrate, eSportsMode: ch.esports_mode, textInVoice: ch.text_in_voice,
-            layout: ch.layout, automated: ch.automated,
+            layout: ch.layout, automated: ch.automated, forumTags: ch.forum_tags,
           });
           pos += 10;
         }
