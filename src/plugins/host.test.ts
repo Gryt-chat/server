@@ -297,7 +297,14 @@ describe("starting them", () => {
  * were not seen is the case this exists for.
  */
 describe("telling members what this server runs", () => {
-  type Announced = { id: string; version: string; capabilities: string[] };
+  type Announced = {
+    id: string;
+    name: string;
+    author?: string;
+    description?: string;
+    homepage?: string;
+    capabilities: string[];
+  };
 
   async function announcements(load: () => Promise<Record<string, unknown>> = async () => ({})) {
     const log = logger();
@@ -313,7 +320,7 @@ describe("telling members what this server runs", () => {
   }
 
   it("names every plugin that started", async () => {
-    plugin("presence", manifestFor("presence", { version: "2.1.0" }));
+    plugin("presence", manifestFor("presence"));
     plugin("quiet", manifestFor("quiet"));
 
     assert.deepEqual(
@@ -334,16 +341,58 @@ describe("telling members what this server runs", () => {
     const [entry] = await announcements();
     assert.deepEqual(entry, {
       id: "automod",
-      version: "1.0.0",
+      name: "automod",
+      author: undefined,
+      description: undefined,
+      homepage: undefined,
       capabilities: ["messages:read", "moderation"],
     });
+  });
+
+  /*
+   * A version number is which known problem applies. Handing it to everybody
+   * who joins answers a question an attacker would otherwise have to ask, and
+   * it is the one field here that narrows an attack rather than describing the
+   * plugin.
+   */
+  it("does not say which version", async () => {
+    plugin("automod", manifestFor("automod", { version: "1.2.3" }));
+
+    const [entry] = await announcements();
+    assert.equal("version" in entry, false, "the version went out with the plugin list");
+    assert.doesNotMatch(JSON.stringify(entry), /1\.2\.3/);
+  });
+
+  /* Who wrote it and where to read about it, which is what somebody deciding
+     whether to stay actually goes and looks at. */
+  it("says who wrote it and where to read about it", async () => {
+    plugin(
+      "automod",
+      manifestFor("automod", {
+        author: "somebody",
+        description: "Bans spam",
+        homepage: "https://example.com/automod",
+      }),
+    );
+
+    const [entry] = await announcements();
+    assert.equal(entry.author, "somebody");
+    assert.equal(entry.description, "Bans spam");
+    assert.equal(entry.homepage, "https://example.com/automod");
   });
 
   it("says so even for a plugin that asked for nothing", async () => {
     plugin("quiet", manifestFor("quiet"));
 
     assert.deepEqual(await announcements(), [
-      { id: "quiet", version: "1.0.0", capabilities: [] },
+      {
+        id: "quiet",
+        name: "quiet",
+        author: undefined,
+        description: undefined,
+        homepage: undefined,
+        capabilities: [],
+      },
     ]);
   });
 

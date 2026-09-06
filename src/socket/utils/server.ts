@@ -426,8 +426,12 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
       upload_max_bytes: cfgUploadMaxBytes,
       version: process.env.SERVER_VERSION || "1.0.0",
       /**
-       * Every plugin this server is running, and what each one may do
-       * (GRYT-939, GRYT-941).
+       * Every plugin this server is running, who wrote it, where to read
+       * about it, and what it may do (GRYT-939, GRYT-941).
+       *
+       * No version, deliberately: a version number is which known problem
+       * applies, and handing that to everybody who joins answers a question an
+       * attacker would otherwise have to ask.
        *
        * Not optional and not configurable. A member is the one whose messages
        * are being read, and what code sits between them and the people they are

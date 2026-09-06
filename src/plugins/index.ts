@@ -64,7 +64,17 @@ export function pluginEvents(): PluginBus {
  * anything that has to be kept in step — plugins do not load or unload while
  * the server is running.
  */
-const announced: { id: string; version: string; capabilities: string[] }[] = [];
+export interface AnnouncedPlugin {
+  id: string;
+  name: string;
+  author?: string;
+  description?: string;
+  /** Where to read about it. Already checked to be http or https. */
+  homepage?: string;
+  capabilities: string[];
+}
+
+const announced: AnnouncedPlugin[] = [];
 
 /**
  * What goes out with the server details.
@@ -75,14 +85,17 @@ const announced: { id: string; version: string; capabilities: string[] }[] = [];
  * whether to stay — and deciding whether to stay is the thing a member can
  * always do.
  *
+ * **The version does not, and that is also the point.** A version number is
+ * which known problem applies, and handing it to everybody who joins answers a
+ * question an attacker would otherwise have to ask. What a member needs — what
+ * it is, who wrote it, where to read about it, what it may do — narrows nothing.
+ *
  * A client plugin also uses this to find its other half, which is where it
- * started (GRYT-939). That turned out to be the smaller of the two reasons.
+ * started (GRYT-939). That turned out to be the smaller of the two reasons, and
+ * a plugin pair that needs to agree on a version can put one in its own
+ * payloads, where it is between the two halves rather than on the doorstep.
  */
-export function announcedPlugins(): readonly {
-  id: string;
-  version: string;
-  capabilities: string[];
-}[] {
+export function announcedPlugins(): readonly AnnouncedPlugin[] {
   return announced;
 }
 

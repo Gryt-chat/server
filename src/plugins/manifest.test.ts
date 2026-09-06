@@ -63,6 +63,53 @@ describe("an ordinary manifest", () => {
   });
 });
 
+/*
+ * Members see this, and a manifest is written by whoever wrote the plugin. A
+ * `javascript:` URL here is a link injection into every member's client and a
+ * `data:` one is a way to serve them a page that looks like Gryt.
+ */
+describe("a link to read about the plugin", () => {
+  for (const homepage of [
+    "https://example.com/automod",
+    "http://example.com",
+    "https://example.com/a?b=c#d",
+  ]) {
+    it(`keeps ${homepage}`, () => {
+      const result = readManifest({ ...valid, homepage });
+      assert.ok(result.ok);
+      assert.ok(result.manifest.homepage?.startsWith("http"));
+    });
+  }
+
+  for (const homepage of [
+    "javascript:alert(1)",
+    "JavaScript:alert(1)",
+    "data:text/html,<h1>gryt</h1>",
+    "file:///etc/passwd",
+    "gryt://join/somewhere",
+    "//example.com",
+    "example.com",
+    "not a url",
+    "",
+    "   ",
+    42,
+    null,
+    `https://example.com/${"x".repeat(400)}`,
+  ]) {
+    it(`drops ${JSON.stringify(homepage)}`, () => {
+      const result = readManifest({ ...valid, homepage });
+      assert.ok(result.ok, "a bad link stopped the plugin loading");
+      assert.equal(result.manifest.homepage, undefined, `${JSON.stringify(homepage)} was kept`);
+    });
+  }
+
+  /* Dropped rather than refused. A plugin that will not start because its link
+     is wrong is a worse outcome than one that starts with no link. */
+  it("does not stop a plugin loading", () => {
+    assert.equal(readManifest({ ...valid, homepage: "javascript:alert(1)" }).ok, true);
+  });
+});
+
 describe("a manifest that is not one", () => {
   for (const junk of [null, undefined, 42, "automod", [], [valid]]) {
     it(`is refused for ${JSON.stringify(junk) ?? "undefined"}`, () => {

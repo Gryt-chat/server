@@ -155,7 +155,14 @@ interface StartOptions {
    * server runs (GRYT-941). Injected rather than imported so the loader has no
    * opinion about where that list lives.
    */
-  announce?: (plugin: { id: string; version: string; capabilities: string[] }) => void;
+  announce?: (plugin: {
+    id: string;
+    name: string;
+    author?: string;
+    description?: string;
+    homepage?: string;
+    capabilities: string[];
+  }) => void;
   bus: PluginBus;
   /** Optional so a test can start plugins without one. The server passes one. */
   messageBus?: PluginMessageBus;
@@ -210,10 +217,19 @@ export async function startPlugins({
        * After the load, so a plugin that failed to start is not announced —
        * saying it is here would send its client half talking to nothing, and
        * would tell a member about something that is not reading anything.
+       *
+       * **No version.** A version number is which known problem applies, and
+       * handing that to everybody who joins is a free answer to a question an
+       * attacker would otherwise have to ask. What a member needs is what it
+       * is, who wrote it, where to read about it, and what it may do — none of
+       * which narrows an attack.
        */
       announce({
         id: manifest.id,
-        version: manifest.version,
+        name: manifest.name,
+        author: manifest.author,
+        description: manifest.description,
+        homepage: manifest.homepage,
         capabilities: [...manifest.capabilities],
       });
       logger.info(
