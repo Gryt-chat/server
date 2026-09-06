@@ -344,7 +344,18 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
         if (!access.allowed) {
           const denial = DENIAL_RESPONSES[access.reason];
           consola.warn(`[Voice:Step 1] REFUSED client=${clientId} user=${userId} room=${roomId} reason=${access.reason}`);
-          socket.emit("voice:room:error", { error: denial.error, message: denial.message });
+          /*
+           * `undetermined` carries a retry delay, the same shape the
+           * unidentified branch above uses. It means this server could not read
+           * the rules rather than that the room is gone, and voice gives up
+           * after five attempts across twenty seconds — short enough to lose
+           * somebody over a database that was busy for a moment.
+           */
+          socket.emit("voice:room:error", {
+            error: denial.error,
+            message: denial.message,
+            ...(access.reason === "undetermined" ? { retryAfterMs: 3000 } : {}),
+          });
           return;
         }
 

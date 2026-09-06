@@ -21,7 +21,24 @@ export type AccessDenial =
   /** A real conversation, but not one of theirs. */
   | "not_a_member"
   /** Neither a channel nor a conversation. Nothing to read. */
-  | "unknown_conversation";
+  | "unknown_conversation"
+  /**
+   * The question could not be answered. Not a refusal.
+   *
+   * Reading the permission rules failed — a busy database, a container still
+   * coming up. This used to arrive as `unknown_conversation`, because
+   * `mayViewChannel` caught its own errors and returned false, so "I could not
+   * check" and "there is no such channel" were one answer.
+   *
+   * They are not one answer to a client. One is permanent and worth giving up
+   * on; the other clears by itself in seconds. Voice reconnects five times over
+   * twenty seconds and then stops, so a transient failure dressed as a missing
+   * channel takes somebody out of a call they could have rejoined.
+   *
+   * Still `allowed: false` — failing closed does not change. Only what the
+   * caller is told about why.
+   */
+  | "undetermined";
 
 /**
  * What to tell the caller, and the matching HTTP status.
@@ -40,6 +57,13 @@ export const DENIAL_RESPONSES: Record<AccessDenial, { error: string; message: st
   unauthenticated: { error: "unauthenticated", message: "You are not signed in to this server", status: 401 },
   not_a_member: { error: "not_found", message: "No such conversation", status: 404 },
   unknown_conversation: { error: "not_found", message: "No such conversation", status: 404 },
+  /*
+   * 503 and a distinct error, because this one is worth retrying and the others
+   * are not. It says nothing about the conversation — only that this server
+   * could not answer — so it is not an oracle the way telling the two 404s
+   * apart would be.
+   */
+  undetermined: { error: "unavailable", message: "Could not check that just now. Try again in a moment.", status: 503 },
 };
 
 const CHANNEL_CACHE_TTL_MS = 15_000;
@@ -95,7 +119,18 @@ export async function resolveConversationAccess(
     // already where the socket handlers, the REST route and the call handlers
     // meet. A channel somebody may not see has to read as absent from all
     // three, and history is the path where a guessed id would otherwise pay.
-    if (!(await mayViewChannel(conversationId, serverUserId))) {
+    //
+    // The try is what separates "no" from "could not tell". `mayViewChannel`
+    // throws now rather than swallowing its own failures, so a rules read that
+    // fell over stops being reported as a channel that does not exist.
+    let visible: boolean;
+    try {
+      visible = await mayViewChannel(conversationId, serverUserId);
+    } catch {
+      return { allowed: false, reason: "undetermined" };
+    }
+
+    if (!visible) {
       return { allowed: false, reason: "unknown_conversation" };
     }
     return { allowed: true, kind: "channel" };
