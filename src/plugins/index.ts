@@ -57,6 +57,28 @@ export function pluginEvents(): PluginBus {
   return bus;
 }
 
+/*
+ * The plugins members are told about (GRYT-939).
+ *
+ * Empty unless a manifest asked. Written once at startup and read on every
+ * join, so it is a plain array rather than anything that has to be kept in
+ * step — plugins do not load or unload while the server is running.
+ */
+const announced: { id: string; version: string }[] = [];
+
+/**
+ * What goes out with the server details, for a client plugin deciding whether
+ * its other half is here.
+ *
+ * The id and the version, and nothing else. The capabilities would tell every
+ * member what a plugin is allowed to do to them without telling them anything
+ * they can act on, and the operator agreeing to a plugin is not the same as
+ * publishing what they agreed to.
+ */
+export function announcedPlugins(): readonly { id: string; version: string }[] {
+  return announced;
+}
+
 /**
  * What the socket handler calls when a client plugin sends something.
  *
@@ -80,7 +102,13 @@ export async function initPlugins(): Promise<void> {
   consola.info(`Loading plugins from ${dir}`);
 
   try {
-    const started = await startPlugins({ dir, bus, messageBus: messages, logger: log });
+    const started = await startPlugins({
+      dir,
+      bus,
+      messageBus: messages,
+      logger: log,
+      announce: (plugin) => void announced.push(plugin),
+    });
     if (started.length === 0) {
       consola.info("No plugins loaded");
       return;

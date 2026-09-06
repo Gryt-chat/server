@@ -150,6 +150,11 @@ const importPlugin: (path: string) => Promise<Record<string, unknown>> = new Fun
 
 interface StartOptions {
   dir: string;
+  /**
+   * Called for each plugin whose manifest asks to be announced. Injected rather
+   * than imported so the loader has no opinion about where that list lives.
+   */
+  announce?: (plugin: { id: string; version: string }) => void;
   bus: PluginBus;
   /** Optional so a test can start plugins without one. The server passes one. */
   messageBus?: PluginMessageBus;
@@ -171,6 +176,7 @@ export async function startPlugins({
   bus,
   messageBus,
   logger,
+  announce = () => {},
   load = importPlugin,
 }: StartOptions): Promise<string[]> {
   const { plugins, rejected } = discoverPlugins(dir);
@@ -193,11 +199,13 @@ export async function startPlugins({
       }
 
       started.push(manifest.id);
+      if (manifest.public) announce({ id: manifest.id, version: manifest.version });
       logger.info(
         `plugin ${manifest.id} ${manifest.version} started` +
           (manifest.capabilities.length
             ? ` (${manifest.capabilities.join(", ")})`
-            : " (no capabilities declared)"),
+            : " (no capabilities declared)") +
+          (manifest.public ? ", announced to members" : ""),
       );
     } catch (err) {
       /*

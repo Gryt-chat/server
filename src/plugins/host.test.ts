@@ -290,6 +290,60 @@ describe("starting them", () => {
  * down, and leave somebody with a server that will not boot over a plugin they
  * installed for fun.
  */
+describe("announcing a plugin to members", () => {
+  it("does not, unless the manifest asked", async () => {
+    plugin("quiet", manifestFor("quiet"));
+    const log = logger();
+    const announced: { id: string; version: string }[] = [];
+
+    await startPlugins({
+      dir,
+      bus: createPluginBus(log as BusLogger),
+      logger: log,
+      announce: (p) => void announced.push(p),
+      load: async () => ({}),
+    });
+
+    assert.deepEqual(announced, []);
+  });
+
+  it("does when it did", async () => {
+    plugin("presence", manifestFor("presence", { public: true, version: "2.1.0" }));
+    const log = logger();
+    const announced: { id: string; version: string }[] = [];
+
+    await startPlugins({
+      dir,
+      bus: createPluginBus(log as BusLogger),
+      logger: log,
+      announce: (p) => void announced.push(p),
+      load: async () => ({}),
+    });
+
+    assert.deepEqual(announced, [{ id: "presence", version: "2.1.0" }]);
+  });
+
+  /* A plugin that failed to start is not here, so saying it is would send its
+     client half talking to nothing. */
+  it("does not announce one that failed to start", async () => {
+    plugin("broken", manifestFor("broken", { public: true }));
+    const log = logger();
+    const announced: { id: string; version: string }[] = [];
+
+    await startPlugins({
+      dir,
+      bus: createPluginBus(log as BusLogger),
+      logger: log,
+      announce: (p) => void announced.push(p),
+      load: async () => {
+        throw new Error("boom");
+      },
+    });
+
+    assert.deepEqual(announced, []);
+  });
+});
+
 describe("a plugin that throws on startup", () => {
   it("is skipped, and the server carries on", async () => {
     plugin("broken", manifestFor("broken"));
@@ -366,7 +420,7 @@ describe("what the api lets a plugin do", () => {
     const log = logger();
     const bus = createPluginBus(log as BusLogger);
     const api = createPluginApi(
-      { id: "a", name: "a", version: "1", main: "i.js", capabilities: ["members:read"] },
+      { id: "a", name: "a", version: "1", main: "i.js", public: false, capabilities: ["members:read"] },
       bus,
       log,
     );
@@ -379,7 +433,7 @@ describe("what the api lets a plugin do", () => {
     const log = logger();
     const bus = createPluginBus(log as BusLogger);
     const api = createPluginApi(
-      { id: "a", name: "a", version: "1", main: "i.js", capabilities: ["messages:read"] },
+      { id: "a", name: "a", version: "1", main: "i.js", public: false, capabilities: ["messages:read"] },
       bus,
       log,
     );
@@ -393,7 +447,7 @@ describe("what the api lets a plugin do", () => {
   it("refuses an event this build has never heard of", () => {
     const log = logger();
     const api = createPluginApi(
-      { id: "a", name: "a", version: "1", main: "i.js", capabilities: [...PLUGIN_CAPABILITIES] },
+      { id: "a", name: "a", version: "1", main: "i.js", public: false, capabilities: [...PLUGIN_CAPABILITIES] },
       createPluginBus(log as BusLogger),
       log,
     );
@@ -407,7 +461,7 @@ describe("what the api lets a plugin do", () => {
   it("prefixes the plugin's log lines with its id", () => {
     const log = logger();
     const api = createPluginApi(
-      { id: "automod", name: "a", version: "1", main: "i.js", capabilities: [] },
+      { id: "automod", name: "a", version: "1", main: "i.js", public: false, capabilities: [] },
       createPluginBus(log as BusLogger),
       log,
     );
@@ -426,7 +480,7 @@ describe("what the api lets a plugin do", () => {
   it("refuses moderation to a plugin that did not declare it", () => {
     const log = logger();
     const api = createPluginApi(
-      { id: "a", name: "a", version: "1", main: "i.js", capabilities: ["messages:read"] },
+      { id: "a", name: "a", version: "1", main: "i.js", public: false, capabilities: ["messages:read"] },
       createPluginBus(log as BusLogger),
       log,
     );
@@ -437,7 +491,7 @@ describe("what the api lets a plugin do", () => {
   it("hands it over to a plugin that did", () => {
     const log = logger();
     const api = createPluginApi(
-      { id: "a", name: "a", version: "1", main: "i.js", capabilities: ["moderation"] },
+      { id: "a", name: "a", version: "1", main: "i.js", public: false, capabilities: ["moderation"] },
       createPluginBus(log as BusLogger),
       log,
     );
@@ -449,7 +503,7 @@ describe("what the api lets a plugin do", () => {
   it("says which capability was missing, not just that one was", () => {
     const log = logger();
     const api = createPluginApi(
-      { id: "watcher", name: "a", version: "1", main: "i.js", capabilities: [] },
+      { id: "watcher", name: "a", version: "1", main: "i.js", public: false, capabilities: [] },
       createPluginBus(log as BusLogger),
       log,
     );
@@ -463,7 +517,7 @@ describe("what the api lets a plugin do", () => {
   it("does not let a plugin edit its own capability list", () => {
     const log = logger();
     const api = createPluginApi(
-      { id: "a", name: "a", version: "1", main: "i.js", capabilities: ["members:read"] },
+      { id: "a", name: "a", version: "1", main: "i.js", public: false, capabilities: ["members:read"] },
       createPluginBus(log as BusLogger),
       log,
     );
