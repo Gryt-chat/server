@@ -12,6 +12,7 @@ import { getServerConfig, effectiveModerationState } from "../db";
 import { checkSessionAllowed } from "../moderation/sessionGate";
 import { syncAllClients, verifyClient, broadcastMemberList, countOtherSessions } from "./utils/clients";
 import { stashedVoiceState, type StashedVoiceState, voiceStateOf } from "./utils/voiceStash";
+import { setPluginActionRefs } from "../plugins/actions";
 import { sendInfo, sendServerDetails, setSocketRefs, broadcastChatNew, broadcastCustomEmojisUpdate, broadcastEmojiQueueUpdate, broadcastServerUiUpdate } from "./utils/server";
 import { getServerIdFromEnv } from "../utils/serverId";
 
@@ -312,6 +313,12 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
 
   // Keep module-level refs for REST-triggered broadcasts
   setSocketRefs(io, serverId, clientsInfo);
+
+  // And for plugin moderation, which needs the SFU client as well so a ban
+  // takes somebody out of voice rather than leaving them talking to the room.
+  // Plugins load before the first connection, so their API exists before this
+  // does and every action checks (GRYT-935).
+  setPluginActionRefs({ io, serverId, clientsInfo, sfuClient });
 
   /* A label rather than the address. The resolved address is what tells two
      clients apart, since everything public arrives through one tunnel — but

@@ -8,6 +8,7 @@
  * own source rather than buried in what looks like ordinary use.
  */
 
+import { createModerationActions, type PluginModeration } from "./actions";
 import type { PluginBus, PluginEventHandler, PluginEventName } from "./bus";
 import type { PluginCapability, PluginManifest } from "./manifest";
 
@@ -45,14 +46,27 @@ export interface GrytServerApi {
    * names the line.
    */
   on<E extends PluginEventName>(event: E, handler: PluginEventHandler<E>): void;
+  /**
+   * Kick and ban. Throws on access if the manifest did not declare
+   * `moderation`, rather than handing back an object whose every call refuses
+   * — a plugin should find out it has not been given this when it reaches for
+   * it, not on the first member it tries to act on.
+   *
+   * The calls themselves return an outcome rather than throwing. A refusal
+   * there is an ordinary answer — the member is a moderator, or already gone —
+   * and a plugin should be able to log it and carry on.
+   */
+  readonly moderation: PluginModeration;
   /** Goes to the server log, prefixed with the plugin id. */
   readonly log: PluginLogger;
 }
 
 export class CapabilityError extends Error {
-  constructor(pluginId: string, event: string, capability: string) {
+  constructor(pluginId: string, what: string, capability: string) {
     super(
-      `plugin ${pluginId} subscribed to ${event} without declaring ${capability} in its manifest`,
+      what === capability
+        ? `plugin ${pluginId} reached for ${what} without declaring ${capability} in its manifest`
+        : `plugin ${pluginId} subscribed to ${what} without declaring ${capability} in its manifest`,
     );
     this.name = "CapabilityError";
   }
@@ -64,6 +78,8 @@ export function createPluginApi(
   logger: PluginLogger,
 ): GrytServerApi {
   const capabilities = Object.freeze([...manifest.capabilities]);
+
+  const moderation = createModerationActions(manifest.id);
 
   const prefixed: PluginLogger = {
     info: (m) => logger.info(`[${manifest.id}] ${m}`),
@@ -89,6 +105,13 @@ export function createPluginApi(
         throw new CapabilityError(manifest.id, event, needed);
       }
       bus.subscribe(manifest.id, event, handler);
+    },
+
+    get moderation(): PluginModeration {
+      if (!capabilities.includes("moderation")) {
+        throw new CapabilityError(manifest.id, "moderation", "moderation");
+      }
+      return moderation;
     },
 
     log: prefixed,
