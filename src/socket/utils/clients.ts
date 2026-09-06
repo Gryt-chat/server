@@ -239,6 +239,10 @@ export async function buildMemberList(clientsInfo: Clients) {
         // somebody may have had a good reason to leave behind.
         nicknameChangeCount: user.nickname_change_count,
         nicknameChangedAt: user.nickname_changed_at?.toISOString() ?? null,
+        /* What they say they are doing (GRYT-929). Undefined rather than null
+           when unset and when offline: it lives on the connection, so somebody
+           who is not here is not doing anything as far as this list knows. */
+        activity: onlineClient?.activity,
         isMuted: onlineClient?.isMuted || false,
         isDeafened: onlineClient?.isDeafened || false,
         isServerMuted: onlineClient?.isServerMuted || false,
@@ -289,6 +293,10 @@ export function memberStateHash(members: MemberListEntry[]): string {
       role: m.role,
       isBot: m.isBot,
       status: m.status,
+      // Changes on its own schedule — a track ends and the next begins with
+      // nothing else about the member moving — so without it here the new one
+      // sits unsent until something unrelated happens.
+      activity: m.activity,
       isConnectedToVoice: m.isConnectedToVoice,
       hasJoinedChannel: m.hasJoinedChannel,
       voiceChannelId: m.voiceChannelId,

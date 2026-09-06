@@ -45,6 +45,15 @@ export const PERMISSIONS = [
 
   // ── Self and other members ────────────────────────────────────────
   "change_nickname",
+  /**
+   * Say what you are doing, in your own words (GRYT-929).
+   *
+   * Beside `change_nickname` because it is the same kind of thing: a line about
+   * yourself that everybody on the server reads. An operator who does not want
+   * free text under people's names takes this away and the control disappears
+   * rather than failing when it is used.
+   */
+  "set_activity",
   /** Choose an owl, or clear one. A string the client draws, not a file. */
   "change_avatar",
   /**
@@ -202,6 +211,7 @@ const MEMBER_PERMISSIONS = [
   "share_screen",
   "start_calls",
   "change_nickname",
+  "set_activity",
   "change_avatar",
   "upload_avatar_image",
 ] as const satisfies readonly Permission[];
@@ -303,7 +313,7 @@ export interface PermissionBackfill {
 }
 
 /** Bump this when adding a batch, and give the new entries the new number. */
-export const PERMISSION_SCHEMA_VERSION = 6;
+export const PERMISSION_SCHEMA_VERSION = 7;
 
 export const PERMISSION_BACKFILLS: readonly PermissionBackfill[] = [
   // Had no gate before: anybody admitted to the server could do all four.
@@ -333,6 +343,13 @@ export const PERMISSION_BACKFILLS: readonly PermissionBackfill[] = [
 
   // GRYT-866.
   { version: 6, permission: "upload_avatar_image", grantedWith: "change_avatar" },
+
+  /* GRYT-929. Carved out of `change_nickname` rather than given to everyone:
+     both are a line about yourself that the whole server reads, so a role
+     already trusted with one is the right set to trust with the other. A
+     server that took nicknames away from a role does not get this handed to
+     them by an upgrade. */
+  { version: 7, permission: "set_activity", grantedWith: "change_nickname" },
 ];
 
 /**

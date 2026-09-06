@@ -347,6 +347,33 @@ describe("events that read the socket rather than a token", () => {
     assert.equal(emitted.some((e) => e.event === "members:list"), true);
   });
 
+  it("presence:activity needs set_activity", async () => {
+    const { ctx, emitted, clientsInfo } = makeContext();
+    await socketCaller([], clientsInfo, ctx.clientId);
+    await registerMemberHandlers(ctx)["presence:activity"]({ activity: "listening" });
+    assert.equal(refusals(emitted).some((r) => r.permission === "set_activity"), true);
+    assert.equal(clientsInfo[ctx.clientId].activity, undefined, "the status was set anyway");
+  });
+
+  it("presence:activity takes one from a role that has it", async () => {
+    const { ctx, emitted, clientsInfo } = makeContext();
+    await socketCaller(["set_activity"], clientsInfo, ctx.clientId);
+    await registerMemberHandlers(ctx)["presence:activity"]({ activity: "listening" });
+    assert.equal(refusals(emitted).length, 0);
+    assert.equal(clientsInfo[ctx.clientId].activity, "listening");
+  });
+
+  /* Taking the permission away mid-session must not strand a status somebody
+     can no longer remove — the same reasoning as turning a camera off. */
+  it("clearing a status is never refused", async () => {
+    const { ctx, emitted, clientsInfo } = makeContext();
+    await socketCaller([], clientsInfo, ctx.clientId);
+    clientsInfo[ctx.clientId].activity = "left over";
+    await registerMemberHandlers(ctx)["presence:activity"]({ activity: "" });
+    assert.equal(refusals(emitted).length, 0);
+    assert.equal(clientsInfo[ctx.clientId].activity, undefined);
+  });
+
   it("voice:camera:state needs share_video", async () => {
     const { ctx, emitted, clientsInfo } = makeContext();
     await socketCaller(["join_voice"], clientsInfo, ctx.clientId);
