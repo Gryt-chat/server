@@ -6,6 +6,10 @@ function normalizeChannelType(t: unknown): "text" | "voice" {
   return s === "voice" ? "voice" : "text";
 }
 
+function normalizeChannelLayout(v: unknown): "chat" | "forum" {
+  return String(v || "").toLowerCase() === "forum" ? "forum" : "chat";
+}
+
 function normalizeSidebarKind(v: unknown): ServerSidebarItemKind {
   const s = String(v || "").toLowerCase();
   if (s === "separator") return "separator";
@@ -26,6 +30,8 @@ function rowToChannel(r: Record<string, unknown>): ServerChannelRecord {
     max_bitrate: r.max_bitrate != null ? Number(r.max_bitrate) : null,
     esports_mode: intToBool(r.esports_mode as number),
     text_in_voice: intToBool(r.text_in_voice as number),
+    layout: normalizeChannelLayout(r.layout),
+    automated: intToBool(r.automated as number),
     post_min_rank: r.post_min_rank != null ? Number(r.post_min_rank) : null,
     view_min_rank: r.view_min_rank != null ? Number(r.view_min_rank) : null,
     permission_scope_id: (r.permission_scope_id as string) ?? null,
@@ -57,6 +63,7 @@ export async function listServerChannels(): Promise<ServerChannelRecord[]> {
 export async function upsertServerChannel(channel: {
   channelId: string; name: string; type: "text" | "voice"; position?: number; description?: string | null;
   requirePushToTalk?: boolean; disableRnnoise?: boolean; maxBitrate?: number | null; eSportsMode?: boolean; textInVoice?: boolean;
+  layout?: "chat" | "forum"; automated?: boolean;
 }): Promise<void> {
   const db = getSqliteDb();
   const now = toIso(new Date());
@@ -70,17 +77,27 @@ export async function upsertServerChannel(channel: {
   const maxBr = typeof channel.maxBitrate === "number" ? Math.max(0, Math.min(510_000, channel.maxBitrate)) : null;
   const eMode = channel.eSportsMode ? 1 : 0;
   const tiv = channel.textInVoice ? 1 : 0;
+  // Forum and automated only mean anything for a text channel; a voice channel
+  // is neither, whatever the caller passes.
+  const layout = type === "text" && channel.layout === "forum" ? "forum" : "chat";
+  const automated = type === "text" && channel.automated ? 1 : 0;
 
   db.prepare(
     // permission_scope_id is deliberately absent. It is set by
     // setChannelPermissionScope, which also cleans up an orphaned private
     // scope; letting a general channel update carry it would mean every caller
     // that renames a channel could silently change who can see it.
-    `INSERT INTO channels (channel_id, name, type, position, description, require_push_to_talk, disable_rnnoise, max_bitrate, esports_mode, text_in_voice, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(channel_id) DO UPDATE SET name=?, type=?, position=?, description=?, require_push_to_talk=?, disable_rnnoise=?, max_bitrate=?, esports_mode=?, text_in_voice=?, updated_at=?`
-  ).run(channelId, name, type, position, description, rPtt, dRnn, maxBr, eMode, tiv, now, now,
-    name, type, position, description, rPtt, dRnn, maxBr, eMode, tiv, now);
+    `INSERT INTO channels (channel_id, name, type, position, description, require_push_to_talk, disable_rnnoise, max_bitrate, esports_mode, text_in_voice, layout, automated, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(channel_id) DO UPDATE SET name=?, type=?, position=?, description=?, require_push_to_talk=?, disable_rnnoise=?, max_bitrate=?, esports_mode=?, text_in_voice=?, layout=?, automated=?, updated_at=?`
+  ).run(channelId, name, type, position, description, rPtt, dRnn, maxBr, eMode, tiv, layout, automated, now, now,
+    name, type, position, description, rPtt, dRnn, maxBr, eMode, tiv, layout, automated, now);
+}
+
+export async function getServerChannel(channelId: string): Promise<ServerChannelRecord | null> {
+  const db = getSqliteDb();
+  const row = db.prepare(`SELECT * FROM channels WHERE channel_id = ?`).get(channelId) as Record<string, unknown> | undefined;
+  return row ? rowToChannel(row) : null;
 }
 
 export async function deleteServerChannel(channelId: string): Promise<void> {

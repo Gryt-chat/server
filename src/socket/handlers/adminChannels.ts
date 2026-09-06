@@ -134,6 +134,8 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
             maxBitrate: c.max_bitrate ?? null,
             eSportsMode: c.esports_mode || false,
             textInVoice: c.text_in_voice || false,
+            layout: c.layout,
+            automated: c.automated || false,
             permissionScopeId: c.permission_scope_id ?? null,
           })),
         });
@@ -148,6 +150,7 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
       description?: string | null; position?: number;
       requirePushToTalk?: boolean; disableRnnoise?: boolean; maxBitrate?: number | null;
       eSportsMode?: boolean; textInVoice?: boolean;
+      layout?: "chat" | "forum"; automated?: boolean;
     }) => {
       try {
         const rl = rlCheck("server:channels:upsert", ctx, RL_SETTINGS);
@@ -189,6 +192,8 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
           maxBitrate: payload.maxBitrate,
           eSportsMode: payload.eSportsMode,
           textInVoice: payload.textInVoice,
+          layout: payload.layout,
+          automated: payload.automated,
         });
         if (isNewChannel) {
           try {
@@ -552,7 +557,17 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
         for (const id of payload.order) {
           const ch = byId.get(id);
           if (!ch) continue;
-          await upsertServerChannel({ channelId: ch.channel_id, name: ch.name, type: ch.type, description: ch.description, position: pos });
+          // Reorder writes the full record, not just the new position:
+          // upsertServerChannel sets every column on conflict, so passing only
+          // name/type/description/position would reset the rest to defaults.
+          // That already quietly cleared the voice flags; layout/automated ride
+          // the same fix. GRYT-982.
+          await upsertServerChannel({
+            channelId: ch.channel_id, name: ch.name, type: ch.type, description: ch.description, position: pos,
+            requirePushToTalk: ch.require_push_to_talk, disableRnnoise: ch.disable_rnnoise,
+            maxBitrate: ch.max_bitrate, eSportsMode: ch.esports_mode, textInVoice: ch.text_in_voice,
+            layout: ch.layout, automated: ch.automated,
+          });
           pos += 10;
         }
         insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "channels_reorder", meta: { order: payload.order } }).catch((e) => consola.warn("audit log write failed", e));
