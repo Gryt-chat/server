@@ -290,57 +290,86 @@ describe("starting them", () => {
  * down, and leave somebody with a server that will not boot over a plugin they
  * installed for fun.
  */
-describe("announcing a plugin to members", () => {
-  it("does not, unless the manifest asked", async () => {
+/*
+ * Not optional and not configurable (GRYT-941). A member is the one whose
+ * messages are being read, and knowing what code sits between them and the
+ * people they are talking to is theirs to know. An operator who would rather it
+ * were not seen is the case this exists for.
+ */
+describe("telling members what this server runs", () => {
+  type Announced = { id: string; version: string; capabilities: string[] };
+
+  async function announcements(load: () => Promise<Record<string, unknown>> = async () => ({})) {
+    const log = logger();
+    const announced: Announced[] = [];
+    await startPlugins({
+      dir,
+      bus: createPluginBus(log as BusLogger),
+      logger: log,
+      announce: (p) => void announced.push(p),
+      load,
+    });
+    return announced;
+  }
+
+  it("names every plugin that started", async () => {
+    plugin("presence", manifestFor("presence", { version: "2.1.0" }));
     plugin("quiet", manifestFor("quiet"));
-    const log = logger();
-    const announced: { id: string; version: string }[] = [];
 
-    await startPlugins({
-      dir,
-      bus: createPluginBus(log as BusLogger),
-      logger: log,
-      announce: (p) => void announced.push(p),
-      load: async () => ({}),
-    });
-
-    assert.deepEqual(announced, []);
+    assert.deepEqual(
+      (await announcements()).map((p) => p.id).sort(),
+      ["presence", "quiet"],
+      "a plugin kept itself out of the list",
+    );
   });
 
-  it("does when it did", async () => {
-    plugin("presence", manifestFor("presence", { public: true, version: "2.1.0" }));
-    const log = logger();
-    const announced: { id: string; version: string }[] = [];
+  /*
+   * The id alone is close to useless — "this server runs automod" tells a member
+   * nothing. "…which reads every message you send" is the sentence they can act
+   * on, and acting on it means leaving.
+   */
+  it("says what each one may do", async () => {
+    plugin("automod", manifestFor("automod", { capabilities: ["messages:read", "moderation"] }));
 
-    await startPlugins({
-      dir,
-      bus: createPluginBus(log as BusLogger),
-      logger: log,
-      announce: (p) => void announced.push(p),
-      load: async () => ({}),
+    const [entry] = await announcements();
+    assert.deepEqual(entry, {
+      id: "automod",
+      version: "1.0.0",
+      capabilities: ["messages:read", "moderation"],
     });
-
-    assert.deepEqual(announced, [{ id: "presence", version: "2.1.0" }]);
   });
 
-  /* A plugin that failed to start is not here, so saying it is would send its
-     client half talking to nothing. */
-  it("does not announce one that failed to start", async () => {
-    plugin("broken", manifestFor("broken", { public: true }));
-    const log = logger();
-    const announced: { id: string; version: string }[] = [];
+  it("says so even for a plugin that asked for nothing", async () => {
+    plugin("quiet", manifestFor("quiet"));
 
-    await startPlugins({
-      dir,
-      bus: createPluginBus(log as BusLogger),
-      logger: log,
-      announce: (p) => void announced.push(p),
-      load: async () => {
+    assert.deepEqual(await announcements(), [
+      { id: "quiet", version: "1.0.0", capabilities: [] },
+    ]);
+  });
+
+  /* A plugin that failed to start is not reading anything, and saying it is
+     here would send its client half talking to nothing. */
+  it("does not name one that failed to start", async () => {
+    plugin("broken", manifestFor("broken"));
+
+    assert.deepEqual(
+      await announcements(async () => {
         throw new Error("boom");
-      },
-    });
+      }),
+      [],
+    );
+  });
 
-    assert.deepEqual(announced, []);
+  /* Handed a copy. A plugin list that could be edited by whoever received it
+     would be a safety net with a hole in it. */
+  it("hands out a list nobody else can edit", async () => {
+    plugin("automod", manifestFor("automod", { capabilities: ["moderation"] }));
+
+    const [entry] = await announcements();
+    entry.capabilities.push("messages:read");
+
+    const [again] = await announcements();
+    assert.deepEqual(again.capabilities, ["moderation"]);
   });
 });
 
@@ -420,7 +449,7 @@ describe("what the api lets a plugin do", () => {
     const log = logger();
     const bus = createPluginBus(log as BusLogger);
     const api = createPluginApi(
-      { id: "a", name: "a", version: "1", main: "i.js", public: false, capabilities: ["members:read"] },
+      { id: "a", name: "a", version: "1", main: "i.js", capabilities: ["members:read"] },
       bus,
       log,
     );
@@ -433,7 +462,7 @@ describe("what the api lets a plugin do", () => {
     const log = logger();
     const bus = createPluginBus(log as BusLogger);
     const api = createPluginApi(
-      { id: "a", name: "a", version: "1", main: "i.js", public: false, capabilities: ["messages:read"] },
+      { id: "a", name: "a", version: "1", main: "i.js", capabilities: ["messages:read"] },
       bus,
       log,
     );
@@ -447,7 +476,7 @@ describe("what the api lets a plugin do", () => {
   it("refuses an event this build has never heard of", () => {
     const log = logger();
     const api = createPluginApi(
-      { id: "a", name: "a", version: "1", main: "i.js", public: false, capabilities: [...PLUGIN_CAPABILITIES] },
+      { id: "a", name: "a", version: "1", main: "i.js", capabilities: [...PLUGIN_CAPABILITIES] },
       createPluginBus(log as BusLogger),
       log,
     );
@@ -461,7 +490,7 @@ describe("what the api lets a plugin do", () => {
   it("prefixes the plugin's log lines with its id", () => {
     const log = logger();
     const api = createPluginApi(
-      { id: "automod", name: "a", version: "1", main: "i.js", public: false, capabilities: [] },
+      { id: "automod", name: "a", version: "1", main: "i.js", capabilities: [] },
       createPluginBus(log as BusLogger),
       log,
     );
@@ -480,7 +509,7 @@ describe("what the api lets a plugin do", () => {
   it("refuses moderation to a plugin that did not declare it", () => {
     const log = logger();
     const api = createPluginApi(
-      { id: "a", name: "a", version: "1", main: "i.js", public: false, capabilities: ["messages:read"] },
+      { id: "a", name: "a", version: "1", main: "i.js", capabilities: ["messages:read"] },
       createPluginBus(log as BusLogger),
       log,
     );
@@ -491,7 +520,7 @@ describe("what the api lets a plugin do", () => {
   it("hands it over to a plugin that did", () => {
     const log = logger();
     const api = createPluginApi(
-      { id: "a", name: "a", version: "1", main: "i.js", public: false, capabilities: ["moderation"] },
+      { id: "a", name: "a", version: "1", main: "i.js", capabilities: ["moderation"] },
       createPluginBus(log as BusLogger),
       log,
     );
@@ -503,7 +532,7 @@ describe("what the api lets a plugin do", () => {
   it("says which capability was missing, not just that one was", () => {
     const log = logger();
     const api = createPluginApi(
-      { id: "watcher", name: "a", version: "1", main: "i.js", public: false, capabilities: [] },
+      { id: "watcher", name: "a", version: "1", main: "i.js", capabilities: [] },
       createPluginBus(log as BusLogger),
       log,
     );
@@ -517,7 +546,7 @@ describe("what the api lets a plugin do", () => {
   it("does not let a plugin edit its own capability list", () => {
     const log = logger();
     const api = createPluginApi(
-      { id: "a", name: "a", version: "1", main: "i.js", public: false, capabilities: ["members:read"] },
+      { id: "a", name: "a", version: "1", main: "i.js", capabilities: ["members:read"] },
       createPluginBus(log as BusLogger),
       log,
     );

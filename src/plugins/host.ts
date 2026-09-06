@@ -151,10 +151,11 @@ const importPlugin: (path: string) => Promise<Record<string, unknown>> = new Fun
 interface StartOptions {
   dir: string;
   /**
-   * Called for each plugin whose manifest asks to be announced. Injected rather
-   * than imported so the loader has no opinion about where that list lives.
+   * Called for each plugin that started, so members can be told what this
+   * server runs (GRYT-941). Injected rather than imported so the loader has no
+   * opinion about where that list lives.
    */
-  announce?: (plugin: { id: string; version: string }) => void;
+  announce?: (plugin: { id: string; version: string; capabilities: string[] }) => void;
   bus: PluginBus;
   /** Optional so a test can start plugins without one. The server passes one. */
   messageBus?: PluginMessageBus;
@@ -199,13 +200,27 @@ export async function startPlugins({
       }
 
       started.push(manifest.id);
-      if (manifest.public) announce({ id: manifest.id, version: manifest.version });
+      /*
+       * Every plugin that started, with what it may do. Not optional and not
+       * configurable (GRYT-941): a member is the one whose messages are being
+       * read, and knowing what code sits between them and the people they are
+       * talking to is theirs to know. An operator who would rather it were not
+       * seen is the case this exists for.
+       *
+       * After the load, so a plugin that failed to start is not announced —
+       * saying it is here would send its client half talking to nothing, and
+       * would tell a member about something that is not reading anything.
+       */
+      announce({
+        id: manifest.id,
+        version: manifest.version,
+        capabilities: [...manifest.capabilities],
+      });
       logger.info(
         `plugin ${manifest.id} ${manifest.version} started` +
           (manifest.capabilities.length
             ? ` (${manifest.capabilities.join(", ")})`
-            : " (no capabilities declared)") +
-          (manifest.public ? ", announced to members" : ""),
+            : " (no capabilities declared)"),
       );
     } catch (err) {
       /*

@@ -63,40 +63,6 @@ describe("an ordinary manifest", () => {
   });
 });
 
-/*
- * Off unless a manifest asks, and that default is a promise the docs make:
- * nobody joining a server can see what the operator runs. A plugin with a
- * client half has to break that promise about itself, so it asks — and the
- * operator can read the ask before enabling it.
- */
-describe("whether members are told a plugin is here", () => {
-  it("is no unless the manifest says otherwise", () => {
-    const result = readManifest(valid);
-    assert.ok(result.ok);
-    assert.equal(result.manifest.public, false);
-  });
-
-  it("is yes for a literal true", () => {
-    const result = readManifest({ ...valid, public: true });
-    assert.ok(result.ok);
-    assert.equal(result.manifest.public, true);
-  });
-
-  /* Only a literal true. A truthy string in somebody's hand-written JSON should
-     not be the thing that announces their plugin to every member. */
-  for (const truthy of ["true", "yes", 1, {}, [], "public"]) {
-    it(`is no for ${JSON.stringify(truthy)}, which is not true`, () => {
-      const result = readManifest({ ...valid, public: truthy });
-      assert.ok(result.ok);
-      assert.equal(result.manifest.public, false, `${JSON.stringify(truthy)} announced a plugin`);
-    });
-  }
-
-  it("does not stop a manifest loading either way", () => {
-    assert.equal(readManifest({ ...valid, public: "nonsense" }).ok, true);
-  });
-});
-
 describe("a manifest that is not one", () => {
   for (const junk of [null, undefined, 42, "automod", [], [valid]]) {
     it(`is refused for ${JSON.stringify(junk) ?? "undefined"}`, () => {

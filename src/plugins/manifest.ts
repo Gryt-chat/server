@@ -72,22 +72,6 @@ export interface PluginManifest {
   author?: string;
   /** Normalised: deduplicated, in catalogue order, unknown names dropped. */
   capabilities: PluginCapability[];
-  /**
-   * Whether members are told this plugin is here (GRYT-939).
-   *
-   * Off unless the manifest says otherwise, and that default is a promise the
-   * docs make: nobody joining a server can see what the operator runs. A server
-   * plugin is one person modding everybody's experience, and a list of them is
-   * a list of what is reading the messages.
-   *
-   * A plugin with a client half has to break that promise about itself, or
-   * every copy of it starts by sending into a server that may not be listening.
-   * So the plugin asks, in its own manifest, and the operator can read the ask
-   * before enabling it. Only the id and the version go out — never the
-   * capabilities, which would tell every member what the plugin is allowed to
-   * do to them without telling them anything they can act on.
-   */
-  public: boolean;
 }
 
 export type ManifestResult =
@@ -202,9 +186,6 @@ export function readManifest(raw: unknown): ManifestResult {
       description: str(source, "description") ?? undefined,
       author: str(source, "author") ?? undefined,
       capabilities: declaredCapabilities(source.capabilities),
-      /* Only a literal `true`. A truthy string in somebody's hand-written JSON
-         should not be the thing that announces their plugin to every member. */
-      public: source.public === true,
     },
   };
 }

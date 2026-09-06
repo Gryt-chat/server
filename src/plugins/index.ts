@@ -58,24 +58,31 @@ export function pluginEvents(): PluginBus {
 }
 
 /*
- * The plugins members are told about (GRYT-939).
+ * Every plugin this server is running (GRYT-939, GRYT-941).
  *
- * Empty unless a manifest asked. Written once at startup and read on every
- * join, so it is a plain array rather than anything that has to be kept in
- * step — plugins do not load or unload while the server is running.
+ * Written once at startup and read on every join, so a plain array rather than
+ * anything that has to be kept in step — plugins do not load or unload while
+ * the server is running.
  */
-const announced: { id: string; version: string }[] = [];
+const announced: { id: string; version: string; capabilities: string[] }[] = [];
 
 /**
- * What goes out with the server details, for a client plugin deciding whether
- * its other half is here.
+ * What goes out with the server details.
  *
- * The id and the version, and nothing else. The capabilities would tell every
- * member what a plugin is allowed to do to them without telling them anything
- * they can act on, and the operator agreeing to a plugin is not the same as
- * publishing what they agreed to.
+ * **The capabilities go with it, and that is the point.** "This server runs
+ * automod" tells a member nothing they can act on. "This server runs automod,
+ * which reads every message you send" is the sentence that lets them decide
+ * whether to stay — and deciding whether to stay is the thing a member can
+ * always do.
+ *
+ * A client plugin also uses this to find its other half, which is where it
+ * started (GRYT-939). That turned out to be the smaller of the two reasons.
  */
-export function announcedPlugins(): readonly { id: string; version: string }[] {
+export function announcedPlugins(): readonly {
+  id: string;
+  version: string;
+  capabilities: string[];
+}[] {
   return announced;
 }
 
