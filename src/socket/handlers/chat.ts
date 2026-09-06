@@ -50,6 +50,7 @@ import { MESSAGE_MAX_LENGTH, MESSAGE_TOO_LONG, SEALED_MAX_LENGTH } from "../../u
 import { applyAutoRoles } from "../../services/autoRoles";
 import { findMentions, type MentionableMember } from "../../services/mentions";
 import { mayInChannel } from "../../services/channelPermissions";
+import { pluginEvents } from "../../plugins";
 import { broadcastServerUiUpdate } from "../utils/server";
 import { directConversationViews } from "./dm";
 import {
@@ -611,6 +612,30 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         // this, sent to the same audience that got the message. GRYT-981.
         if (threadUpdate) {
           recipients.forEach((cid) => io.sockets.sockets.get(cid)?.emit("thread:updated", threadUpdate));
+        }
+
+        /*
+         * Plugins hear about it (GRYT-933). After delivery for the same reason
+         * as mentions below: nothing a plugin does may stop a message arriving,
+         * and `emit` neither throws nor waits.
+         *
+         * Two kinds of message are not offered at all rather than offered
+         * empty. A direct message is between two people and a plugin installed
+         * by the operator has no business in it. A sealed message is ciphertext
+         * — there is no plaintext copy on this server, which is the point of it
+         * — so an event carrying `text: ""` would read as somebody sending
+         * nothing rather than as something unreadable.
+         */
+        if (access.kind !== "dm" && !sealed) {
+          pluginEvents().emit("message:created", {
+            messageId: created.message_id,
+            channelId: created.conversation_id,
+            userId: created.sender_server_id,
+            nickname: user.nickname ?? null,
+            text: created.text ?? "",
+            attachmentCount: created.attachments?.length ?? 0,
+            at: created.created_at.toISOString(),
+          });
         }
 
         /*

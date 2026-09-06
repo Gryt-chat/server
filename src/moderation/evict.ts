@@ -2,6 +2,7 @@ import consola from "consola";
 import type { Server as SocketIoServer } from "socket.io";
 
 import { getUserByServerId, setUserInactive, revokeUserRefreshTokens } from "../db";
+import { pluginEvents } from "../plugins";
 import type { Clients } from "../types";
 import { sfuRoomId, voiceRoomName } from "../socket/utils/voiceRooms";
 import { forgetStashedVoiceState } from "../socket/utils/voiceStash";
@@ -52,6 +53,19 @@ export async function evictUser(params: {
 
   await setUserInactive(targetServerUserId);
   await revokeUserRefreshTokens(targetGrytUserId);
+
+  // Plugins hear about it (GRYT-933), carrying which of the two this was — a
+  // plugin deciding whether to act wants to know a human already has.
+  // The row is read rather than the connection, so the name is there whether or
+  // not they were online when it happened. Swallowed: a plugin's event is not
+  // worth failing a ban over.
+  const evicted = await getUserByServerId(targetServerUserId).catch(() => null);
+  pluginEvents().emit("member:left", {
+    userId: targetServerUserId,
+    nickname: evicted?.nickname ?? null,
+    reason: action === "ban" ? "banned" : "kicked",
+    at: new Date().toISOString(),
+  });
 
   const fallback =
     action === "ban"
