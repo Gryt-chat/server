@@ -587,7 +587,7 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
       try {
         const auth = await requireAuth(socket, payload);
         if (!auth) return;
-        await ensureDefaultSidebarItems();
+        if (await ensureDefaultSidebarItems()) resetChannelPermissionCache();
         const items = await listServerSidebarItems();
         socket.emit("server:sidebar", {
           serverId,
