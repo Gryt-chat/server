@@ -79,8 +79,13 @@ async function refreshChannelIds(): Promise<Set<string>> {
 /**
  * Whether a channel by this id exists. Cached, and on a miss it reads again
  * before answering no, or a just-created channel is refused to its own maker.
+ *
+ * Exported since GRYT-936: a plugin deleting a message has to establish that
+ * the conversation is a channel and not a direct message, and it should be
+ * asking the same cached question the access resolver asks rather than a second
+ * one of its own.
  */
-async function channelExists(channelId: string): Promise<boolean> {
+export async function channelExists(channelId: string): Promise<boolean> {
   const now = Date.now();
   if (!channelIdCache || now - channelIdCache.fetchedAt > CHANNEL_CACHE_TTL_MS) {
     return (await refreshChannelIds()).has(channelId);

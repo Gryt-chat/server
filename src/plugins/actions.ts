@@ -27,7 +27,9 @@
 import consola from "consola";
 import type { Server } from "socket.io";
 
-import { banUser, getUserByServerId, insertServerAudit } from "../db";
+import { banUser, getMessageById, getUserByServerId, insertServerAudit } from "../db";
+import { channelExists } from "../socket/utils/conversationAccess";
+import { deleteMessageEverywhere } from "../moderation/deleteMessage";
 import { evictUser } from "../moderation/evict";
 import { getEffectiveStanding } from "../services/permissions";
 import type { SFUClient } from "../sfu/client";
@@ -115,6 +117,17 @@ export interface PluginModeration {
     serverUserId: string,
     options?: { reason?: string; durationMs?: number },
   ): Promise<ModerationOutcome>;
+  /**
+   * Take a message down. Usually the more proportionate answer — most spam
+   * wants the post gone rather than the person.
+   *
+   * Channels only. A direct message is between two people and a plugin the
+   * operator installed has no business in it, the same rule that keeps DMs out
+   * of `message:created`.
+   *
+   * @param channelId The `channelId` carried on `message:created`.
+   */
+  deleteMessage(channelId: string, messageId: string): Promise<ModerationOutcome>;
 }
 
 async function act(
@@ -204,9 +217,85 @@ async function act(
   return { ok: true };
 }
 
+async function remove(
+  pluginId: string,
+  channelId: string,
+  messageId: string,
+): Promise<ModerationOutcome> {
+  if (!refs) {
+    return { ok: false, reason: "the server is not accepting connections yet" };
+  }
+  if (typeof channelId !== "string" || typeof messageId !== "string" || !channelId.trim() || !messageId.trim()) {
+    return { ok: false, reason: "a channel id and a message id are both needed" };
+  }
+
+  const rl = checkRateLimit("plugin:moderation", pluginId, undefined, PLUGIN_ACTION_RULE);
+  if (!rl.allowed) {
+    consola.warn(
+      `plugin ${pluginId} hit its moderation limit and its delete was refused; ` +
+        `${PLUGIN_ACTION_RULE.limit} actions a minute is a ceiling on a loop, not a quota to raise`,
+    );
+    return { ok: false, reason: "too many moderation actions from this plugin" };
+  }
+
+  /*
+   * Channels only, established by asking whether this is one rather than by
+   * asking whether it is a DM. A conversation id that is neither is refused for
+   * the same reason: `deleteMessageEverywhere` is told this is a channel, and
+   * it decides who to notify from that.
+   */
+  if (!(await channelExists(channelId.trim()))) {
+    return { ok: false, reason: "no channel with that id — plugins cannot touch direct messages" };
+  }
+
+  const message = await getMessageById(channelId.trim(), messageId.trim());
+  if (!message) {
+    return { ok: false, reason: "no message with that id in that channel" };
+  }
+
+  /*
+   * The same reach rule as kicking, applied to whoever wrote it. Deleting a
+   * moderator's message is acting on a moderator — quieter than banning them
+   * and the same kind of thing, and a plugin that could do it could delete
+   * every message a moderator posted about the plugin.
+   */
+  const author = await getUserByServerId(message.sender_server_id);
+  if (author) {
+    const reach = pluginMayActOn(await getEffectiveStanding(author.server_user_id, author.gryt_user_id));
+    if (!reach.allowed) {
+      return { ok: false, reason: reach.reason };
+    }
+  }
+
+  const deleted = await deleteMessageEverywhere({
+    io: refs.io,
+    clientsInfo: refs.clientsInfo,
+    sfuClient: refs.sfuClient,
+    conversationId: channelId.trim(),
+    messageId: messageId.trim(),
+    message,
+    access: { allowed: true, kind: "channel" },
+  });
+
+  if (!deleted) {
+    return { ok: false, reason: "the message was already gone" };
+  }
+
+  await insertServerAudit({
+    actorServerUserId: pluginActorId(pluginId),
+    action: "plugin:message:delete",
+    target: channelId.trim(),
+    meta: { plugin: pluginId, messageId: messageId.trim(), author: message.sender_server_id },
+  }).catch((e) => consola.warn("audit log write failed", e));
+
+  consola.info(`plugin ${pluginId} deleted message ${messageId.trim()} in ${channelId.trim()}`);
+  return { ok: true };
+}
+
 export function createModerationActions(pluginId: string): PluginModeration {
   return {
     kick: (serverUserId, options = {}) => act(pluginId, "kick", serverUserId, options),
     ban: (serverUserId, options = {}) => act(pluginId, "ban", serverUserId, options),
+    deleteMessage: (channelId, messageId) => remove(pluginId, channelId, messageId),
   };
 }

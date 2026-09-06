@@ -14,7 +14,11 @@ import {
   setServerOwner,
   setServerRole,
 } from "../db/sqlite/servers";
+import { upsertServerChannel } from "../db/sqlite/channels";
+import { getMessageById, insertMessage } from "../db/sqlite/messages";
 import { getUserByServerId, setUserInactive, upsertUser } from "../db/sqlite/users";
+import { resetChannelIdCache } from "../socket/utils/conversationAccess";
+import { getMessagesCached, resetMessageCache } from "../socket/utils/messageCache";
 import { resetRateLimits } from "../utils/rateLimiter";
 import type { Clients } from "../types";
 import {
@@ -82,10 +86,33 @@ after(() => rmSync(dir, { recursive: true, force: true }));
 
 beforeEach(() => {
   resetRateLimits();
+  resetMessageCache();
   setPluginActionRefs(refs());
 });
 
 let seq = 0;
+
+async function channel(): Promise<string> {
+  seq += 1;
+  const channelId = `channel-${seq}`;
+  await upsertServerChannel({ channelId, name: `Channel ${seq}`, type: "text" });
+  resetChannelIdCache();
+  return channelId;
+}
+
+async function post(channelId: string, senderServerUserId: string, text: string) {
+  return insertMessage({
+    conversation_id: channelId,
+    sender_server_id: senderServerUserId,
+    text,
+    sealed: null,
+    attachments: null,
+    reactions: null,
+    reply_to_message_id: null,
+    thread_id: null,
+  });
+}
+
 async function member(role = "regular") {
   seq += 1;
   const user = await upsertUser(`account-member-${seq}`, `Member ${seq}`);
@@ -322,5 +349,148 @@ describe("before the socket layer is up", () => {
 
     assert.equal(result.ok, false);
     assert.equal((await getUserByServerId(target.server_user_id))?.is_active, true);
+  });
+});
+
+/*
+ * Taking the post down rather than the person, which is the more common thing
+ * an automod wants. GRYT-936 pulled the delete out of chat.ts so this and
+ * `chat:delete` are the same delete — the attachment cleanup and the cache drop
+ * included, which is the half that would have gone quietly missing in a second
+ * copy.
+ */
+describe("deleting a message", () => {
+  it("takes it out of the database", async () => {
+    const c = await channel();
+    const author = await member();
+    const msg = await post(c, author.server_user_id, "buy my coins");
+
+    const result = await createModerationActions("automod").deleteMessage(c, msg.message_id);
+
+    assert.deepEqual(result, { ok: true });
+    assert.equal(await getMessageById(c, msg.message_id), null);
+  });
+
+  /* The half a second copy of this would have forgotten. A delete that updates
+     the row and not the cache leaves the message on the next person's first
+     page, which reads as a delete that did not work. */
+  it("takes it out of the cache as well", async () => {
+    const c = await channel();
+    const author = await member();
+    const msg = await post(c, author.server_user_id, "buy my coins");
+    await post(c, author.server_user_id, "something else");
+    await getMessagesCached(c);
+
+    await createModerationActions("automod").deleteMessage(c, msg.message_id);
+
+    assert.deepEqual(
+      (await getMessagesCached(c)).map((m) => m.text),
+      ["something else"],
+      "the deleted message was still on the cached first page",
+    );
+  });
+
+  it("records who did it, and which message", async () => {
+    const c = await channel();
+    const author = await member();
+    const msg = await post(c, author.server_user_id, "buy my coins");
+
+    await createModerationActions("automod").deleteMessage(c, msg.message_id);
+
+    const [entry] = await listServerAudit(1);
+    assert.equal(entry.action, "plugin:message:delete");
+    assert.equal(entry.actor_server_user_id, "plugin:automod");
+    assert.equal(entry.target, c);
+    assert.deepEqual(JSON.parse(entry.meta_json ?? "{}"), {
+      plugin: "automod",
+      messageId: msg.message_id,
+      author: author.server_user_id,
+    });
+  });
+
+  it("refuses a message that is not there", async () => {
+    const c = await channel();
+    const result = await createModerationActions("automod").deleteMessage(c, "never-existed");
+
+    assert.equal(result.ok, false);
+    assert.match(result.ok === false ? result.reason : "", /no message/);
+  });
+
+  /*
+   * A direct message is between two people and a plugin the operator installed
+   * has no business in it — the same rule that keeps DMs out of
+   * `message:created`. Checked by asking whether the id is a channel rather
+   * than whether it is a DM, so an id that is neither is refused too.
+   */
+  it("refuses anything that is not a channel", async () => {
+    const author = await member();
+    const msg = await post("conversation-not-a-channel", author.server_user_id, "private");
+
+    const result = await createModerationActions("automod")
+      .deleteMessage("conversation-not-a-channel", msg.message_id);
+
+    assert.equal(result.ok, false);
+    assert.match(result.ok === false ? result.reason : "", /direct messages/);
+    assert.ok(await getMessageById("conversation-not-a-channel", msg.message_id));
+  });
+
+  /* Quieter than banning them and the same kind of thing. A plugin that could
+     do this could delete every message a moderator posted about the plugin. */
+  it("refuses to delete a moderator's message", async () => {
+    const c = await channel();
+    const mod = await member("moderator");
+    const msg = await post(c, mod.server_user_id, "I am watching this plugin");
+
+    const result = await createModerationActions("automod").deleteMessage(c, msg.message_id);
+
+    assert.equal(result.ok, false);
+    assert.match(result.ok === false ? result.reason : "", /moderator/);
+    assert.ok(await getMessageById(c, msg.message_id));
+  });
+
+  it("still deletes a message whose author has since left", async () => {
+    const c = await channel();
+    const author = await member();
+    const msg = await post(c, author.server_user_id, "spam, then gone");
+    await setUserInactive(author.server_user_id);
+
+    const result = await createModerationActions("automod").deleteMessage(c, msg.message_id);
+
+    assert.deepEqual(result, { ok: true }, "a spammer leaving should not strand their spam");
+  });
+
+  for (const [channelId, messageId] of [["", "m"], ["c", ""], ["  ", "m"]]) {
+    it(`refuses ${JSON.stringify([channelId, messageId])}`, async () => {
+      const result = await createModerationActions("automod").deleteMessage(channelId, messageId);
+      assert.equal(result.ok, false);
+    });
+  }
+
+  it("counts against the same ceiling as kicking", async () => {
+    const c = await channel();
+    const author = await member();
+    const actions = createModerationActions("busy");
+
+    for (let i = 0; i < PLUGIN_ACTION_RULE.limit; i++) {
+      await actions.kick((await member()).server_user_id);
+    }
+
+    const msg = await post(c, author.server_user_id, "one too many");
+    const result = await actions.deleteMessage(c, msg.message_id);
+
+    assert.equal(result.ok, false);
+    assert.match(result.ok === false ? result.reason : "", /too many/);
+  });
+
+  it("refuses before the socket layer is up", async () => {
+    clearPluginActionRefs();
+    const c = await channel();
+    const author = await member();
+    const msg = await post(c, author.server_user_id, "early");
+
+    const result = await createModerationActions("early").deleteMessage(c, msg.message_id);
+
+    assert.equal(result.ok, false);
+    assert.ok(await getMessageById(c, msg.message_id));
   });
 });
