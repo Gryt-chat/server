@@ -61,6 +61,13 @@ export interface DeleteMessageParams {
    */
   message: MessageRecord;
   access: AllowedConversationAccess;
+  /**
+   * Injectable so a test can watch it happen. Not for production use — the
+   * default is the only caller — but this is the step most likely to be lost
+   * in a refactor and the least likely to be noticed when it is, so it is
+   * worth being able to assert.
+   */
+  cleanUpAttachments?: (fileIds: string[]) => Promise<unknown>;
 }
 
 /**
@@ -76,13 +83,14 @@ export async function deleteMessageEverywhere({
   messageId,
   message,
   access,
+  cleanUpAttachments = deleteUnreferencedFiles,
 }: DeleteMessageParams): Promise<boolean> {
   const deleted = await deleteMessage(conversationId, messageId);
   if (!deleted) return false;
 
   const attachmentIds = Array.isArray(message.attachments) ? message.attachments : [];
   if (attachmentIds.length > 0) {
-    void deleteUnreferencedFiles(attachmentIds).catch((e) =>
+    void cleanUpAttachments(attachmentIds).catch((e) =>
       consola.warn("attachment cleanup after delete failed", e),
     );
   }

@@ -45,12 +45,18 @@ export function sweepMessageCache(now = Date.now()): void {
   }
 }
 
-/** The first page, from memory when it is fresh enough and the database when not. */
+/**
+ * The first page, from memory when it is fresh enough and the database when not.
+ *
+ * `now` is injectable for the same reason `sweepMessageCache` takes one: the
+ * only interesting thing about a cache is what it does at the boundary, and a
+ * test that cannot move time can only ever assert the fresh half.
+ */
 export async function getMessagesCached(
   conversationId: string,
   limit = 50,
+  now = Date.now(),
 ): Promise<MessageRecord[]> {
-  const now = Date.now();
   const cached = cache.get(conversationId);
   if (cached && now - cached.fetchedAt < TTL_MS) return cached.items.slice(-limit);
 

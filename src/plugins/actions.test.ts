@@ -459,10 +459,21 @@ describe("deleting a message", () => {
     assert.deepEqual(result, { ok: true }, "a spammer leaving should not strand their spam");
   });
 
-  for (const [channelId, messageId] of [["", "m"], ["c", ""], ["  ", "m"]]) {
-    it(`refuses ${JSON.stringify([channelId, messageId])}`, async () => {
+  /*
+   * Refused up front, and the reason says which argument was wrong. Everything
+   * below would refuse these anyway — an empty channel id is not a channel, an
+   * empty message id is not a message — so what this actually holds is the
+   * message. "no channel with that id" for somebody who passed an empty string
+   * sends them looking for a channel that was never the problem.
+   */
+  for (const [channelId, messageId] of [["", "m"], ["c", ""], ["  ", "m"], ["c", "  "]]) {
+    it(`refuses ${JSON.stringify([channelId, messageId])}, saying which`, async () => {
       const result = await createModerationActions("automod").deleteMessage(channelId, messageId);
       assert.equal(result.ok, false);
+      assert.match(
+        result.ok === false ? result.reason : "",
+        /a channel id and a message id are both needed/,
+      );
     });
   }
 

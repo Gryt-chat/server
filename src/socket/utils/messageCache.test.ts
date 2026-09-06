@@ -212,6 +212,33 @@ describe("a message that is gone", () => {
   });
 });
 
+/*
+ * The only interesting thing about a cache is what it does at the boundary. The
+ * fresh half is covered above; this is the other one, and without it "always
+ * serve from memory" passes every test in this file.
+ */
+describe("an entry that has gone stale", () => {
+  it("is re-read rather than served", async () => {
+    const c = conversation();
+    await message(c, "one");
+    await getMessagesCached(c);
+    await message(c, "written behind its back");
+
+    const later = Date.now() + 10 * 60 * 1000;
+
+    assert.equal((await getMessagesCached(c, 50, later)).length, 2);
+  });
+
+  it("is still served while it is fresh", async () => {
+    const c = conversation();
+    await message(c, "one");
+    await getMessagesCached(c);
+    await message(c, "written behind its back");
+
+    assert.equal((await getMessagesCached(c, 50, Date.now())).length, 1);
+  });
+});
+
 describe("sweeping", () => {
   it("leaves a fresh entry alone", async () => {
     const c = conversation();
