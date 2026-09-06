@@ -236,6 +236,7 @@ function createSchema(d: DatabaseSync): void {
       -- whether only bots/webhooks/system may post. GRYT-981 / GRYT-982.
       layout TEXT NOT NULL DEFAULT 'chat',
       automated INTEGER NOT NULL DEFAULT 0,
+      forum_tags TEXT,
       -- Both of these are migrated into channel_permission_scopes on upgrade
       -- and nothing reads them afterwards. They stay so that a server rolled
       -- back to an older build still enforces the gate it had, which a dropped
@@ -343,7 +344,8 @@ function createSchema(d: DatabaseSync): void {
       reply_count INTEGER NOT NULL DEFAULT 0,
       locked INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
-      last_message_at TEXT NOT NULL
+      last_message_at TEXT NOT NULL,
+      tags TEXT
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_threads_root ON threads(root_message_id);
     CREATE INDEX IF NOT EXISTS idx_threads_conv ON threads(conversation_id, last_message_at);
@@ -837,6 +839,15 @@ function runMigrations(d: DatabaseSync): void {
   }
   if (!hasColumn(d, "channels", "automated")) {
     d.exec("ALTER TABLE channels ADD COLUMN automated INTEGER NOT NULL DEFAULT 0");
+  }
+
+  // A forum channel's tag palette, and the tag ids a topic carries. Both JSON,
+  // additive, defaulting to none. GRYT-981 Stage 3.
+  if (!hasColumn(d, "channels", "forum_tags")) {
+    d.exec("ALTER TABLE channels ADD COLUMN forum_tags TEXT");
+  }
+  if (!hasColumn(d, "threads", "tags")) {
+    d.exec("ALTER TABLE threads ADD COLUMN tags TEXT");
   }
 
   d.prepare("UPDATE server_config SET avatar_thumb_px = ?").run(AVATAR_THUMB_PX);
