@@ -38,6 +38,10 @@ import {
   decrementThreadReply,
   deleteThread,
   listThreadMessages,
+  listThreadsByConversation,
+  countThreadParticipants,
+  setThreadStatus,
+  setThreadTags,
 } from "../../db";
 import { processProfanity, type CensorStyle, type ProfanityMode } from "../../utils/profanityFilter";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
@@ -909,6 +913,247 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
       } catch (err) {
         consola.error("thread:fetch failed", err);
         socket.emit("thread:error", "Failed to fetch thread");
+      }
+    },
+
+    // Mark a topic open / solved / closed. The author or a moderator may.
+    // 'solved' keeps it repliable; 'closed' stops new replies (chat:send checks
+    // the status). GRYT-981 Stage 3.
+    'thread:status:set': async (payload: { conversationId: string; threadId: string; status: string; accessToken: string }) => {
+      try {
+        const ip = getClientIp();
+        const userId = clientsInfo[clientId]?.serverUserId;
+        const rl = checkRateLimit("chat:edit", userId, ip, RL_EDIT);
+        if (!rl.allowed) {
+          socket.emit("thread:error", { error: "rate_limited", retryAfterMs: rl.retryAfterMs, message: `Too fast. Wait ${Math.ceil((rl.retryAfterMs || 0) / 1000)}s.` });
+          return;
+        }
+        if (!payload || typeof payload.conversationId !== "string" || typeof payload.threadId !== "string" || typeof payload.accessToken !== "string") {
+          socket.emit("thread:error", "Invalid payload");
+          return;
+        }
+        const status = payload.status;
+        if (status !== "open" && status !== "solved" && status !== "closed") {
+          socket.emit("thread:error", { error: "bad_status", message: "A topic is open, solved or closed." });
+          return;
+        }
+        const auth = await requireAuth(socket, payload, { permission: "send_messages" });
+        if (!auth) return;
+        const access = await requireConversationAccess(payload.conversationId, auth.tokenPayload.serverUserId);
+        if (!access) return;
+        const thread = await getThread(payload.threadId);
+        if (!thread || thread.conversation_id !== payload.conversationId) {
+          socket.emit("thread:error", { error: "thread_not_found", message: "That thread no longer exists." });
+          return;
+        }
+        // The author can settle their own topic; everyone else needs the
+        // moderator permission.
+        const isAuthor = thread.created_by === auth.tokenPayload.serverUserId;
+        if (!isAuthor && !auth.permissions.has("manage_messages")) {
+          socket.emit("thread:error", { error: "forbidden", message: "Only the topic's author or a moderator can change this.", permission: "manage_messages" });
+          return;
+        }
+        const updated = await setThreadStatus(payload.threadId, status);
+        if (!updated) { socket.emit("thread:error", "Failed to update the topic."); return; }
+        const upd = {
+          conversation_id: updated.conversation_id,
+          thread_id: updated.thread_id,
+          root_message_id: updated.root_message_id,
+          reply_count: updated.reply_count,
+          last_message_at: updated.last_message_at.toISOString(),
+          status: updated.status,
+        };
+        recipientClientIds(payload.conversationId, access).forEach((cid) =>
+          io.sockets.sockets.get(cid)?.emit("thread:updated", upd),
+        );
+      } catch (err) {
+        consola.error("thread:status:set failed", err);
+        socket.emit("thread:error", "Failed to update the topic.");
+      }
+    },
+
+    // Change a topic's tags. The author or a moderator may; unknown tag ids are
+    // dropped against the channel's palette. GRYT-981 Stage 3.
+    'thread:tags:set': async (payload: { conversationId: string; threadId: string; tagIds: string[]; accessToken: string }) => {
+      try {
+        const ip = getClientIp();
+        const userId = clientsInfo[clientId]?.serverUserId;
+        const rl = checkRateLimit("chat:edit", userId, ip, RL_EDIT);
+        if (!rl.allowed) {
+          socket.emit("thread:error", { error: "rate_limited", retryAfterMs: rl.retryAfterMs, message: `Too fast. Wait ${Math.ceil((rl.retryAfterMs || 0) / 1000)}s.` });
+          return;
+        }
+        if (!payload || typeof payload.conversationId !== "string" || typeof payload.threadId !== "string" || !Array.isArray(payload.tagIds) || typeof payload.accessToken !== "string") {
+          socket.emit("thread:error", "Invalid payload");
+          return;
+        }
+        const auth = await requireAuth(socket, payload, { permission: "send_messages" });
+        if (!auth) return;
+        const access = await requireConversationAccess(payload.conversationId, auth.tokenPayload.serverUserId);
+        if (!access) return;
+        const thread = await getThread(payload.threadId);
+        if (!thread || thread.conversation_id !== payload.conversationId) {
+          socket.emit("thread:error", { error: "thread_not_found", message: "That thread no longer exists." });
+          return;
+        }
+        const isAuthor = thread.created_by === auth.tokenPayload.serverUserId;
+        if (!isAuthor && !auth.permissions.has("manage_messages")) {
+          socket.emit("thread:error", { error: "forbidden", message: "Only the topic's author or a moderator can change this.", permission: "manage_messages" });
+          return;
+        }
+        const channel = await getServerChannel(payload.conversationId);
+        const validTagIds = new Set((channel?.forum_tags ?? []).map((t) => t.id));
+        const tags = payload.tagIds.filter((id) => typeof id === "string" && validTagIds.has(id)).slice(0, 20);
+        const updated = await setThreadTags(payload.threadId, tags);
+        if (!updated) { socket.emit("thread:error", "Failed to update the topic."); return; }
+        const upd = {
+          conversation_id: updated.conversation_id,
+          thread_id: updated.thread_id,
+          root_message_id: updated.root_message_id,
+          reply_count: updated.reply_count,
+          last_message_at: updated.last_message_at.toISOString(),
+          status: updated.status,
+          tags: updated.tags,
+        };
+        recipientClientIds(payload.conversationId, access).forEach((cid) =>
+          io.sockets.sockets.get(cid)?.emit("thread:updated", upd),
+        );
+      } catch (err) {
+        consola.error("thread:tags:set failed", err);
+        socket.emit("thread:error", "Failed to update the topic.");
+      }
+    },
+
+    // The topic index of a forum channel: every thread as a summary row, with
+    // its root preview, author and participant count. Token-less like
+    // chat:fetch. GRYT-981 Stage 2.
+    'forum:topics': async (payload: { conversationId: string }) => {
+      try {
+        const ip = getClientIp();
+        const userId = clientsInfo[clientId]?.serverUserId;
+        if (!(await socketMay(clientsInfo, clientId, "read_messages"))) {
+          socket.emit("forum:error", { error: "forbidden", message: "You do not have permission to read this channel.", permission: "read_messages" });
+          return;
+        }
+        const rl = checkRateLimit("chat:fetch", userId, ip, RL_FETCH);
+        if (!rl.allowed) {
+          socket.emit("forum:error", { error: "rate_limited", retryAfterMs: rl.retryAfterMs, message: `Too fast. Wait ${Math.ceil((rl.retryAfterMs || 0) / 1000)}s.` });
+          return;
+        }
+        if (!payload || typeof payload.conversationId !== "string") { socket.emit("forum:error", "Invalid payload"); return; }
+        if (!(await requireConversationAccess(payload.conversationId, userId))) return;
+
+        const threads = await listThreadsByConversation(payload.conversationId);
+        const rootRecords = (await Promise.all(
+          threads.map((t) => getMessageById(payload.conversationId, t.root_message_id)),
+        )).filter((r): r is MessageRecord => !!r);
+        const enrichedRoots = await enrichMessages(rootRecords);
+        const rootById = new Map(enrichedRoots.map((r) => [r.message_id, r]));
+
+        const topics = await Promise.all(threads.map(async (t) => {
+          const root = rootById.get(t.root_message_id);
+          const participantCount = await countThreadParticipants(t.thread_id, t.root_message_id);
+          return {
+            thread_id: t.thread_id,
+            conversation_id: t.conversation_id,
+            root_message_id: t.root_message_id,
+            title: t.title,
+            status: t.status,
+            reply_count: t.reply_count,
+            participant_count: participantCount,
+            created_at: t.created_at.toISOString(),
+            last_message_at: t.last_message_at.toISOString(),
+            creator_server_id: t.created_by,
+            creator_nickname: root?.sender_nickname ?? null,
+            creator_avatar_file_id: root?.sender_avatar_file_id ?? null,
+            tags: t.tags,
+            preview: root?.text ? root.text.slice(0, 200) : null,
+          };
+        }));
+        socket.emit("forum:topics:list", { conversation_id: payload.conversationId, topics });
+      } catch (err) {
+        consola.error("forum:topics failed", err);
+        socket.emit("forum:error", "Failed to list topics");
+      }
+    },
+
+    // Create a forum topic: one root message and a thread with a title, made
+    // together. GRYT-981 Stage 2.
+    'forum:topic:create': async (payload: { conversationId: string; title: string; text?: string; accessToken: string; tagIds?: string[] }) => {
+      try {
+        const ip = getClientIp();
+        const userId = clientsInfo[clientId]?.serverUserId;
+        const rl = checkRateLimit("chat:send", userId, ip, RL_SEND);
+        if (!rl.allowed) {
+          socket.emit("forum:error", { error: "rate_limited", retryAfterMs: rl.retryAfterMs, message: `Too fast. Wait ${Math.ceil((rl.retryAfterMs || 0) / 1000)}s.` });
+          return;
+        }
+        if (!payload || typeof payload.conversationId !== "string" || typeof payload.title !== "string" || typeof payload.accessToken !== "string") {
+          socket.emit("forum:error", "Invalid payload");
+          return;
+        }
+        const auth = await requireAuth(socket, payload, { permission: "send_messages" });
+        if (!auth) return;
+        const sendMute = await textMuteFor(auth.tokenPayload.serverUserId);
+        if (sendMute.muted) { socket.emit("forum:error", textMuteError(sendMute)); return; }
+        const access = await requireConversationAccess(payload.conversationId, auth.tokenPayload.serverUserId);
+        if (!access) return;
+        if (access.kind === "dm") { socket.emit("forum:error", { error: "not_a_forum", message: "Topics can only be created in a channel." }); return; }
+        if (!(await mayInChannel(payload.conversationId, auth.tokenPayload.serverUserId, "send_messages", auth.tokenPayload.grytUserId))) {
+          socket.emit("forum:error", { error: "forbidden", message: "This channel is read-only for your role." });
+          return;
+        }
+        const channel = await getServerChannel(payload.conversationId);
+        if (channel?.automated && !isBotIdentity(auth.tokenPayload.grytUserId)) {
+          socket.emit("forum:error", { error: "automated_channel", message: "This is an automated channel — only bots and the system can post here." });
+          return;
+        }
+        const title = payload.title.trim().slice(0, 200);
+        const text = typeof payload.text === "string" ? payload.text.trim() : "";
+        if (!title) { socket.emit("forum:error", { error: "empty_title", message: "A topic needs a title." }); return; }
+        if (!text) { socket.emit("forum:error", { error: "empty_body", message: "A topic needs a first message." }); return; }
+        if (text.length > MESSAGE_MAX_LENGTH) { socket.emit("forum:error", MESSAGE_TOO_LONG); return; }
+
+        const user = await getUserByServerId(auth.tokenPayload.serverUserId);
+        if (!user) { socket.emit("forum:error", "User not found. Please rejoin."); return; }
+
+        const created = await insertMessage({
+          conversation_id: payload.conversationId,
+          sender_server_id: auth.tokenPayload.serverUserId,
+          text,
+          attachments: null,
+          reactions: null,
+        });
+        const validTagIds = new Set((channel?.forum_tags ?? []).map((t) => t.id));
+        const tags = Array.isArray(payload.tagIds) ? payload.tagIds.filter((id) => validTagIds.has(id)).slice(0, 20) : [];
+        const thread = await createThread({
+          conversation_id: payload.conversationId,
+          root_message_id: created.message_id,
+          created_by: auth.tokenPayload.serverUserId,
+          title,
+          tags,
+        });
+        const summary = {
+          thread_id: thread.thread_id,
+          conversation_id: thread.conversation_id,
+          root_message_id: thread.root_message_id,
+          title: thread.title,
+          created_by: thread.created_by,
+          status: thread.status,
+          reply_count: thread.reply_count,
+          locked: thread.locked,
+          created_at: thread.created_at.toISOString(),
+          last_message_at: thread.last_message_at.toISOString(),
+        };
+        (await deliverableClientIds(payload.conversationId, access, auth.tokenPayload.serverUserId))
+          .forEach((cid) => io.sockets.sockets.get(cid)?.emit("thread:created", summary));
+        socket.emit("forum:topic:created", {
+          ...summary,
+          root: { ...created, sender_nickname: user.nickname, sender_avatar_file_id: user.avatar_file_id },
+        });
+      } catch (err) {
+        consola.error("forum:topic:create failed", err);
+        socket.emit("forum:error", "Failed to create topic");
       }
     },
 

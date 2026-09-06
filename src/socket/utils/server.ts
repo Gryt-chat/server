@@ -226,7 +226,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
   // Sidebar items are persisted in DB; bootstrap defaults if missing.
   // We still emit `channels` for backward compatibility (derived from sidebar items).
   let sidebar_items: { id: string; kind: string; position: number; channelId?: string; spacerHeight?: number; label?: string; parentItemId?: string }[] = [];
-  let channels: { id: string; name: string; type: string; description?: string; requirePushToTalk?: boolean; disableRnnoise?: boolean; maxBitrate?: number; eSportsMode?: boolean; textInVoice?: boolean; layout?: "chat" | "forum"; automated?: boolean; permissionScopeId?: string | null; canSend?: boolean; canJoin?: boolean }[] = [];
+  let channels: { id: string; name: string; type: string; description?: string; requirePushToTalk?: boolean; disableRnnoise?: boolean; maxBitrate?: number; eSportsMode?: boolean; textInVoice?: boolean; layout?: "chat" | "forum"; automated?: boolean; forumTags?: { id: string; name: string; emoji?: string | null; color?: string | null }[]; permissionScopeId?: string | null; canSend?: boolean; canJoin?: boolean }[] = [];
   try {
     await ensureDefaultSidebarItems();
 
@@ -288,6 +288,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
           textInVoice: c.text_in_voice || false,
           layout: c.layout,
           automated: c.automated || false,
+          forumTags: c.forum_tags,
           permissionScopeId: c.permission_scope_id ?? null,
           canSend: postable.has(c.channel_id),
           canJoin: joinable.has(c.channel_id),
@@ -312,6 +313,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
         textInVoice: c.text_in_voice || false,
         layout: c.layout,
         automated: c.automated || false,
+        forumTags: c.forum_tags,
         permissionScopeId: c.permission_scope_id ?? null,
         canSend: postable.has(c.channel_id),
         canJoin: joinable.has(c.channel_id),

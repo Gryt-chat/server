@@ -20,6 +20,7 @@ function rowToThread(r: Record<string, unknown>): ThreadRecord {
     title: (r.title as string) ?? null,
     created_by: r.created_by as string,
     status: ((r.status as string) ?? "open") as ThreadStatus,
+    tags: r.tags ? (JSON.parse(r.tags as string) as string[]) : [],
     reply_count: Number(r.reply_count ?? 0),
     locked: Number(r.locked ?? 0) === 1,
     created_at: fromIso(r.created_at as string),
@@ -32,15 +33,17 @@ export async function createThread(record: {
   root_message_id: string;
   created_by: string;
   title?: string | null;
+  tags?: string[];
   thread_id?: string;
   created_at?: Date;
 }): Promise<ThreadRecord> {
   const db = getSqliteDb();
   const thread_id = record.thread_id ?? randomUUID();
   const created_at = record.created_at ?? new Date();
+  const tags = Array.isArray(record.tags) && record.tags.length > 0 ? JSON.stringify(record.tags.slice(0, 20)) : null;
   db.prepare(
-    `INSERT INTO threads (thread_id, conversation_id, root_message_id, title, created_by, status, reply_count, locked, created_at, last_message_at)
-     VALUES (?, ?, ?, ?, ?, 'open', 0, 0, ?, ?)`,
+    `INSERT INTO threads (thread_id, conversation_id, root_message_id, title, created_by, status, reply_count, locked, created_at, last_message_at, tags)
+     VALUES (?, ?, ?, ?, ?, 'open', 0, 0, ?, ?, ?)`,
   ).run(
     thread_id,
     record.conversation_id,
@@ -49,6 +52,7 @@ export async function createThread(record: {
     record.created_by,
     toIso(created_at),
     toIso(created_at),
+    tags,
   );
   return {
     thread_id,
@@ -57,6 +61,7 @@ export async function createThread(record: {
     title: record.title ?? null,
     created_by: record.created_by,
     status: "open",
+    tags: Array.isArray(record.tags) ? record.tags.slice(0, 20) : [],
     reply_count: 0,
     locked: false,
     created_at,
@@ -90,6 +95,15 @@ export async function listThreadsByConversation(conversationId: string): Promise
   return rows.map(rowToThread);
 }
 
+/** Distinct people in a thread: the root author plus everyone who replied. */
+export async function countThreadParticipants(threadId: string, rootMessageId: string): Promise<number> {
+  const db = getSqliteDb();
+  const row = db
+    .prepare(`SELECT COUNT(DISTINCT sender_server_id) AS c FROM messages WHERE thread_id = ? OR message_id = ?`)
+    .get(threadId, rootMessageId) as { c: number } | undefined;
+  return Number(row?.c ?? 0);
+}
+
 export async function bumpThreadOnReply(threadId: string, at: Date): Promise<ThreadRecord | null> {
   const db = getSqliteDb();
   const res = db
@@ -112,6 +126,22 @@ export async function decrementThreadReply(threadId: string): Promise<ThreadReco
  * channel message and is left alone — deleting it is the caller's separate
  * `deleteMessage` call.
  */
+/** Set a thread's status: open, solved (answered, still repliable) or closed (locked). */
+export async function setThreadTags(threadId: string, tags: string[]): Promise<ThreadRecord | null> {
+  const db = getSqliteDb();
+  const value = Array.isArray(tags) && tags.length > 0 ? JSON.stringify(tags.slice(0, 20)) : null;
+  const res = db.prepare(`UPDATE threads SET tags = ? WHERE thread_id = ?`).run(value, threadId);
+  if (res.changes === 0) return null;
+  return getThread(threadId);
+}
+
+export async function setThreadStatus(threadId: string, status: ThreadStatus): Promise<ThreadRecord | null> {
+  const db = getSqliteDb();
+  const res = db.prepare(`UPDATE threads SET status = ? WHERE thread_id = ?`).run(status, threadId);
+  if (res.changes === 0) return null;
+  return getThread(threadId);
+}
+
 export async function deleteThread(
   threadId: string,
 ): Promise<{ conversation_id: string; root_message_id: string } | null> {
