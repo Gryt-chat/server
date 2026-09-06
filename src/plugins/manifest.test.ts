@@ -64,36 +64,49 @@ describe("an ordinary manifest", () => {
 });
 
 /*
- * Off unless a manifest asks, and that default is a promise the docs make:
- * nobody joining a server can see what the operator runs. A plugin with a
- * client half has to break that promise about itself, so it asks — and the
- * operator can read the ask before enabling it.
+ * Members see this, and a manifest is written by whoever wrote the plugin. A
+ * `javascript:` URL here is a link injection into every member's client and a
+ * `data:` one is a way to serve them a page that looks like Gryt.
  */
-describe("whether members are told a plugin is here", () => {
-  it("is no unless the manifest says otherwise", () => {
-    const result = readManifest(valid);
-    assert.ok(result.ok);
-    assert.equal(result.manifest.public, false);
-  });
-
-  it("is yes for a literal true", () => {
-    const result = readManifest({ ...valid, public: true });
-    assert.ok(result.ok);
-    assert.equal(result.manifest.public, true);
-  });
-
-  /* Only a literal true. A truthy string in somebody's hand-written JSON should
-     not be the thing that announces their plugin to every member. */
-  for (const truthy of ["true", "yes", 1, {}, [], "public"]) {
-    it(`is no for ${JSON.stringify(truthy)}, which is not true`, () => {
-      const result = readManifest({ ...valid, public: truthy });
+describe("a link to read about the plugin", () => {
+  for (const homepage of [
+    "https://example.com/automod",
+    "http://example.com",
+    "https://example.com/a?b=c#d",
+  ]) {
+    it(`keeps ${homepage}`, () => {
+      const result = readManifest({ ...valid, homepage });
       assert.ok(result.ok);
-      assert.equal(result.manifest.public, false, `${JSON.stringify(truthy)} announced a plugin`);
+      assert.ok(result.manifest.homepage?.startsWith("http"));
     });
   }
 
-  it("does not stop a manifest loading either way", () => {
-    assert.equal(readManifest({ ...valid, public: "nonsense" }).ok, true);
+  for (const homepage of [
+    "javascript:alert(1)",
+    "JavaScript:alert(1)",
+    "data:text/html,<h1>gryt</h1>",
+    "file:///etc/passwd",
+    "gryt://join/somewhere",
+    "//example.com",
+    "example.com",
+    "not a url",
+    "",
+    "   ",
+    42,
+    null,
+    `https://example.com/${"x".repeat(400)}`,
+  ]) {
+    it(`drops ${JSON.stringify(homepage)}`, () => {
+      const result = readManifest({ ...valid, homepage });
+      assert.ok(result.ok, "a bad link stopped the plugin loading");
+      assert.equal(result.manifest.homepage, undefined, `${JSON.stringify(homepage)} was kept`);
+    });
+  }
+
+  /* Dropped rather than refused. A plugin that will not start because its link
+     is wrong is a worse outcome than one that starts with no link. */
+  it("does not stop a plugin loading", () => {
+    assert.equal(readManifest({ ...valid, homepage: "javascript:alert(1)" }).ok, true);
   });
 });
 

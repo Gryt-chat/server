@@ -426,13 +426,23 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
       upload_max_bytes: cfgUploadMaxBytes,
       version: process.env.SERVER_VERSION || "1.0.0",
       /**
-       * The plugins this server runs that asked to be visible (GRYT-939).
+       * Every plugin this server is running, who wrote it, where to read
+       * about it, and what it may do (GRYT-939, GRYT-941).
        *
-       * Empty on almost every server, and empty by default on one running
-       * plugins — a plugin has to ask in its own manifest. It is here rather
-       * than in `server:info` because that goes out before joining, and what
-       * an operator runs is not something to hand to anybody who can reach the
-       * port.
+       * No version, deliberately: a version number is which known problem
+       * applies, and handing that to everybody who joins answers a question an
+       * attacker would otherwise have to ask.
+       *
+       * Not optional and not configurable. A member is the one whose messages
+       * are being read, and what code sits between them and the people they are
+       * talking to is theirs to know — an operator who would rather it were not
+       * seen is exactly the case this exists for.
+       *
+       * Still in `server:details` rather than `server:info`, which means
+       * somebody learns this after joining rather than before. That is the
+       * weaker half of the promise and it is filed as GRYT-941: info goes to
+       * anybody who can reach the port, so moving it there is a decision about
+       * scanners rather than about members.
        */
       plugins: announcedPlugins(),
     },

@@ -70,24 +70,16 @@ export interface PluginManifest {
   main: string;
   description?: string;
   author?: string;
+  /**
+   * Where to go and read what this plugin is (GRYT-941).
+   *
+   * Members are told this, so it is checked rather than trusted: `http` or
+   * `https` and nothing else. A `javascript:` or `data:` URL rendered as a link
+   * in somebody's client is the reason this is not just a string.
+   */
+  homepage?: string;
   /** Normalised: deduplicated, in catalogue order, unknown names dropped. */
   capabilities: PluginCapability[];
-  /**
-   * Whether members are told this plugin is here (GRYT-939).
-   *
-   * Off unless the manifest says otherwise, and that default is a promise the
-   * docs make: nobody joining a server can see what the operator runs. A server
-   * plugin is one person modding everybody's experience, and a list of them is
-   * a list of what is reading the messages.
-   *
-   * A plugin with a client half has to break that promise about itself, or
-   * every copy of it starts by sending into a server that may not be listening.
-   * So the plugin asks, in its own manifest, and the operator can read the ask
-   * before enabling it. Only the id and the version go out — never the
-   * capabilities, which would tell every member what the plugin is allowed to
-   * do to them without telling them anything they can act on.
-   */
-  public: boolean;
 }
 
 export type ManifestResult =
@@ -134,6 +126,28 @@ export function declaredCapabilities(value: unknown): PluginCapability[] {
  * where a later refactor could lose them.
  */
 const ID = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+
+/*
+ * Only a link somebody can safely be shown.
+ *
+ * Members see this, and a plugin's manifest is written by whoever wrote the
+ * plugin — so a `javascript:` URL here would be a link injection into every
+ * member's client, and a `data:` one a way to serve them a page that looks like
+ * Gryt. Parsed rather than pattern-matched, because a regex over URLs is how
+ * that goes wrong.
+ */
+function readHomepage(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const raw = value.trim();
+  if (!raw || raw.length > 300) return undefined;
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
 
 /*
  * Not semver-strict. A plugin nobody publishes does not need a version anybody
@@ -199,12 +213,10 @@ export function readManifest(raw: unknown): ManifestResult {
       name,
       version,
       main,
-      description: str(source, "description") ?? undefined,
-      author: str(source, "author") ?? undefined,
+      description: str(source, "description")?.slice(0, 200) ?? undefined,
+      author: str(source, "author")?.slice(0, 80) ?? undefined,
+      homepage: readHomepage(source.homepage),
       capabilities: declaredCapabilities(source.capabilities),
-      /* Only a literal `true`. A truthy string in somebody's hand-written JSON
-         should not be the thing that announces their plugin to every member. */
-      public: source.public === true,
     },
   };
 }
