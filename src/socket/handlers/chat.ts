@@ -40,6 +40,7 @@ import {
   listThreadMessages,
   listThreadsByConversation,
   countThreadParticipants,
+  setThreadStatus,
 } from "../../db";
 import { processProfanity, type CensorStyle, type ProfanityMode } from "../../utils/profanityFilter";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
@@ -886,6 +887,62 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
       } catch (err) {
         consola.error("thread:fetch failed", err);
         socket.emit("thread:error", "Failed to fetch thread");
+      }
+    },
+
+    // Mark a topic open / solved / closed. The author or a moderator may.
+    // 'solved' keeps it repliable; 'closed' stops new replies (chat:send checks
+    // the status). GRYT-981 Stage 3.
+    'thread:status:set': async (payload: { conversationId: string; threadId: string; status: string; accessToken: string }) => {
+      try {
+        const ip = getClientIp();
+        const userId = clientsInfo[clientId]?.serverUserId;
+        const rl = checkRateLimit("chat:edit", userId, ip, RL_EDIT);
+        if (!rl.allowed) {
+          socket.emit("thread:error", { error: "rate_limited", retryAfterMs: rl.retryAfterMs, message: `Too fast. Wait ${Math.ceil((rl.retryAfterMs || 0) / 1000)}s.` });
+          return;
+        }
+        if (!payload || typeof payload.conversationId !== "string" || typeof payload.threadId !== "string" || typeof payload.accessToken !== "string") {
+          socket.emit("thread:error", "Invalid payload");
+          return;
+        }
+        const status = payload.status;
+        if (status !== "open" && status !== "solved" && status !== "closed") {
+          socket.emit("thread:error", { error: "bad_status", message: "A topic is open, solved or closed." });
+          return;
+        }
+        const auth = await requireAuth(socket, payload, { permission: "send_messages" });
+        if (!auth) return;
+        const access = await requireConversationAccess(payload.conversationId, auth.tokenPayload.serverUserId);
+        if (!access) return;
+        const thread = await getThread(payload.threadId);
+        if (!thread || thread.conversation_id !== payload.conversationId) {
+          socket.emit("thread:error", { error: "thread_not_found", message: "That thread no longer exists." });
+          return;
+        }
+        // The author can settle their own topic; everyone else needs the
+        // moderator permission.
+        const isAuthor = thread.created_by === auth.tokenPayload.serverUserId;
+        if (!isAuthor && !auth.permissions.has("manage_messages")) {
+          socket.emit("thread:error", { error: "forbidden", message: "Only the topic's author or a moderator can change this.", permission: "manage_messages" });
+          return;
+        }
+        const updated = await setThreadStatus(payload.threadId, status);
+        if (!updated) { socket.emit("thread:error", "Failed to update the topic."); return; }
+        const upd = {
+          conversation_id: updated.conversation_id,
+          thread_id: updated.thread_id,
+          root_message_id: updated.root_message_id,
+          reply_count: updated.reply_count,
+          last_message_at: updated.last_message_at.toISOString(),
+          status: updated.status,
+        };
+        recipientClientIds(payload.conversationId, access).forEach((cid) =>
+          io.sockets.sockets.get(cid)?.emit("thread:updated", upd),
+        );
+      } catch (err) {
+        consola.error("thread:status:set failed", err);
+        socket.emit("thread:error", "Failed to update the topic.");
       }
     },
 

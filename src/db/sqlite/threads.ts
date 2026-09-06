@@ -121,6 +121,14 @@ export async function decrementThreadReply(threadId: string): Promise<ThreadReco
  * channel message and is left alone — deleting it is the caller's separate
  * `deleteMessage` call.
  */
+/** Set a thread's status: open, solved (answered, still repliable) or closed (locked). */
+export async function setThreadStatus(threadId: string, status: ThreadStatus): Promise<ThreadRecord | null> {
+  const db = getSqliteDb();
+  const res = db.prepare(`UPDATE threads SET status = ? WHERE thread_id = ?`).run(status, threadId);
+  if (res.changes === 0) return null;
+  return getThread(threadId);
+}
+
 export async function deleteThread(
   threadId: string,
 ): Promise<{ conversation_id: string; root_message_id: string } | null> {
