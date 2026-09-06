@@ -6,17 +6,10 @@
  * is: the events themselves are a handful of plain objects, and everything else
  * here is containment.
  *
- * Three failures it is built around, in the order they bite:
- *
- * 1. **A handler throws.** Uncaught, that propagates into whichever socket
- *    handler emitted the event and fails the operation for the member who
- *    triggered it — somebody's message not sending because a plugin has a typo.
- * 2. **A handler rejects.** An async handler's rejection is invisible to a
- *    plain try/catch around the call, and an unhandled rejection takes the
- *    process down on Node's default. Both are caught.
- * 3. **A handler throws every time.** Catching alone turns that into an
- *    infinite log and a permanent tax on every message. After enough failures
- *    the plugin is dropped and said so, once.
+ * The containment itself lives in `guard.ts` since GRYT-939, because plugins
+ * gained a second way to be called and the failure count is per plugin rather
+ * than per channel — a plugin throwing five times on events and five times on
+ * messages has thrown ten times.
  *
  * What this deliberately does not do is wait. `emit` returns as soon as it has
  * handed the payload out; a plugin that takes ten seconds delays itself and
@@ -24,6 +17,15 @@
  * could *refuse* a message would have to be awaited, and then a slow plugin is
  * a slow server.
  */
+
+import {
+  copyForHandler,
+  createPluginGuard,
+  type GuardLogger,
+  type PluginGuard,
+} from "./guard";
+
+export { FAILURES_BEFORE_DISABLE } from "./guard";
 
 /** Everything a plugin can hear. Adding one means adding it here first. */
 export interface PluginEvents {
@@ -63,21 +65,7 @@ export type PluginEventHandler<E extends PluginEventName> = (
   payload: PluginEvents[E],
 ) => void | Promise<void>;
 
-/**
- * How many times one plugin may fail before it stops being called.
- *
- * Counted per plugin rather than per handler, because a plugin whose code
- * throws is broken as a whole and the second handler is no more likely to work
- * than the first. Ten is enough that a transient failure — a network call in a
- * handler, a database busy — does not disable anything, and few enough that a
- * plugin broken on every message is gone within a second of traffic.
- */
-export const FAILURES_BEFORE_DISABLE = 10;
-
-export interface BusLogger {
-  warn(message: string): void;
-  error(message: string): void;
-}
+export type BusLogger = GuardLogger;
 
 interface Subscription<E extends PluginEventName> {
   pluginId: string;
@@ -97,53 +85,13 @@ export interface PluginBus {
   stats(): { plugins: string[]; disabled: string[]; subscriptions: number };
 }
 
-/*
- * Handed to each handler as its own copy.
- *
- * Without this the first plugin to receive an event can rewrite it for every
- * plugin after it, and for the server if the object came from somewhere that
- * still holds it. Two plugins seeing different text for the same message,
- * depending on load order, is the kind of bug that never gets found.
- *
- * structuredClone rather than a spread: the payloads are shallow today and a
- * spread would quietly stop protecting the moment one is not.
- */
-function copyFor<T>(payload: T): T {
-  try {
-    return structuredClone(payload);
-  } catch {
-    /* Only reachable if a payload picks up something unclonable, which would be
-       a bug in the emit site rather than in the plugin. Better to deliver the
-       original than to drop the event silently. */
-    return payload;
-  }
-}
-
-export function createPluginBus(logger: BusLogger): PluginBus {
+export function createPluginBus(
+  logger: BusLogger,
+  /* Defaulted so a test can make a bus on its own. The server passes one in, so
+     the failure count is shared with everything else that calls a plugin. */
+  guard: PluginGuard = createPluginGuard(logger),
+): PluginBus {
   const subscriptions = new Map<PluginEventName, Subscription<PluginEventName>[]>();
-  const failures = new Map<string, number>();
-  const disabled = new Set<string>();
-
-  function disable(pluginId: string, why: string): void {
-    if (disabled.has(pluginId)) return;
-    disabled.add(pluginId);
-    remove(pluginId);
-    logger.error(
-      `plugin ${pluginId} failed ${FAILURES_BEFORE_DISABLE} times and will not be called again: ${why}`,
-    );
-  }
-
-  function recordFailure(pluginId: string, event: string, err: unknown): void {
-    const message = err instanceof Error ? err.message : String(err);
-    const count = (failures.get(pluginId) ?? 0) + 1;
-    failures.set(pluginId, count);
-
-    if (count >= FAILURES_BEFORE_DISABLE) {
-      disable(pluginId, message);
-      return;
-    }
-    logger.warn(`plugin ${pluginId} threw handling ${event}: ${message}`);
-  }
 
   function remove(pluginId: string): void {
     for (const [event, list] of subscriptions) {
@@ -153,11 +101,13 @@ export function createPluginBus(logger: BusLogger): PluginBus {
     }
   }
 
+  guard.onDisable(remove);
+
   return {
     subscribe(pluginId, event, handler) {
       /* A plugin already disabled must not be able to re-arm itself by
          subscribing again from inside a handler that is still running. */
-      if (disabled.has(pluginId)) return;
+      if (guard.isDisabled(pluginId)) return;
 
       const list = subscriptions.get(event) ?? [];
       list.push({ pluginId, handler } as Subscription<PluginEventName>);
@@ -168,23 +118,13 @@ export function createPluginBus(logger: BusLogger): PluginBus {
       const list = subscriptions.get(event);
       if (!list || list.length === 0) return;
 
-      /* Copied before iterating, because a handler may subscribe or disable
+      /* Copied before iterating, because a handler may subscribe or be disabled
          during the loop and mutating the array underneath it would skip
          somebody. */
       for (const { pluginId, handler } of [...list]) {
-        if (disabled.has(pluginId)) continue;
-
-        try {
-          const result = (handler as PluginEventHandler<typeof event>)(copyFor(payload));
-          /* A rejection is not something the try/catch above can see. Checking
-             for a thenable rather than for a Promise, so a handler returning
-             any promise-alike is still caught. */
-          if (result && typeof (result as Promise<void>).catch === "function") {
-            (result as Promise<void>).catch((err) => recordFailure(pluginId, event, err));
-          }
-        } catch (err) {
-          recordFailure(pluginId, event, err);
-        }
+        guard.call(pluginId, event, () =>
+          (handler as PluginEventHandler<typeof event>)(copyForHandler(payload)),
+        );
       }
     },
 
@@ -197,7 +137,7 @@ export function createPluginBus(logger: BusLogger): PluginBus {
         count += list.length;
         for (const s of list) plugins.add(s.pluginId);
       }
-      return { plugins: [...plugins].sort(), disabled: [...disabled].sort(), subscriptions: count };
+      return { plugins: [...plugins].sort(), disabled: guard.disabledIds(), subscriptions: count };
     },
   };
 }
