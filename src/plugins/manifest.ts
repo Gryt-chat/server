@@ -27,16 +27,17 @@ export const PLUGIN_CAPABILITIES = [
   "messages:read",
   /** Receive `member:joined` and `member:left`, with the invite code used. */
   "members:read",
+  /**
+   * Kick and ban members (GRYT-935). Everything with a victim.
+   *
+   * Deleting a message is not in here yet and is GRYT-936: `chat:delete` does
+   * six things inline and has to be pulled out before a second caller can have
+   * it. The rule this catalogue follows is that an entry arrives with the code
+   * that honours it — an operator reading "may delete messages" on a screen
+   * must not be agreeing to something that does not exist.
+   */
+  "moderation",
 ] as const;
-
-/*
- * Nothing that acts is in here yet, deliberately. A catalogue entry a plugin
- * can declare and the API cannot honour would be worse than not offering it:
- * an operator would read "may ban members" on a screen and believe they had
- * agreed to something that does not exist. Banning, kicking and deleting are
- * their own piece of work — see GRYT-935 — and they arrive with the API that
- * performs them, not before.
- */
 
 export type PluginCapability = (typeof PLUGIN_CAPABILITIES)[number];
 
@@ -44,6 +45,7 @@ export type PluginCapability = (typeof PLUGIN_CAPABILITIES)[number];
 export const CAPABILITY_LABELS: Record<PluginCapability, string> = {
   "messages:read": "Read every message sent in a channel",
   "members:read": "See who joins and leaves, and the invite code they used",
+  moderation: "Kick and ban members, but not moderators or you",
 };
 
 export interface PluginManifest {

@@ -417,6 +417,49 @@ describe("what the api lets a plugin do", () => {
     assert.equal(log.at("info")[0], "[automod] banned somebody");
   });
 
+  /*
+   * Thrown on the property rather than returned as a refusal from each call. A
+   * plugin should find out it was not given this when it reaches for it, at
+   * startup, not on the first member it tries to act on at three in the
+   * morning.
+   */
+  it("refuses moderation to a plugin that did not declare it", () => {
+    const log = logger();
+    const api = createPluginApi(
+      { id: "a", name: "a", version: "1", main: "i.js", capabilities: ["messages:read"] },
+      createPluginBus(log as BusLogger),
+      log,
+    );
+
+    assert.throws(() => api.moderation, CapabilityError);
+  });
+
+  it("hands it over to a plugin that did", () => {
+    const log = logger();
+    const api = createPluginApi(
+      { id: "a", name: "a", version: "1", main: "i.js", capabilities: ["moderation"] },
+      createPluginBus(log as BusLogger),
+      log,
+    );
+
+    assert.equal(typeof api.moderation.kick, "function");
+    assert.equal(typeof api.moderation.ban, "function");
+  });
+
+  it("says which capability was missing, not just that one was", () => {
+    const log = logger();
+    const api = createPluginApi(
+      { id: "watcher", name: "a", version: "1", main: "i.js", capabilities: [] },
+      createPluginBus(log as BusLogger),
+      log,
+    );
+
+    assert.throws(
+      () => api.moderation,
+      (err: Error) => /watcher/.test(err.message) && /moderation/.test(err.message),
+    );
+  });
+
   it("does not let a plugin edit its own capability list", () => {
     const log = logger();
     const api = createPluginApi(
