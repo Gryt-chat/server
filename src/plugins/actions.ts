@@ -25,17 +25,14 @@
  */
 
 import consola from "consola";
-import type { Server } from "socket.io";
-
 import { banUser, getMessageById, getUserByServerId, insertServerAudit } from "../db";
 import { channelExists } from "../socket/utils/conversationAccess";
 import { deleteMessageEverywhere } from "../moderation/deleteMessage";
 import { evictUser } from "../moderation/evict";
 import { getEffectiveStanding } from "../services/permissions";
-import type { SFUClient } from "../sfu/client";
-import type { Clients } from "../types";
 import { broadcastMemberList, syncAllClients } from "../socket/utils/clients";
 import { checkRateLimit, type RateLimitRule } from "../utils/rateLimiter";
+import { pluginRefs } from "./refs";
 import { pluginMayActOn } from "./reach";
 
 /**
@@ -78,29 +75,6 @@ export type ModerationOutcome =
    */
   | { ok: false; reason: string };
 
-interface ActionRefs {
-  io: Server;
-  serverId: string;
-  clientsInfo: Clients;
-  sfuClient: SFUClient | null;
-}
-
-/*
- * Set once the socket layer is up, the same way `setSocketRefs` does it for
- * REST-triggered broadcasts. Plugins load before the first connection, so the
- * API object exists before these do — every action checks.
- */
-let refs: ActionRefs | null = null;
-
-export function setPluginActionRefs(next: ActionRefs): void {
-  refs = next;
-}
-
-/** For tests, which must not inherit a previous case's refs. */
-export function clearPluginActionRefs(): void {
-  refs = null;
-}
-
 export interface PluginModeration {
   /**
    * Remove somebody from the server. They can come back.
@@ -136,6 +110,7 @@ async function act(
   serverUserId: string,
   options: { reason?: string; durationMs?: number },
 ): Promise<ModerationOutcome> {
+  const refs = pluginRefs();
   if (!refs) {
     return { ok: false, reason: "the server is not accepting connections yet" };
   }
@@ -222,6 +197,7 @@ async function remove(
   channelId: string,
   messageId: string,
 ): Promise<ModerationOutcome> {
+  const refs = pluginRefs();
   if (!refs) {
     return { ok: false, reason: "the server is not accepting connections yet" };
   }

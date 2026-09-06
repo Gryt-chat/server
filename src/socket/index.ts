@@ -12,7 +12,7 @@ import { getServerConfig, effectiveModerationState } from "../db";
 import { checkSessionAllowed } from "../moderation/sessionGate";
 import { syncAllClients, verifyClient, broadcastMemberList, countOtherSessions } from "./utils/clients";
 import { stashedVoiceState, type StashedVoiceState, voiceStateOf } from "./utils/voiceStash";
-import { setPluginActionRefs } from "../plugins/actions";
+import { setPluginRefs } from "../plugins/refs";
 import { sendInfo, sendServerDetails, setSocketRefs, broadcastChatNew, broadcastCustomEmojisUpdate, broadcastEmojiQueueUpdate, broadcastServerUiUpdate } from "./utils/server";
 import { getServerIdFromEnv } from "../utils/serverId";
 
@@ -30,6 +30,7 @@ import { registerVoiceLatencyHandlers } from "./handlers/voiceLatency";
 import { registerReportHandlers } from "./handlers/reports";
 import { registerBlockHandlers } from "./handlers/blocks";
 import { registerTypingHandlers } from "./handlers/typing";
+import { registerPluginHandlers } from "./handlers/plugins";
 import { registerDmKeyHandlers } from "./handlers/dmKeys";
 import { registerMentionHandlers } from "./handlers/mentions";
 import { addressIsOwn, resolveClientIp, trustedProxyHops } from "../config/clientAddress";
@@ -318,7 +319,7 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
   // takes somebody out of voice rather than leaving them talking to the room.
   // Plugins load before the first connection, so their API exists before this
   // does and every action checks (GRYT-935).
-  setPluginActionRefs({ io, serverId, clientsInfo, sfuClient });
+  setPluginRefs({ io, serverId, clientsInfo, sfuClient });
 
   /* A label rather than the address. The resolved address is what tells two
      clients apart, since everything public arrives through one tunnel — but
@@ -384,6 +385,7 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
     ...registerDiagnosticsHandlers(ctx),
     ...registerVoiceLatencyHandlers(ctx),
     ...registerTypingHandlers(ctx),
+    ...registerPluginHandlers(ctx),
     ...registerDmKeyHandlers(ctx),
     ...registerMentionHandlers(ctx),
   };

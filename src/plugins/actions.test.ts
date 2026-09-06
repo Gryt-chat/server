@@ -23,11 +23,10 @@ import { resetRateLimits } from "../utils/rateLimiter";
 import type { Clients } from "../types";
 import {
   PLUGIN_ACTION_RULE,
-  clearPluginActionRefs,
   createModerationActions,
   pluginActorId,
-  setPluginActionRefs,
 } from "./actions";
+import { clearPluginRefs, setPluginRefs } from "./refs";
 
 /**
  * What a plugin can do to somebody, and everything it cannot (GRYT-935).
@@ -87,7 +86,7 @@ after(() => rmSync(dir, { recursive: true, force: true }));
 beforeEach(() => {
   resetRateLimits();
   resetMessageCache();
-  setPluginActionRefs(refs());
+  setPluginRefs(refs());
 });
 
 let seq = 0;
@@ -342,7 +341,7 @@ describe("a plugin that will not stop", () => {
  */
 describe("before the socket layer is up", () => {
   it("refuses rather than throwing", async () => {
-    clearPluginActionRefs();
+    clearPluginRefs();
     const target = await member();
 
     const result = await createModerationActions("early").kick(target.server_user_id);
@@ -494,7 +493,7 @@ describe("deleting a message", () => {
   });
 
   it("refuses before the socket layer is up", async () => {
-    clearPluginActionRefs();
+    clearPluginRefs();
     const c = await channel();
     const author = await member();
     const msg = await post(c, author.server_user_id, "early");
