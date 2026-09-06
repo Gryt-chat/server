@@ -179,6 +179,24 @@ describe("a message nobody should see", () => {
     assert.deepEqual(emitted, [], "a client was told off for running a plugin the server does not");
   });
 
+  /*
+   * And stays quiet even when the message is malformed. Without the check for
+   * whether anybody is listening, a client running a plugin this server does
+   * not would be told off for its topic — a complaint about a conversation the
+   * server was never part of, arriving on every change forever.
+   */
+  it("is dropped quietly even when it is malformed", async () => {
+    const emitted = await send({
+      accessToken: token,
+      pluginId: "nobody-runs-this",
+      topic: "not a topic",
+      data: "x".repeat(MAX_PAYLOAD_BYTES + 1),
+    });
+
+    assert.equal(received.length, 0);
+    assert.deepEqual(emitted, [], "a plugin the server does not run got a complaint about its topic");
+  });
+
   it("does not reach a plugin listening on a different topic", async () => {
     listen("presence", "score");
 
