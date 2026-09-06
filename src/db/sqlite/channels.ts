@@ -127,9 +127,15 @@ export async function deleteServerChannel(channelId: string): Promise<void> {
   db.prepare(`DELETE FROM channels WHERE channel_id = ?`).run(channelId);
 }
 
-export async function ensureDefaultChannels(): Promise<void> {
+/**
+ * Seed the starting channels on a server that has none.
+ *
+ * Answers whether it actually wrote any, because whoever asked has a
+ * permission cache keyed on the channel list and it is now wrong (GRYT-997).
+ */
+export async function ensureDefaultChannels(): Promise<boolean> {
   const existing = await listServerChannels();
-  if (existing.length > 0) return;
+  if (existing.length > 0) return false;
   const voiceId = (process.env.VOICE_CHANNEL_ID || "voice").trim().slice(0, 64) || "voice";
   const voiceName = (process.env.VOICE_CHANNEL_NAME || "Voice Chat").trim().slice(0, 80) || "Voice Chat";
   await upsertServerChannel({ channelId: "general", name: "General", type: "text", position: 10, description: "General text chat" });
@@ -152,6 +158,7 @@ export async function ensureDefaultChannels(): Promise<void> {
       }
     } catch { /* ignore */ }
   }
+  return true;
 }
 
 export async function listServerSidebarItems(): Promise<ServerSidebarItemRecord[]> {
@@ -230,9 +237,10 @@ export async function deleteServerSidebarItem(itemId: string): Promise<void> {
   db.prepare(`DELETE FROM sidebar_items WHERE item_id = ?`).run(norm);
 }
 
-export async function ensureDefaultSidebarItems(): Promise<void> {
+/** As {@link ensureDefaultChannels}: true when this call seeded something. */
+export async function ensureDefaultSidebarItems(): Promise<boolean> {
   const existing = await listServerSidebarItems();
-  if (existing.length > 0) return;
+  if (existing.length > 0) return false;
   await ensureDefaultChannels();
   const chans = await listServerChannels();
   let pos = 10;
@@ -240,4 +248,5 @@ export async function ensureDefaultSidebarItems(): Promise<void> {
     await upsertServerSidebarItem({ itemId: `sb_ch_${String(ch.channel_id).slice(0, 54)}`, kind: "channel", channelId: ch.channel_id, position: pos });
     pos += 10;
   }
+  return true;
 }

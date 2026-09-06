@@ -4,7 +4,7 @@ import { Clients } from "../../types";
 import type { JoinPolicy, RoleDefinitionRecord } from "../../db/interfaces";
 import { FALLBACK_ROLE_ID, PERMISSIONS } from "../../constants/permissions";
 import { getEffectiveStanding } from "../../services/permissions";
-import { joinableChannelIds, postableChannelIds, visibleChannelIds } from "../../services/channelPermissions";
+import { joinableChannelIds, postableChannelIds, resetChannelPermissionCache, visibleChannelIds } from "../../services/channelPermissions";
 import { getAcceptedIdentityTiers } from "../../auth/identity";
 import { getVoiceSeatLimit } from "../../utils/voiceSeats";
 import { syncAllClients, broadcastMemberList } from "./clients";
@@ -228,7 +228,11 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
   let sidebar_items: { id: string; kind: string; position: number; channelId?: string; spacerHeight?: number; label?: string; parentItemId?: string }[] = [];
   let channels: { id: string; name: string; type: string; description?: string; requirePushToTalk?: boolean; disableRnnoise?: boolean; maxBitrate?: number; eSportsMode?: boolean; textInVoice?: boolean; layout?: "chat" | "forum"; automated?: boolean; forumTags?: { id: string; name: string; emoji?: string | null; color?: string | null }[]; permissionScopeId?: string | null; canSend?: boolean; canJoin?: boolean }[] = [];
   try {
-    await ensureDefaultSidebarItems();
+    // Seeding a brand-new server creates its first channels right here. The
+    // permission cache may already hold the empty channel list from a moment
+    // ago, and a stale one filters every channel out of the first join —
+    // an empty sidebar until it expires (GRYT-997).
+    if (await ensureDefaultSidebarItems()) resetChannelPermissionCache();
 
     const [allItems, allChannels] = await Promise.all([
       listServerSidebarItems(),
@@ -321,7 +325,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
     }
   } catch (e) {
     consola.warn("Failed to load persisted sidebar/channels (falling back to defaults):", e);
-    await ensureDefaultChannels().catch((e) => consola.warn("ensureDefaultChannels fallback failed", e));
+    if (await ensureDefaultChannels().catch((e) => { consola.warn("ensureDefaultChannels fallback failed", e); return false; })) resetChannelPermissionCache();
     channels = [
       { name: "General", type: "text", id: "general", description: "General text chat" },
       { name: "Random", type: "text", id: "random", description: "Random discussions and off-topic chat" },
