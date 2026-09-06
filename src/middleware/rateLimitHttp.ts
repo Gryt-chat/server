@@ -69,6 +69,26 @@ export const RL_HTTP_OUTBOUND: RateLimitRule = { limit: 20, windowMs: 60_000, ba
 export const RL_HTTP_UPLOAD: RateLimitRule = { limit: 30, windowMs: 60_000, banMs: 30_000 };
 
 /**
+ * Staging an emoji, which is an upload that arrives in bursts.
+ *
+ * Importing a pack is one gesture that becomes one request per emoji, and the
+ * client stages six at a time, so a forty-emoji pack is forty writes in a few
+ * seconds. Under `RL_HTTP_UPLOAD` that is a refusal a third of the way in, on
+ * an action somebody deliberately started and holds `manage_emojis` for.
+ *
+ * **No `banMs`.** A ban is for an address that ought to stop, and this burst is
+ * somebody using the import as intended: refuse the requests over the line and
+ * let the client wait out `Retry-After`. The ban is also what made this so
+ * visible — while the mount had one bucket, banning the writes took the emoji
+ * list down with them and every emoji on the server appeared to vanish partway
+ * through an import.
+ *
+ * Still bounded. An emoji is small, and the decoding happens on the queue
+ * rather than in the request.
+ */
+export const RL_HTTP_EMOJI_WRITE: RateLimitRule = { limit: 150, windowMs: 60_000 };
+
+/**
  * Reading an attachment back.
  *
  * Generous, because a busy channel legitimately fetches many files as it

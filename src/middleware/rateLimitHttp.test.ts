@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { beforeEach, describe, it } from "node:test";
 
 import { resetRateLimits } from "../utils/rateLimiter";
-import { httpRateLimit, requestIp, RL_HTTP_FILE, RL_HTTP_OUTBOUND, RL_HTTP_UPLOAD } from "./rateLimitHttp";
+import { httpRateLimit, requestIp, RL_HTTP_API, RL_HTTP_EMOJI_WRITE, RL_HTTP_FILE, RL_HTTP_OUTBOUND, RL_HTTP_UPLOAD } from "./rateLimitHttp";
 
 type FakeRes = {
   statusCode: number | null;
@@ -75,6 +75,36 @@ describe("httpRateLimit", () => {
 
     const { passed } = hammer(httpRateLimit("t:file", RL_HTTP_FILE), 10);
     assert.equal(passed, 10, "exhausting the upload budget must not touch the file budget");
+  });
+
+  /**
+   * The emoji incident, as a test.
+   *
+   * Staging an emoji and reading the emoji list shared one key, and the write
+   * rule carries a ban. So importing a pack — one request per emoji, six at a
+   * time — spent the budget, banned the address, and the ban refused the list
+   * as well. A client with no list draws no emoji, so a server halfway through
+   * an import was indistinguishable from one whose emoji had been deleted.
+   */
+  it("keeps reading an emoji list possible while writes are banned", () => {
+    const writes = httpRateLimit("t:emoji:write", RL_HTTP_UPLOAD);
+    hammer(writes, RL_HTTP_UPLOAD.limit + 20);
+
+    const { passed } = hammer(httpRateLimit("t:emoji:read", RL_HTTP_API), 10);
+    assert.equal(passed, 10, "a banned write budget must not refuse the list");
+  });
+
+  /**
+   * A burst is the normal shape of this endpoint rather than a sign of abuse,
+   * so it answers 429 and lets the caller retry instead of shutting the address
+   * out for another window.
+   */
+  it("does not ban an address for staging emoji quickly", () => {
+    assert.equal(RL_HTTP_EMOJI_WRITE.banMs, undefined);
+    assert.ok(
+      RL_HTTP_EMOJI_WRITE.limit > RL_HTTP_UPLOAD.limit,
+      "a pack import is a legitimate burst and needs more room than a file upload",
+    );
   });
 
   it("reads the caller address from the socket when no proxy is trusted", () => {

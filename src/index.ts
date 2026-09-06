@@ -1,6 +1,6 @@
 import { config } from "dotenv";
 import { isOriginAllowed, readAllowedOrigins } from "./config/cors";
-import { RL_HTTP_API, RL_HTTP_FILE, RL_HTTP_OUTBOUND, RL_HTTP_PUBLIC, RL_HTTP_UPLOAD, httpRateLimit } from "./middleware/rateLimitHttp";
+import { RL_HTTP_API, RL_HTTP_EMOJI_WRITE, RL_HTTP_FILE, RL_HTTP_OUTBOUND, RL_HTTP_PUBLIC, RL_HTTP_UPLOAD, httpRateLimit } from "./middleware/rateLimitHttp";
 config({ path: "config.env", override: false });
 config({ override: false });
 import { consola } from "consola";
@@ -346,7 +346,23 @@ app.use(
   uploadsRouter,
 );
 app.use("/api/members", httpRateLimit("http:api", RL_HTTP_API), membersRouter);
-app.use("/api/emojis", httpRateLimit("http:emoji", RL_HTTP_UPLOAD), emojisRouter);
+
+// Same split as uploads above, and for a sharper reason: reading the emoji list
+// and staging an emoji shared one bucket, so an import's burst of writes banned
+// the mount and every client's GET of the list was refused with it. The list
+// answering 429 does not degrade — the client had no emoji to draw, so a server
+// mid-import looked like a server whose emoji had been deleted.
+//
+// Separate keys, not just separate budgets. A shared key would still let the
+// writes spend the reads' allowance.
+const limitEmojiWrites = httpRateLimit("http:emoji:write", RL_HTTP_EMOJI_WRITE);
+const limitEmojiReads = httpRateLimit("http:emoji:read", RL_HTTP_API);
+app.use(
+  "/api/emojis",
+  (req, res, next) =>
+    (req.method === "GET" ? limitEmojiReads : limitEmojiWrites)(req, res, next),
+  emojisRouter,
+);
 app.use("/api/link-preview", httpRateLimit("http:outbound", RL_HTTP_OUTBOUND), linkPreviewRouter);
 app.use("/api/oembed", httpRateLimit("http:outbound", RL_HTTP_OUTBOUND), oEmbedRouter);
 app.use("/api/media/metadata", httpRateLimit("http:outbound", RL_HTTP_OUTBOUND), mediaMetadataRouter);
