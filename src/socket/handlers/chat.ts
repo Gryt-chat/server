@@ -58,15 +58,19 @@ import {
   resolveConversationAccess,
   type AllowedConversationAccess,
 } from "../utils/conversationAccess";
+import {
+  appendCachedMessage,
+  dropCachedMessage,
+  getMessagesCached,
+  replaceCachedMessage,
+  sweepMessageCache,
+} from "../utils/messageCache";
 
 const RL_SEND: RateLimitRule = { limit: 20, windowMs: 10_000, banMs: 30_000, scorePerAction: 1, maxScore: 10, scoreDecayMs: 2000 };
 const RL_REACT: RateLimitRule = { limit: 60, windowMs: 60_000, scorePerAction: 0.5, maxScore: 15, scoreDecayMs: 3000 };
 const RL_DELETE: RateLimitRule = { limit: 30, windowMs: 60_000, scorePerAction: 1, maxScore: 15, scoreDecayMs: 3000 };
 const RL_EDIT: RateLimitRule = { limit: 20, windowMs: 60_000, scorePerAction: 1, maxScore: 10, scoreDecayMs: 2000 };
 const RL_FETCH: RateLimitRule = { limit: 15, windowMs: 10_000, scorePerAction: 0.3, maxScore: 8, scoreDecayMs: 1500 };
-
-const MESSAGE_CACHE_TTL_MS = parseInt(process.env.MESSAGE_CACHE_TTL_MS || "30000");
-const messageCache = new Map<string, { items: MessageRecord[]; fetchedAt: number }>();
 
 /*
  * The member list mentions are matched against. Cached because it is the whole
@@ -94,22 +98,11 @@ const recentNonces = new Map<string, { message: MessageRecord; createdAt: number
 
 setInterval(() => {
   const now = Date.now();
-  for (const [key, entry] of messageCache) {
-    if (now - entry.fetchedAt > MESSAGE_CACHE_TTL_MS * 2) messageCache.delete(key);
-  }
+  sweepMessageCache(now);
   for (const [nonce, entry] of recentNonces) {
     if (now - entry.createdAt > NONCE_TTL_MS) recentNonces.delete(nonce);
   }
 }, 60_000).unref();
-
-async function getMessagesCached(conversationId: string, limit = 50): Promise<MessageRecord[]> {
-  const now = Date.now();
-  const cached = messageCache.get(conversationId);
-  if (cached && now - cached.fetchedAt < MESSAGE_CACHE_TTL_MS) return cached.items.slice(-limit);
-  const items = await listMessages(conversationId, limit);
-  messageCache.set(conversationId, { items, fetchedAt: now });
-  return items;
-}
 
 function isConversationAVoiceChannel(conversationId: string, sfuClient: SFUClient | null): boolean {
   if (!sfuClient?.isConnected()) return false;
@@ -213,10 +206,7 @@ async function enrichAttachments(messages: MessageRecord[]): Promise<MessageReco
       deleteMessage(m.conversation_id, m.message_id).catch(err =>
         consola.warn("Auto-pruned empty message with missing attachments", m.message_id, err),
       );
-      const cached = messageCache.get(m.conversation_id);
-      if (cached?.items) {
-        cached.items = cached.items.filter(c => c.message_id !== m.message_id);
-      }
+      dropCachedMessage(m.conversation_id, m.message_id);
       continue;
     }
 
@@ -548,10 +538,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         // A thread reply is kept out of the channel's first-page cache — it must
         // not leak into the main timeline. It bumps the thread counters instead.
         if (!threadId) {
-          const existing = messageCache.get(created.conversation_id);
-          const appended = existing?.items ? [...existing.items, created] : [created];
-          const items = appended.length > 100 ? appended.slice(-100) : appended;
-          messageCache.set(created.conversation_id, { items, fetchedAt: Date.now() });
+          appendCachedMessage(created.conversation_id, created);
         }
 
         let threadUpdate:
@@ -1184,13 +1171,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         const updatedMessage = await addReactionToMessage(payload.conversationId, payload.messageId, payload.reactionSrc, auth.tokenPayload.serverUserId);
         if (!updatedMessage) { socket.emit("chat:error", "Message not found"); return; }
 
-        const existing = messageCache.get(updatedMessage.conversation_id);
-        if (existing?.items) {
-          messageCache.set(updatedMessage.conversation_id, {
-            items: existing.items.map((m) => m.message_id === updatedMessage.message_id ? updatedMessage : m),
-            fetchedAt: existing.fetchedAt,
-          });
-        }
+        replaceCachedMessage(updatedMessage.conversation_id, updatedMessage);
 
         let [enrichedReaction] = await enrichMessages([updatedMessage]);
         [enrichedReaction] = await enrichAttachments([enrichedReaction]);
@@ -1259,13 +1240,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           );
         }
 
-        const existing = messageCache.get(payload.conversationId);
-        if (existing?.items) {
-          messageCache.set(payload.conversationId, {
-            items: existing.items.filter((m) => m.message_id !== payload.messageId),
-            fetchedAt: existing.fetchedAt,
-          });
-        }
+        dropCachedMessage(payload.conversationId, payload.messageId);
 
         recipientClientIds(payload.conversationId, access).forEach((cid) => {
           io.sockets.sockets.get(cid)?.emit("chat:deleted", { conversation_id: payload.conversationId, message_id: payload.messageId });
@@ -1383,13 +1358,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         const [withAttachments] = await enrichAttachments([enriched]);
         enriched = withAttachments;
 
-        const existing = messageCache.get(payload.conversationId);
-        if (existing?.items) {
-          messageCache.set(payload.conversationId, {
-            items: existing.items.map((m) => m.message_id === updated.message_id ? updated : m),
-            fetchedAt: existing.fetchedAt,
-          });
-        }
+        replaceCachedMessage(payload.conversationId, updated);
 
         const connectedClients = recipientClientIds(payload.conversationId, access);
 
