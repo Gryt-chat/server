@@ -35,12 +35,24 @@ test("sending checks the length", () => {
   assert.match(chat, /text\.length > MESSAGE_MAX_LENGTH/);
 });
 
-test("editing checks it too, so the cap cannot be edited around", () => {
-  // Send four characters, edit them into four million. This is the bypass, and
-  // it is why the assertion below counts two call sites rather than one.
+test("every way to put text in a message checks the cap", () => {
+  // Send four characters, edit them into four million. That is the bypass, and
+  // it is why this counts call sites rather than asserting one exists.
+  //
+  // Three of them now: `chat:send`, `chat:edit`, and `forum:topic:create`,
+  // which arrived with GRYT-981 and does check. The count went to three at the
+  // same time and this test did not, so main was red for two merges.
+  //
+  // Failing here is the test working. A new way to put text into a message is
+  // exactly the thing that must not quietly skip the cap, so the answer is to
+  // go and look at the new call site rather than to raise the number.
   const chat = src("socket/handlers/chat.ts");
   const checks = chat.match(/text\.length > MESSAGE_MAX_LENGTH/g) ?? [];
-  assert.equal(checks.length, 2, "expected chat:send and chat:edit to both check");
+  assert.equal(
+    checks.length,
+    3,
+    "a text path in chat.ts either stopped checking the cap, or a new one was added without checking it",
+  );
 });
 
 test("the webhook route uses the shared constant rather than its own copy", () => {
