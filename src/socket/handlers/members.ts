@@ -6,6 +6,7 @@ import { buildMemberList, syncAllClients, broadcastMemberList } from "../utils/c
 import { socketMay } from "../utils/standing";
 import { looksLikeABotName } from "../../auth/identity";
 import { readWornUpdate } from "../../utils/wornString";
+import { normaliseActivity } from "../../utils/activityText";
 
 export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
   const { io, socket, clientId, serverId, clientsInfo } = ctx;
@@ -41,6 +42,37 @@ export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
         consola.error("members:fetch failed", err);
         socket.emit("members:error", "Failed to fetch member list");
       }
+    },
+
+    /**
+     * What this person says they are doing, in their own words (GRYT-929).
+     *
+     * No permission of its own. It says nothing to anybody who cannot already
+     * see the member list, and gating it behind a role would mean a status that
+     * silently does nothing for most people — a moderator takes it down with
+     * the tools they already have for a nickname.
+     *
+     * Held on the connection rather than stored, so it stops being true when
+     * they close the app. That means it does not survive a reconnect and the
+     * client re-sends it on join, the same as voice state.
+     *
+     * Clearing goes through the same door: an empty string, or one that is
+     * only spaces, normalises to null and takes the status down.
+     */
+    'presence:activity': async (data: { activity?: unknown }) => {
+      const info = clientsInfo[clientId];
+      if (!info) return;
+      // Not for a socket that has not said who it is. `temp_` clients are
+      // filtered out of the member list anyway, so this would be a status
+      // nobody could see attached to nobody in particular.
+      if (!info.serverUserId || info.serverUserId.startsWith("temp_")) return;
+
+      const activity = normaliseActivity(data?.activity);
+      if (info.activity === (activity ?? undefined)) return;
+
+      info.activity = activity ?? undefined;
+      syncAllClients(io, clientsInfo);
+      broadcastMemberList(io, clientsInfo, serverId);
     },
 
     'profile:update': async (data: { nickname?: string; avatarWorn?: string | null }) => {
