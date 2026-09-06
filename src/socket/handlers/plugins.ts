@@ -4,7 +4,7 @@ import { pluginMessages } from "../../plugins";
 import {
   MAX_PAYLOAD_BYTES,
   PLUGIN_MESSAGE_EVENT,
-  measurePayload,
+  inspectPayload,
   readTopic,
 } from "../../plugins/messaging";
 import { checkRateLimit, type RateLimitRule } from "../../utils/rateLimiter";
@@ -104,10 +104,10 @@ export function registerPluginHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        const size = measurePayload(payload?.data);
+        const size = inspectPayload(payload?.data);
         if (!size.ok) {
           socket.emit("plugin:error", {
-            error: "payload_too_large",
+            error: "invalid_payload",
             pluginId,
             limit: MAX_PAYLOAD_BYTES,
             message: size.reason,

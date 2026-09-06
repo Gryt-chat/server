@@ -73,18 +73,113 @@ export function readTopic(value: unknown): TopicResult {
   return { ok: true, topic };
 }
 
+/**
+ * How deep a payload may nest.
+ *
+ * Eight is more than any presence or scoreboard shape needs and shallow enough
+ * that nothing downstream has to survive a structure built to be walked. The
+ * size cap alone does not cover this: `[[[[…]]]]` reaches thousands of levels
+ * well inside eight kilobytes, and the thing that breaks is not this server —
+ * it is `structuredClone` on the way to each handler, and every plugin that
+ * does the obvious recursive thing with what it was handed.
+ */
+export const MAX_PAYLOAD_DEPTH = 8;
+
+/**
+ * How many values a payload may contain.
+ *
+ * Also not covered by the size cap: eight kilobytes of `{"a":1,"b":1,…}` is
+ * several thousand keys, which is a payload built to be expensive rather than
+ * one built to say something.
+ */
+export const MAX_PAYLOAD_NODES = 512;
+
+/**
+ * Keys that are not data.
+ *
+ * `JSON.parse` does not set a prototype from a `__proto__` key, so nothing here
+ * is exploited by parsing. It is exploited by what a plugin does next: the
+ * obvious way to merge an update into stored state is a deep merge, and a deep
+ * merge written the obvious way walks straight into it.
+ *
+ * Refused rather than stripped. A plugin receiving a payload quietly missing a
+ * key it sent would be a worse afternoon than one told its payload was refused,
+ * and nobody sends these on purpose.
+ */
+const FORBIDDEN_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
 export type PayloadResult = { ok: true; bytes: number } | { ok: false; reason: string };
 
 /**
- * Whether this payload is small enough, and encodable at all.
+ * Whether this payload is safe to carry, and small enough.
  *
- * Measured in bytes rather than characters, because the limit is about what
- * crosses the wire and one emoji is four of them. `JSON.stringify` throwing is
- * a circular structure, and `undefined` is what it returns for a value that
- * encodes to nothing — both are refused here rather than delivered as a
- * message whose data silently vanished.
+ * **The transport checks the structure. The plugin checks the meaning.** That
+ * line is where it is because a transport that validated payload *contents*
+ * would be a transport plugin authors worked around — but a payload that is
+ * expensive or dangerous to *handle* is not the plugin's problem to discover,
+ * because by the time it discovers it, it has already handled it.
+ *
+ * The walk is iterative rather than recursive on purpose. A recursive check for
+ * "is this too deeply nested" overflows on exactly the input it exists to
+ * refuse.
  */
-export function measurePayload(data: unknown): PayloadResult {
+export function inspectPayload(data: unknown): PayloadResult {
+  /*
+   * Structure first, size second. `JSON.stringify` recurses internally, so a
+   * deeply nested payload can throw a RangeError there — which would come back
+   * as "cannot be sent as JSON" and send somebody looking for the wrong
+   * problem.
+   */
+  const stack: { value: unknown; depth: number }[] = [{ value: data, depth: 0 }];
+  let nodes = 0;
+
+  while (stack.length > 0) {
+    const { value, depth } = stack.pop() as { value: unknown; depth: number };
+
+    nodes += 1;
+    if (nodes > MAX_PAYLOAD_NODES) {
+      return { ok: false, reason: `a message may contain at most ${MAX_PAYLOAD_NODES} values` };
+    }
+
+    if (typeof value === "string") {
+      /* A lone surrogate is half a character. It survives JSON as an escape and
+         then breaks whatever tries to render or re-encode it downstream, and
+         nothing sends one by accident. */
+      if (/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(value)) {
+        return { ok: false, reason: "that payload contains malformed text" };
+      }
+      continue;
+    }
+
+    if (value === null || typeof value !== "object") continue;
+
+    if (depth >= MAX_PAYLOAD_DEPTH) {
+      return { ok: false, reason: `a message may nest at most ${MAX_PAYLOAD_DEPTH} deep` };
+    }
+
+    if (Array.isArray(value)) {
+      for (const entry of value) stack.push({ value: entry, depth: depth + 1 });
+      continue;
+    }
+
+    /* `Object.keys` rather than `for…in`, so an inherited key cannot be counted
+       as one of this object's — and `getOwnPropertyNames` is not needed because
+       anything that came through JSON has no non-enumerable ones. */
+    for (const key of Object.keys(value as Record<string, unknown>)) {
+      if (FORBIDDEN_KEYS.has(key)) {
+        return { ok: false, reason: `a message may not contain a "${key}" key` };
+      }
+      stack.push({ value: (value as Record<string, unknown>)[key], depth: depth + 1 });
+    }
+  }
+
+  /*
+   * Measured in bytes rather than characters, because the limit is about what
+   * crosses the wire and one emoji is four of them. `JSON.stringify` throwing
+   * is a circular structure, and `undefined` is what it returns for a value
+   * that encodes to nothing — both are refused rather than delivered as a
+   * message whose data silently vanished.
+   */
   let json: string | undefined;
   try {
     json = JSON.stringify(data);
@@ -101,6 +196,7 @@ export function measurePayload(data: unknown): PayloadResult {
   }
   return { ok: true, bytes };
 }
+
 
 /** What a server plugin receives. */
 export interface IncomingPluginMessage {
@@ -243,7 +339,7 @@ export function createMessaging(
         return false;
       }
 
-      const size = measurePayload(data);
+      const size = inspectPayload(data);
       if (!size.ok) {
         logger.warn(`plugin ${pluginId} tried to send a message it cannot: ${size.reason}`);
         return false;

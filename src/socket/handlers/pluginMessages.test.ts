@@ -233,7 +233,7 @@ describe("a message that is malformed", () => {
     });
 
     assert.equal(received.length, 0);
-    assert.equal((emitted[0]?.payload as { error: string }).error, "payload_too_large");
+    assert.equal((emitted[0]?.payload as { error: string }).error, "invalid_payload");
   });
 
   it("is refused for a plugin id that is missing or blank", async () => {

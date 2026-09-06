@@ -4,10 +4,12 @@ import { describe, it, beforeEach } from "node:test";
 import { createPluginGuard, FAILURES_BEFORE_DISABLE, type GuardLogger } from "./guard";
 import {
   MAX_PAYLOAD_BYTES,
+  MAX_PAYLOAD_DEPTH,
+  MAX_PAYLOAD_NODES,
   MAX_TOPIC_LENGTH,
   createMessageBus,
   createMessaging,
-  measurePayload,
+  inspectPayload,
   readTopic,
   type IncomingPluginMessage,
 } from "./messaging";
@@ -84,7 +86,7 @@ describe("a topic", () => {
 
 describe("a payload", () => {
   it("is measured as the bytes that would cross the wire", () => {
-    const result = measurePayload({ a: "b" });
+    const result = inspectPayload({ a: "b" });
     assert.ok(result.ok);
     assert.equal(result.bytes, JSON.stringify({ a: "b" }).length);
   });
@@ -92,13 +94,13 @@ describe("a payload", () => {
   /* One emoji is four bytes and one character. Measuring characters would let a
      payload through at four times the cap. */
   it("counts bytes, not characters", () => {
-    const emoji = measurePayload("🎧".repeat(MAX_PAYLOAD_BYTES / 4));
+    const emoji = inspectPayload("🎧".repeat(MAX_PAYLOAD_BYTES / 4));
     assert.equal(emoji.ok, false, "a payload of emoji got through on its character count");
   });
 
   it("refuses one over the cap", () => {
-    assert.equal(measurePayload("x".repeat(MAX_PAYLOAD_BYTES - 10)).ok, true);
-    assert.equal(measurePayload("x".repeat(MAX_PAYLOAD_BYTES + 1)).ok, false);
+    assert.equal(inspectPayload("x".repeat(MAX_PAYLOAD_BYTES - 10)).ok, true);
+    assert.equal(inspectPayload("x".repeat(MAX_PAYLOAD_BYTES + 1)).ok, false);
   });
 
   /* Both would otherwise arrive as a message whose data had silently vanished,
@@ -106,18 +108,100 @@ describe("a payload", () => {
   it("refuses one that cannot be JSON", () => {
     const circular: Record<string, unknown> = {};
     circular.self = circular;
-    assert.equal(measurePayload(circular).ok, false);
+    assert.equal(inspectPayload(circular).ok, false);
   });
 
   it("refuses one that encodes to nothing", () => {
-    assert.equal(measurePayload(undefined).ok, false);
-    assert.equal(measurePayload(() => {}).ok, false);
+    assert.equal(inspectPayload(undefined).ok, false);
+    assert.equal(inspectPayload(() => {}).ok, false);
   });
 
   it("allows the ordinary shapes", () => {
     for (const data of [null, 0, false, "", [], {}, { nested: { deep: [1, 2, 3] } }]) {
-      assert.equal(measurePayload(data).ok, true, `refused ${JSON.stringify(data)}`);
+      assert.equal(inspectPayload(data).ok, true, `refused ${JSON.stringify(data)}`);
     }
+  });
+});
+
+/*
+ * The size cap covers none of this, which is the point of checking it
+ * separately. A payload built to be expensive or dangerous to *handle* is not
+ * the plugin's problem to discover, because by the time it discovers it, it has
+ * already handled it.
+ */
+describe("a payload built to break something", () => {
+  const nest = (depth: number): unknown => {
+    let out: unknown = 1;
+    for (let i = 0; i < depth; i++) out = { a: out };
+    return out;
+  };
+
+  it("is refused for nesting too deep", () => {
+    assert.equal(inspectPayload(nest(MAX_PAYLOAD_DEPTH)).ok, true);
+    assert.equal(inspectPayload(nest(MAX_PAYLOAD_DEPTH + 1)).ok, false);
+  });
+
+  /* Thousands of levels fit inside the byte cap, and what breaks is not this
+     server — it is structuredClone on the way to each handler, and every plugin
+     that does the obvious recursive thing with what it was handed. */
+  it("is refused for nesting that would still fit in the size cap", () => {
+    /* Each level is six bytes of JSON, so a thousand of them is well inside
+       eight kilobytes and a hundred and twenty-five times the depth cap. */
+    const deep = nest(1000);
+    assert.ok(Buffer.byteLength(JSON.stringify(deep), "utf8") < MAX_PAYLOAD_BYTES);
+    assert.equal(inspectPayload(deep).ok, false);
+  });
+
+  it("does not overflow the stack checking that", () => {
+    /* The check is iterative for this reason: a recursive one overflows on
+       exactly the input it exists to refuse. */
+    assert.doesNotThrow(() => inspectPayload(nest(200_000)));
+  });
+
+  it("counts arrays as depth too", () => {
+    let arr: unknown = 1;
+    for (let i = 0; i < MAX_PAYLOAD_DEPTH + 1; i++) arr = [arr];
+    assert.equal(inspectPayload(arr).ok, false);
+  });
+
+  it("is refused for too many values", () => {
+    const wide: Record<string, number> = {};
+    for (let i = 0; i < MAX_PAYLOAD_NODES + 10; i++) wide[`k${i}`] = 1;
+    assert.equal(inspectPayload(wide).ok, false);
+  });
+
+  it("is refused for a long array as readily as a wide object", () => {
+    assert.equal(inspectPayload(new Array(MAX_PAYLOAD_NODES + 10).fill(1)).ok, false);
+  });
+
+  /*
+   * JSON.parse does not set a prototype from these, so nothing is exploited by
+   * parsing. It is exploited by what a plugin does next: the obvious way to
+   * merge an update into stored state is a deep merge, and a deep merge written
+   * the obvious way walks straight into it.
+   */
+  for (const key of ["__proto__", "constructor", "prototype"]) {
+    it(`is refused for a ${key} key`, () => {
+      const payload = JSON.parse(`{"a":{"${key}":{"admin":true}}}`);
+      const result = inspectPayload(payload);
+      assert.equal(result.ok, false, `${key} was allowed through`);
+      assert.match(result.ok === false ? result.reason : "", new RegExp(key));
+    });
+  }
+
+  it("allows those words as values, which are only words", () => {
+    assert.equal(inspectPayload({ note: "__proto__" }).ok, true);
+  });
+
+  /* Half a character. It survives JSON as an escape and then breaks whatever
+     tries to render or re-encode it, and nothing sends one by accident. */
+  it("is refused for a lone surrogate", () => {
+    assert.equal(inspectPayload("\uD800").ok, false);
+    assert.equal(inspectPayload({ deep: ["\uDC00"] }).ok, false);
+  });
+
+  it("allows a whole emoji, which is two of them together", () => {
+    assert.equal(inspectPayload("🎧").ok, true);
   });
 });
 
