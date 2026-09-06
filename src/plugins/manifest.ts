@@ -37,6 +37,15 @@ export const PLUGIN_CAPABILITIES = [
    * must not be agreeing to something that does not exist.
    */
   "moderation",
+  /**
+   * Talk to the client half of this plugin (GRYT-939).
+   *
+   * Separate from the read capabilities because it points the other way. The
+   * others let a plugin see what members do; this one lets members send it
+   * arbitrary bytes, and an operator agreeing to it is agreeing to a plugin
+   * that parses a stranger's input.
+   */
+  "messaging",
 ] as const;
 
 export type PluginCapability = (typeof PLUGIN_CAPABILITIES)[number];
@@ -45,7 +54,8 @@ export type PluginCapability = (typeof PLUGIN_CAPABILITIES)[number];
 export const CAPABILITY_LABELS: Record<PluginCapability, string> = {
   "messages:read": "Read every message sent in a channel",
   "members:read": "See who joins and leaves, and the invite code they used",
-  moderation: "Kick and ban members, but not moderators or you",
+  moderation: "Kick and ban members and delete their messages, but not a moderator's",
+  messaging: "Exchange its own messages with the copy of itself in people's clients",
 };
 
 export interface PluginManifest {

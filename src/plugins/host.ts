@@ -19,6 +19,7 @@ import { isAbsolute, join, resolve } from "path";
 
 import { createPluginApi, type PluginLogger } from "./api";
 import type { PluginBus } from "./bus";
+import type { PluginMessageBus } from "./messaging";
 import { readManifest, type PluginManifest } from "./manifest";
 
 export interface DiscoveredPlugin {
@@ -150,6 +151,8 @@ const importPlugin: (path: string) => Promise<Record<string, unknown>> = new Fun
 interface StartOptions {
   dir: string;
   bus: PluginBus;
+  /** Optional so a test can start plugins without one. The server passes one. */
+  messageBus?: PluginMessageBus;
   logger: PluginLogger;
   /** Injected so the loader can be tested without importing real files. */
   load?: (entry: string) => Promise<Record<string, unknown>>;
@@ -166,6 +169,7 @@ interface StartOptions {
 export async function startPlugins({
   dir,
   bus,
+  messageBus,
   logger,
   load = importPlugin,
 }: StartOptions): Promise<string[]> {
@@ -184,7 +188,7 @@ export async function startPlugins({
 
       if (typeof activate === "function") {
         await (activate as (api: unknown) => unknown)(
-          createPluginApi(manifest, bus, logger),
+          createPluginApi(manifest, bus, logger, messageBus),
         );
       }
 

@@ -9,6 +9,7 @@
  */
 
 import { createModerationActions, type PluginModeration } from "./actions";
+import { createMessaging, type PluginMessageBus, type PluginMessaging } from "./messaging";
 import type { PluginBus, PluginEventHandler, PluginEventName } from "./bus";
 import type { PluginCapability, PluginManifest } from "./manifest";
 
@@ -57,6 +58,16 @@ export interface GrytServerApi {
    * and a plugin should be able to log it and carry on.
    */
   readonly moderation: PluginModeration;
+  /**
+   * The pipe to the client half of this plugin. Throws on access if the
+   * manifest did not declare `messaging`.
+   *
+   * **What arrives on it was written by a member's client.** Check it. The
+   * transport caps the size and the rate and nothing else — the shape is the
+   * plugin's to establish, and assuming its own client half is on the other end
+   * is the mistake this note exists for.
+   */
+  readonly messaging: PluginMessaging;
   /** Goes to the server log, prefixed with the plugin id. */
   readonly log: PluginLogger;
 }
@@ -76,6 +87,7 @@ export function createPluginApi(
   manifest: PluginManifest,
   bus: PluginBus,
   logger: PluginLogger,
+  messageBus?: PluginMessageBus,
 ): GrytServerApi {
   const capabilities = Object.freeze([...manifest.capabilities]);
 
@@ -105,6 +117,19 @@ export function createPluginApi(
         throw new CapabilityError(manifest.id, event, needed);
       }
       bus.subscribe(manifest.id, event, handler);
+    },
+
+    get messaging(): PluginMessaging {
+      if (!capabilities.includes("messaging")) {
+        throw new CapabilityError(manifest.id, "messaging", "messaging");
+      }
+      if (!messageBus) {
+        /* Only reachable from a test that built an API without one. A plugin
+           that declared the capability and got silence would be the worse
+           failure, so this says which. */
+        throw new Error(`plugin ${manifest.id} asked for messaging on a server with no message bus`);
+      }
+      return createMessaging(manifest.id, messageBus, prefixed);
     },
 
     get moderation(): PluginModeration {

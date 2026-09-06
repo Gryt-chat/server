@@ -16,10 +16,14 @@
 import { consola } from "consola";
 
 import { createPluginBus, type PluginBus } from "./bus";
+import { createPluginGuard } from "./guard";
 import { pluginsDir, startPlugins } from "./host";
+import { createMessageBus, type PluginMessageBus } from "./messaging";
 
 export type { PluginEvents, PluginEventName, PluginBus } from "./bus";
 export { PLUGIN_CAPABILITIES, CAPABILITY_LABELS } from "./manifest";
+export { PLUGIN_MESSAGE_EVENT } from "./messaging";
+export type { IncomingPluginMessage } from "./messaging";
 
 /*
  * One bus for the process.
@@ -39,11 +43,28 @@ const log = {
   error: (m: string) => consola.error(m),
 };
 
-const bus = createPluginBus(log);
+/*
+ * One guard for the process, shared by both buses, so a plugin's failures add
+ * up across everything that calls it rather than being counted twice at half
+ * the rate (GRYT-939).
+ */
+const guard = createPluginGuard(log);
+const bus = createPluginBus(log, guard);
+const messages = createMessageBus(guard);
 
 /** What the emit sites call. Cheap and safe when no plugins are loaded. */
 export function pluginEvents(): PluginBus {
   return bus;
+}
+
+/**
+ * What the socket handler calls when a client plugin sends something.
+ *
+ * Also answers whether anybody is listening, which is how a message for a
+ * plugin this server does not run is refused before it is parsed.
+ */
+export function pluginMessages(): PluginMessageBus {
+  return messages;
 }
 
 /**
@@ -59,7 +80,7 @@ export async function initPlugins(): Promise<void> {
   consola.info(`Loading plugins from ${dir}`);
 
   try {
-    const started = await startPlugins({ dir, bus, logger: log });
+    const started = await startPlugins({ dir, bus, messageBus: messages, logger: log });
     if (started.length === 0) {
       consola.info("No plugins loaded");
       return;
