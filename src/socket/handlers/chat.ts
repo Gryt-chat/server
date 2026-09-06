@@ -30,6 +30,13 @@ import {
   blockedServerIdsFor,
   getAllRegisteredUsers,
   recordMentions,
+  createThread,
+  getThread,
+  getThreadByRoot,
+  bumpThreadOnReply,
+  decrementThreadReply,
+  deleteThread,
+  listThreadMessages,
 } from "../../db";
 import { processProfanity, type CensorStyle, type ProfanityMode } from "../../utils/profanityFilter";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
@@ -277,7 +284,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
   }
 
   return {
-    'chat:send': async (payload: { conversationId: string; accessToken: string; text?: string; sealed?: string; attachments?: string[]; replyToMessageId?: string; nonce?: string }) => {
+    'chat:send': async (payload: { conversationId: string; accessToken: string; text?: string; sealed?: string; attachments?: string[]; replyToMessageId?: string; threadId?: string; nonce?: string }) => {
       try {
         const ip = getClientIp();
         const userId = clientsInfo[clientId]?.serverUserId;
@@ -314,6 +321,28 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
             message: "This channel is read-only for your role.",
           });
           return;
+        }
+
+        // A reply into a thread: same channel, same permissions as any other
+        // message here. It just carries a thread_id and is delivered so the
+        // client can place it in the thread rather than the main flow. Threads
+        // live in channels, not DMs (GRYT-981).
+        let threadId: string | null = null;
+        if (typeof payload.threadId === "string" && payload.threadId) {
+          if (access.kind === "dm") {
+            socket.emit("chat:error", { error: "threads_not_allowed", message: "Threads are not available in direct messages." });
+            return;
+          }
+          const thread = await getThread(payload.threadId);
+          if (!thread || thread.conversation_id !== payload.conversationId) {
+            socket.emit("chat:error", { error: "thread_not_found", message: "That thread no longer exists." });
+            return;
+          }
+          if (thread.locked || thread.status === "closed") {
+            socket.emit("chat:error", { error: "thread_closed", message: "This thread is closed to new replies." });
+            return;
+          }
+          threadId = thread.thread_id;
         }
 
         // Identity verification
@@ -481,6 +510,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           attachments: attachments && attachments.length > 0 ? attachments : null,
           reactions: null,
           reply_to_message_id: replyToMessageId,
+          thread_id: threadId,
         });
 
         let enriched: MessageRecord = {
@@ -496,10 +526,31 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           recentNonces.set(payload.nonce, { message: enriched, createdAt: Date.now() });
         }
 
-        const existing = messageCache.get(created.conversation_id);
-        const appended = existing?.items ? [...existing.items, created] : [created];
-        const items = appended.length > 100 ? appended.slice(-100) : appended;
-        messageCache.set(created.conversation_id, { items, fetchedAt: Date.now() });
+        // A thread reply is kept out of the channel's first-page cache — it must
+        // not leak into the main timeline. It bumps the thread counters instead.
+        if (!threadId) {
+          const existing = messageCache.get(created.conversation_id);
+          const appended = existing?.items ? [...existing.items, created] : [created];
+          const items = appended.length > 100 ? appended.slice(-100) : appended;
+          messageCache.set(created.conversation_id, { items, fetchedAt: Date.now() });
+        }
+
+        let threadUpdate:
+          | { conversation_id: string; thread_id: string; root_message_id: string; reply_count: number; last_message_at: string; status: string }
+          | null = null;
+        if (threadId) {
+          const bumped = await bumpThreadOnReply(threadId, created.created_at);
+          if (bumped) {
+            threadUpdate = {
+              conversation_id: bumped.conversation_id,
+              thread_id: bumped.thread_id,
+              root_message_id: bumped.root_message_id,
+              reply_count: bumped.reply_count,
+              last_message_at: bumped.last_message_at.toISOString(),
+              status: bumped.status,
+            };
+          }
+        }
 
         if (access.kind === "dm") {
           await touchConversation(created.conversation_id, created.created_at).catch((err) =>
@@ -537,6 +588,12 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
             : enriched;
           io.sockets.sockets.get(cid)?.emit("chat:new", msg);
         });
+
+        // The root's "N replies" summary and the thread's activity sort ride on
+        // this, sent to the same audience that got the message. GRYT-981.
+        if (threadUpdate) {
+          recipients.forEach((cid) => io.sockets.sockets.get(cid)?.emit("thread:updated", threadUpdate));
+        }
 
         /*
          * Who this message named. After delivery, deliberately: a parse that
@@ -696,6 +753,126 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
+    // Start a thread from an existing message. No message is posted here; the
+    // first reply is a normal chat:send carrying this thread's id. GRYT-981.
+    'thread:create': async (payload: { conversationId: string; rootMessageId: string; accessToken: string; title?: string }) => {
+      try {
+        const ip = getClientIp();
+        const userId = clientsInfo[clientId]?.serverUserId;
+        const rl = checkRateLimit("chat:send", userId, ip, RL_SEND);
+        if (!rl.allowed) {
+          socket.emit("thread:error", { error: "rate_limited", retryAfterMs: rl.retryAfterMs, message: `Too fast. Wait ${Math.ceil((rl.retryAfterMs || 0) / 1000)}s.` });
+          return;
+        }
+        if (!payload || typeof payload.conversationId !== "string" || typeof payload.rootMessageId !== "string" || typeof payload.accessToken !== "string") {
+          socket.emit("thread:error", "Invalid payload");
+          return;
+        }
+        const auth = await requireAuth(socket, payload, { permission: "send_messages" });
+        if (!auth) return;
+        const access = await requireConversationAccess(payload.conversationId, auth.tokenPayload.serverUserId);
+        if (!access) return;
+        if (access.kind === "dm") {
+          socket.emit("thread:error", { error: "threads_not_allowed", message: "Threads are not available in direct messages." });
+          return;
+        }
+        if (!(await mayInChannel(payload.conversationId, auth.tokenPayload.serverUserId, "send_messages", auth.tokenPayload.grytUserId))) {
+          socket.emit("thread:error", { error: "forbidden", message: "This channel is read-only for your role." });
+          return;
+        }
+        const root = await getMessageById(payload.conversationId, payload.rootMessageId);
+        if (!root) { socket.emit("thread:error", "Message not found"); return; }
+        if (root.thread_id) { socket.emit("thread:error", { error: "already_in_thread", message: "You can't start a thread from a message that is already in one." }); return; }
+
+        // Idempotent: a double click, or two people at once, resolves to one
+        // thread. The unique index on root_message_id is the backstop.
+        const existing = await getThreadByRoot(payload.rootMessageId);
+        const title = typeof payload.title === "string" && payload.title.trim() ? payload.title.trim().slice(0, 200) : null;
+        const thread = existing ?? await createThread({
+          conversation_id: payload.conversationId,
+          root_message_id: payload.rootMessageId,
+          created_by: auth.tokenPayload.serverUserId,
+          title,
+        });
+        const summary = {
+          thread_id: thread.thread_id,
+          conversation_id: thread.conversation_id,
+          root_message_id: thread.root_message_id,
+          title: thread.title,
+          created_by: thread.created_by,
+          status: thread.status,
+          reply_count: thread.reply_count,
+          locked: thread.locked,
+          created_at: thread.created_at.toISOString(),
+          last_message_at: thread.last_message_at.toISOString(),
+        };
+        (await deliverableClientIds(payload.conversationId, access, auth.tokenPayload.serverUserId))
+          .forEach((cid) => io.sockets.sockets.get(cid)?.emit("thread:created", summary));
+      } catch (err) {
+        consola.error("thread:create failed", err);
+        socket.emit("thread:error", "Failed to create thread");
+      }
+    },
+
+    // The replies inside a thread, plus its root, for when a thread panel opens.
+    // Token-less like chat:fetch: permission comes from the verified socket.
+    'thread:fetch': async (payload: { conversationId: string; threadId: string }) => {
+      try {
+        const ip = getClientIp();
+        const userId = clientsInfo[clientId]?.serverUserId;
+        if (!(await socketMay(clientsInfo, clientId, "read_messages"))) {
+          socket.emit("thread:error", { error: "forbidden", message: "You do not have permission to read this channel.", permission: "read_messages" });
+          return;
+        }
+        const rl = checkRateLimit("chat:fetch", userId, ip, RL_FETCH);
+        if (!rl.allowed) {
+          socket.emit("thread:error", { error: "rate_limited", retryAfterMs: rl.retryAfterMs, message: `Too fast. Wait ${Math.ceil((rl.retryAfterMs || 0) / 1000)}s.` });
+          return;
+        }
+        if (!payload || typeof payload.conversationId !== "string" || typeof payload.threadId !== "string") {
+          socket.emit("thread:error", "Invalid fetch payload");
+          return;
+        }
+        if (!(await requireConversationAccess(payload.conversationId, userId))) return;
+        const thread = await getThread(payload.threadId);
+        if (!thread || thread.conversation_id !== payload.conversationId) {
+          socket.emit("thread:error", { error: "thread_not_found", message: "That thread no longer exists." });
+          return;
+        }
+        const hidden = await blockedServerIdsFor(clientsInfo[clientId]?.serverUserId ?? "");
+        const replies = await listThreadMessages(payload.threadId);
+        const visible = hidden.size === 0 ? replies : replies.filter((m) => !hidden.has(m.sender_server_id));
+        let items = await enrichMessages(visible);
+        items = await enrichAttachments(items);
+        const rootRaw = await getMessageById(payload.conversationId, thread.root_message_id);
+        let root: (typeof items)[number] | null = null;
+        if (rootRaw && (hidden.size === 0 || !hidden.has(rootRaw.sender_server_id))) {
+          const [enrichedRoot] = await enrichAttachments(await enrichMessages([rootRaw]));
+          root = enrichedRoot ?? null;
+        }
+        socket.emit("thread:history", {
+          conversation_id: payload.conversationId,
+          thread: {
+            thread_id: thread.thread_id,
+            conversation_id: thread.conversation_id,
+            root_message_id: thread.root_message_id,
+            title: thread.title,
+            created_by: thread.created_by,
+            status: thread.status,
+            reply_count: thread.reply_count,
+            locked: thread.locked,
+            created_at: thread.created_at.toISOString(),
+            last_message_at: thread.last_message_at.toISOString(),
+          },
+          root,
+          items,
+        });
+      } catch (err) {
+        consola.error("thread:fetch failed", err);
+        socket.emit("thread:error", "Failed to fetch thread");
+      }
+    },
+
     'chat:react': async (payload: { conversationId: string; messageId: string; reactionSrc: string; accessToken: string }) => {
       try {
         const ip = getClientIp();
@@ -809,6 +986,39 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         recipientClientIds(payload.conversationId, access).forEach((cid) => {
           io.sockets.sockets.get(cid)?.emit("chat:deleted", { conversation_id: payload.conversationId, message_id: payload.messageId });
         });
+
+        // Keep the thread counters honest: a reply leaving decrements its
+        // thread, and deleting a root takes the whole thread (and its replies)
+        // with it. GRYT-981.
+        const threadRecips = recipientClientIds(payload.conversationId, access);
+        if (message.thread_id) {
+          const bumped = await decrementThreadReply(message.thread_id);
+          if (bumped) {
+            const upd = {
+              conversation_id: bumped.conversation_id,
+              thread_id: bumped.thread_id,
+              root_message_id: bumped.root_message_id,
+              reply_count: bumped.reply_count,
+              last_message_at: bumped.last_message_at.toISOString(),
+              status: bumped.status,
+            };
+            threadRecips.forEach((cid) => io.sockets.sockets.get(cid)?.emit("thread:updated", upd));
+          }
+        } else {
+          const rootThread = await getThreadByRoot(payload.messageId);
+          if (rootThread) {
+            const removed = await deleteThread(rootThread.thread_id);
+            if (removed) {
+              threadRecips.forEach((cid) =>
+                io.sockets.sockets.get(cid)?.emit("thread:deleted", {
+                  conversation_id: removed.conversation_id,
+                  thread_id: rootThread.thread_id,
+                  root_message_id: removed.root_message_id,
+                }),
+              );
+            }
+          }
+        }
       } catch (err) {
         consola.error("chat:delete failed", err);
         socket.emit("chat:error", "Failed to delete message");
