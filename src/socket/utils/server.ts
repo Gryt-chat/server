@@ -6,6 +6,7 @@ import { FALLBACK_ROLE_ID, PERMISSIONS } from "../../constants/permissions";
 import { getEffectiveStanding } from "../../services/permissions";
 import { joinableChannelIds, postableChannelIds, visibleChannelIds } from "../../services/channelPermissions";
 import { getAcceptedIdentityTiers } from "../../auth/identity";
+import { announcedPlugins } from "../../plugins";
 import { getVoiceSeatLimit } from "../../utils/voiceSeats";
 import { syncAllClients, broadcastMemberList } from "./clients";
 import { clientMayReceive, refreshAllClientPermissions } from "./standing";
@@ -420,6 +421,16 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
       avatar_max_bytes: cfgAvatarMaxBytes,
       upload_max_bytes: cfgUploadMaxBytes,
       version: process.env.SERVER_VERSION || "1.0.0",
+      /**
+       * The plugins this server runs that asked to be visible (GRYT-939).
+       *
+       * Empty on almost every server, and empty by default on one running
+       * plugins — a plugin has to ask in its own manifest. It is here rather
+       * than in `server:info` because that goes out before joining, and what
+       * an operator runs is not something to hand to anybody who can reach the
+       * port.
+       */
+      plugins: announcedPlugins(),
     },
   };
 
