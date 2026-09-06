@@ -11,6 +11,7 @@ import {
   insertMessage,
   listMessages,
   listServerChannels,
+  getServerChannel,
   MessageRecord,
   getUserByServerId,
   getUsersByServerIds,
@@ -319,6 +320,19 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           socket.emit("chat:error", {
             error: "forbidden",
             message: "This channel is read-only for your role.",
+          });
+          return;
+        }
+
+        // An automated channel takes posts only from bots, webhooks and the
+        // system. Webhooks and system messages insert directly and never reach
+        // this handler, so the gate here is simply: a human is refused, a bot
+        // is not. DMs are never automated. GRYT-982.
+        const automatedChannel = access.kind === "dm" ? null : await getServerChannel(payload.conversationId);
+        if (automatedChannel?.automated && !isBotIdentity(auth.tokenPayload.grytUserId)) {
+          socket.emit("chat:error", {
+            error: "automated_channel",
+            message: "This is an automated channel — only bots and the system can post here.",
           });
           return;
         }

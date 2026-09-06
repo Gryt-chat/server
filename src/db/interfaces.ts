@@ -383,6 +383,17 @@ export interface ServerChannelRecord {
   esports_mode: boolean;
   text_in_voice: boolean;
   /**
+   * How a text channel is presented: a normal chat stream, or a forum of
+   * topics. Voice channels ignore it. GRYT-981 Stage 2.
+   */
+  layout: "chat" | "forum";
+  /**
+   * An automated channel: only bots, webhooks and system messages may post. A
+   * human holding send_messages is still refused, in the send path itself.
+   * GRYT-982.
+   */
+  automated: boolean;
+  /**
    * Minimum rank required to post. Null means anybody holding send_messages,
    * which is every channel unless an operator narrows it.
    */

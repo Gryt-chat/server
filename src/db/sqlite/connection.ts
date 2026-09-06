@@ -232,6 +232,10 @@ function createSchema(d: DatabaseSync): void {
       max_bitrate INTEGER,
       esports_mode INTEGER NOT NULL DEFAULT 0,
       text_in_voice INTEGER NOT NULL DEFAULT 0,
+      -- How a text channel is presented (chat stream vs forum of topics) and
+      -- whether only bots/webhooks/system may post. GRYT-981 / GRYT-982.
+      layout TEXT NOT NULL DEFAULT 'chat',
+      automated INTEGER NOT NULL DEFAULT 0,
       -- Both of these are migrated into channel_permission_scopes on upgrade
       -- and nothing reads them afterwards. They stay so that a server rolled
       -- back to an older build still enforces the gate it had, which a dropped
@@ -823,6 +827,16 @@ function runMigrations(d: DatabaseSync): void {
   // createSchema, which runs CREATE TABLE IF NOT EXISTS on every boot. GRYT-981.
   if (!hasColumn(d, "messages", "thread_id")) {
     d.exec("ALTER TABLE messages ADD COLUMN thread_id TEXT");
+  }
+
+  // A text channel's presentation and its write policy. Additive and
+  // idempotent; existing channels default to a normal chat everyone can post
+  // in. GRYT-981 / GRYT-982.
+  if (!hasColumn(d, "channels", "layout")) {
+    d.exec("ALTER TABLE channels ADD COLUMN layout TEXT NOT NULL DEFAULT 'chat'");
+  }
+  if (!hasColumn(d, "channels", "automated")) {
+    d.exec("ALTER TABLE channels ADD COLUMN automated INTEGER NOT NULL DEFAULT 0");
   }
 
   d.prepare("UPDATE server_config SET avatar_thumb_px = ?").run(AVATAR_THUMB_PX);
