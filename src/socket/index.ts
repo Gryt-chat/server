@@ -25,6 +25,7 @@ import { registerDirectMessageHandlers } from "./handlers/dm";
 import { registerVoiceHandlers } from "./handlers/voice";
 import { endRingsFor, registerCallHandlers } from "./handlers/calls";
 import { registerMemberHandlers } from "./handlers/members";
+import { registerSessionHandlers } from "./handlers/sessions";
 import { registerDiagnosticsHandlers } from "./handlers/diagnostics";
 import { registerVoiceLatencyHandlers } from "./handlers/voiceLatency";
 import { registerReportHandlers } from "./handlers/reports";
@@ -380,6 +381,7 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
     ...registerVoiceHandlers(ctx),
     ...registerCallHandlers(ctx),
     ...registerMemberHandlers(ctx),
+    ...registerSessionHandlers(ctx),
     ...registerReportHandlers(ctx),
     ...registerBlockHandlers(ctx),
     ...registerDiagnosticsHandlers(ctx),
