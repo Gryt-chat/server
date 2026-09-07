@@ -25,6 +25,11 @@ jobs:
       # server#53 merged with no automated verification beyond a local run.
       - run: yarn test
 
+      # examples/ is the plugin operators copy. It is plain .mjs against the
+      # same api object `createPluginApi` builds, so a change to that surface
+      # breaks here rather than in somebody's server log.
+      - run: yarn test:examples
+
       # `build` is tsc. Named that way in package.json, but it is the
       # type check, and it is what stops a PR compiling only on the author's
       # machine.
