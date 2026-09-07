@@ -8,6 +8,7 @@ import { generateAccessToken, generateFileToken, verifyAccessToken } from "../..
 import {
   getServerConfig,
   getUserByServerId,
+  setUserAvatar,
   setUserInactive,
   purgeOrphanedConversations,
   getRefreshToken,
@@ -136,13 +137,43 @@ export function registerJoinHelpers(ctx: HandlerContext): EventHandlerMap {
       try {
         const clientInfo = clientsInfo[clientId];
         if (!clientInfo || !clientInfo.serverUserId || clientInfo.serverUserId.startsWith("temp_")) {
-          socket.emit("server:error", "You are not a registered user");
+          socket.emit("server:error", {
+            error: "not_registered",
+            message: "You are not a registered member of this server.",
+          });
           return;
         }
 
         const { nickname, serverUserId } = clientInfo;
 
+        // The owner cannot leave. There is exactly one -- ownership is
+        // `server_config.owner_gryt_user_id`, not a role somebody else can also
+        // hold -- so leaving would put the server beyond anybody's reach, with
+        // no settings, no moderation and no way to hand it over. Nothing
+        // stopped this before, because until now the client's Leave button
+        // never reached this handler at all.
+        const config = await getServerConfig();
+        if (clientInfo.grytUserId && config?.owner_gryt_user_id === clientInfo.grytUserId) {
+          socket.emit("server:error", {
+            error: "owner_cannot_leave",
+            message:
+              "You own this server, so leaving it would leave nobody able to " +
+              "administer it. Hand ownership to somebody else first, or remove " +
+              "it from your sidebar instead.",
+          });
+          return;
+        }
+
         await setUserInactive(serverUserId);
+
+        // The picture goes, the row stays. Nothing points at the file once the
+        // column is cleared, so the media sweep collects it; what is kept is
+        // the nickname and the membership row, which is what the messages they
+        // wrote are attributed to. Rejoining rebinds to that same row and
+        // uploads a new picture, so this costs a re-upload and nothing else.
+        await setUserAvatar(serverUserId, null).catch((e) =>
+          consola.warn("clearing the avatar on leave failed", e),
+        );
 
         // Plugins hear about it (GRYT-933). Emitted here rather than on a
         // socket disconnect, which happens every time somebody closes a laptop
@@ -179,7 +210,7 @@ export function registerJoinHelpers(ctx: HandlerContext): EventHandlerMap {
         socket.emit("server:left", { message: "Successfully left the server" });
       } catch (err) {
         consola.error("server:leave failed", err);
-        socket.emit("server:error", "Failed to leave server");
+        socket.emit("server:error", { error: "leave_failed", message: "Could not leave this server." });
       }
     },
 
