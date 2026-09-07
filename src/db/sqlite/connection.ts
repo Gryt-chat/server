@@ -327,10 +327,6 @@ function createSchema(d: DatabaseSync): void {
     -- automatic promotion is measured on. Without it that count is a full scan
     -- of the table on every message anybody sends.
     CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_server_id);
-    -- Thread replies are fetched by thread, and filtered out of the channel
-    -- timeline. Both want an index on thread_id. GRYT-981.
-    CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);
-
     -- A thread hangs off one root message in a conversation. The root stays in
     -- the timeline; the replies carry messages.thread_id and are kept out of it.
     -- root_message_id is unique: a message roots at most one thread. GRYT-981.
@@ -830,6 +826,17 @@ function runMigrations(d: DatabaseSync): void {
   if (!hasColumn(d, "messages", "thread_id")) {
     d.exec("ALTER TABLE messages ADD COLUMN thread_id TEXT");
   }
+
+  // Built here rather than in createSchema, because createSchema runs first and
+  // an index cannot name a column that only this migration adds. It used to sit
+  // beside the other message indexes, where on every already-existing database
+  // it threw `no such column: thread_id` — which aborted createSchema, so
+  // runMigrations never ran, the column was never added, and the threads table
+  // and everything after that statement were never created either. The server
+  // came up and could not read a single message, on every boot, for good. Fresh
+  // databases were fine, because there CREATE TABLE names the column itself,
+  // which is why beta was healthy while every upgraded server was not. GRYT-974.
+  d.exec("CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id)");
 
   // A text channel's presentation and its write policy. Additive and
   // idempotent; existing channels default to a normal chat everyone can post
