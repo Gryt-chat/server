@@ -124,3 +124,77 @@ export async function evictUser(params: {
     s.disconnect(true);
   }
 }
+
+/**
+ * Drop a member's *other* sockets, keeping the one that asked.
+ *
+ * The sign-out counterpart to `evictUser`, and deliberately not the same
+ * function. A kick emits `server:kicked`, which the client reads as "this
+ * server is gone" and takes out of the sidebar — right for a ban, wrong for
+ * someone tidying up their own sessions, who is still a member and still
+ * sitting in the server on the device they did it from.
+ *
+ * It also does less on purpose: no `setUserInactive`, because signing out is
+ * not leaving. The caller has already moved the member's `token_version`, which
+ * is what makes the tokens on those other devices useless; this is what makes
+ * it immediate rather than waiting for them to speak.
+ *
+ * Voice is torn down for the sockets that go. Disconnecting does not touch the
+ * media path, and the disconnect handler deliberately stashes voice state so a
+ * dropped connection can resume — which for a session that was just signed out
+ * is the opposite of what is wanted (GRYT-611).
+ *
+ * Returns how many sockets were dropped, so the caller can tell the member what
+ * happened.
+ */
+export async function disconnectOtherSessions(params: {
+  io: SocketIoServer;
+  clientsInfo: Clients;
+  serverId: string;
+  sfuClient: { disconnectUser(roomId: string, userId: string): Promise<void>; untrackUserConnection(userId: string): void } | null;
+  targetGrytUserId: string;
+  keepSocketId: string;
+}): Promise<number> {
+  const { io, clientsInfo, serverId, sfuClient, targetGrytUserId, keepSocketId } = params;
+  let dropped = 0;
+
+  for (const [sid, s] of io.sockets.sockets) {
+    if (sid === keepSocketId) continue;
+    const ci = clientsInfo[sid];
+    if (!ci) continue;
+    if (ci.grytUserId !== targetGrytUserId) continue;
+
+    if (ci.hasJoinedChannel && ci.voiceChannelId) {
+      const roomId = sfuRoomId(serverId, ci.voiceChannelId);
+      if (sfuClient) {
+        await sfuClient
+          .disconnectUser(roomId, ci.serverUserId)
+          .catch((e) => consola.warn("SFU disconnect on sign-out failed", e));
+        sfuClient.untrackUserConnection(ci.serverUserId);
+      }
+      forgetStashedVoiceState(ci.serverUserId);
+
+      s.to(voiceRoomName(serverId, ci.voiceChannelId)).emit("voice:peer:left", {
+        clientId: sid,
+        nickname: ci.nickname,
+        channelId: ci.voiceChannelId,
+      });
+
+      ci.hasJoinedChannel = false;
+      ci.voiceChannelId = "";
+      ci.streamID = "";
+      ci.isConnectedToVoice = false;
+    }
+
+    // The same event the gates emit when a stale token turns up, so a client
+    // that already knows how to react to one needs nothing new for this.
+    s.emit("token:revoked", {
+      reason: "signed_out_elsewhere",
+      message: "You signed out of this device from somewhere else.",
+    });
+    s.disconnect(true);
+    dropped += 1;
+  }
+
+  return dropped;
+}
