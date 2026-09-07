@@ -1,0 +1,10 @@
+{
+  "id": "crosspost-guard",
+  "name": "Crosspost guard",
+  "version": "1.0.0",
+  "main": "index.mjs",
+  "author": "Gryt",
+  "description": "Deletes the same message when it lands in several channels at once, and bans whoever keeps doing it",
+  "homepage": "https://docs.gryt.chat/docs/server/plugins",
+  "capabilities": ["messages:read", "moderation"]
+}

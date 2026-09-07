@@ -1,0 +1,10 @@
+{
+  "id": "presence",
+  "name": "Presence",
+  "version": "1.0.0",
+  "main": "index.mjs",
+  "author": "Gryt",
+  "description": "Shows what people are playing, for anybody running the client half",
+  "homepage": "https://docs.gryt.chat/docs/guide/plugin-pairs",
+  "capabilities": ["messaging", "members:read"]
+}
