@@ -227,6 +227,7 @@ export function registerJoinHelpers(ctx: HandlerContext): EventHandlerMap {
             nickname: user.nickname,
             serverHost: socket.handshake.headers.host || "unknown",
             tokenVersion: currentVersion,
+            userTokenVersion: user.token_version ?? 0,
           };
           const newAccessToken = generateAccessToken(refreshedPayload);
           // Re-minted with the access token rather than on its own timer. A
@@ -276,7 +277,29 @@ export function registerJoinHelpers(ctx: HandlerContext): EventHandlerMap {
             return;
           }
 
-          const renewed = { grytUserId, serverUserId, nickname, serverHost, tokenVersion: currentVersion };
+          // The branch that made revocation not work. It re-mints from the
+          // claims of a token the caller already holds, so a client that
+          // refreshes before its fifteen minutes are up renews forever. The
+          // refresh-token branch above checks `revoked`; this one never did,
+          // so signing out of every device left a running client untouched.
+          // Now a token minted before the member's token_version was bumped is
+          // refused here too, and the new one carries the current value.
+          if ((decoded.userTokenVersion ?? 0) !== (gate.user.token_version ?? 0)) {
+            socket.emit("token:revoked", {
+              reason: "user_token_version_mismatch",
+              message: "Your session was ended. Please sign in again.",
+            });
+            return;
+          }
+
+          const renewed = {
+            grytUserId,
+            serverUserId,
+            nickname,
+            serverHost,
+            tokenVersion: currentVersion,
+            userTokenVersion: gate.user.token_version ?? 0,
+          };
           const newToken = generateAccessToken(renewed);
           const newFileToken = generateFileToken(renewed);
           if (clientsInfo[clientId]) {

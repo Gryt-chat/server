@@ -84,6 +84,7 @@ function createSchema(d: DatabaseSync): void {
       is_server_muted INTEGER NOT NULL DEFAULT 0,
       is_server_deafened INTEGER NOT NULL DEFAULT 0,
       server_mute_expires_at TEXT,
+      token_version INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       last_seen TEXT NOT NULL
     );
@@ -568,6 +569,15 @@ function runMigrations(d: DatabaseSync): void {
     if (needsBackfill.cnt > 0) {
       d.exec("UPDATE users SET created_at = last_seen WHERE created_at = '' OR created_at IS NULL");
     }
+  }
+
+  // Per-member token invalidation, the counterpart to server_config's
+  // token_version. Additive with a constant default, so existing members start
+  // at 0 and every token they already hold still matches until something bumps
+  // it. No index: an index here would have to be built after this column
+  // exists, and createSchema runs first (GRYT-974).
+  if (!hasColumn(d, "users", "token_version")) {
+    d.exec("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0");
   }
 
   if (!hasColumn(d, "channels", "post_min_rank")) {

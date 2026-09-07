@@ -10,7 +10,7 @@ import { unlink, readFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { deleteObject, putObject, getObject } from "../storage";
-import { insertFile, insertImageJob, getFile, updateFileRecord, updateUserAvatar, setUserAvatar, getServerConfig, DEFAULT_AVATAR_MAX_BYTES, DEFAULT_UPLOAD_MAX_BYTES } from "../db";
+import { insertFile, insertImageJob, getFile, updateFileRecord, updateUserAvatar, setUserAvatar, getServerConfig, getUserByServerId, DEFAULT_AVATAR_MAX_BYTES, DEFAULT_UPLOAD_MAX_BYTES } from "../db";
 import { isSealedUpload, storageForUpload } from "./uploadStorage";
 import { requireBearerToken } from "../middleware/requireBearerToken";
 import { verifyFileToken } from "../utils/jwt";
@@ -615,6 +615,15 @@ async function mayReadFiles(req: Request): Promise<boolean> {
     const cfg = await getServerConfig();
     const currentVersion = cfg?.token_version ?? 0;
     if ((payload.tokenVersion ?? 0) !== currentVersion) return false;
+
+    // Per-member revocation. This one matters more here than anywhere else: a
+    // file token lives twelve hours against an access token's fifteen minutes,
+    // so without this a session that was ended keeps reading uploads for the
+    // rest of the day. Costs one indexed lookup on a request that is already
+    // hitting the database for the config. GRYT-973.
+    const member = await getUserByServerId(payload.serverUserId);
+    if (!member) return false;
+    if ((payload.userTokenVersion ?? 0) !== (member.token_version ?? 0)) return false;
   } catch {
     // The config is unreadable, so the version cannot be checked. Refuse rather
     // than serve: this is the path that had no check at all until GRYT-740.
