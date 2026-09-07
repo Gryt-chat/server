@@ -826,7 +826,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
 
     // The replies inside a thread, plus its root, for when a thread panel opens.
     // Token-less like chat:fetch: permission comes from the verified socket.
-    'thread:fetch': async (payload: { conversationId: string; threadId: string }) => {
+    'thread:fetch': async (payload: { conversationId: string; threadId: string; limit?: number; before?: string }) => {
       try {
         const ip = getClientIp();
         const userId = clientsInfo[clientId]?.serverUserId;
@@ -849,16 +849,29 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           socket.emit("thread:error", { error: "thread_not_found", message: "That thread no longer exists." });
           return;
         }
+        const limit = typeof payload.limit === "number" ? payload.limit : 50;
+        const before = typeof payload.before === "string" ? new Date(payload.before) : undefined;
+
         const hidden = await blockedServerIdsFor(clientsInfo[clientId]?.serverUserId ?? "");
-        const replies = await listThreadMessages(payload.threadId);
+        const replies = await listThreadMessages(payload.threadId, limit, before);
         const visible = hidden.size === 0 ? replies : replies.filter((m) => !hidden.has(m.sender_server_id));
+        /* Counted before the block filter, unlike chat:fetch, which counts
+           after and says so. A full page that is entirely people you have
+           blocked comes back empty, and counting after would report no more
+           history and stop the scrollback there. */
+        const hasMore = replies.length >= limit;
         let items = await enrichMessages(visible);
         items = await enrichAttachments(items);
-        const rootRaw = await getMessageById(payload.conversationId, thread.root_message_id);
+        /* Only on the first page. Paging backwards is asking for older
+           replies; sending the root again with each one would have the client
+           redraw the topic above the divider every time somebody scrolls. */
         let root: (typeof items)[number] | null = null;
-        if (rootRaw && (hidden.size === 0 || !hidden.has(rootRaw.sender_server_id))) {
-          const [enrichedRoot] = await enrichAttachments(await enrichMessages([rootRaw]));
-          root = enrichedRoot ?? null;
+        if (!before) {
+          const rootRaw = await getMessageById(payload.conversationId, thread.root_message_id);
+          if (rootRaw && (hidden.size === 0 || !hidden.has(rootRaw.sender_server_id))) {
+            const [enrichedRoot] = await enrichAttachments(await enrichMessages([rootRaw]));
+            root = enrichedRoot ?? null;
+          }
         }
         socket.emit("thread:history", {
           conversation_id: payload.conversationId,
@@ -876,6 +889,8 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           },
           root,
           items,
+          hasMore,
+          ...(before ? { before: payload.before } : {}),
         });
       } catch (err) {
         consola.error("thread:fetch failed", err);
