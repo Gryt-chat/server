@@ -694,6 +694,10 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           nickname: user.nickname,
           serverHost: socket.handshake.headers.host || "unknown",
           tokenVersion,
+          // Stamped from the row this join already resolved. Joining is the one
+          // moment a session legitimately starts, so whatever the member's
+          // counter reads now is what this token is entitled to.
+          userTokenVersion: user.token_version ?? 0,
         };
 
         const accessToken = generateAccessToken(tokenPayload);

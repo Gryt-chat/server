@@ -505,6 +505,17 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
             grytUserId: tokenPayload.grytUserId,
             serverUserId: tokenPayload.serverUserId,
           });
+          if (gate.ok && (tokenPayload.userTokenVersion ?? 0) !== (gate.user.token_version ?? 0)) {
+            // Restoring is how a client comes back after a reconnect, so it is
+            // the path a revoked session would otherwise slip through: the
+            // socket drops, reconnects, and hands over the same token it had
+            // before anyone ended it. GRYT-973.
+            socket.emit("token:revoked", {
+              reason: "user_token_version_mismatch",
+              message: "Your session was ended. Please sign in again.",
+            });
+            return;
+          }
           if (!gate.ok) {
             // Only a ban says `server:kicked`, because the client takes the
             // server out of the sidebar on that. "Not a member" is ambiguous —

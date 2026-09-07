@@ -23,6 +23,17 @@ export interface TokenPayload {
   nickname: string;
   serverHost: string;
   tokenVersion: number;
+  /**
+   * The member's own `users.token_version` when this token was minted, checked
+   * against the current one by every gate. `tokenVersion` above is the
+   * server-wide counter; this is the per-member one, so a single person's
+   * sessions can be ended without touching anybody else's.
+   *
+   * Optional, and read as 0 when absent: tokens minted before this existed
+   * carry nothing, and members start at 0, so those tokens keep working until
+   * something actually revokes them. Nobody is signed out by the deploy.
+   */
+  userTokenVersion?: number;
 }
 
 export function generateAccessToken(payload: TokenPayload): string {

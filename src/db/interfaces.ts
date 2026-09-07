@@ -59,6 +59,19 @@ export interface UserRecord {
   last_seen: Date;
   last_token_refresh?: Date;
   is_active: boolean;
+  /**
+   * Bumped to invalidate every access token this member is already holding.
+   *
+   * The per-server `server_config.token_version` is the same idea for everyone
+   * at once, which is what a ban uses. This one is per member, so signing out
+   * of every device, changing an email or a password, or recovering a stolen
+   * session can end that member's sessions without ending anybody else's.
+   *
+   * A token carries the value it was minted with. Every gate compares the two
+   * and refuses a token from before the bump, so the longest a revoked session
+   * can survive is the moment it next speaks to the server.
+   */
+  token_version: number;
   /** Server mute and deafen, which belong to the user rather than the socket. */
   is_server_muted: boolean;
   is_server_deafened: boolean;

@@ -63,6 +63,16 @@ export async function requireBearerToken(req: Request, res: Response, next: Next
       res.status(403).json({ error: gate.code, message: gate.message });
       return;
     }
+
+    // Per-member revocation, on the row the gate above already loaded, so it
+    // costs no extra query. A token minted before this member's token_version
+    // was bumped is refused here — which is what makes signing out of every
+    // device, or changing an email or password, end the sessions that are
+    // already running instead of waiting for each token to expire.
+    if ((payload.userTokenVersion ?? 0) !== (gate.user.token_version ?? 0)) {
+      res.status(401).json({ error: "token_revoked", message: "Session ended. Please sign in again." });
+      return;
+    }
   } catch {
     res.status(503).json({ error: "unavailable", message: "Could not verify membership." });
     return;

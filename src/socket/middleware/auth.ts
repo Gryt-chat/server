@@ -147,6 +147,19 @@ export async function requireAuth(
     return null;
   }
 
+  // Per-member revocation, read off the row the gate just loaded. The check
+  // above is the server-wide counter, which ends everybody's sessions at once;
+  // this ends one member's. Emitted as token:revoked, the same event the
+  // server-wide bump uses, so a client that already knows how to react to one
+  // needs no new handling for the other.
+  if ((tokenPayload.userTokenVersion ?? 0) !== (gate.user.token_version ?? 0)) {
+    socket.emit("token:revoked", {
+      reason: "user_token_version_mismatch",
+      message: "Your session was ended. Please sign in again.",
+    });
+    return null;
+  }
+
   const standing = await standingOf(tokenPayload);
 
   if (options?.permission && !standing.permissions.has(options.permission)) {

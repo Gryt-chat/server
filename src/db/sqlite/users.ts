@@ -15,6 +15,7 @@ function rowToUser(r: Record<string, unknown>): UserRecord {
     created_at: fromIso(r.created_at as string),
     last_seen: fromIso(r.last_seen as string),
     is_active: intToBool(r.is_active as number),
+    token_version: Number(r.token_version ?? 0),
     is_server_muted: intToBool(r.is_server_muted as number),
     is_server_deafened: intToBool(r.is_server_deafened as number),
     server_mute_expires_at: r.server_mute_expires_at
@@ -131,6 +132,9 @@ export async function upsertUser(
     is_server_muted: false,
     is_server_deafened: false,
     server_mute_expires_at: null,
+    // Matches the column default. A member who has just joined has nothing to
+    // revoke, and the token minted for this join carries the same zero.
+    token_version: 0,
     nickname_change_count: 0,
     nickname_changed_at: null,
     // A new member has not designed anything yet, so their owl is whatever
@@ -325,4 +329,32 @@ export async function replaceUserIdentity(
   }
   await revokeUserRefreshTokens(oldGrytUserId).catch(() => {});
   return { oldGrytUserId, ownerUpdated };
+}
+
+/**
+ * End every session this member currently holds.
+ *
+ * Two things have to move together, which is why they live in one function.
+ * Bumping `token_version` invalidates the access tokens already in their
+ * client's hands: each token carries the value it was minted with, and every
+ * gate refuses one that is behind. Revoking the refresh tokens stops a new
+ * access token being minted from a stored one.
+ *
+ * Doing only the first leaves the client able to mint a fresh token from its
+ * refresh token. Doing only the second leaves the token it is already holding
+ * good until it expires, which is what made signing out of every device not
+ * actually sign anybody out.
+ *
+ * Keyed on the account, not the membership, so a member with more than one row
+ * here loses all of them at once.
+ *
+ * This is the lever. Nothing calls it yet — the places that should (signing out
+ * everywhere, an email or password change, recovering a stolen session) are
+ * wired up separately, and each one is a decision about when a session should
+ * end rather than about how. GRYT-973.
+ */
+export async function revokeUserSessions(grytUserId: string): Promise<void> {
+  const db = getSqliteDb();
+  db.prepare("UPDATE users SET token_version = token_version + 1 WHERE gryt_user_id = ?").run(grytUserId);
+  await revokeUserRefreshTokens(grytUserId).catch(() => {});
 }
