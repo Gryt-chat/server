@@ -7,18 +7,8 @@ import type { CensorStyle, ProfanityMode } from "../utils/profanityFilter";
 export type { CensorStyle, ProfanityMode };
 
 /**
- * What a server asks of somebody who is not already a member. `invite` is the
- * default, `open` lets anyone the server accepts walk in, and `request` sits
- * between: anybody may ask, nobody gets in until an admin says so.
- *
- * **Deliberately not about identity tiers**, which are `GRYT_IDENTITY_TIERS`.
- * Keeping them apart makes "accounts walk in, guests need an invite" a
- * combination rather than a special case.
- */
-/**
- * A list rather than a union, because the normaliser that reads the column and
- * the settings patch that writes it both check against it. With their own
- * copies they drifted, and `request` could not be selected at all (GRYT-792).
+ * Not about identity tiers. A list, because the reader and the writer both check
+ * against it and drifted when they each had their own.
  */
 export const JOIN_POLICIES = ["invite", "open", "request"] as const;
 
@@ -29,12 +19,8 @@ export function isJoinPolicy(v: unknown): v is JoinPolicy {
   return typeof v === "string" && (JOIN_POLICIES as readonly string[]).includes(v);
 }
 
-/**
- * Somebody asking to be let in, on a `request` server. One row per identity, so
- * asking repeatedly builds no queue. The row is kept after the decision: an
- * approval outlives the connection that asked, and a vanished denial would let
- * them ask again immediately.
- */
+/** One row per identity, so asking repeatedly builds no queue, and kept after
+    the decision, or a denial lets them ask again immediately. */
 export interface ServerJoinRequestRecord {
   gryt_user_id: string;
   nickname: string;
@@ -59,70 +45,39 @@ export interface UserRecord {
   last_seen: Date;
   last_token_refresh?: Date;
   is_active: boolean;
-  /**
-   * Bumped to invalidate every access token this member is already holding.
-   *
-   * The per-server `server_config.token_version` is the same idea for everyone
-   * at once, which is what a ban uses. This one is per member, so signing out
-   * of every device, changing an email or a password, or recovering a stolen
-   * session can end that member's sessions without ending anybody else's.
-   *
-   * A token carries the value it was minted with. Every gate compares the two
-   * and refuses a token from before the bump, so the longest a revoked session
-   * can survive is the moment it next speaks to the server.
-   */
+  /** Per member, where `server_config.token_version` is everybody at once. A
+      revoked session survives until it next speaks to the server. */
   token_version: number;
   /** Server mute and deafen, which belong to the user rather than the socket. */
   is_server_muted: boolean;
   is_server_deafened: boolean;
   /** When a timed mute lifts. Null means it stays until removed. */
   server_mute_expires_at: Date | null;
-  /**
-   * How many times this member has renamed themselves here, and when they last
-   * did. Deliberately a count and a time rather than the names — see the
-   * migration in `connection.ts`. Null and zero mean "not since this was
-   * recorded", which for rows that predate it is not the same as "never".
-   */
+  /** A count and a time rather than the names. Zero means not since this was
+      recorded, which for older rows is not the same as never. */
   nickname_change_count: number;
   nickname_changed_at: Date | null;
-  /**
-   * What this member says their DM public key is (GRYT-720). **Opaque here on
-   * purpose** — nothing on this server reads, verifies or acts on it, because a
-   * server vouching for the binding would be vouching for what a member has to
-   * check anyway. Null for anybody who has not sent one.
-   */
+  /** Opaque on purpose: a server vouching for the binding would vouch for what a
+      member has to check anyway. */
   dm_key_binding: string | null;
-  /**
-   * What this member's owl is wearing, as the string `@gryt/owl` encodes, or
-   * null when they have no designed look. Stored and passed on without being
-   * read — see `utils/wornString.ts`.
-   */
+  /** Null when they have no designed look. Stored and passed on without being
+      read — see `utils/wornString.ts`. */
   avatar_worn: string | null;
 }
 
 // ── Conversation types ───────────────────────────────────────────
 
-/**
- * A conversation that is not a channel. `messages.conversation_id` holds both
- * kinds of id, and which one it is decides who may read it.
- */
+/** `messages.conversation_id` holds both kinds of id, and which one it is
+    decides who may read it. */
 export interface ConversationRecord {
   conversation_id: string;
-  /**
-   * A `dm` has an id derived from its pair, which makes opening it idempotent
-   * from either end. A `group` has a random one, because a derived id cannot
-   * survive somebody being added.
-   */
+  /** A `dm`'s id is derived from its pair, so opening is idempotent. A `group`'s
+      is random, because a derived id cannot survive an addition. */
   kind: "dm" | "group";
   /** What a group is called, when somebody named it. Always null on a `dm`. */
   name: string | null;
-  /**
-   * A picture somebody uploaded for a group.
-   *
-   * Null is not "no icon" — it means the clients draw one from the name.
-   * Storing a generated image would freeze it against a group that gets
-   * renamed.
-   */
+  /** Null means the clients draw one from the name: a stored generated image
+      would freeze against a rename. */
   icon_file_id: string | null;
   created_by_server_user_id: string | null;
   created_at: Date;
@@ -146,12 +101,8 @@ export interface ForumTag {
 
 export type ThreadStatus = "open" | "solved" | "closed";
 
-/**
- * A thread: a discussion that hangs off one root message in a conversation.
- * The root stays in the normal timeline; replies carry `thread_id` and are kept
- * out of it. `reply_count` / `last_message_at` are counters maintained on every
- * reply and delete. GRYT-981.
- */
+/** The root stays in the normal timeline and replies carry `thread_id` and are
+    kept out of it. The counters are maintained on every reply and delete. */
 export interface ThreadRecord {
   thread_id: string;
   conversation_id: string;
@@ -172,24 +123,16 @@ export interface MessageRecord {
   message_id: string;
   sender_server_id: string;
   text: string | null;
-  /**
-   * The sealed envelope, when this message was encrypted (GRYT-729).
-   *
-   * Opaque. Nothing on this server parses it, and `text` is null whenever it is
-   * set — there is no plaintext copy anywhere, which is the point.
-   */
+  /** Opaque, and `text` is null whenever it is set: there is no plaintext copy
+      anywhere, which is the point. */
   sealed?: string | null;
   created_at: Date;
   edited_at?: Date | null;
   attachments: string[] | null;
   reactions: Reaction[] | null;
   reply_to_message_id?: string | null;
-  /**
-   * The thread this message belongs to, or null for a normal channel message.
-   * Independent of `reply_to_message_id`: a message in a thread may still quote
-   * another message. Thread replies are filtered out of the channel timeline
-   * (see listMessages) so they never appear twice. GRYT-981.
-   */
+  /** Independent of `reply_to_message_id`, since a thread message may still
+      quote one. Replies are filtered out of the channel timeline. */
   thread_id?: string | null;
   sender_nickname?: string;
   sender_avatar_file_id?: string;
@@ -227,24 +170,14 @@ export interface FileRecord {
 
 // ── Server config types ──────────────────────────────────────────
 
-// 100MB is what Cloudflare allows through on Free and Pro, so a higher default
-// only produces a confusing failure for anyone behind a tunnel. Raise them per
-// server if you front it yourself; uploads also accept 0, meaning no limit.
-//
-// Avatars and emoji are re-encoded on the way in, so these govern which source
-// files are accepted rather than what is kept. **What bounds the memory is
-// MAX_INPUT_PIXELS in utils/imageValidation, not these.**
+// 100MB is what Cloudflare allows on Free and Pro, so a higher default only
+// confuses anyone behind a tunnel. Memory is bounded by MAX_INPUT_PIXELS.
 export const DEFAULT_AVATAR_MAX_BYTES = 8 * 1024 * 1024;
 export const DEFAULT_UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
 export const DEFAULT_EMOJI_MAX_BYTES = 2 * 1024 * 1024;
 
-/**
- * How many files one message may carry.
- *
- * There was no limit. The size cap is per file, so a single message could name
- * a hundred of them and the only bound was how many the sender could upload
- * first.
- */
+/** The size cap is per file, so without this one message can name a hundred of
+    them. */
 export const DEFAULT_MAX_ATTACHMENTS_PER_MESSAGE = 10;
 export const DEFAULT_VOICE_MAX_BITRATE_BPS = 96_000;
 
@@ -266,15 +199,8 @@ export interface ServerConfigRecord {
   system_channel_id: string | null;
   lan_open: boolean;
   join_policy: JoinPolicy;
-  /**
-   * Which role somebody lands on first, split by how they proved who they are —
-   * an account is durable, a local key is regenerable in two seconds. A public
-   * server hands the first `member` and the second `guest`, which one column
-   * cannot express.
-   *
-   * Both default to `member`. Making a server read-only for strangers is a
-   * decision in the role editor, not something an upgrade does.
-   */
+  /** Split by tier, because a public server hands an account `member` and a
+      local key `guest`. Both default to `member`. */
   default_role_account: string;
   default_role_local: string;
   bot_join_policy: BotJoinPolicy;
@@ -285,13 +211,8 @@ export interface ServerConfigRecord {
   updated_at: Date;
 }
 
-/**
- * Which role somebody holds, as a `role_definitions.role_id`. A bare string,
- * since a server defines its own roles.
- *
- * Nothing validates it here. An id with no definition resolves to the fallback
- * role rather than being rejected on read — see `normalizeRoleId`.
- */
+/** A bare string, since a server defines its own roles. An id with no definition
+    resolves to the fallback rather than being rejected on read. */
 export type ServerRole = string;
 
 export interface ServerRoleRecord {
@@ -302,13 +223,8 @@ export interface ServerRoleRecord {
 }
 
 /**
- * A role, as opposed to somebody holding one. `rank` answers who may act on
- * whom; `permissions` answers what the holder may do at all. **Deliberately
- * independent** — a rank-90 auditor holding nothing but `view_audit_log`
- * outranks the moderators without gaining any of their powers.
- *
- * `is_system` marks the five that ship. They can be renamed, recoloured and
- * re-permissioned, and cannot be deleted: the defaults fall back to them.
+ * `rank` is who may act on whom and `permissions` what the holder may do.
+ * The five `is_system` roles are editable and never deletable.
  */
 export interface RoleDefinitionRecord {
   role_id: string;
@@ -318,20 +234,11 @@ export interface RoleDefinitionRecord {
   rank: number;
   permissions: Permission[];
   is_system: boolean;
-  /**
-   * Whether an invite may be bound to this role. Off until somebody ticks it,
-   * so nothing is invite-grantable by default. Never settable on the owner or
-   * admin roles, or on a role carrying a permission that grants permissions —
-   * see `services/inviteRoles.ts`, which is where the rules live.
-   */
+  /** Off until somebody ticks it, and never settable on owner, admin, or a role
+      that grants permissions. The rules live in `services/inviteRoles.ts`. */
   grantable_by_invite: boolean;
-  /**
-   * What this role asks before granting itself. Both null means never; both set
-   * means **both have to be true** — time alone is how a trusted tier lands on
-   * an account that signed up a month ago and never spoke.
-   *
-   * Only ever a promotion; nothing here takes a role away.
-   */
+  /** Both null is never and both set means both must be true, since time alone
+      lands a trusted tier on an account that never spoke. Promotion only. */
   auto_grant_after_days: number | null;
   auto_grant_after_messages: number | null;
   created_at: Date;
@@ -342,13 +249,8 @@ export interface RoleDefinitionRecord {
 export type BotStatus = "pending" | "approved" | "denied";
 
 /**
- * A bot, and what an operator agreed to let it do. `requested_permissions` is
- * **written once and never rewritten** — a bot coming back asking for more is
- * asking a question already answered. `granted_permissions` is its entire
- * permission set; bots hold no roles, so no role edit can widen one.
- *
- * `bot_id` is null before the bot exists; `claim_token` is null on a knock and
- * is cleared the moment a registration is claimed.
+ * `requested_permissions` is written once. `granted_permissions` is the bot's
+ * whole set: it holds no roles, so no role edit widens one.
  */
 export interface BotRecord {
   registration_id: string;
@@ -358,11 +260,8 @@ export interface BotRecord {
   description: string | null;
   requested_permissions: Permission[];
   granted_permissions: Permission[];
-  /**
-   * How high a bot sits for the checks about acting on people. Zero means it
-   * cannot kick, ban or mute anybody, which is where most bots should stay:
-   * deleting a message is not acting on a person.
-   */
+  /** Zero means it cannot kick, ban or mute anybody, which is where most bots
+      should stay: deleting a message is not acting on a person. */
   rank: number;
   status: BotStatus;
   created_at: Date;
@@ -371,12 +270,8 @@ export interface BotRecord {
   decided_by_server_user_id: string | null;
 }
 
-/**
- * Whether a bot nobody has heard of may leave a knock.
- *
- * `request` records it and admits nothing. `disabled` refuses at the door, for
- * a server that only wants bots it set up itself with a claim token.
- */
+/** `request` records a knock and admits nothing; `disabled` refuses at the door,
+    for a server that only wants the bots it set up itself. */
 export type BotJoinPolicy = "request" | "disabled";
 
 export interface ServerBanRecord {
@@ -404,38 +299,21 @@ export interface ServerChannelRecord {
   max_bitrate: number | null;
   esports_mode: boolean;
   text_in_voice: boolean;
-  /**
-   * How a text channel is presented: a normal chat stream, or a forum of
-   * topics. Voice channels ignore it. GRYT-981 Stage 2.
-   */
+  /** A normal chat stream or a forum of topics. Voice channels ignore it. */
   layout: "chat" | "forum";
-  /**
-   * An automated channel: only bots, webhooks and system messages may post. A
-   * human holding send_messages is still refused, in the send path itself.
-   * GRYT-982.
-   */
+  /** Only bots, webhooks and system messages may post: a human holding
+      send_messages is still refused, in the send path. */
   automated: boolean;
   /** The tags a forum channel offers its topics. Empty on a normal channel. GRYT-981. */
   forum_tags: ForumTag[];
-  /**
-   * Minimum rank required to post. Null means anybody holding send_messages,
-   * which is every channel unless an operator narrows it.
-   */
+  /** Null means anybody holding send_messages, which is every channel unless an
+      operator narrows it. */
   post_min_rank: number | null;
-  /**
-   * Which permission scope decides what each role may do here. Null means the
-   * channel has no opinion.
-   *
-   * **Never resolve a permission by reading this.** `channelPermissions.ts` is
-   * the one answer and every path goes through it.
-   */
+  /** Null means the channel has no opinion. Never resolve a permission by
+      reading this; `channelPermissions.ts` is the one answer. */
   permission_scope_id: string | null;
-  /**
-   * Both of these are migrated into a permission scope on upgrade and nothing
-   * reads them afterwards. They stay so a server rolled back to an older build
-   * still enforces the gate it had, which dropping the columns would lose
-   * silently. See migrations/rankGates.ts.
-   */
+  /** Migrated into a scope on upgrade and unread afterwards. Kept so a rollback
+      still enforces the gate it had rather than losing it silently. */
   view_min_rank: number | null;
   created_at: Date;
   updated_at: Date;
@@ -445,11 +323,8 @@ export interface ServerChannelRecord {
 export type RuleEffect = "allow" | "deny";
 
 /**
- * A named set of per-role channel rules, or one channel's private set.
- *
- * `is_template` tells the two apart. A template is shared, named, and listed in
- * server settings; a private scope belongs to the one channel that chose
- * "Custom" and dies with it.
+ * `is_template` tells a shared, named, listed template from the private scope
+ * that belongs to one channel and dies with it.
  */
 export interface ChannelPermissionScopeRecord {
   scope_id: string;
@@ -461,11 +336,8 @@ export interface ChannelPermissionScopeRecord {
 }
 
 /**
- * One thing a scope changes.
- *
- * There is no row for "inherit" — that is the absence of one. So a scope that
- * hides a channel from three roles is three rows, and a permission added to the
- * catalogue later needs no backfill.
+ * There is no row for inherit, that is the absence of one, so a permission added
+ * to the catalogue later needs no backfill.
  */
 export interface ChannelPermissionRuleRecord {
   scope_id: string;
@@ -488,15 +360,8 @@ export interface ServerSidebarItemRecord {
   spacer_height: number | null;
   /** The name, for a separator or a folder. Null for the rest. */
   label: string | null;
-  /**
-   * The folder this sits in, or null for the top level.
-   *
-   * **Only a channel may have one.** A folder inside a folder is a tree, and a
-   * tree needs a drop target for every depth; the sidebar has one indent step
-   * and no way to draw a second. Separators and spacers stay at the top level
-   * for the same reason: they divide the list, and a divider inside a folder
-   * divides nothing.
-   */
+  /** Only a channel may have one: the sidebar has one indent step, and a divider
+      inside a folder divides nothing. */
   parent_item_id: string | null;
   created_at: Date;
   updated_at: Date;
@@ -514,10 +379,8 @@ export interface ServerInviteRecord {
   uses_consumed: number;
   /** The role this invite grants on a first join, or null for none. */
   granted_role_id: string | null;
-  /**
-   * The rank that role carried when it was bound. A role that has climbed
-   * since is not the role that was agreed to, so the grant is refused.
-   */
+  /** A role that has climbed since is not the one that was agreed to, so the
+      grant is refused. */
   granted_role_rank: number | null;
   revoked: boolean;
   note: string | null;
@@ -614,9 +477,8 @@ export interface ReportRecord {
 }
 
 /**
- * A report about a person rather than a message. `status` deliberately does not
- * reuse the message queue's "approved", which applied to a person reads as
- * approving of them.
+ * `status` does not reuse the message queue's "approved", which applied to a
+ * person reads as approving of them.
  */
 export interface UserReportRecord {
   report_id: string;
