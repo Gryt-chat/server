@@ -208,3 +208,69 @@ describe("a mention knows which thread it was in", () => {
     assert.equal(rows.length, 1);
   });
 });
+
+/**
+ * Reading a channel is not reading the threads hanging off it.
+ *
+ * The client filters thread replies out of the channel timeline and shows the
+ * root instead, so a reply that named somebody was never on screen. Clearing
+ * it when the channel opened took the count off the topic row on the way in,
+ * before anybody could see which topic it pointed at (GRYT-1014).
+ */
+describe("marking mentions seen is scoped to what was on screen", () => {
+  const CONV = "conv-seen";
+  const THREAD_A = "thread-seen-a";
+  const THREAD_B = "thread-seen-b";
+  const WHO = "user-seen";
+
+  before(async () => {
+    for (const [id, thread] of [
+      ["seen-channel", null],
+      ["seen-thread-a", THREAD_A],
+      ["seen-thread-b", THREAD_B],
+    ] as const) {
+      await insertMessage({
+        conversation_id: CONV,
+        message_id: id,
+        sender_server_id: "someone",
+        text: "@named",
+        attachments: null,
+        reactions: null,
+        ...(thread ? { thread_id: thread } : {}),
+      });
+      await recordMentions({
+        conversationId: CONV,
+        messageId: id,
+        senderServerUserId: "someone",
+        serverUserIds: [WHO],
+      });
+    }
+  });
+
+  it("clears the channel's own mentions and leaves the threads alone", async () => {
+    assert.equal(await markMentionsSeen(WHO, CONV), 1);
+
+    const left = await listUnseenMentions(WHO);
+    assert.deepEqual(
+      left.filter((r) => r.conversation_id === CONV).map((r) => r.message_id).sort(),
+      ["seen-thread-a", "seen-thread-b"],
+    );
+  });
+
+  it("clears one thread without touching the other", async () => {
+    assert.equal(await markMentionsSeen(WHO, CONV, THREAD_A), 1);
+
+    const left = await listUnseenMentions(WHO);
+    assert.deepEqual(
+      left.filter((r) => r.conversation_id === CONV).map((r) => r.message_id),
+      ["seen-thread-b"],
+    );
+  });
+
+  it("clears everything when no conversation is named, threads included", async () => {
+    // What a "mark all read" wants, and the way out if a thread stops being
+    // reachable — a deleted forum topic would otherwise hold its count forever.
+    assert.equal(await markMentionsSeen(WHO), 1);
+    assert.equal((await listUnseenMentions(WHO)).length, 0);
+  });
+});

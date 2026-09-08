@@ -101,23 +101,53 @@ export async function countUnseenMentions(
  * Mark what they have read, by conversation rather than by message. No
  * conversation clears everything. Already-seen rows are left alone, so the time
  * recorded stays the first time they saw it.
+ *
+ * A conversation on its own clears what was on screen: the mentions whose
+ * message sits in the channel timeline. A thread reply is not in that timeline
+ * — the client filters replies out and shows the root — so opening the channel
+ * is not reading it, and clearing it there would take the count off the topic
+ * row before anybody could see which topic it pointed at (GRYT-1014). Those
+ * clear when the thread is opened and named here.
  */
 export async function markMentionsSeen(
   serverUserId: string,
   conversationId?: string,
+  threadId?: string,
 ): Promise<number> {
   const db = getSqliteDb();
   const seen_at = toIso(new Date());
 
-  const result = conversationId
-    ? db
-        .prepare(
-          `UPDATE mentions SET seen_at = ? WHERE server_user_id = ? AND conversation_id = ? AND seen_at IS NULL`,
-        )
-        .run(seen_at, serverUserId, conversationId)
-    : db
-        .prepare(`UPDATE mentions SET seen_at = ? WHERE server_user_id = ? AND seen_at IS NULL`)
-        .run(seen_at, serverUserId);
+  /* Which thread a mention is in lives on the message, not on the row being
+     updated, so both conversation-scoped statements go through a subquery
+     against `messages` on the pair the foreign key is built from. */
+  let result;
+  if (conversationId && threadId) {
+    result = db
+      .prepare(
+        `UPDATE mentions SET seen_at = ?
+          WHERE server_user_id = ? AND conversation_id = ? AND seen_at IS NULL
+            AND message_id IN (
+              SELECT message_id FROM messages
+               WHERE conversation_id = ? AND thread_id = ?
+            )`,
+      )
+      .run(seen_at, serverUserId, conversationId, conversationId, threadId);
+  } else if (conversationId) {
+    result = db
+      .prepare(
+        `UPDATE mentions SET seen_at = ?
+          WHERE server_user_id = ? AND conversation_id = ? AND seen_at IS NULL
+            AND message_id IN (
+              SELECT message_id FROM messages
+               WHERE conversation_id = ? AND thread_id IS NULL
+            )`,
+      )
+      .run(seen_at, serverUserId, conversationId, conversationId);
+  } else {
+    result = db
+      .prepare(`UPDATE mentions SET seen_at = ? WHERE server_user_id = ? AND seen_at IS NULL`)
+      .run(seen_at, serverUserId);
+  }
 
   return Number(result.changes ?? 0);
 }
