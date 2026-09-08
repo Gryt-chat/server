@@ -5,8 +5,9 @@ import { describe, it } from "node:test";
 
 /**
  * A leak here is a correct answer written where it should not be, so this reads
- * the source. Coarse on purpose: the fix is to wrap it in `addressLabel`.
+ * the source. The fix is to wrap the call in `addressLabel`.
  */
+
 /* `__dirname` rather than `import.meta`: this file is compiled as CommonJS. */
 const SOURCES = join(__dirname, "..");
 

@@ -5,6 +5,16 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 const LIMIT = 2;
+
+/* Paths not swept yet: the review-required half is its own PR. Delete an entry
+   once that directory is clean — this list only ever shrinks. */
+const NOT_YET = [
+  "src/auth/",
+  "src/db/",
+  "src/middleware/",
+  "src/socket/middleware/",
+  "src/storage/",
+];
 const EMPTY = /^(\/\*+|\*+\/?|\/\/|#)$|[─=]{3,}\s*\*?\/?$/;
 const ROOTS = ["src", "scripts", "examples", ".github/workflows"];
 const SKIP = new Set(["node_modules", "dist", "build", "coverage", ".git"]);
@@ -73,6 +83,7 @@ for (const root of ROOTS) {
     continue;
   }
   for (const file of entries) {
+    if (NOT_YET.some((prefix) => file.startsWith(prefix))) continue;
     const text = readFileSync(file, "utf8");
     for (const run of runs(text, HASH.test(file))) {
       offenders.push(`${file}:${run.line} — ${run.length} lines`);

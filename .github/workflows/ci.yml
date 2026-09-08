@@ -32,3 +32,7 @@ jobs:
 
       # The whole repo, now that the flat config describes scripts/ too.
       - run: npx eslint .
+
+      # No comment runs past two lines. The script carries the list of paths
+      # still to be swept, and that list only ever shrinks.
+      - run: node scripts/check-comment-length.mjs
