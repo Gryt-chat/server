@@ -53,15 +53,29 @@ export async function listMessages(conversationId: string, limit = 50, before?: 
 }
 
 /**
- * The replies inside a thread, oldest first. The root message is a normal
- * channel message and is fetched separately by the caller. GRYT-981.
+ * The replies inside a thread, oldest first, newest page first. The root
+ * message is a normal channel message and is fetched separately by the caller.
+ * GRYT-981.
+ *
+ * **Was ascending with a limit, which took the oldest N.** A thread that passed
+ * 200 replies stopped showing the new ones — the recent end was the part that
+ * disappeared, and there was no cursor to fetch it with either. Same shape as
+ * `listMessages` above now: newest-first window, reversed on the way out, so
+ * the default page is the end of the thread and `before` walks backwards from
+ * there. GRYT-1010.
  */
-export async function listThreadMessages(threadId: string, limit = 200): Promise<MessageRecord[]> {
+export async function listThreadMessages(
+  threadId: string,
+  limit = 50,
+  before?: Date,
+): Promise<MessageRecord[]> {
   const db = getSqliteDb();
-  const rows = db
-    .prepare(`SELECT * FROM messages WHERE thread_id = ? ORDER BY created_at ASC, message_id ASC LIMIT ?`)
-    .all(threadId, limit) as Record<string, unknown>[];
-  return rows.map(rowToMessage);
+  const rows = before
+    ? db.prepare(`SELECT * FROM messages WHERE thread_id = ? AND created_at < ? ORDER BY created_at DESC, message_id DESC LIMIT ?`).all(threadId, toIso(before), limit)
+    : db.prepare(`SELECT * FROM messages WHERE thread_id = ? ORDER BY created_at DESC, message_id DESC LIMIT ?`).all(threadId, limit);
+  const messages = (rows as Record<string, unknown>[]).map(rowToMessage);
+  messages.reverse();
+  return messages;
 }
 
 export async function deleteMessage(conversationId: string, messageId: string): Promise<boolean> {
