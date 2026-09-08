@@ -1,18 +1,6 @@
 /**
- * Importing emojis from emoji.gg. Same shape as the BetterTTV routes next door,
- * except this reads HTML: the JSON API returns about 5,400 emojis, a slice of
- * the site, and none of the ones this was built for are in it.
- *
- * Three page shapes, three parsers, because the markup differs:
- *
- *   /user/<name>   lazy-loaded, URL in data-src, name in alt as "<Name> Emoji"
- *   /pack/<slug>   alt is literally "Emoji", so the name comes from the
- *                  filename; each image is paired with the /emoji/ link
- *                  wrapping it, so related-pack thumbnails drop out
- *   /emoji/<slug>  og:image is the file, og:title is the name
- *
- * All three break when emoji.gg redesigns. They fail by returning nothing
- * rather than something wrong.
+ * Reads HTML, because their JSON API is a 5,400-emoji slice that holds none of
+ * what this was built for. Three page shapes, three parsers, all fragile.
  */
 import type { Router, Request, Response, NextFunction } from "express";
 
@@ -26,11 +14,8 @@ const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
   "(KHTML, like Gecko) Chrome/125.0 Safari/537.36";
 
-/**
- * A profile with 225 emojis is nine requests. The cap is what stops a profile
- * with thousands from turning one click into a few hundred, and the client is
- * told when it bites rather than being handed a quietly short list.
- */
+/** A profile with 225 emojis is nine requests. The client is told when this
+    bites rather than handed a quietly short list. */
 const MAX_USER_PAGES = 40;
 const PAGE_DELAY_MS = 250;
 
@@ -38,17 +23,13 @@ const PAGE_DELAY_MS = 250;
 const SLUG_RE = /^[A-Za-z0-9_-]{1,100}$/;
 const USERNAME_RE = /^[^/?#]{1,64}$/;
 
-/**
- * The only URLs the file proxy will fetch. Anchored, no query string, no dots
- * beyond the extension — the proxy exists because the client cannot read these
- * cross-origin, not to be a general fetcher.
- */
+/** Anchored, no query string, no dots beyond the extension: the proxy exists
+    because the client cannot read these cross-origin. */
 const CDN_FILE_RE =
   /^https:\/\/cdn\d*\.emoji\.gg\/emojis\/[A-Za-z0-9_-]+\.(png|gif|webp|jpe?g|avif)$/;
 
-// These are written without named groups, the `s` flag or matchAll: this
-// package targets ES2016, and bumping the whole server's target to please one
-// route is not a change that belongs in it. [\s\S] is the `s` flag by hand.
+// No named groups, `s` flag or matchAll: this package targets ES2016, so
+// [\s\S] is the `s` flag by hand.
 
 /** Cards on a profile: CDN URL in data-src (1), display name in alt (2). */
 const USER_CARD_RE =
@@ -102,10 +83,8 @@ function fileFromUrl(url: string): { slug: string; ext: string } | null {
   return { slug, ext };
 }
 
-/**
- * A CDN URL to an emote. The name comes from alt, or from the filename, which
- * is `<id><-|_><name>.<ext>`. Null rather than a guessed name.
- */
+/** The name comes from alt, or from the filename `<id><-|_><name>.<ext>`. Null
+    rather than a guessed name. */
 function toEmote(url: string, altName: string | null): EmojiGgEmote | null {
   const parsed = fileFromUrl(url);
   if (!parsed) return null;

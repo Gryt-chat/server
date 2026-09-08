@@ -1,19 +1,8 @@
-/**
- * Who is allowed to open a connection to this server.
- *
- * Split out of `index.ts` so it can be tested — importing that file starts a
- * server — and because this is the kind of decision that should be readable on
- * its own.
- */
+/** Split out of `index.ts` so it can be tested; importing that starts a
+    server. */
 
-/**
- * 3666 is the Vite dev port (packages/client/vite.config.ts). Origins are
- * matched exactly, so both spellings of loopback have to be listed. Added
- * outside production only — a production server has no reason to accept an
- * origin it can't reach. ops/start_dev.sh passes these explicitly too; this is
- * for servers started by hand, which otherwise reject the dev client with a
- * bare 400 on the socket.io handshake.
- */
+/** 3666 is the Vite dev port, and origins are matched exactly, so both
+    spellings of loopback are listed. Outside production only. */
 export const DEV_CORS_ORIGINS = ["http://localhost:3666", "http://127.0.0.1:3666"];
 
 export const DEFAULT_CORS_ORIGINS =
@@ -44,17 +33,8 @@ export function originIsHost(origin: string, host: string): boolean {
   }
 }
 
-/**
- * Electron production builds load from http://127.0.0.1:15738 or send
- * `Origin: "null"` (file://).
- *
- * `requestHost` is what lets a native app in. React Native's WebSocket sets
- * `Origin` from the URL it opens, so the phone arrives claiming the server
- * itself — which is same-origin, and not what CORS was ever about.
- *
- * **The exact host, never a wildcard or a suffix match**: `chat.example.com`
- * does not speak for `evil.example`, and a different port is a different origin.
- */
+/** `requestHost` is what lets a native app in: the phone's WebSocket sets
+    `Origin` to the server itself. The exact host, never a suffix match. */
 export function isOriginAllowed(
   origin: string,
   allowed: string[],

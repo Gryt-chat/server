@@ -1,10 +1,6 @@
 /**
- * Whether this server is in service (GRYT-281). Called `GRYT_AUTH_MODE` once,
- * which read as a switch for whether members needed an account and never was —
- * that is `GRYT_IDENTITY_TIERS` alone. All it ever did was reject every join.
- *
- * The old name and values still work silently: a rename that took somebody's
- * server offline on upgrade would be the worse bug.
+ * Whether this server is in service. The old `GRYT_AUTH_MODE` name and values
+ * still work silently, since a rename that took a server offline is worse.
  */
 
 const TRUTHY = new Set(["true", "on", "yes", "1", "enabled", "required"]);
@@ -15,19 +11,13 @@ export type ServiceState =
   | { inService: true }
   /** Deliberately closed. */
   | { inService: false }
-  /**
-   * The value is not one this understands, so neither answer is safe: treating
-   * a typo as "on" ignores somebody who meant to close their server, and
-   * treating it as "off" takes down a server over a spelling mistake. Refusing
-   * joins and saying why is the only honest option, and it is what the old code
-   * did with an unrecognised `GRYT_AUTH_MODE`.
-   */
+  /** Neither answer is safe: a typo read as on ignores somebody closing their
+      server, and read as off takes one down over a spelling mistake. */
   | { inService: false; misconfigured: string };
 
 export function readServiceState(env: NodeJS.ProcessEnv = process.env): ServiceState {
-  // The new name wins when both are set, so somebody migrating can add the new
-  // one and delete the old one in either order without a window where the two
-  // disagree and the loser is whichever the code happened to read first.
+  // The new name wins when both are set, so a migration can add and delete in
+  // either order.
   const raw = env.GRYT_SERVER_ENABLED ?? env.GRYT_AUTH_MODE;
   if (raw === undefined || raw.trim() === "") return { inService: true };
 

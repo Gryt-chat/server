@@ -19,11 +19,8 @@ type ReportedComponent = Omit<ComponentVersionInfo, "current"> & { current: stri
 export interface VersionStatus {
 	server: ComponentVersionInfo;
 	sfu: ReportedComponent | null;
-	/**
-	 * Null when there is no worker to ask — either none is configured, or the
-	 * one configured did not answer. Both mean "cannot say", which is different
-	 * from a worker that answered and is out of date.
-	 */
+	/** Null means cannot say — none configured, or none answering — which is not
+	    the same as a worker that answered and is out of date. */
 	worker: ReportedComponent | null;
 }
 
@@ -70,11 +67,8 @@ async function fetchLatestVersions(repo: string): Promise<{ stable: string; beta
 	return data;
 }
 
-/**
- * The prerelease stages the release workflows actually produce, in order.
- *
- * A closed set on purpose — see `parseVersion`.
- */
+/** The stages the release workflows produce, in order. Closed on purpose; see
+    `parseVersion`. */
 const PRERELEASE_STAGES = ["alpha", "beta", "rc"] as const;
 
 interface ParsedVersion {
@@ -84,18 +78,8 @@ interface ParsedVersion {
 }
 
 /**
- * A version this code is willing to compare, or null.
- *
- * Two bugs shaped this. `git describe` gives `1.0.48-1-gafa06e4` off a tag, and
- * a parser doing `(part || 0)` turned that into 1.0.0, so every comparison said
- * an update was available (GRYT-306). Then refusing too much sent
- * `1.6.15-beta.1` down the unparseable branch, where it called itself stable
- * and took the newest *stable* release as latest — so a beta server stopped
- * being offered updates (GRYT-722).
- *
- * So: plain releases, and the `-<stage>.<n>` shape the workflows produce.
- * **A closed set of stages rather than the semver grammar** — full semver reads
- * `1.0.48-1-gafa06e4` as a valid prerelease and compares it.
+ * Plain releases and the `-<stage>.<n>` the workflows produce, nothing else.
+ * Full semver reads `git describe`'s `1.0.48-1-gafa06e4` as a prerelease.
  */
 export function parseVersion(v: string): ParsedVersion | null {
 	const m = /^(\d+)\.(\d+)\.(\d+)(?:-([a-z]+)\.(\d+))?$/.exec(v.trim());
@@ -176,11 +160,8 @@ async function fetchSfuCurrentVersion(): Promise<string | null> {
 	}
 }
 
-/**
- * Ask the image worker what it is — a separate process, so the server cannot
- * know at build time. IMAGE_WORKER_URL unset means no answer rather than an
- * error: plenty of deployments have no worker.
- */
+/** A separate process, so the server cannot know at build time. Unset means no
+    answer rather than an error: plenty of deployments have no worker. */
 async function fetchWorkerCurrentVersion(): Promise<string | null> {
 	const url = process.env.IMAGE_WORKER_URL;
 	if (!url) return null;

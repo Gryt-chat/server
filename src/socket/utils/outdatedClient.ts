@@ -3,25 +3,15 @@ import { Server } from "socket.io";
 import { sendClientNotice } from "./clientNotices";
 import type { Clients } from "../../types";
 
-/**
- * The first Windows build whose updater can install anything. v1.6.6 through
- * v1.6.24 shipped a PowerShell helper that failed to parse, so those installs
- * find and download every release and install none — the only way out is a
- * person double-clicking an installer.
- */
+/** 1.6.6 through 1.6.24 shipped a PowerShell helper that failed to parse, so
+    those installs download every release and install none. */
 const FIRST_WORKING_WINDOWS_UPDATER = "1.6.25";
 
 /** One reminder per person per day. */
 const REMINDER_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
-/**
- * Kept in memory rather than in the database.
- *
- * A restart forgets who has been told, so a server restarted twice in a day
- * can remind the same person twice. That is the trade for not adding a table
- * and a migration for something nobody should still be seeing in a month. The
- * ceiling is one message per member per start, not a loop.
- */
+/** A restart forgets who was told, which is the trade for not adding a table.
+    The ceiling is one message per member per start, not a loop. */
 const remindedAt = new Map<string, number>();
 
 type DesktopClient = {
@@ -29,15 +19,8 @@ type DesktopClient = {
   version: string;
 };
 
-/**
- * Read the desktop client out of Electron's default user agent, which Gryt does
- * not override:
- *
- *   … gryt-chat/1.6.24 Chrome/144.0.7559.220 Electron/40.6.1 Safari/537.36
- *
- * The browser build carries neither token, so it cannot match — a browser user
- * has nothing to install and should never see this.
- */
+/** Out of Electron's default user agent, which Gryt does not override. The
+    browser build carries neither token, so it cannot match. */
 export function parseDesktopClient(
   userAgent: string | undefined,
 ): DesktopClient | null {
@@ -71,10 +54,8 @@ export function needsUpdateReminder(userAgent: string | undefined): boolean {
   return isOlder(client.version, FIRST_WORKING_WINDOWS_UPDATER);
 }
 
-/**
- * Tell this person, and only this person, at most once a day. Their sockets
- * only, nothing written down, and the words live in the client (GRYT-896).
- */
+/** Their sockets only, at most once a day, nothing written down, and the words
+    live in the client. */
 export function remindOutdatedWindowsClient(
   io: Server,
   clientsInfo: Clients,

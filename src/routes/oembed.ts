@@ -57,14 +57,8 @@ function pickOEmbedFields(json: unknown, url: string): OEmbedOut | null {
   };
 }
 
-/**
- * The providers worth knowing by name.
- *
- * Everything else is found by discovery below, so this list is not what
- * decides whether a site works — it is the sites where we want a specific
- * parameter set (a theme, a DNT flag, a suppressed script tag) rather than
- * whatever the endpoint does by default.
- */
+/** Not what decides whether a site works — discovery below does that. These are
+    the ones wanting a specific parameter set rather than the default. */
 function getKnownOEmbedEndpoint(url: string, theme?: string): string | null {
   let u: URL;
   try {
@@ -125,9 +119,8 @@ async function fetchJsonWithTimeout(url: string, timeoutMs: number): Promise<unk
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    // Through the checked follower: the endpoint passed `checkPreviewUrl`, but a
-    // 302 from it could still land inside the network, so every hop is checked
-    // rather than only the first.
+    // The endpoint passed `checkPreviewUrl`, but a 302 from it could land inside
+    // the network, so every hop is checked.
     const fetched = await fetchFollowingSafely(url, controller.signal, "application/json");
     if ("blocked" in fetched) throw new Error("oembed_fetch_blocked");
     const { res } = fetched;
@@ -141,26 +134,14 @@ async function fetchJsonWithTimeout(url: string, timeoutMs: number): Promise<unk
   }
 }
 
-/**
- * Ask the page itself where its oEmbed endpoint is.
- *
- * A site advertises one with `<link rel="alternate"
- * type="application/json+oembed">`, and hundreds do — Flickr, CodePen, Giphy,
- * Vimeo, Kickstarter, every WordPress install, most Mastodon servers. Reading
- * the tag is what makes those work without adding each one to the list above.
- *
- * The endpoint comes out of a remote document, so it is a URL an attacker
- * controls as surely as the one in the chat box, and it goes through the same
- * check before anything connects to it.
- */
+/** Reading the `<link rel="alternate">` tag is what makes hundreds of sites work
+    without listing each. The endpoint is attacker-controlled, so it is checked. */
 async function discoverOEmbedEndpoint(pageUrl: string): Promise<string | null> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    // `pageUrl` passed `checkPreviewUrl`, but following its redirects blindly is
-    // how a public page walks the fetch onto an internal address. Every hop is
-    // checked, and the endpoint below is resolved against the address actually
-    // landed on rather than the one asked for.
+    // Following redirects blindly is how a public page walks the fetch onto an
+    // internal address. The endpoint resolves against where it landed.
     const fetched = await fetchFollowingSafely(
       pageUrl,
       controller.signal,

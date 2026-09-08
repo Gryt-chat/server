@@ -1,21 +1,7 @@
 /**
- * How a server plugin hears about things (GRYT-933).
- *
- * Plugins run in this process, so the only thing standing between a bad one and
- * the server going down is what happens around the call. That is what this file
- * is: the events themselves are a handful of plain objects, and everything else
- * here is containment.
- *
- * The containment itself lives in `guard.ts` since GRYT-939, because plugins
- * gained a second way to be called and the failure count is per plugin rather
- * than per channel — a plugin throwing five times on events and five times on
- * messages has thrown ten times.
- *
- * What this deliberately does not do is wait. `emit` returns as soon as it has
- * handed the payload out; a plugin that takes ten seconds delays itself and
- * nothing else. That is also why stage one is observe-only — a plugin that
- * could *refuse* a message would have to be awaited, and then a slow plugin is
- * a slow server.
+ * Observe-only, and `emit` never waits: a plugin that could refuse a message
+ * would have to be awaited, and then a slow plugin is a slow server. The
+ * containment is in `guard.ts`.
  */
 
 import {
@@ -49,11 +35,8 @@ export interface PluginEvents {
   "member:left": {
     userId: string;
     nickname: string | null;
-    /**
-     * Why they are gone. A plugin logging arrivals and departures wants to
-     * write a different line for each, and one deciding whether to act wants
-     * to know it was not already handled by a human.
-     */
+    /** A plugin logging departures wants a different line for each, and one
+        deciding whether to act wants to know a human already did. */
     reason: "left" | "kicked" | "banned";
     at: string;
   };
@@ -118,9 +101,8 @@ export function createPluginBus(
       const list = subscriptions.get(event);
       if (!list || list.length === 0) return;
 
-      /* Copied before iterating, because a handler may subscribe or be disabled
-         during the loop and mutating the array underneath it would skip
-         somebody. */
+      /* Copied before iterating: a handler may subscribe or be disabled during
+         the loop, and mutating underneath it skips somebody. */
       for (const { pluginId, handler } of [...list]) {
         guard.call(pluginId, event, () =>
           (handler as PluginEventHandler<typeof event>)(copyForHandler(payload)),

@@ -25,21 +25,8 @@ function timerKey(serverUserId: string, conversationId: string, threadId?: strin
 export function registerTypingHandlers(ctx: HandlerContext): EventHandlerMap {
 	const { io, clientId, clientsInfo, getClientIp } = ctx;
 
-	/**
-	 * The clients that should hear that somebody is typing here, or null if the
-	 * typist has no business in this conversation at all.
-	 *
-	 * Both events used to go to every connected socket. That was harmless while
-	 * every conversation was a channel every member could see, and it stopped
-	 * being harmless twice: once when direct messages arrived, and again with
-	 * `view_min_rank`. The payload carries the conversation id, so an
-	 * unfiltered indicator names a private conversation — and names one of the
-	 * two people in it — every few seconds while either of them types.
-	 *
-	 * Same shape as `recipientClientIds` in chat.ts, and for the same reason:
-	 * who may hear about a conversation is one question, and answering it twice
-	 * is two chances to answer it differently.
-	 */
+	/** Null when the typist has no business in the conversation. The payload
+	    carries its id, so an unfiltered indicator names a private one. */
 	async function typingAudience(conversationId: string, typistId: string): Promise<string[] | null> {
 		const access = await resolveConversationAccess(conversationId, typistId);
 		if (!access.allowed) return null;
@@ -67,9 +54,8 @@ export function registerTypingHandlers(ctx: HandlerContext): EventHandlerMap {
 		if (existing) clearTimeout(existing);
 		typingTimers.delete(key);
 
-		// The timer still clears above even when the audience is empty or the
-		// access has since been withdrawn. A stuck "typing…" that never stops
-		// is what you get otherwise, on the client that did see the start.
+		// The timer clears above even with an empty audience, or the client that
+		// saw the start is left on a "typing…" that never stops.
 		const audience = await typingAudience(conversationId, serverUserId);
 		for (const cid of audience ?? []) {
 			io.sockets.sockets.get(cid)?.emit("chat:stop_typing", {
@@ -98,15 +84,12 @@ export function registerTypingHandlers(ctx: HandlerContext): EventHandlerMap {
 			const user = await getUserByServerId(userId);
 			if (!user) return;
 
-			// A muted member is not going to say anything, so the room is not
-			// told they are about to. Read off the row already fetched rather
-			// than through `textMuteFor`, which would read it a second time.
+			// A muted member is not going to say anything. Read off the row
+			// already fetched rather than through `textMuteFor`.
 			if (effectiveModerationState(user).isServerMuted) return;
 
-			// Resolved before the timer is set, so a guessed id for a hidden
-			// channel or somebody else's DM never reaches anyone — and never
-			// leaves a timer behind that would fire a stop for a conversation
-			// the typist was refused.
+			// Before the timer is set, so a guessed id neither reaches anyone nor
+			// leaves a timer that fires a stop for a refused conversation.
 			const audience = await typingAudience(payload.conversationId, userId);
 			if (!audience) return;
 
