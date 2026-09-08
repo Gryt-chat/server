@@ -79,11 +79,8 @@ function rlCheck(event: string, ctx: HandlerContext, rule: RateLimitRule) {
 /** A year, in minutes. Longer than this is what a permanent ban is for. */
 const MAX_BAN_MINUTES = 525_600;
 
-/**
- * When a ban should lift. Anything unusable means permanent rather than
- * rejected — refusing a moderation action over a malformed duration fails the
- * wrong way.
- */
+/** Anything unusable means permanent rather than rejected: refusing a
+    moderation action over a malformed duration fails the wrong way. */
 function resolveBanExpiry(expiresInMinutes?: number | null): Date | null {
   if (expiresInMinutes === undefined || expiresInMinutes === null) return null;
   const minutes = Math.floor(Number(expiresInMinutes));
@@ -102,12 +99,8 @@ function resolveMuteExpiry(expiresInMinutes?: number | null): Date | null {
   return new Date(Date.now() + Math.min(minutes, MAX_MUTE_MINUTES) * 60_000);
 }
 
-/**
- * Tells the SFU what this user's audio should be doing. The room is
- * `${serverId}_${voiceChannelId}` and the user is the server user id — both
- * were once wrong here, so the call matched nothing and only a cooperating
- * client was ever muted. Mirrors the equivalent call in voice.ts.
- */
+/** The room is `${serverId}_${voiceChannelId}` and the user is the server user
+    id. Both were once wrong, so only a cooperating client was ever muted. */
 function pushSfuAudioState(
   sfuClient: HandlerContext["sfuClient"],
   serverId: string,
@@ -125,11 +118,8 @@ function pushSfuAudioState(
     .catch((e) => consola.error("Failed to update SFU audio state:", e));
 }
 
-/** `#rrggbb` only — the value goes straight into a style on every client. */
-/**
- * `undefined` means leave it alone; anything that is not a positive number
- * becomes null, which is off. Capped because it arrives from a form.
- */
+/** `undefined` leaves it alone, anything not a positive number becomes null.
+    Capped because it arrives from a form. */
 function normalizeThreshold(value: unknown): number | null | undefined {
   if (value === undefined) return undefined;
   const n = Number(value);
@@ -137,6 +127,7 @@ function normalizeThreshold(value: unknown): number | null | undefined {
   return Math.min(Math.floor(n), 1_000_000);
 }
 
+/** `#rrggbb` only: the value goes straight into a style on every client. */
 function normalizeRoleColor(value: unknown, fallback: string | null): string | null {
   if (value === null) return null;
   if (typeof value !== "string") return fallback;
@@ -145,11 +136,8 @@ function normalizeRoleColor(value: unknown, fallback: string | null): string | n
   return /^#[0-9a-fA-F]{6}$/.test(trimmed) ? trimmed.toLowerCase() : fallback;
 }
 
-/**
- * Everything the role editor needs. The permission catalogue rides along: an
- * older client would otherwise show a short list with no sign it was short,
- * and the editor saves the whole set, so the rest would be dropped.
- */
+/** The permission catalogue rides along because the editor saves the whole
+    set, so an older client would silently drop what it did not know about. */
 async function roleEditorState() {
   const [definitions, config] = await Promise.all([
     listRoleDefinitions(),
@@ -178,36 +166,19 @@ async function roleEditorState() {
       account: config?.default_role_account ?? FALLBACK_ROLE_ID,
       local: config?.default_role_local ?? FALLBACK_ROLE_ID,
     },
-    /*
-     * Which identities this server admits, so the editor can stop offering a
-     * setting that does nothing (GRYT-907).
-     *
-     * The guest default only applies to somebody arriving with a self-signed
-     * key, and `GRYT_IDENTITY_TIERS` decides whether anybody can. Without this
-     * the editor had a live dropdown and a footnote underneath explaining that
-     * the dropdown might not be used — which is a worse way of saying it than
-     * turning the control off.
-     *
-     * Sent from the same place the rest of the editor's state comes from
-     * rather than fetched separately: it is already on `/api/server-info` and
-     * in the challenge, and a second round trip for one array is not worth the
-     * extra failure mode.
-     */
+    /* Which identities this server admits, so the editor can disable a
+       setting that would do nothing. */
     identityTiers: getAcceptedIdentityTiers(),
   };
 }
 
-/**
- * `claim_token` is deliberately absent. It is shown once, in the reply to
- * `server:bots:register` — one that can be re-read lives as long as the list.
- */
+/** `claim_token` is deliberately absent: it is shown once, in the reply to
+    `server:bots:register`. */
 async function botsView() {
   const [bots, cfg] = await Promise.all([listBots(), getServerConfig()]);
   return {
-    // Whether a bot nobody has heard of may leave a knock. Sent with the list
-    // rather than with the server settings, because it is the setting this
-    // screen is about and an operator with `manage_bots` and nothing else
-    // should be able to change it.
+    // Sent with the list rather than the server settings, so somebody holding
+    // only `manage_bots` can still change it.
     policy: cfg?.bot_join_policy ?? "disabled",
     bots: bots.map((b) => ({
       registrationId: b.registration_id,
@@ -237,11 +208,8 @@ function emitRateLimited(ctx: HandlerContext, rl: { retryAfterMs?: number }) {
 export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
   const { io, socket, clientId, serverId, clientsInfo, sfuClient } = ctx;
 
-  /**
-   * Everything that has to be true before one member's roles are changed.
-   * Three events share it, because one of them being a check short is a
-   * privilege escalation rather than a cosmetic difference.
-   */
+  /** Shared by three events, because one of them being a check short is a
+      privilege escalation. */
   async function resolveRoleChange(
     event: string,
     payload: { accessToken: string; serverUserId: string; role: string },
@@ -277,10 +245,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
     // check is gone rather than duplicated.
     if (!(await requireOutranks(socket, auth, targetId, verb))) return null;
 
-    // Granting a role you do not outrank is granting yourself a promotion one
-    // step removed. Strictly below, matching `requireOutranks`, so an admin
-    // cannot mint a second admin either. Applied to removal as well: the rank
-    // you may not hand out is the rank you may not take away.
+    // Strictly below, matching `requireOutranks`, so an admin cannot mint a
+    // second admin. Removal too: what you cannot hand out you cannot take away.
     if (definition.rank >= auth.rank) {
       socket.emit("server:error", {
         error: "forbidden",
@@ -307,8 +273,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         const isOwner = !!(cfg.owner_gryt_user_id && cfg.owner_gryt_user_id === client.grytUserId);
         const view = settingsView(cfg, serverId, isOwner);
 
-        // Every member receives this, and `systemChannelId` is a channel id —
-        // naming a channel somebody cannot see undoes the rest of the work.
+        // `systemChannelId` is a channel id and every member receives this.
         // Blanked rather than refused, since the other settings are theirs.
         if (
           view.systemChannelId &&
@@ -357,10 +322,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         const auth = await requireAuth(socket, payload, { permission: "manage_server" });
         if (!auth) return;
 
-        // Validation, the row write and every side effect live in
-        // settings/serverSettings.ts, because the management endpoint applies
-        // the same change and two copies would drift on the first thing either
-        // one forgot.
+        // Validation and side effects live in settings/serverSettings.ts,
+        // because the management endpoint applies the same change.
         const updated = await applyServerSettings(payload, {
           serverUserId: auth.tokenPayload.serverUserId,
           via: "client",
@@ -392,25 +355,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    /**
-     * How every member got in, for the Members tab (GRYT-923).
-     *
-     * The per-member `server:member:invite` below answers the same question one
-     * at a time, which is right for the ban dialog and wrong for a list: fifty
-     * members would be fifty round trips, each with its own timeout.
-     *
-     * **Gated on `manage_invites`, not `create_invite`.** Who arrived on whose
-     * invite is not something everybody who can mint one should be able to read
-     * off a list — `manage_invites` is already the permission for "see every
-     * invite this server has issued, and revoke them", which is exactly this.
-     * (`server:member:invite` still takes `create_invite`, which looks too
-     * loose; changing it is a behaviour change to an event the ban dialog
-     * depends on, so it is left alone here.)
-     *
-     * Two reads and a join in memory rather than a query per member. Both are
-     * already loaded whole elsewhere in this file, so nothing new reaches the
-     * database layer.
-     */
+    /** Gated on `manage_invites`, not `create_invite`: who arrived on whose
+        invite is not for everybody who can mint one. */
     'server:members:invites': async (payload: { accessToken: string }) => {
       try {
         const auth = await requireAuth(socket, payload, { permission: "manage_invites" });
@@ -433,10 +379,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
               return {
                 serverUserId: u.server_user_id,
                 code,
-                /* Null rather than absent when the invite has since been
-                   deleted. The member still came in on that code, and saying
-                   so with nothing beside it is more honest than dropping the
-                   row and implying they arrived some other way. */
+                /* Null rather than absent when the invite was deleted: the
+                   member still came in on that code. */
                 note: invite?.note ?? null,
                 revoked: invite ? Boolean(invite.revoked) : null,
                 usesConsumed: invite?.uses_consumed ?? null,
@@ -468,10 +412,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           : null;
         const customCode = typeof payload.customCode === "string" ? payload.customCode.trim() : null;
 
-        // Binding a role needs more than the permission to make invites.
-        // `create_invite` says you may open a door; it does not say what may
-        // walk through it wearing what. So the role is checked against the
-        // same rules a direct grant goes through, plus the actor's own rank.
+        // `create_invite` says you may open a door, not what may walk through
+        // it, so the role goes through the same rules as a direct grant.
         let grantedRole: { roleId: string; rank: number } | null = null;
         const wantsRole = typeof payload.grantsRole === "string" ? payload.grantsRole.trim().toLowerCase() : "";
         if (wantsRole) {
@@ -534,9 +476,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
     },
 
     // ── Join requests ────────────────────────────────────────────
-    //
-    // Readable whatever the join policy is: switching away from `request`
-    // should not hide a queue somebody is still owed a decision on.
+    // Readable whatever the join policy is, so switching away from `request`
+    // cannot hide a queue somebody is owed a decision on.
 
     'server:joinRequests:list': async (payload: { accessToken: string }) => {
       try {
@@ -588,9 +529,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           meta: { nickname: decided.nickname },
         }).catch((e) => consola.warn("audit log write failed", e));
 
-        // Everyone who can act on the queue sees it change, not just whoever
-        // clicked — two moderators looking at the same list should not both be
-        // deciding the same person.
+        // Everyone who can act on the queue sees it change, so two moderators
+        // do not both decide the same person.
         broadcastServerUiUpdate();
         socket.emit("server:joinRequest:decided", {
           serverId,
@@ -609,10 +549,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       try {
         const auth = await requireAuth(socket, payload, { permission: "manage_roles" });
         if (!auth) return;
-        // One entry per member rather than one per row. A client that keys a
-        // map by member and takes the last row it sees would otherwise show
-        // whichever role was granted most recently, which is not the one the
-        // member list draws.
+        // One entry per member, not per row: a client keying by member would
+        // otherwise show whichever role was granted last.
         const byMember = await listRolesByMember();
         const updatedAt = new Map(
           (await listServerRoles()).map((r) => [r.server_user_id, r.updated_at]),
@@ -642,9 +580,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         await setServerRole(targetId, nextRole);
         insertServerAudit({ actorServerUserId: change.actorId, action: "role_set", target: targetId, meta: { role: nextRole } }).catch((e) => consola.warn("audit log write failed", e));
         io.to("verifiedClients").emit("server:role:updated", { serverId, serverUserId: targetId, role: nextRole, roles: await listMemberRoles(targetId) });
-        // The target's own permission list is part of server details, so it has
-        // to be re-sent — otherwise a demotion only takes effect on their next
-        // reconnect, and the UI keeps offering what the server now refuses.
+        // The target's permissions ride on server details, so without this a
+        // demotion waits for their next reconnect.
         broadcastServerUiUpdate("other");
       } catch (e) {
         consola.error("server:roles:set failed", e);
@@ -652,11 +589,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    /*
-     * Give somebody a role without taking away the ones they have. Same gates
-     * as set: an operator who can add a role they do not outrank can promote
-     * themselves one step removed.
-     */
+    /* Same gates as set: adding a role you do not outrank is promoting
+       yourself one step removed. */
     'server:roles:add': async (payload: { accessToken: string; serverUserId: string; role: string }) => {
       try {
         const change = await resolveRoleChange("server:roles:add", payload, "give a role to");
@@ -674,10 +608,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    /*
-     * Take one role away. Removing the last is allowed: it leaves them on the
-     * joiner default for their tier, not on nothing.
-     */
+    /* Removing the last role is allowed: it leaves them on the joiner default
+       for their tier, not on nothing. */
     'server:roles:remove': async (payload: { accessToken: string; serverUserId: string; role: string }) => {
       try {
         const change = await resolveRoleChange("server:roles:remove", payload, "take a role from");
@@ -696,9 +628,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
     },
 
     // ── Role definitions ─────────────────────────────────────────
-    //
-    // What a role *is*, as opposed to who holds one. Gated on `manage_roles`,
-    // which by default only the owner has — see the note on ADMIN_PERMISSIONS.
+    // What a role is, as opposed to who holds one. Gated on `manage_roles`,
+    // which by default only the owner has.
 
     'server:roles:definitions:list': async (payload: { accessToken: string }) => {
       try {
@@ -741,27 +672,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
 
         const existing = await getRoleDefinition(roleId);
 
-        /*
-         * The owner role is what the fail-open path in services/permissions
-         * falls back to, and it is the only thing standing between a mistake in
-         * this editor and a server nobody can administer. Its name, rank and
-         * permissions stay unwritable for that reason.
-         *
-         * **Its colour is not part of that** (GRYT-906). A colour cannot lock
-         * anybody out, cannot move anybody above anybody, and cannot grant
-         * anything. Refusing it was the blanket rule catching something the
-         * rule was not written for.
-         *
-         * Before the two rank checks below, and that is not incidental: the
-         * owner role's rank is the owner's own, so `existing.rank >= auth.rank`
-         * refuses the owner editing their own role.
-         *
-         * Which is why this needs its own gate. `manage_roles` alone would let
-         * a delegated admin recolour the owner so the owner reads as an
-         * ordinary member — small, but social engineering for no benefit. Rank
-         * is the check the rest of this file uses for "you are not above this",
-         * and it is the one used here.
-         */
+        /* services/permissions falls back to this role, so its name, rank and
+           permissions are unwritable. Runs before the rank checks below. */
         if (roleId === OWNER_ROLE_ID) {
           const colourOnly =
             payload?.color !== undefined &&
@@ -798,9 +710,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
             grantableByInvite: existing.grantable_by_invite,
           });
 
-          // Null means the row went between the read and the write. Nothing to
-          // broadcast, and a client told a role updated when it did not would
-          // draw a colour the server does not hold.
+          // Null means the row went between the read and the write, and a
+          // client told otherwise would draw a colour the server does not hold.
           if (!saved) {
             socket.emit("server:error", { error: "roles_failed", message: "Failed to save the role." });
             return;
@@ -830,10 +741,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           ? Math.max(0, Math.min(99, Math.round(Number(payload?.rank))))
           : existing?.rank ?? 0;
 
-        // Nobody may create or raise a role to their own level. Without this an
-        // admin with `manage_roles` could define "superadmin" at rank 99 and
-        // hand it to a friend, and the outranks checks would then work exactly
-        // as designed against the owner.
+        // Without this an admin with `manage_roles` could define a role at
+        // rank 99 and hand it to a friend.
         if (rank >= auth.rank) {
           socket.emit("server:error", {
             error: "forbidden",
@@ -853,10 +762,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           ? normalizePermissions(payload.permissions)
           : existing?.permissions ?? [];
 
-        // Same argument as the rank check, for capability rather than
-        // hierarchy: you cannot put a permission into a role that you do not
-        // hold yourself. The owner holds everything, so this only ever binds
-        // somebody the owner has delegated to.
+        // Capability rather than hierarchy: you cannot put a permission into a
+        // role that you do not hold yourself.
         const overreach = permissions.filter((perm) => !auth.permissions.has(perm));
         if (overreach.length > 0) {
           socket.emit("server:error", {
@@ -866,17 +773,13 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        // A role that hands itself out is a role nobody reviews before it takes
-        // effect, so the same two rules apply as to granting it by hand: it
-        // cannot reach your own rank, and it cannot carry a permission you do
-        // not hold. Both are already checked above, on the way in.
+        // A role that hands itself out is never reviewed, so the rank and
+        // permission rules above are what stand in for that.
         const autoGrantAfterDays = normalizeThreshold(payload?.autoGrantAfterDays);
         const autoGrantAfterMessages = normalizeThreshold(payload?.autoGrantAfterMessages);
 
-        // The tick that lets an invite hand this role out. Refused for the same
-        // reasons an invite could not be bound to it, checked here so the flag
-        // can never be set on a role that would fail at binding time — a tick
-        // that saves and then never works is worse than a tick that refuses.
+        // Checked here so the flag can never be set on a role that would fail
+        // at binding time.
         let grantableByInvite = existing?.grantable_by_invite ?? false;
         if (typeof payload?.grantableByInvite === "boolean") {
           grantableByInvite = payload.grantableByInvite;
@@ -946,9 +849,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         if (isSystemRole(roleId)) {
           socket.emit("server:error", {
             error: "forbidden",
-            // Saying why, because the seeder would silently put the row back on
-            // the next restart and a delete that undoes itself is worse than a
-            // refusal.
+            // Saying why, because the seeder would put the row back on the
+            // next restart.
             message: "Built-in roles cannot be deleted. Edit their permissions instead.",
           });
           return;
@@ -972,9 +874,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
 
         const { moved } = await deleteRoleDefinition(roleId, reassignTo);
 
-        // A default that pointed at the role just deleted would leave every
-        // future joiner resolving to the fallback, which is a permission change
-        // nobody asked for and nothing in the UI would show.
+        // A default pointing at the deleted role would send every future
+        // joiner to the fallback, silently.
         const defaultsPatch: { defaultRoleAccount?: string; defaultRoleLocal?: string } = {};
         if (cfg?.default_role_account === roleId) defaultsPatch.defaultRoleAccount = reassignTo;
         if (cfg?.default_role_local === roleId) defaultsPatch.defaultRoleLocal = reassignTo;
@@ -1055,9 +956,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
     },
 
     // ── Bots ─────────────────────────────────────────────────────
-    //
-    // All behind `manage_bots`, which by default only the owner has. Approving
-    // a bot grants permissions to something nobody in the room can vouch for.
+    // All behind `manage_bots`, owner-only by default: approving a bot grants
+    // permissions to something nobody in the room can vouch for.
 
     'server:bots:list': async (payload: { accessToken: string }) => {
       try {
@@ -1070,10 +970,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    /**
-     * Answer a bot that knocked. The registry intersects what the operator
-     * ticked with what the bot asked for, so "approve" is never a blank cheque.
-     */
+    /** The registry intersects what was ticked with what the bot asked for,
+        so approving is never a blank cheque. */
     'server:bots:decide': async (payload: {
       accessToken: string;
       botId: string;
@@ -1099,9 +997,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         const wanted = normalizePermissions(payload.permissions ?? []);
         const overreach = wanted.filter((p) => !auth.permissions.has(p));
         if (overreach.length > 0) {
-          // The same rule as role editing. Somebody delegated `manage_bots`
-          // must not be able to route around their own ceiling by approving a
-          // bot that asked for more than they hold.
+          // As in role editing: somebody delegated `manage_bots` cannot route
+          // around their own ceiling by approving a greedier bot.
           socket.emit("server:error", {
             error: "forbidden",
             message: `Cannot grant permissions you do not have: ${overreach.join(", ")}`,
@@ -1140,10 +1037,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    /**
-     * Write down what a bot may do before there is a bot. The token is shown
-     * once, here.
-     */
+    /** What a bot may do, before there is a bot. The token is shown once,
+        here. */
     'server:bots:register': async (payload: {
       accessToken: string;
       nickname: string;
@@ -1252,11 +1147,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    /**
-     * Withdraw a bot's registration. Takes effect at the next thing it tries —
-     * standing is resolved from the registry on every check. The membership row
-     * is left alone; removing that is a kick or a ban.
-     */
+    /** Takes effect at the bot's next call, since standing is read from the
+        registry each time. The membership row is left alone. */
     'server:bots:revoke': async (payload: { accessToken: string; registrationId: string }) => {
       try {
         const rl = rlCheck("server:bots:revoke", ctx, RL_SETTINGS);
@@ -1283,10 +1175,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           meta: { nickname: existing?.nickname ?? null },
         }).catch((e) => consola.warn("audit log write failed", e));
 
-        // Withdrawing permission and removing the member are two things, and an
-        // operator clicking Revoke means both. The permission half already took
-        // effect the moment the row went — standing is read from the registry on
-        // every check, so there is no grant left to expire.
+        // Revoke means both halves. The permission half already took effect
+        // when the row went.
         if (existing?.bot_id) {
           const member = await getUserByGrytId(existing.bot_id).catch(() => null);
           if (member) {
@@ -1379,11 +1269,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    /**
-     * How a member got in, for the moderator about to remove them. Asked for by
-     * id rather than broadcast: the member list goes to everybody, and an
-     * invite code in it would let any member collect working codes.
-     */
+    /** By id rather than broadcast: the member list goes to everybody, and an
+        invite code in it would let any member collect working codes. */
     'server:member:invite': async (payload: { accessToken: string; targetServerUserId?: string }) => {
       try {
         const auth = await requireAuth(socket, payload, { permission: "create_invite" });
@@ -1457,10 +1344,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           const { deletedMessages, updatedReactions, orphanedAttachmentIds } =
             await purgeUserContent(targetId);
 
-          // Straight away rather than on the next sweep (GRYT-139). A ban with
-          // purge is usually reached for because of what somebody posted, and
-          // the sweep's grace period is measured from upload — so it protects
-          // the newest files, which are exactly the ones being removed.
+          // Straight away, not on the next sweep: the sweep's grace period is
+          // measured from upload, so it protects exactly these files.
           const files = await deleteFilesNow(orphanedAttachmentIds);
 
           const affectedConversations = [...new Set(deletedMessages.map((d) => d.conversation_id))];
@@ -1475,10 +1360,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           );
         }
 
-        // Close the door they came through, if asked. A ban is keyed on the
-        // identity, and one with no account behind it costs seconds to replace
-        // — so a banned user can return on the same invite. This does not make
-        // the ban durable; it closes the forgotten-live-link case.
+        // A ban is keyed on an identity that costs seconds to replace, so this
+        // closes the forgotten-live-link case rather than making a ban durable.
         let revokedInvite: string | null = null;
         if (payload.revokeInvite) {
           try {
@@ -1510,10 +1393,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    // Accepts either identifier. Ban speaks serverUserId and unban spoke
-    // grytUserId, so undoing a ban meant holding a different id from the one
-    // used to make it — and the bans list is the only place the grytUserId
-    // appears at all.
+    // Accepts either identifier: ban speaks serverUserId and unban spoke
+    // grytUserId, so undoing one meant holding an id you did not have.
     'server:unban': async (payload: { accessToken: string; grytUserId?: string; targetServerUserId?: string }) => {
       try {
         const rl = rlCheck("server:unban", ctx, RL_MODERATION);
@@ -1574,9 +1455,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         const targetId = payload.targetServerUserId.trim();
         if (!(await requireOutranks(socket, auth, targetId, "server-mute"))) return;
 
-        // The row is the source of truth now. The in-memory flag below is a
-        // cache of it for the sockets that are already connected; without the
-        // write, reconnecting cleared the mute.
+        // The row is the source of truth and the flag below is its cache for
+        // connected sockets. Without the write, reconnecting cleared the mute.
         const mutedUntil = resolveMuteExpiry(payload.expiresInMinutes);
         await setUserModerationState(targetId, { muted: payload.muted, mutedUntil });
 
@@ -1687,12 +1567,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         const before = typeof payload.before === "string" ? new Date(payload.before) : undefined;
         const items = await listServerAudit(limit, before && Number.isFinite(before.getTime()) ? before : undefined);
 
-        // Rank does not gate the audit log, so an auditor holding nothing but
-        // `view_audit_log` would otherwise read a hidden channel's id out of
-        // `target` and its name out of `meta`. Rows are dropped whole rather
-        // than redacted, because a redacted row still says one exists.
-        // mayViewChannel answers true for non-channel targets and reads a
-        // cache, so the per-row call is cheap.
+        // Rank does not gate the audit log, so `view_audit_log` alone would
+        // read a hidden channel's id out of `target`. Dropped whole, not redacted.
         const allowed = await Promise.all(
           items.map((it) =>
             it.target

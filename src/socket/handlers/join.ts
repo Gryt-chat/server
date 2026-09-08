@@ -56,23 +56,15 @@ const RL_JOIN: RateLimitRule = {
   scorePerAction: 0.5, maxScore: 10, scoreDecayMs: 5000,
 };
 
-/**
- * How often one address may ask to be let in. The queue is keyed on identity,
- * which does not bound a script minting a fresh local identity per attempt.
- */
+/** Keyed on address, because the queue is keyed on identity and a script can
+    mint a fresh local identity per attempt. */
 const RL_JOIN_REQUEST: RateLimitRule = {
   limit: 10, windowMs: 60 * 60_000, banMs: 10 * 60_000,
   scorePerAction: 1, maxScore: 10, scoreDecayMs: 60_000,
 };
 
-/**
- * How many people one invite may bring in per hour. `RL_JOIN` is keyed on IP
- * and scales straight up with the number of addresses, so once a link is
- * public the invite itself is the only thing left to limit.
- *
- * A sliding window, so thirty people joining a LAN party in one minute all get
- * in. A server running a bigger event raises it.
- */
+/** `RL_JOIN` is keyed on IP, so once a link is public the invite is the only
+    thing left to limit. Sliding, so a LAN party all gets in at once. */
 function inviteArrivalRule(): RateLimitRule {
   const raw = parseInt(process.env.GRYT_INVITE_MAX_JOINS_PER_HOUR || "", 10);
   const limit = Number.isFinite(raw) && raw > 0 ? raw : 60;
@@ -99,18 +91,12 @@ function warnLanOpenBehindProxy(ip: string): void {
 // ── Handlers ────────────────────────────────────────────────────────
 
 
-/**
- * "This member is a bot, so there is no role to assign". A throw rather than a
- * flag because the block it skips sits inside a try that swallows and logs.
- */
+/** A throw rather than a flag, because the block it skips sits inside a try
+    that swallows and logs. */
 class BotHoldsNoRole extends Error {}
 
-/**
- * Whether a bot is allowed in, and under which registration. Only an
- * already-approved bot gets in, and what it declares this time is ignored
- * entirely — a bot whose image has been taken over cannot change the question
- * after it has been answered.
- */
+/** Only an already-approved bot gets in, and what it declares this time is
+    ignored: a taken-over image cannot re-ask a question already answered. */
 async function admitBot(
   botId: string,
   declaration: BotDeclaration | undefined,
@@ -124,9 +110,8 @@ async function admitBot(
   if (existing) {
     if (existing.status === "approved") return { ok: true, bot: existing };
     if (existing.status === "denied") {
-      // Told the same thing as a pending bot, for the same reason the human
-      // join-request path gives: confirming that somebody looked and said no
-      // invites arguing with the message rather than with a person.
+      // Told the same thing as a pending bot: confirming somebody looked and
+      // said no invites an argument with the message.
       return {
         ok: false,
         error: "bot_not_approved",
@@ -225,10 +210,8 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
             });
             return;
           }
-          // Wording kept as it was rather than corrected to "out of service".
-          // The client matches on the `error` code, not the sentence, but this
-          // one reaches a person, and changing both the code and the copy in the
-          // same release would leave nothing recognisable in a bug report.
+          // Wording kept as it was: this sentence reaches a person, and moving
+          // the code and the copy at once leaves nothing to match a bug report.
           socket.emit("server:error", { error: "auth_disabled", message: "This server has disabled authentication." });
           return;
         }
@@ -264,10 +247,8 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    // Step 2: the client answers the challenge with a signed assertion and a
-    // certificate. `note` rides here rather than on the challenge because the
-    // challenge binds only what the client must not change between the two
-    // steps, and nothing downstream trusts a note.
+    // Step 2: a signed assertion and a certificate. `note` rides here because
+    // the challenge binds only what must not change between the two steps.
     'server:verify': async (payload: {
       certificate?: string;
       assertion?: string;
@@ -324,17 +305,14 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
             throw new Error("Assertion subject does not match certificate subject");
           }
 
-          // `grytUserId`, not `sub`: they differ for an account vouched for by
-          // a secondary issuer, and this is what every table keys on, so a CA
-          // trusted for its own users cannot name somebody else's (GRYT-267).
+          // `grytUserId`, not `sub`: every table keys on this, so a CA trusted
+          // for its own users cannot name somebody else's.
           grytUserId = cert.grytUserId;
           suggestedNickname = cert.preferredUsername;
           identityTier = cert.tier;
 
-          // Only an account can claim a prior identity, and only ever a local
-          // one. Letting a local identity claim another would make swapping
-          // between them a matter of holding two keys, which is not a thing
-          // anybody needs and is a way to shed a ban.
+          // Only an account may claim a prior identity, and only a local one:
+          // otherwise holding two keys is a way to shed a ban.
           if (payload.link && cert.tier === "account") {
             const link = await verifyIdentityLink(
               payload.link,
@@ -348,9 +326,8 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           const message = e instanceof Error ? e.message : String(e);
           consola.warn(`Identity verification failed for ${clientId}:`, message);
 
-          // Which half failed, so a client whose certificate and signing key
-          // have drifted apart can renew and retry. "Sign in again" sent people
-          // to do the one thing that cannot help.
+          // Which half failed, so a client whose certificate and key have
+          // drifted can renew rather than sign in again, which cannot help.
           const reason =
             e instanceof IdentityVerificationError ? e.reason : "unknown";
           // Only set when the verifier could tell that the clock was the
@@ -371,20 +348,15 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        // Whether the operator admits this kind of identity at all. Unlike the
-        // ban refusal below this says exactly what is wrong, and leaks nothing:
-        // the accepted tiers are already in `server:info`.
-        //
-        // Bots come from the registry, not GRYT_IDENTITY_TIERS. Otherwise
-        // adding one bot means accepting every anonymous joiner, and a restart.
+        // Says exactly what is wrong, since the accepted tiers are already in
+        // `server:info`. Bots come from the registry, not GRYT_IDENTITY_TIERS.
         let botRegistration: Awaited<ReturnType<typeof getBotById>> = null;
         if (identityTier === "bot") {
           const outcome = await admitBot(
             grytUserId,
             challenge.bot,
-            // The name it asked to be called, used only if this is the first
-            // time anybody has seen it. Once approved, the registration's name
-            // is the one that sticks.
+            // Used only the first time anybody sees it; after approval the
+            // registration's name is the one that sticks.
             (challenge.nickname || "Bot").trim(),
           );
           if (!outcome.ok) {
@@ -407,10 +379,8 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        // A bot's name is whatever the operator approved, not what the bot sent
-        // this time. It is the label people will use to decide whether to trust
-        // a message, so it must not be something the bot can change after the
-        // fact.
+        // Whatever was approved, not what the bot sent this time: it is the
+        // label people trust a message by.
         const nickname = botRegistration
           ? botRegistration.nickname
           : (challenge.nickname || suggestedNickname || "User").trim();
@@ -427,9 +397,8 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
         }
         let cfg = await getServerConfig().catch(() => null);
 
-        // Stays ahead of invite consumption so a banned user does not burn a
-        // code on a join that was never going to succeed. The refusal is
-        // deliberately uninformative; the real reason is in the audit log.
+        // Ahead of invite consumption, so a banned user does not burn a code.
+        // The refusal is deliberately uninformative; the audit log has the why.
         const identity = await checkIdentityAllowed(grytUserId);
         if (!identity.ok) {
           consola.info(`Join refused for ${grytUserId}: ${identity.code}`);
@@ -440,10 +409,8 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        // A ban follows the identity being claimed, not just the one presented.
-        // Without this, making an account is the cheapest ban evasion there is:
-        // get banned without one, sign up, arrive with a clean sub and link the
-        // old identity back on afterwards.
+        // A ban follows the identity being claimed, not only the one presented,
+        // or signing up and linking back afterwards evades every ban.
         if (priorSub) {
           const prior = await checkIdentityAllowed(priorSub);
           if (!prior.ok) {
@@ -456,22 +423,19 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           }
         }
 
-        // Carry the old membership over before anything reads it, so the join
-        // continues as the member they already were — with their roles, and
-        // owning what they owned.
+        // Before anything reads it, so the join continues as the member they
+        // already were, with their roles and what they owned.
         if (priorSub) {
           try {
             const carry = await carryIdentityForward(priorSub, grytUserId);
             if (carry.status === "carried") {
               consola.info(`Linked ${priorSub} to ${grytUserId} on join`);
-              // `cfg` was read before the carry-over, which is the one thing
-              // here that can change who owns the server. Stale, it sends
-              // `isOwner: false` to somebody who does own it.
+              // `cfg` was read before the carry-over, which can change who owns
+              // the server. Stale, it sends `isOwner: false` to the owner.
               cfg = await getServerConfig().catch(() => cfg);
             } else if (carry.status === "account_already_member") {
-              // Both identities are already members, so nothing moves and
-              // nobody is told. This line is what answers "where did my roles
-              // go" afterwards.
+              // Both identities are already members, so nothing moves. This
+              // line is what answers "where did my roles go" afterwards.
               consola.info(
                 `Not linking ${priorSub} to ${grytUserId}: both are members here, so the guest membership was left as it is`,
               );
@@ -488,9 +452,8 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
         let claimedOwnerGrytUserId: string | null | undefined;
         let usedInviteCode: string | undefined;
 
-        // Bots skip the invite and join-policy gate, and have to: their
-        // admission *is* the registration. Requiring an invite too means an
-        // approved bot cannot join a server on the default policy.
+        // A bot's admission is its registration, so requiring an invite as well
+        // would lock an approved bot out of a server on the default policy.
         if (!isActiveMember && !botRegistration) {
           const ip = getClientIp();
           const inviteKey = getInviteCooldownKey(ip, grytUserId);
@@ -515,10 +478,8 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
 
           const inviteCode = challenge.inviteCode || "";
           if (inviteCode) {
-            // Checked before consuming, so a refused arrival does not spend a
-            // use of a limited invite. Keyed on the code rather than the
-            // caller, which is the point: the limit has to hold across every
-            // machine holding the same link.
+            // Before consuming, so a refusal does not spend a use. Keyed on the
+            // code, so the limit holds across every machine with the link.
             const arrivals = checkRateLimit("invite:arrivals", inviteCode, undefined, inviteArrivalRule());
             if (!arrivals.allowed) {
               consola.warn(`Invite ${inviteCode} hit its hourly arrival limit`);
@@ -560,19 +521,16 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
             if (cfg?.lan_open && isPrivateIp(ip) && !clientAddressIsOwn()) {
               warnLanOpenBehindProxy(ip);
             }
-            // Ahead of the policy check, and has to be: the first person
-            // through the door arrives without an invite, and claiming after
-            // would leave the server ownerless and unconfigurable.
+            // Ahead of the policy check: the first person through arrives
+            // without an invite, and claiming later leaves nobody in charge.
             const claimed = await claimServerOwner(grytUserId);
             claimedOwnerGrytUserId = claimed.owner;
             const policy = normalizeJoinPolicy(cfg?.join_policy);
             const isClaimingOwner = claimedOwnerGrytUserId === grytUserId;
 
             if (!isClaimingOwner && policy === "request") {
-              // Asking is rate limited per address, not per identity. The row is
-              // keyed on the identity, so one person cannot build a queue on
-              // their own — but a script making a fresh local identity each time
-              // can, and each one costs nothing to make.
+              // Per address, not per identity: the row is keyed on identity and
+              // a fresh local one costs nothing to make.
               const asks = checkRateLimit("join:requests", undefined, ip, RL_JOIN_REQUEST);
               if (!asks.allowed) {
                 socket.emit("server:error", {
@@ -587,16 +545,13 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
               const request = await createOrRefreshJoinRequest(grytUserId, nickname, joinNote);
 
               if (request.status === "approved") {
-                // Let them through, and take the row with them. Leaving it would
-                // mean an approval readmits them forever, including after they
-                // leave or are removed.
+                // Take the row with them, or an approval readmits them forever,
+                // including after they are removed.
                 await clearJoinRequest(grytUserId);
                 consola.info(`Approved join request used by ${grytUserId}`);
               } else {
-                // A denial is told the same thing as a pending one. Saying "you
-                // were turned down" confirms a moderator looked and decided,
-                // which is the same leak the ban refusal above avoids — and it
-                // invites arguing with the message instead of with a person.
+                // A denial hears what a pending one hears: saying otherwise
+                // confirms a moderator looked, which is the leak above.
                 consola.info(`Join request ${request.status} for ${grytUserId}`);
                 socket.emit("server:error", {
                   error: "approval_pending",
@@ -630,15 +585,8 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           inviteCode: usedInviteCode,
         });
 
-        /*
-         * Plugins hear about an arrival (GRYT-933). `isActiveMember` was read
-         * before any of this, so this fires for somebody new and for somebody
-         * coming back after a kick, and not on the reconnects an active member
-         * makes all day — a plugin greeting people would otherwise greet the
-         * same person every time their wifi dropped.
-         *
-         * `emit` neither throws nor waits, so nothing here can fail a join.
-         */
+        /* `isActiveMember` was read before all this, so a greeting plugin does
+           not fire on every wifi drop. `emit` cannot throw or fail a join. */
         if (!isActiveMember) {
           pluginEvents().emit("member:joined", {
             userId: user.server_user_id,
@@ -651,38 +599,29 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
         const setupRequired = isOwner && !cfg?.is_configured;
         const tokenVersion = cfg?.token_version ?? 0;
 
-        // Deliberately skipped for a bot: no roles row, and no auto-role pass.
-        // A bot's permissions live on its registration, and a roles row would be
-        // a second place that could disagree with it — including one that a role
-        // edit could quietly widen.
+        // Skipped for a bot: its permissions live on the registration, and a
+        // roles row would be a second place a role edit could widen.
         try {
           if (botRegistration) throw new BotHoldsNoRole();
           const existingRoles = await listMemberRoles(user.server_user_id);
-          // A first-time joiner lands on the default for their identity tier —
-          // which is how "guests may read, accounts may talk" is expressed. An
-          // existing member keeps whatever they were given; changing the
-          // default must not re-sort the people already here.
+          // First-time joiners land on their tier's default; existing members
+          // keep what they were given, so a default change re-sorts nobody.
           const joinRole = defaultRoleForTier(identityTierOf(grytUserId), cfg);
           if (existingRoles.length === 0) {
             await setServerRole(user.server_user_id, isOwner ? "owner" : joinRole);
-            // A role bound to the invite, if it still passes the rules. Only
-            // reachable on a first join, never on a reconnect carrying the same
-            // stored code. Added rather than assigned, so an invite can raise
-            // somebody above the tier default and never below it.
+            // First join only, never a reconnect on the stored code. Added
+            // rather than assigned, so an invite can only raise somebody.
             if (!isOwner && usedInviteCode) {
               await applyInviteRole(usedInviteCode, user.server_user_id);
             }
           } else if (isOwner && !existingRoles.includes("owner")) {
-            // Added rather than assigned. The owner is allowed to hold other
-            // roles, and replacing the set here would take them away every time
-            // they reconnected.
+            // Added rather than assigned: the owner may hold other roles, and
+            // replacing the set would drop them on every reconnect.
             await addMemberRole(user.server_user_id, "owner");
           }
 
-          // A role they earned while they were away lands now. Joining is one
-          // of the two moments the answer can change — the other is sending a
-          // message — and doing it here rather than on a timer means there is
-          // no background job to fail quietly.
+          // Joining and sending are the two moments the answer can change, so
+          // there is no timer here to fail quietly.
           await applyAutoRoles(user.server_user_id, grytUserId);
         } catch (e) {
           if (!(e instanceof BotHoldsNoRole)) consola.warn("Failed to ensure role row:", e);
@@ -694,16 +633,14 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           nickname: user.nickname,
           serverHost: socket.handshake.headers.host || "unknown",
           tokenVersion,
-          // Stamped from the row this join already resolved. Joining is the one
-          // moment a session legitimately starts, so whatever the member's
-          // counter reads now is what this token is entitled to.
+          // From the row this join resolved: a session legitimately starts
+          // here, so the counter as it reads now is what the token gets.
           userTokenVersion: user.token_version ?? 0,
         };
 
         const accessToken = generateAccessToken(tokenPayload);
-        // Reads uploads and nothing else. It goes in the query string of an
-        // `<img src>`, where an Authorization header cannot follow, so it is
-        // deliberately the weaker of the two. See GRYT-740.
+        // Reads uploads and nothing else. Deliberately the weaker token: it
+        // rides in an `<img src>` query string, where a header cannot follow.
         const fileToken = generateFileToken(tokenPayload);
 
         const refreshTokenRecord = await createRefreshToken({
@@ -737,9 +674,8 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           refreshToken: refreshTokenRecord.token_id,
           nickname: user.nickname,
           avatarFileId: user.avatar_file_id || null,
-          // What this server already holds for them, so a client knows on the
-          // way in whether they have a look here rather than after the first
-          // member list arrives.
+          // Sent on the way in, so a client does not have to wait for the first
+          // member list to know whether they have a look here.
           avatarWorn: user.avatar_worn ?? null,
           isOwner,
           setupRequired,
@@ -768,9 +704,8 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           postSystemMessage(io, clientsInfo, formatJoinMessage(user.nickname, user.server_user_id));
         }
 
-        // Outside the isActiveMember branch on purpose: someone who has been
-        // a member for months is exactly who is stuck on a build that cannot
-        // update, and they never join for the first time again.
+        // Outside the isActiveMember branch: somebody stuck on a build that
+        // cannot update never joins for the first time again.
         remindOutdatedWindowsClient(
           io,
           clientsInfo,

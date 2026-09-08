@@ -1,20 +1,13 @@
 /**
- * What a member of this server is allowed to do.
- *
- * A role carries a set of these and each gate asks for the one thing it needs.
- * `rank` is separate and is only about who may act on whom — see `outranks` in
- * the middleware. Capability and hierarchy are different questions.
+ * What a member may do. `rank` is separate and only decides who may act on whom.
  */
 export const PERMISSIONS = [
   // ── Text ──────────────────────────────────────────────────────────
   /** See what has been said. A role without it is in the server and blind. */
   "read_messages",
   "send_messages",
-  /**
-   * Start or post in a DM. `allow_dms` on `server_config` is the whole-server
-   * switch and wins over any role. Reading an existing conversation is not
-   * gated on this — losing it does not hide what was already said.
-   */
+  /** Start or post in a DM. `server_config.allow_dms` overrides this, and
+      reading an existing conversation is not gated on it. */
   "send_direct_messages",
   /** Edit a message you sent. Somebody else's is `manage_messages`. */
   "edit_own_messages",
@@ -22,10 +15,7 @@ export const PERMISSIONS = [
   "delete_own_messages",
   "attach_files",
   "add_reactions",
-  /**
-   * Report a message or a person, both. Channel-scoped for messages;
-   * `user:report` asks for it at server scope.
-   */
+  /** Channel-scoped for messages; `user:report` asks for it at server scope. */
   "report_messages",
   /** Unfurl links. Reader-side: the displaying client fetches the preview. */
   "use_link_previews",
@@ -37,30 +27,18 @@ export const PERMISSIONS = [
   "speak",
   "share_video",
   "share_screen",
-  /**
-   * Start a call. Answering one is `join_voice`, deliberately — gating both
-   * would leave somebody unable to pick up a call placed to them.
-   */
+  /** Answering a call is `join_voice` instead, so gating both cannot leave
+      somebody unable to pick up. */
   "start_calls",
 
   // ── Self and other members ────────────────────────────────────────
   "change_nickname",
-  /**
-   * Say what you are doing, in your own words (GRYT-929).
-   *
-   * Beside `change_nickname` because it is the same kind of thing: a line about
-   * yourself that everybody on the server reads. An operator who does not want
-   * free text under people's names takes this away and the control disappears
-   * rather than failing when it is used.
-   */
+  /** Free text about yourself that the whole server reads, like a nickname. */
   "set_activity",
   /** Choose an owl, or clear one. A string the client draws, not a file. */
   "change_avatar",
-  /**
-   * Upload a picture to use as one. Split from `change_avatar` because this
-   * one puts a stranger's file in front of everybody. A member without it
-   * still gets every owl.
-   */
+  /** Split from `change_avatar`: this one puts a stranger's file in front of
+      everybody. */
   "upload_avatar_image",
   /** See who else is here. */
   "view_members",
@@ -100,10 +78,8 @@ export const PERMISSIONS = [
   "manage_bots",
   /** Server name, description, icon, limits, join policy, the lot. */
   "manage_server",
-  /**
-   * Hand an existing membership to a different identity. Owner-only by
-   * default: it is the one action that makes an account into another account.
-   */
+  /** Owner-only by default: the one action that makes an account into
+      another account. */
   "replace_identity",
   "view_audit_log",
   /** Whether this server is running a current build. */
@@ -113,12 +89,8 @@ export const PERMISSIONS = [
 export type Permission = (typeof PERMISSIONS)[number];
 
 /**
- * The permissions a single channel can have an opinion about — a deliberate
- * subset, since `ban_members` means the same thing wherever you stand.
- *
- * `read_messages` denied at channel scope does not grey the channel out: the
- * server stops naming it, so the member cannot learn it exists. See
- * services/channelPermissions.
+ * Denying `read_messages` here stops the server naming the channel at all,
+ * rather than greying it out. See services/channelPermissions.
  */
 export const CHANNEL_PERMISSIONS = [
   "read_messages",
@@ -151,10 +123,8 @@ export function isPermission(value: unknown): value is Permission {
   return typeof value === "string" && PERMISSION_SET.has(value);
 }
 
-/**
- * Keep only the permissions this build knows about. A role edited by a newer
- * server can name one that does not exist here; dropping it fails shut.
- */
+/** A role edited by a newer server can name a permission this build lacks.
+    Dropping it fails shut. */
 export function normalizePermissions(value: unknown): Permission[] {
   if (!Array.isArray(value)) return [];
   const seen = new Set<Permission>();
@@ -167,9 +137,7 @@ export function normalizePermissions(value: unknown): Permission[] {
 // ── Built-in roles ──────────────────────────────────────────────────
 
 /**
- * The roles every server starts with. They can be renamed, recoloured and
- * re-permissioned like any other role, but not deleted — the defaults and the
- * owner fall back to them. See `isSystemRole`.
+ * Editable but never deletable: the defaults and the owner fall back to them.
  */
 export interface BuiltInRole {
   id: string;
@@ -181,11 +149,8 @@ export interface BuiltInRole {
 
 const EVERY_PERMISSION = PERMISSIONS;
 
-/**
- * Not a floor — a role really can have none of these. It is the set every role
- * gets on *upgrade*, since none of them were gated before. See
- * PERMISSION_BACKFILLS.
- */
+/** Not a floor. The set every role gets on upgrade, since none of these had
+    a gate before. */
 const OPEN_TO_EVERYONE = [
   "read_messages",
   "view_members",
@@ -216,11 +181,8 @@ const MEMBER_PERMISSIONS = [
   "upload_avatar_image",
 ] as const satisfies readonly Permission[];
 
-/**
- * Deliberately shorter than the name suggests. `mod` gated exactly kick, mute
- * and deafen; bans, reports, join requests and the audit log were `admin`.
- * Adding the rest would widen what the role can do, which this must not.
- */
+/** Shorter than the name suggests: `mod` gated exactly kick, mute and deafen.
+    Adding more would widen the role. */
 const MOD_PERMISSIONS = [
   ...MEMBER_PERMISSIONS,
   "kick_members",
@@ -229,11 +191,8 @@ const MOD_PERMISSIONS = [
   "disconnect_members",
 ] as const satisfies readonly Permission[];
 
-/**
- * Everything except the three that stay owner-only. An admin who could grant
- * `manage_roles` could grant themselves everything, which would make the
- * owner's authority advisory. `replace_identity` is the same shape.
- */
+/** An admin who could grant `manage_roles` could hand themselves every other
+    permission on the list. */
 const ADMIN_PERMISSIONS = EVERY_PERMISSION.filter(
   (p) =>
     p !== "manage_roles" &&
@@ -253,11 +212,8 @@ export const BUILT_IN_ROLES: readonly BuiltInRole[] = [
   { id: "guest", name: "Guest", rank: 10, color: null, permissions: GUEST_PERMISSIONS },
 ];
 
-/**
- * The permissions that can be used to acquire more permissions. A set of its
- * own because the question is asked away from role editing too — an invite
- * that hands out a role is a role grant nobody watches happen.
- */
+/** Permissions that can acquire more permissions. Asked away from role editing
+    too: an invite binding a role is a grant nobody watches happen. */
 export const ESCALATION_PERMISSIONS: ReadonlySet<string> = new Set([
   "manage_roles",
   "manage_server",
@@ -265,10 +221,8 @@ export const ESCALATION_PERMISSIONS: ReadonlySet<string> = new Set([
   "manage_bots",
 ]);
 
-/**
- * Only ever given by hand. `admin` holds none of ESCALATION_PERMISSIONS, so a
- * permission test alone would let an invite hand it out.
- */
+/** `admin` holds none of ESCALATION_PERMISSIONS, so a permission test alone
+    would let an invite hand it out. */
 export const ADMIN_ONLY_ROLE_IDS: ReadonlySet<string> = new Set(["owner", "admin"]);
 
 const SYSTEM_ROLE_IDS: ReadonlySet<string> = new Set(BUILT_IN_ROLES.map((r) => r.id));
@@ -283,10 +237,8 @@ export const FALLBACK_ROLE_ID = "member";
 /** The role that always holds every permission, whatever its row says. */
 export const OWNER_ROLE_ID = "owner";
 
-/**
- * Slug-shaped, and lowercase: ids are compared exactly, so a role called
- * `Trusted` that is sometimes `trusted` is two roles.
- */
+/** Ids are compared exactly, so a role sometimes `Trusted` and sometimes
+    `trusted` is two roles. */
 export const ROLE_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 
 export function isValidRoleId(value: unknown): value is string {
@@ -296,14 +248,8 @@ export function isValidRoleId(value: unknown): value is string {
 // ── Upgrading an existing server ────────────────────────────────────
 
 /**
- * Which permissions are new since a given schema version, and who should
- * already have them. A build that adds a permission does not change any stored
- * role, so without this the release that made reading a permission would leave
- * every existing role unable to read.
- *
- * Each new permission names the one it was carved out of, or `everyone` if it
- * had no gate before. **Grants only** — nothing here takes a permission away,
- * so an operator's choices survive an upgrade untouched.
+ * A build that adds a permission does not touch stored roles, so an upgrade
+ * needs this to keep behaving the same. Grants only; nothing here takes away.
  */
 export interface PermissionBackfill {
   version: number;
@@ -344,18 +290,12 @@ export const PERMISSION_BACKFILLS: readonly PermissionBackfill[] = [
   // GRYT-866.
   { version: 6, permission: "upload_avatar_image", grantedWith: "change_avatar" },
 
-  /* GRYT-929. Carved out of `change_nickname` rather than given to everyone:
-     both are a line about yourself that the whole server reads, so a role
-     already trusted with one is the right set to trust with the other. A
-     server that took nicknames away from a role does not get this handed to
-     them by an upgrade. */
+  /* Carved out of `change_nickname`, so a role that had nicknames taken away
+     does not get this handed to it by an upgrade. */
   { version: 7, permission: "set_activity", grantedWith: "change_nickname" },
 ];
 
-/**
- * What a stored role should gain moving between two versions. Pure, because
- * getting it wrong is a silent privilege change in either direction.
- */
+/** Pure: getting this wrong is a silent privilege change in either direction. */
 export function backfillFor(
   current: readonly string[],
   fromVersion: number,
