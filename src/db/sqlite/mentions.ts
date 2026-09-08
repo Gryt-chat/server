@@ -4,6 +4,15 @@ export interface MentionRecord {
   conversation_id: string;
   message_id: string;
   created_at: string;
+  /**
+   * The thread the naming happened in, or null for one in the channel itself.
+   *
+   * Read off the message rather than stored here. The mentions table has one
+   * row per person per message and a foreign key to messages, so the thread is
+   * already known — a column of its own would be a second copy that a moved
+   * message could disagree with.
+   */
+  thread_id: string | null;
 }
 
 /**
@@ -57,9 +66,16 @@ export async function listUnseenMentions(
   const db = getSqliteDb();
   return db
     .prepare(
-      `SELECT conversation_id, message_id, created_at FROM mentions
-       WHERE server_user_id = ? AND seen_at IS NULL
-       ORDER BY created_at ASC LIMIT ?`,
+      /* Joined rather than left-joined: the foreign key means a mention whose
+         message is gone has already been deleted with it, so an inner join
+         cannot lose a row that should still be counted. */
+      `SELECT m.conversation_id, m.message_id, m.created_at, msg.thread_id
+         FROM mentions m
+         JOIN messages msg
+           ON msg.conversation_id = m.conversation_id
+          AND msg.message_id = m.message_id
+        WHERE m.server_user_id = ? AND m.seen_at IS NULL
+        ORDER BY m.created_at ASC LIMIT ?`,
     )
     .all(serverUserId, Math.min(Math.max(limit, 1), 500)) as unknown as MentionRecord[];
 }
