@@ -9,12 +9,8 @@ if (JWT_SECRET === DEFAULT_SECRET && (process.env.NODE_ENV || '').toLowerCase() 
 
 const ACCESS_TOKEN_EXPIRY = '15m';
 
-/**
- * Much longer than an access token, because an `<img>` cannot notice a 401 and
- * retry — the picture just fails. Affordable because it reads files on one
- * server and does nothing else, and it carries `tokenVersion`, so bumping that
- * kills every one already handed out.
- */
+/** Long because an `<img>` cannot notice a 401 and retry. Affordable because it
+    reads files and nothing else, and `tokenVersion` kills them all. */
 const FILE_TOKEN_EXPIRY = '12h';
 
 export interface TokenPayload {
@@ -23,16 +19,8 @@ export interface TokenPayload {
   nickname: string;
   serverHost: string;
   tokenVersion: number;
-  /**
-   * The member's own `users.token_version` when this token was minted, checked
-   * against the current one by every gate. `tokenVersion` above is the
-   * server-wide counter; this is the per-member one, so a single person's
-   * sessions can be ended without touching anybody else's.
-   *
-   * Optional, and read as 0 when absent: tokens minted before this existed
-   * carry nothing, and members start at 0, so those tokens keep working until
-   * something actually revokes them. Nobody is signed out by the deploy.
-   */
+  /** The per-member counter, where `tokenVersion` above is server-wide. Read as
+      0 when absent, so the deploy that added it signs nobody out. */
   userTokenVersion?: number;
 }
 
@@ -43,11 +31,8 @@ export function generateAccessToken(payload: TokenPayload): string {
 export function verifyAccessToken(token: string, opts?: { ignoreExpiration?: boolean }): TokenPayload | null {
   try {
     const decoded = jwt.verify(token, JWT_SECRET, { ignoreExpiration: opts?.ignoreExpiration }) as TokenPayload & { scope?: string };
-    // A file token is signed with this same secret and would otherwise verify
-    // here — which would make the weaker credential, the one that travels in
-    // URLs and logs, work everywhere the stronger one does. The check is for
-    // any scope rather than for `file` specifically, so a scope added later is
-    // refused by default instead of being quietly accepted.
+    // A file token shares this secret and would otherwise verify here. Any
+    // scope, not `file` specifically, so a later one is refused by default.
     if (decoded?.scope) return null;
     return decoded;
   } catch {
@@ -56,16 +41,8 @@ export function verifyAccessToken(token: string, opts?: { ignoreExpiration?: boo
 }
 
 /**
- * The token that reads a file, and only that. `GET /api/uploads/files/:fileId`
- * had no auth at all, so every file was one request away from anyone holding
- * the UUID, forever (GRYT-740).
- *
- * Its own token because an `<img>` cannot send an Authorization header, so it
- * sits in the URL — which turns up in logs, referrers and pasted links. What
- * leaks reads files on one server; the access token would be the session.
- *
- * **`scope` is checked on the way back in.** Without it this is byte-identical
- * to an access token signed with the same secret.
+ * Its own token because it rides in a URL, which turns up in logs and referrers.
+ * `scope` is checked on the way back in, or this is an access token.
  */
 export interface FileTokenPayload extends TokenPayload {
   scope: 'file';

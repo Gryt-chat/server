@@ -12,16 +12,8 @@ import type { Clients } from "../../types";
 import { sendServerDetails } from "./server";
 
 /**
- * The first join on a brand-new server (GRYT-997).
- *
- * A server with no channels yet creates them lazily, inside the same
- * `sendServerDetails` that is about to list them. The permission layer caches
- * the channel list for fifteen seconds, so anything that asked a permission
- * question a moment earlier has cached "there are no channels" — and the owner,
- * who is allowed everything, was handed the empty set of everything.
- *
- * What that looked like: joining a fresh server and landing on a sidebar with
- * nothing in it, which fixed itself on a reload once the cache expired.
+ * A new server creates its channels inside the `sendServerDetails` that lists
+ * them, and a cached empty list left the first join on an empty sidebar.
  */
 
 const HOST = "bootstrap.test:5001";
@@ -49,9 +41,8 @@ describe("the first join on a server with no channels yet", () => {
     const owner = await upsertUser("account-owner", "Owner");
     await setServerRole(owner.server_user_id, "owner");
 
-    // The part that made this a bug rather than a theory: somebody asks a
-    // permission question while the channel table is still empty, which is what
-    // fills the cache. On a real join plenty of things do.
+    // A permission question asked while the table is still empty is what fills
+    // the cache, and on a real join plenty of things ask one.
     resetChannelPermissionCache();
     const beforeSeeding = await visibleChannelIds(owner.server_user_id, "account-owner");
     assert.equal(beforeSeeding.size, 0, "nothing exists yet, so nothing is visible yet");

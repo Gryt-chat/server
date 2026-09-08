@@ -18,17 +18,8 @@ import { registerAdminChannelHandlers } from "./adminChannels";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
 /**
- * A channel that is created has to be a channel somebody can see.
- *
- * `server:details` builds its channel list from the sidebar, and
- * `ensureDefaultSidebarItems` seeds rows once and then returns early forever
- * after. So on a server whose sidebar is already populated, a channel created
- * through `server:channels:upsert` had no row and appeared to nobody — while
- * existing, answering `chat:fetch` and accepting `chat:send`.
- *
- * The desktop has always sent `server:sidebar:item:upsert` itself immediately
- * afterwards, which is the only reason this was survivable. These cases are
- * about the handler being right on its own. GRYT-839.
+ * `server:details` builds its list from the sidebar and the seeder runs once, so
+ * a new channel had no row and appeared to nobody while answering `chat:fetch`.
  */
 
 const HOST = "sidebar.test:5001";
@@ -111,10 +102,8 @@ describe("a new channel gets a sidebar row", () => {
     assert.ok(rows[0].position > (existing?.position ?? 0));
   });
 
-  /*
-   * Removing a channel from the sidebar and keeping the channel is something
-   * somebody can deliberately do. Renaming it must not undo that.
-   */
+  /* Taking a channel off the sidebar and keeping the channel is deliberate, and
+     a rename must not undo it. */
   it("adds nothing on an edit", async () => {
     for (const row of await rowsFor("c-new")) {
       await handlers["server:sidebar:item:delete"]({ accessToken, itemId: row.item_id });
@@ -132,12 +121,8 @@ describe("a new channel gets a sidebar row", () => {
 });
 
 describe("one row per channel", () => {
-  /*
-   * The case the fix above would otherwise cause. The desktop sends
-   * `server:channels:upsert` and `server:sidebar:item:upsert` back to back with
-   * an item id of its own, so the channel would be given a row here and a
-   * second one a moment later — and two rows draw the channel twice.
-   */
+  /* The desktop sends its own row a moment later, so without this the channel
+     gets two and the sidebar draws it twice. */
   it("drops the row added alongside the channel when a client names its own", async () => {
     await handlers["server:channels:upsert"]({
       accessToken, channelId: "c-desktop", name: "desktop", type: "text",

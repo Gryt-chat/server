@@ -1,9 +1,5 @@
-/**
- * Round-trips a file larger than the multipart part size through both storage
- * backends, using the sourcePath path, and checks the bytes come back byte for
- * byte. 20 MB against an 8 MB part size means at least three parts, so this
- * genuinely exercises multipart rather than falling back to a single PUT.
- */
+/** Round-trips a file through both storage backends and compares the bytes.
+    20 MB against an 8 MB part size is three parts, so multipart really runs. */
 import { createHash, randomBytes } from "crypto";
 import { mkdtemp, rm, stat, writeFile } from "fs/promises";
 import { tmpdir } from "os";

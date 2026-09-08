@@ -13,13 +13,8 @@ import {
 const SECRET = "shared-server-secret";
 
 describe("signClientToken", () => {
-  // Pinned on both sides. internal/auth/clienttoken_test.go in the SFU asserts
-  // the same string, so if either implementation drifts a test fails here
-  // instead of a call failing in production.
-  //
-  // That was not true until GRYT-803 — this comment claimed it while the Go
-  // side pinned nothing, so the agreement it describes was never actually
-  // checked from the other end. It is now.
+  // internal/auth/clienttoken_test.go in the SFU asserts the same string, so
+  // drift on either side fails a test rather than a call.
   it("matches the vector the SFU pins", () => {
     const token = signClientToken(SECRET, "user-abc", "room-xyz", 1788000000000, "nonce-1");
     assert.equal(
@@ -67,9 +62,8 @@ describe("mintClientToken", () => {
 });
 
 describe("signClientTokenV2", () => {
-  // The other half of the pinned pair above. The SFU verifies what this signs,
-  // so a capability list that serialises differently on the two sides is a
-  // member who cannot speak and no error anywhere saying why.
+  // The other half of the pinned pair: a capability list serialising differently
+  // is a member who cannot speak, with no error saying why.
   it("matches the vector the SFU pins", () => {
     assert.equal(
       signClientTokenV2(SECRET, "user-abc", "room-xyz", 1788000000000, "nonce-1", [CAP_SPEAK]),
@@ -126,10 +120,8 @@ describe("mintClientToken", () => {
 });
 
 describe("an empty secret", () => {
-  // GRYT-786. SERVER_PASSWORD defaulted to empty and this was the only thing
-  // that read it, so the signing key on an ordinary deployment was a value
-  // anybody can guess. HMAC accepts an empty key perfectly happily, which is
-  // why the refusal has to be written down rather than relied upon.
+  // HMAC accepts an empty key perfectly happily, so the refusal has to be
+  // written down rather than relied upon.
   it("is refused, because HMAC would accept it", () => {
     assert.throws(() => mintClientToken("", "u", "r", [CAP_SPEAK]), /empty secret/);
   });

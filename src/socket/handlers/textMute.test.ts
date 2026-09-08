@@ -16,17 +16,8 @@ import { registerTypingHandlers } from "./typing";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
 /**
- * A mute has to cover text, not only voice (GRYT-917).
- *
- * Driven through the handlers rather than through `textMuteFor`, because the
- * bug was never in the deciding — `effectiveModerationState` has been right the
- * whole time and the member list has been drawing it. The bug was that nothing
- * on the way to a message asked. A test of the helper would have passed against
- * the broken build.
- *
- * The same harness `permissionGates.test.ts` uses, and for the same reason:
- * `requireAuth` wants a token and a `host` header, and what is under test is
- * the decision rather than the transport.
+ * Through the handlers, not `textMuteFor`: the deciding was always right and
+ * nothing on the way to a message asked, so a helper test would have passed.
  */
 
 const HOST = "mute.test:5001";
@@ -169,9 +160,8 @@ describe("a mute stops text, not only voice", () => {
   });
 
   it("lets a member whose timeout has lapsed talk again", async () => {
-    // The row still says muted. `effectiveModerationState` is what makes the
-    // expiry mean anything, and nothing sweeps the column, so a mute that is
-    // only lifted by a background job would still be a mute here.
+    // The row still says muted, and nothing sweeps the column, so
+    // `effectiveModerationState` is what makes the expiry mean anything.
     const { ctx, emitted } = makeContext();
     const who = await member({ until: new Date(Date.now() - 1000) });
     await handlers(ctx)["chat:send"]({
@@ -209,10 +199,8 @@ describe("a mute stops text, not only voice", () => {
   });
 
   it("says nothing to the room about a muted member typing", async () => {
-    // Paired with the unmuted case deliberately. The audience is everybody in
-    // `clientsInfo` except the typist, so a test with one client in it emits
-    // nothing whatever the mute says — which is a test that passes against the
-    // broken build. The first half is what proves the harness reaches the emit.
+    // Paired with the unmuted case: one client in `clientsInfo` emits nothing
+    // whatever the mute says, and would pass against the broken build.
     const heard = async (mute?: { until: Date | null }) => {
       const { ctx, emitted } = makeContext();
       const who = await member(mute);

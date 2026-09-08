@@ -4,10 +4,8 @@ import { test } from "node:test";
 import { isPrivateIp } from "./isPrivateIp";
 
 test("recognises every private IPv4 range, not only the low ones", () => {
-  // 10/8 and 127/8 always worked. The other three did not: `num & mask` is a
-  // signed 32-bit value and their prefixes are unsigned literals, so the
-  // comparison never came out true. That made `lan_open` refuse a client on a
-  // 192.168 address, which is the address nearly every home LAN hands out.
+  // `num & mask` is signed and the other three prefixes are unsigned literals,
+  // so `lan_open` refused a client on 192.168, which most home LANs hand out.
   assert.equal(isPrivateIp("10.0.0.1"), true);
   assert.equal(isPrivateIp("127.0.0.1"), true);
   assert.equal(isPrivateIp("172.16.0.1"), true);

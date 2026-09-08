@@ -1,16 +1,6 @@
 /*
- * Crosspost guard — a server plugin with no client half.
- *
- * Catches the one spam pattern that is easy to be sure about: the same message,
- * pasted into several channels inside a minute. A person answering a question
- * in two places writes it differently the second time. A script does not.
- *
- * What it does when it is sure: deletes the copies. Deleting is the answer to
- * most of this — the post is the problem, and the person may well be somebody
- * whose account got taken. Whoever does it twice in an hour gets a day off.
- *
- * Read this before running it. It is an example of the shape, not a moderation
- * policy, and the numbers below are guesses about a server that is not yours.
+ * Deletes the same message pasted into several channels inside a minute. An
+ * example of the shape, not a policy — the numbers are guesses about a server.
  */
 
 /** How many channels the same text has to reach before this is spam. */
@@ -29,24 +19,15 @@ const BAN_MS = 24 * 60 * 60_000;
 const MIN_LENGTH = 12;
 
 export function activate(api) {
-  /*
-   * `${userId}\n${text}` -> { at, posts: [{ channelId, messageId }] }
-   *
-   * Keyed on the pair, so two people saying the same thing are two entries and
-   * one person saying two things is as well. Text is the key rather than a
-   * hash of it: this map is pruned to a minute, and hashing would buy nothing
-   * but a way to be wrong about collisions.
-   */
+  /* `${userId}\n${text}` -> { at, posts: [{ channelId, messageId }] }. Text
+     rather than a hash of it: a minute's worth cannot be worth a collision. */
   const recent = new Map();
 
   /** userId -> when this plugin last swept them. */
   const swept = new Map();
 
-  /*
-   * Called on every message, so it has to stay cheap and it has to actually
-   * empty. A Map that only grows is how a plugin takes a server down three
-   * weeks after somebody installs it.
-   */
+  /* Called on every message, so it has to actually empty: a Map that only grows
+     takes a server down three weeks after somebody installs it. */
   function prune(now) {
     for (const [key, entry] of recent) {
       if (now - entry.at > WINDOW_MS) recent.delete(key);
@@ -62,12 +43,8 @@ export function activate(api) {
     for (const post of posts) {
       const outcome = await api.moderation.deleteMessage(post.channelId, post.messageId);
 
-      /*
-       * A refusal here is an ordinary answer, not a failure. The usual one is
-       * that they are a moderator — Gryt will not let a plugin act on somebody
-       * who can moderate, whatever the plugin thinks — and the log line is how
-       * an operator finds out this ran and chose not to.
-       */
+      /* An ordinary answer, not a failure. Usually they are a moderator, whom
+         no plugin may act on, and this line is how an operator finds out. */
       if (!outcome.ok) {
         api.log.warn(`left ${who}'s message in ${post.channelId} alone: ${outcome.reason}`);
         return;
@@ -114,12 +91,8 @@ export function activate(api) {
     // in does not start a second sweep over the same posts.
     recent.delete(key);
 
-    /*
-     * `message:created` does not wait for this and nothing upstream sees what
-     * it throws, so the catch is here or it is nowhere. Ten throws and Gryt
-     * turns the plugin off, which is the right outcome but a confusing one to
-     * debug from a server log with nothing in it.
-     */
+    /* Nothing upstream sees what this throws, so the catch is here or nowhere.
+       Ten throws and Gryt turns the plugin off. */
     void sweep(message.userId, message.nickname, entry.posts, now).catch((error) => {
       api.log.error(`sweep failed: ${error.message}`);
     });

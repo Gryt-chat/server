@@ -4,10 +4,8 @@ import { describe, it } from "node:test";
 import { findMentions } from "./mentions";
 
 /**
- * The cases that matter are the ones where the server could disagree with the
- * client about what a mention is. A name the client draws as a mention but the
- * server does not store is a highlighted word that reached nobody, which looks
- * like it worked and did not.
+ * Where the server could disagree with the client about what a mention is: a
+ * name drawn as one and not stored is a highlighted word that reached nobody.
  */
 const MEMBERS = [
   { serverUserId: "u_ada", nickname: "Ada" },

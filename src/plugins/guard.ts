@@ -1,38 +1,10 @@
 /**
- * What happens around every call into a plugin (GRYT-939).
- *
- * Lifted out of `bus.ts`, where it grew alongside the event bus. It moved when
- * plugins gained a second way to be called — a message from a client plugin —
- * because the interesting number is per plugin and not per channel. A plugin
- * throwing five times on events and five times on messages is a plugin that
- * has thrown ten times, and two separate counters would have let it run
- * forever.
- *
- * The three failures this exists for, unchanged from where it came from:
- *
- * 1. **A handler throws.** Uncaught, it propagates into whichever server code
- *    called the plugin and fails that operation for the member who triggered
- *    it — somebody's message not sending because a plugin has a typo.
- * 2. **A handler rejects.** A plain try/catch around the call cannot see an
- *    async rejection, and an unhandled one takes the process down on Node's
- *    default.
- * 3. **A handler throws every time.** Catching alone turns that into an
- *    infinite log and a permanent tax on every message. After enough failures
- *    the plugin is dropped and said so, once.
- *
- * It never waits. A plugin that takes ten seconds delays itself and nothing
- * else.
+ * Catches a throw, catches a rejection, and drops a plugin that keeps failing.
+ * Counted per plugin, not per channel, and it never waits.
  */
 
-/**
- * How many times one plugin may fail before it stops being called.
- *
- * Counted per plugin rather than per handler or per channel, because a plugin
- * whose code throws is broken as a whole and its second handler is no more
- * likely to work than its first. Ten is enough that a transient failure — a
- * network call in a handler, a database busy — disables nothing, and few enough
- * that a plugin broken on every message is gone within a second of traffic.
- */
+/** Enough that a busy database disables nothing, few enough that a plugin
+    broken on every message is gone within a second of traffic. */
 export const FAILURES_BEFORE_DISABLE = 10;
 
 export interface GuardLogger {
@@ -41,44 +13,24 @@ export interface GuardLogger {
 }
 
 export interface PluginGuard {
-  /**
-   * Run one plugin handler. Never throws, never waits, never lets a rejection
-   * escape.
-   *
-   * `what` names the thing being handled, for the log line — an event name, a
-   * message topic. It is the only part of this a reader will see.
-   */
+  /** Never throws, never waits, never lets a rejection escape. `what` is an
+      event name or a message topic, for the log line. */
   call(pluginId: string, what: string, run: () => void | Promise<void>): void;
   isDisabled(pluginId: string): boolean;
-  /**
-   * Registered by anything holding subscriptions, so a disabled plugin's
-   * handlers are dropped rather than merely skipped.
-   *
-   * Skipping alone would look identical from the outside while the maps filled
-   * up with dead handlers from a plugin that re-subscribes on a timer.
-   */
+  /** Dropped rather than skipped: skipping looks the same from outside while
+      the maps fill with dead handlers from a plugin re-subscribing on a timer. */
   onDisable(drop: (pluginId: string) => void): void;
   disabledIds(): string[];
 }
 
-/**
- * Handed to each handler as its own copy.
- *
- * Without this the first plugin to receive something can rewrite it for every
- * plugin after it, and for the server if the object came from somewhere that
- * still holds it. Two plugins seeing different text for the same message,
- * depending on load order, is the kind of bug that never gets found.
- *
- * structuredClone rather than a spread: the payloads are shallow today and a
- * spread would quietly stop protecting the moment one is not.
- */
+/** Or the first plugin rewrites the payload for every one after it. Cloned, not
+    spread: a spread stops protecting the moment a payload is not shallow. */
 export function copyForHandler<T>(payload: T): T {
   try {
     return structuredClone(payload);
   } catch {
-    /* Only reachable if a payload picks up something unclonable, which would be
-       a bug at the call site rather than in the plugin. Better to deliver the
-       original than to drop it silently. */
+    /* Only reachable if a payload picks up something unclonable, which is a bug
+       at the call site. Better delivered than dropped silently. */
     return payload;
   }
 }
@@ -115,9 +67,8 @@ export function createPluginGuard(logger: GuardLogger): PluginGuard {
 
       try {
         const result = run();
-        /* A rejection is not something the try/catch above can see. Checking
-           for a thenable rather than for a Promise, so a handler returning any
-           promise-alike is still caught. */
+        /* The try/catch above cannot see a rejection. A thenable rather than a
+           Promise, so any promise-alike is still caught. */
         if (result && typeof (result as Promise<void>).catch === "function") {
           (result as Promise<void>).catch((err) => recordFailure(pluginId, what, err));
         }

@@ -11,22 +11,12 @@ import {
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 
 /**
- * Blocking somebody, which is a personal act rather than a moderator one.
- *
- * No permission is checked anywhere in here. That is the point: blocking has
- * to work against somebody who outranks you, or it does not work for the
- * person who needs it most.
- *
- * **Nothing is ever sent to the blocked person.** No event, no member-list
- * marker, no error that names the reason. A block that announces itself
- * invites the retaliation it exists to stop. They can infer it when a
- * conversation will not open, which is true of every product that has this,
- * and the refusal they get is the ordinary one.
+ * No permission is checked: blocking has to work against somebody who outranks
+ * you. Nothing ever reaches the blocked person, not even a refusal that says so.
  */
 
-/* Looser than reporting. Blocking is not an accusation anybody has to review,
- * and somebody clearing out a bad afternoon may block several people in a row.
- * Still bounded, because each call writes. */
+/* Looser than reporting: nobody has to review a block, and somebody may make
+   several in a row. Still bounded, because each call writes. */
 const RL_BLOCK: RateLimitRule = { limit: 30, windowMs: 60_000, scorePerAction: 1, maxScore: 20, scoreDecayMs: 3_000 };
 
 export function registerBlockHandlers(ctx: HandlerContext): EventHandlerMap {
@@ -73,10 +63,8 @@ export function registerBlockHandlers(ctx: HandlerContext): EventHandlerMap {
 
         await blockUser(auth.tokenPayload.grytUserId, target.gryt_user_id);
 
-        /* The conversation goes out of the blocker's list, and only theirs.
-         * `hidden_at` is per member and already exists for the ordinary
-         * "close this conversation" case, so this is the same act somebody
-         * could have done by hand. */
+        /* Only the blocker's list. `hidden_at` is per member and already exists
+           for closing a conversation, so this is what they could do by hand. */
         await hideConversationsBetween(
           auth.tokenPayload.serverUserId,
           payload.serverUserId,
@@ -105,9 +93,8 @@ export function registerBlockHandlers(ctx: HandlerContext): EventHandlerMap {
         const auth = await requireAuth(socket, payload);
         if (!auth) return;
 
-        /* Looked up rather than required to exist. Somebody blocked and then
-         * banned is gone from `users`, and their block row has to be
-         * removable or the list has an entry nobody can clear. */
+        /* Looked up rather than required: somebody blocked and then banned is
+           gone from `users`, and the row still has to be removable. */
         const target = await getUserByServerId(payload.serverUserId);
         if (target) {
           await unblockUser(auth.tokenPayload.grytUserId, target.gryt_user_id);

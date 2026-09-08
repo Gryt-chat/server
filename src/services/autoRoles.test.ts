@@ -21,12 +21,8 @@ import { upsertUser } from "../db/sqlite/users";
 import { applyAutoRoles } from "./autoRoles";
 
 /**
- * Roles that hand themselves out.
- *
- * The failure that matters is a promotion that should not have happened —
- * somebody quiet crossing a time threshold, or a moderator being pushed
- * sideways into a lower tier — so most of this is about what does *not* get
- * granted.
+ * The failure that matters is a promotion that should not have happened, so most
+ * of this is about what does not get granted.
  */
 
 let dir: string;

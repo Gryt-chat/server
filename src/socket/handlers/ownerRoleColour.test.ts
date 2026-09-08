@@ -23,21 +23,8 @@ import { registerAdminHandlers } from "./admin";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
 /**
- * What may be written to the owner role, and by whom (GRYT-906).
- *
- * The owner role used to be unwritable in full: `services/permissions` falls
- * back to it when a lookup fails, so a mistake in the role editor could leave a
- * server nobody can administer. Its colour was never part of that — a colour
- * grants nothing and moves nobody — so it is now the one field that saves.
- *
- * The risk in opening a hole in a blanket rule is that the hole is wider than
- * intended, which is what most of this file is about: a payload that slips a
- * rank or a permission in beside the colour must be refused outright rather
- * than half-applied, and somebody below the owner must not get to recolour it
- * at all.
- *
- * Drives the handler directly, the way `permissionGates.test.ts` does. There is
- * no socket.io here and no network; the decision is what is under test.
+ * Colour is the one field on the owner role that saves, and a payload slipping a
+ * rank in beside it is refused outright rather than half-applied.
  */
 
 const HOST = "owner-colour.test:5001";
@@ -182,12 +169,8 @@ describe("the owner role's colour", () => {
   });
 });
 
-/*
- * The half that matters. Everything below is a way of asking for more than a
- * colour, and every one of them has to come back refused with the row
- * untouched — a payload that is half-applied is the failure this whole
- * exception could introduce.
- */
+/* Every one of these asks for more than a colour and has to come back refused
+   with the row untouched. */
 describe("nothing else about the owner role", () => {
   const smuggled: [string, Record<string, unknown>][] = [
     ["a name beside the colour", { color: "#00ff00", name: "Boss" }],
@@ -218,13 +201,8 @@ describe("nothing else about the owner role", () => {
   });
 });
 
-/*
- * `manage_roles` is not enough on its own.
- *
- * An admin the owner delegated to could otherwise recolour the owner role so
- * that the owner reads as an ordinary member. Small, and pointless to allow.
- * Rank is the check the rest of this handler uses for "you are not above this".
- */
+/* `manage_roles` alone would let a delegated admin recolour the owner into an
+   ordinary member. Rank is the check the rest of the handler uses. */
 describe("somebody below the owner", () => {
   it("cannot recolour it, even holding manage_roles", async () => {
     const before = await colourOf();
@@ -234,10 +212,8 @@ describe("somebody below the owner", () => {
   });
 });
 
-/*
- * A colour that is not a colour is dropped rather than stored. `#fff`,
- * `red` and `javascript:` all reach the client as a CSS value.
- */
+/* Dropped rather than stored: `#fff`, `red` and `javascript:` all reach the
+   client as a CSS value. */
 describe("a colour that is not one", () => {
   for (const bad of ["red", "#fff", "#12345g", "javascript:alert(1)", "  ", 42, true]) {
     it(`falls back rather than storing ${JSON.stringify(bad)}`, async () => {

@@ -21,10 +21,8 @@ function parseIPv4(ip: string): number | null {
 function isPrivateIPv4(ip: string): boolean {
   const num = parseIPv4(ip);
   if (num === null) return false;
-  // `&` gives a *signed* 32-bit result, and every prefix from 128.0.0.0 up is
-  // written here as an unsigned literal, so for those the comparison could
-  // never come out true. Without the `>>> 0` this answered false for
-  // 172.16/12, 192.168/16 and 169.254/16 — three of the five ranges listed.
+  // `&` gives a signed result and the prefixes are unsigned literals, so without
+  // `>>> 0` this answered false for three of the five ranges listed.
   return IPV4_PRIVATE_RANGES.some((r) => ((num & r.mask) >>> 0) === r.prefix);
 }
 

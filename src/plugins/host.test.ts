@@ -10,12 +10,8 @@ import { PLUGIN_CAPABILITIES } from "./manifest";
 import { discoverPlugins, pluginsDir, startPlugins } from "./host";
 
 /**
- * Finding plugins on disk, and what happens when one of them is not (GRYT-933).
- *
- * None of this is a security boundary — loading a plugin runs its code with
- * this process's privileges. What is being checked is that every way a folder
- * can fail to be a plugin is named and skipped, and that the server comes up
- * regardless. An operator debugging their own plugin at midnight is the reader.
+ * Not a security boundary: every way a folder can fail to be a plugin is named
+ * and skipped, and the server comes up regardless.
  */
 
 let dir = "";
@@ -83,9 +79,8 @@ describe("discovering plugins", () => {
     );
   });
 
-  /* Almost nobody runs plugins, so this is the normal case rather than an
-     error. A server that would not start without the directory would be a
-     server that stopped starting on upgrade. */
+  /* The normal case, not an error: a server needing the directory would stop
+     starting on upgrade. */
   it("is empty and quiet when the directory does not exist", () => {
     const { plugins, rejected } = discoverPlugins(join(dir, "nope"));
     assert.deepEqual(plugins, []);
@@ -144,20 +139,16 @@ describe("a folder that is not a plugin", () => {
   });
 });
 
-/*
- * The manifest already refuses a `main` with `..` in it. This is the same
- * question asked of the path that is actually opened, which a symlink can
- * answer differently.
- */
+/* The same question the manifest asks, of the path that is actually opened,
+   which a symlink can answer differently. */
 describe("an entry point that leaves the folder", () => {
   it("is refused when the path resolves outside", () => {
     const outside = join(dir, "outside.js");
     writeFileSync(outside, "");
     const path = join(dir, "escapee");
     mkdirSync(path);
-    /* Written directly rather than through readManifest, because readManifest
-       would refuse it first — this is the second check, and it has to be
-       reachable to be worth having. */
+    /* Written directly, because readManifest would refuse it first and this is
+       the second check. */
     writeFileSync(
       join(path, "manifest.json"),
       JSON.stringify({ id: "escapee", name: "e", version: "1", main: "sub/../../outside.js" }),
@@ -284,18 +275,8 @@ describe("starting them", () => {
   });
 });
 
-/*
- * The failure an operator will actually hit. Refusing to start the server
- * instead would hand anybody who can write to that folder a way to take it
- * down, and leave somebody with a server that will not boot over a plugin they
- * installed for fun.
- */
-/*
- * Not optional and not configurable (GRYT-941). A member is the one whose
- * messages are being read, and knowing what code sits between them and the
- * people they are talking to is theirs to know. An operator who would rather it
- * were not seen is the case this exists for.
- */
+/* Not configurable: what code sits between a member and the people they talk to
+   is theirs to know. */
 describe("telling members what this server runs", () => {
   type Announced = {
     id: string;
@@ -330,11 +311,8 @@ describe("telling members what this server runs", () => {
     );
   });
 
-  /*
-   * The id alone is close to useless — "this server runs automod" tells a member
-   * nothing. "…which reads every message you send" is the sentence they can act
-   * on, and acting on it means leaving.
-   */
+  /* The id alone tells a member nothing they can act on; what it reads is the
+     part they can. */
   it("says what each one may do", async () => {
     plugin("automod", manifestFor("automod", { capabilities: ["messages:read", "moderation"] }));
 
@@ -349,12 +327,8 @@ describe("telling members what this server runs", () => {
     });
   });
 
-  /*
-   * A version number is which known problem applies. Handing it to everybody
-   * who joins answers a question an attacker would otherwise have to ask, and
-   * it is the one field here that narrows an attack rather than describing the
-   * plugin.
-   */
+  /* A version names which known problem applies, and is the one field here that
+     narrows an attack rather than describing the plugin. */
   it("does not say which version", async () => {
     plugin("automod", manifestFor("automod", { version: "1.2.3" }));
 
@@ -549,12 +523,8 @@ describe("what the api lets a plugin do", () => {
     assert.equal(log.at("info")[0], "[automod] banned somebody");
   });
 
-  /*
-   * Thrown on the property rather than returned as a refusal from each call. A
-   * plugin should find out it was not given this when it reaches for it, at
-   * startup, not on the first member it tries to act on at three in the
-   * morning.
-   */
+  /* Thrown on the property, so a plugin finds out at startup rather than on the
+     first member it tries to act on. */
   it("refuses moderation to a plugin that did not declare it", () => {
     const log = logger();
     const api = createPluginApi(

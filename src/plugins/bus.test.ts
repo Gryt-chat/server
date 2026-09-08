@@ -4,12 +4,8 @@ import { describe, it } from "node:test";
 import { FAILURES_BEFORE_DISABLE, createPluginBus, type BusLogger } from "./bus";
 
 /**
- * What happens around the call, which is the whole point of the bus (GRYT-933).
- *
- * A plugin runs in this process. The events are plain objects and carrying them
- * is not interesting; what is interesting is that a broken plugin cannot fail
- * somebody's message send, cannot take the process down with an unhandled
- * rejection, and cannot tax every message forever.
+ * Carrying the events is not the interesting part. A broken plugin cannot fail a
+ * message send, take the process down, or tax every message forever.
  */
 
 function recorder(): BusLogger & { warns: string[]; errors: string[] } {
@@ -56,11 +52,8 @@ describe("delivering an event", () => {
   });
 });
 
-/*
- * The one that decides whether two plugins can be trusted to run side by side.
- * Without a copy, the first handler rewrites the event for the second, and
- * which one wins depends on load order.
- */
+/* Without a copy, the first handler rewrites the event for the second and which
+   one wins depends on load order. */
 describe("one plugin cannot rewrite the event for another", () => {
   it("hands each handler its own copy", () => {
     const bus = createPluginBus(recorder());
@@ -138,11 +131,8 @@ describe("a handler that throws", () => {
   });
 });
 
-/*
- * A rejection is invisible to the try/catch around the call, and on Node's
- * default an unhandled one takes the process down. This is the failure that
- * would look like the server crashing at random under load.
- */
+/* Invisible to the try/catch around the call, and on Node's default an
+   unhandled one takes the process down. */
 describe("a handler that rejects", () => {
   it("is caught rather than left unhandled", async () => {
     const log = recorder();
@@ -175,11 +165,8 @@ describe("a handler that rejects", () => {
   });
 });
 
-/*
- * Catching alone leaves a plugin that throws on every message writing a log
- * line and burning a call forever. Slow, noisy, and never fixed because nothing
- * ever gets worse enough to notice.
- */
+/* Catching alone leaves a plugin throwing on every message forever: slow,
+   noisy, and never bad enough to notice. */
 describe("a plugin that throws every time", () => {
   it("stops being called", () => {
     const log = recorder();
@@ -238,9 +225,8 @@ describe("a plugin that throws every time", () => {
     assert.equal(calls, FAILURES_BEFORE_DISABLE);
   });
 
-  /* And the subscription is not kept either. Refusing the call at emit would
-     look the same from the outside while the map filled up with dead handlers
-     from a plugin that re-subscribes on a timer. */
+  /* Refusing at emit looks the same from outside while the map fills with dead
+     handlers from a plugin re-subscribing on a timer. */
   it("does not accumulate subscriptions it will never call", () => {
     const bus = createPluginBus(recorder());
     bus.subscribe("broken", "message:created", () => {
@@ -253,12 +239,8 @@ describe("a plugin that throws every time", () => {
     assert.deepEqual(bus.stats(), { plugins: [], disabled: ["broken"], subscriptions: 0 });
   });
 
-  /*
-   * The case the check inside the emit loop exists for, and the only one: the
-   * list was snapshotted before the first handler ran, so a plugin's *second*
-   * handler is still in the snapshot after the first one crossed the threshold
-   * and had its subscriptions removed.
-   */
+  /* The list is snapshotted before the first handler runs, so a plugin's second
+     handler is still in it after the first crossed the threshold. */
   it("stops mid-emit, not just from the next event", () => {
     const bus = createPluginBus(recorder());
     let second = 0;

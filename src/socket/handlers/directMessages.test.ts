@@ -18,19 +18,8 @@ import { registerDirectMessageHandlers } from "./dm";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
 /**
- * Direct messages, driven through the handlers rather than around them.
- *
- * `conversationAccess.test.ts` proves the access rule answers correctly. It
- * cannot prove the handlers ask it, and it says nothing at all about who the
- * answer is then sent to — a handler that resolves access perfectly and then
- * broadcasts to every socket passes every test in that file. Reactions and
- * deletions did exactly that until GRYT-671, so this is the file that would
- * notice them going back.
- *
- * Three participants, each with their own socket, all sharing one `clientsInfo`
- * and one `io.sockets.sockets` map — which is what makes "who received this"
- * an assertion rather than a hope. Mallory is a member of the server in good
- * standing throughout. Every refusal she gets is about the conversation.
+ * `conversationAccess.test.ts` proves the rule answers correctly, not that the
+ * handlers ask it or who they then send to.
  */
 
 const HOST = "dm.test:5001";
@@ -76,13 +65,8 @@ const world = makeWorld();
 
 let seq = 0;
 
-/**
- * A member of this server, connected, holding the default member permissions.
- *
- * `hasJoinedChannel` and the rest of the voice fields are what a socket looks
- * like once a join has finished; the chat handlers read `serverUserId` off this
- * and nothing else here matters to them.
- */
+/** The voice fields are what a socket looks like once a join has finished; the
+    chat handlers read `serverUserId` and nothing else. */
 async function connectMember(
   nickname: string,
   grytUserIdOverride?: string,
@@ -245,11 +229,8 @@ describe("opening a direct message", () => {
       assert.ok(alice.received("dm:error").length > 0, `no refusal for ${label}`);
     }
 
-    // Bots carry a reserved `sub` prefix, so this is the id doing the work
-    // rather than a flag somebody could forget to set.
-    // The constant rather than the literal: the prefix is `BOT_`, and a test
-    // that spelled it itself would go green against a server that had stopped
-    // recognising bots at all.
+    // The id does the work rather than a flag, and the constant rather than the
+    // literal, or this goes green against a server that stopped recognising bots.
     const bot = await connectMember("Botty", `${BOT_SUB_PREFIX}probe-1`);
     clearAll();
     await alice.handlers["dm:open"]({ accessToken: alice.accessToken, targetServerUserId: bot.serverUserId });
@@ -464,9 +445,8 @@ describe("hiding a conversation", () => {
   }
 
   it("takes it out of your list and leaves theirs alone", async () => {
-    // The whole point of the feature, and the thing most likely to be got
-    // wrong: `hidden_at` is on the membership row, so it is one person's
-    // answer. A column on `conversations` would have hidden it for both.
+    // `hidden_at` is on the membership row, so it is one person's answer. A
+    // column on `conversations` would hide it for both.
     const conversationId = await openDm(alice, bob);
 
     await hide(alice, conversationId, true);
@@ -567,9 +547,8 @@ describe("group conversations", () => {
   });
 
   it("does not swallow the one-to-one those people already had", async () => {
-    // The decision this feature turns on. Adding somebody to a pair
-    // conversation would make its history readable by a third person, so
-    // making a group makes a *new* conversation and leaves the pair alone.
+    // Adding somebody to a pair would make its history readable by a third
+    // person, so a group is a new conversation and the pair is left alone.
     const pairId = await openDm(alice, bob);
     await alice.handlers["chat:send"]({ conversationId: pairId, accessToken: alice.accessToken, text: "just us" });
 
@@ -721,14 +700,8 @@ describe("group conversations", () => {
   });
 });
 
-/**
- * Sealed messages (GRYT-729).
- *
- * The server stores an envelope it cannot read and refuses the two shapes that
- * would put a copy in the clear beside it — a message that is both, and a
- * message sealed on a channel, where there is no set of keys to seal to and
- * anybody admitted later would find the history unreadable.
- */
+/** An envelope the server cannot read, and the two shapes that would put a copy
+    in the clear beside it. */
 describe("a sealed direct message", () => {
   const envelope = JSON.stringify({
     type: "gryt-sealed-message",
@@ -780,16 +753,8 @@ describe("a sealed direct message", () => {
       sealed: envelope,
     });
 
-    /*
-     * Straight out of the database rather than through `chat:fetch`.
-     *
-     * Two layers sit in front of the column and both hand back a copy that
-     * never touched it: the broadcast is built from what `insertMessage` was
-     * given, and `chat:fetch` reads `getMessagesCached`. So a `rowToMessage`
-     * that dropped `sealed` passes every handler-level assertion, and the
-     * message goes empty only once the cache expires and somebody reloads —
-     * which is exactly the shape of bug that reaches people rather than CI.
-     */
+    /* Two layers hand back copies that never touched the column, so a
+       `rowToMessage` dropping `sealed` passes every handler assertion. */
     const { listMessages } = await import("../../db/sqlite/messages");
     const stored = await listMessages(conversationId, 50);
 
@@ -843,9 +808,8 @@ describe("a sealed direct message", () => {
     const conversationId = await openDm(alice, bob);
     clearAll();
 
-    // Over 64 kB and still a plausible envelope. The cap is not about security
-    // — nothing here reads the column — it is that a field nobody parses is a
-    // place to park data.
+    // Over 64 kB and still a plausible envelope. The cap is because a field
+    // nobody parses is a place to park data.
     await alice.handlers["chat:send"]({
       conversationId,
       accessToken: alice.accessToken,

@@ -14,13 +14,8 @@ import {
 import { resetChannelIdCache, resolveConversationAccess } from "./conversationAccess";
 
 /**
- * The rule that decides who can read a conversation.
- *
- * Every case here is one somebody could try on purpose. A DM id is derived from
- * the two `server_user_id`s and member lists carry those, so anybody on the
- * server can work out the id of a conversation between two other people and ask
- * for it — which is the whole reason this file exists and why "could you name
- * the id" is never the question being answered.
+ * A DM id is derived from two `server_user_id`s and member lists carry those, so
+ * anybody can work one out and ask for it. Naming the id is never the question.
  */
 
 let dir: string;

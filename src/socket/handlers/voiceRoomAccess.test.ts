@@ -16,26 +16,8 @@ import type { EventHandlerMap, HandlerContext } from "./types";
 import { registerVoiceHandlers } from "./voice";
 
 /**
- * Which rooms `voice:room:request` will hand an SFU token for.
- *
- * The handler used to grant any string. That was survivable while every room id
- * was a channel — a channel is open to every member of the server, so "may this
- * person use voice" and "may this person be in this room" had the same answer.
- *
- * A conversation breaks that. `directConversationId` hashes the sorted pair of
- * member ids, and the file it lives in says outright that the result is not a
- * secret: anybody who can read a member list can compute the id of any two
- * people's conversation. So the id being nameable proves nothing, and a call
- * placed in a conversation room is only private if this handler asks who is in
- * it.
- *
- * The second half is the same problem pointed the other way. Even a properly
- * gated call leaks if the server then announces the room id to everybody, so
- * the member list is asserted on here too.
- *
- * There is no SFU in these tests. Past the access check the handler fails on
- * `sfuClient` being null, which is fine — what is under test is which requests
- * get that far.
+ * A DM's id is a hash of the sorted pair and not a secret, so naming one proves
+ * nothing. The member list is asserted on too, since announcing the id leaks.
  */
 
 const HOST = "voiceroom.test:5001";
@@ -184,10 +166,8 @@ describe("voice:room:request decides which rooms are yours", () => {
   });
 
   it("keeps a third person out of a conversation that is not theirs", async () => {
-    // Mallory is a member of this server in good standing and holds every
-    // permission Alice does. The only thing she is missing is being in the
-    // conversation — and she can work its id out from the member list, which is
-    // the whole reason this check has to exist.
+    // Mallory holds every permission Alice does and is only missing being in the
+    // conversation, whose id she can work out from the member list.
     mallory.clear();
     await mallory.handlers["voice:room:request"](pairId);
     assert.equal(refusedAsNotFound(mallory), true);
@@ -242,9 +222,8 @@ describe("a conversation never reaches the server-wide member list", () => {
   });
 
   it("keeps the id out of the dedupe hash as well", async () => {
-    // The hash is what decides whether a broadcast goes out at all, so a
-    // conversation id left in it would be a second copy of the same leak —
-    // and would repaint every client each time somebody moved between calls.
+    // The hash decides whether a broadcast goes out, so an id left in it is a
+    // second copy of the leak and repaints every client on every move.
     clientsInfo[alice.clientId].voiceChannelId = pairId;
     const inOneCall = memberStateHash(await buildMemberList(clientsInfo));
 

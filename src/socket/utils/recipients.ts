@@ -1,25 +1,6 @@
 /**
- * Which connected clients should be told about something in a conversation
- * (GRYT-936).
- *
- * Lived as a closure inside `registerChatHandlers`, which was the right place
- * while every answer was being sent in response to somebody's socket event.
- * Deleting a message is no longer only that — a plugin can do it, with no
- * socket and no member behind it — and a second copy of this is a second
- * answer to "who can see this channel", which is not a question that should
- * have two.
- *
- * Three cases, in the order they are decided:
- *
- * - a direct message goes to its members and nobody else
- * - a voice channel's text goes to the people currently *in* that voice
- *   channel, because that is what makes it the channel's chat rather than a
- *   room anybody can read
- * - anything else goes to everybody connected
- *
- * The last one looks broad and is not the whole story: what a member may see is
- * decided when the message is delivered, in `clientMayReceive`. This answers
- * where a conversation reaches, not who is allowed to read it.
+ * A DM reaches its members, a voice channel's text whoever is in it, anything
+ * else everybody. Who may read it is `clientMayReceive`, at delivery.
  */
 
 import type { SFUClient } from "../../sfu/client";

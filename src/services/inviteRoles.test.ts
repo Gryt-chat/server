@@ -103,8 +103,7 @@ test("a role renamed onto the admin id refuses the grant", () => {
 });
 
 test("redeeming does not consult the creator, so a demoted creator's link still works", () => {
-  // Deliberate. The snapshot and the rules bound what the link can do; the
-  // creator may have left, and a link that dies when somebody leaves is a
-  // different bug. Written down so the choice is visible rather than assumed.
+  // Deliberate: the snapshot and the rules bound the link, and the creator may
+  // have left.
   assert.equal(mayRedeemInviteRole(role(), 20).ok, true);
 });

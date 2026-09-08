@@ -12,16 +12,8 @@ import { buildMemberList } from "../utils/clients";
 import { registerDmKeyHandlers } from "./dmKeys";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
-/**
- * Publishing a DM key binding (GRYT-720).
- *
- * The server stores an opaque string and hands it back in the member list, and
- * the two things worth asserting are both about what it does *not* do. It must
- * not read or vouch for the binding, because a peer has to establish that for
- * itself and a server that appeared to check it would invite somebody to skip
- * doing so. And it must not let a member park unbounded data in a column that
- * goes to every other member on every broadcast.
- */
+/** Both assertions are about what the server does not do: vouch for the binding,
+    or let a member park unbounded data in a broadcast column. */
 
 let dir: string;
 
@@ -150,16 +142,8 @@ describe("publishing a DM key binding", () => {
       "a client with no identity to sign with must be able to stop people encrypting to a key nobody holds");
   });
 
-  /*
-   * A fresh member per case, and this is not tidiness.
-   *
-   * `dm:key:publish` is rate limited to five in a minute, which is generous for
-   * something a client sends once. Looping bad inputs through one member spends
-   * that budget in three cases and then every later one is dropped by the
-   * limiter rather than by the guard under test — so the assertions all pass,
-   * and they pass with the guards deleted. Both the length cap and the type
-   * check were verified that way before this was noticed.
-   */
+  /* A fresh member per case, not for tidiness: five publishes a minute means
+     later cases are dropped by the limiter and pass with the guards deleted. */
   async function publishAs(binding: unknown): Promise<string | null> {
     const member = await connect(`Guard ${seq + 1}`);
     await member.handlers["dm:key:publish"]({ binding: binding as string });
@@ -174,9 +158,8 @@ describe("publishing a DM key binding", () => {
       "four.parts.are.wrong",
       "has spaces.in.it",
       "a".repeat(5000),
-      // Correctly shaped and over the cap, which is the only input the length
-      // check is the one refusing. Anything malformed is caught by the shape
-      // first, so a case that used one passes with the cap deleted.
+      // The only input the length check is the one refusing: anything malformed
+      // is caught by the shape first.
       `${"a".repeat(4100)}.b.c`,
     ]) {
       assert.equal(await publishAs(bad), null,
@@ -185,14 +168,8 @@ describe("publishing a DM key binding", () => {
   });
 
   it("refuses a type that is not a string", async () => {
-    /*
-     * `["a.b.c"]` is the one that matters. A number or a plain object is
-     * refused by the shape check anyway, because the regex stringifies its
-     * argument and neither produces three base64url segments — so a case using
-     * only those passes with the type check deleted. An array of one string
-     * stringifies to exactly that string, sails through the shape, and reaches
-     * the column as an array.
-     */
+    /* `["a.b.c"]` is the one that matters: it stringifies to exactly that
+       string, sails through the shape check, and reaches the column as an array. */
     for (const bad of [42, {}, true, ["a.b.c"], ["eyJhIjoxfQ.eyJiIjoyfQ.c2ln"]]) {
       assert.equal(await publishAs(bad), null,
         `${JSON.stringify(bad)} was stored`);
@@ -216,13 +193,8 @@ describe("publishing a DM key binding", () => {
   });
 
   it("does not let one member set another's", async () => {
-    /*
-     * The payload names a victim, several ways. Alice publishing her own key
-     * and Bob's staying put does not test this — with the member read off the
-     * payload the fallback to the socket still runs when no name is there, so
-     * that version passes with the check inverted. The payload has to actually
-     * carry one.
-     */
+    /* The payload has to actually name a victim: without one the fallback to the
+       socket still runs, and the case passes with the check inverted. */
     for (const field of ["serverUserId", "who", "userId", "target", "member"]) {
       const before = await bindingOf(bob.serverUserId);
       await alice.handlers["dm:key:publish"]({

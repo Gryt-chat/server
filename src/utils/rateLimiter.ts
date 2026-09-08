@@ -31,11 +31,8 @@ class SlidingWindowLimiter {
 	private scores: Map<string, ScoreData> = new Map();
 
 	constructor(private defaultRule: RateLimitRule) {
-		// Unref'd, so importing this module does not by itself hold the process
-		// open — the same reason the nonce sweeper in auth/identity is. The
-		// server runs forever regardless; anything that only wants a handler,
-		// like a test, should be able to exit when it is done. Without it a
-		// test file that imports any handler hangs after the last assertion.
+		// Unref'd, or a test file that imports any handler hangs after its last
+		// assertion. Same as the nonce sweeper in auth/identity.
 		setInterval(() => this.evictStale(), 60_000).unref();
 	}
 
@@ -59,11 +56,8 @@ class SlidingWindowLimiter {
 		this.scores.clear();
 	}
 
-	/**
-	 * Who the ban is against, for the log, without writing an address down. The
-	 * key ends in the caller's address, so the parts are logged separately —
-	 * the key itself is untouched, being also the map key.
-	 */
+	/** For the log, without writing an address down: the key ends in the caller's
+	    address, so the parts are logged separately. */
 	private banSubject(parts: RateLimitKeyParts): {
 		event: string;
 		user: string;
@@ -166,14 +160,8 @@ export function checkRateLimit(event: string, userId?: string, ip?: string, rule
 	return limiter.check({ event, userId, ip }, rule);
 }
 
-/**
- * Clear every counter, for a test that drives one handler many times.
- *
- * The limiter is process-global and keyed on the caller, so a test file acting
- * as the same person twenty times looks exactly like somebody hammering the
- * server — which is the point of it, and makes it the wrong thing to leave
- * running between cases. The same seam `resetChannelIdCache` is.
- */
+/** Process-global and keyed on the caller, so a test acting as one person twenty
+    times looks like somebody hammering the server. */
 export function resetRateLimits(): void {
 	limiter.reset();
 }

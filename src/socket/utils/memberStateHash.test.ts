@@ -4,17 +4,8 @@ import { describe, it } from "node:test";
 import { memberStateHash } from "./clients";
 
 /**
- * The dedupe, checked field by field.
- *
- * `emitMemberListNow` compares this hash against the last one it broadcast and
- * returns early when they match. So a field that `buildMemberList` carries and
- * this does not is a value that reaches nobody — the list is rebuilt, correctly,
- * with the new value in it, and then thrown away. Nothing errors and the builder
- * looks right, which is why GRYT-65 cost a full debugging round.
- *
- * One case per field that should repaint somebody's row. Adding a field to the
- * builder means adding a case here, and if that feels like busywork: this is
- * the file that would have caught it.
+ * A field `buildMemberList` carries and this does not reaches nobody: the list is
+ * rebuilt correctly and thrown away, with nothing erroring.
  */
 
 type Member = Parameters<typeof memberStateHash>[0][number];
@@ -88,9 +79,8 @@ describe("the member list dedupe", () => {
   }
 
   it("clearing a designed owl is a change too", () => {
-    // Going back to an uploaded picture. The value moves to null, and a hash
-    // that only noticed a look appearing would leave everybody looking at the
-    // owl somebody has just stopped wearing.
+    // The value moves to null, and a hash noticing only a look appearing leaves
+    // everybody looking at an owl somebody stopped wearing.
     assert.notEqual(
       memberStateHash([member({ avatarWorn: "aiac----adab" })]),
       memberStateHash([member({ avatarWorn: null })]),

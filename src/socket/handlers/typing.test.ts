@@ -14,12 +14,8 @@ import { registerTypingHandlers } from "./typing";
 import type { HandlerContext } from "./types";
 
 /**
- * A reply being written in a thread is not somebody typing in the channel
- * (GRYT-1020).
- *
- * Driven through the handler because the interesting part is the timer, and a
- * timer is state the handler owns. Nothing here asserts on the audience — that
- * is `channelVisibilityLeaks.test.ts`, and it does not change with the thread.
+ * A reply in a thread is not somebody typing in the channel. Through the handler
+ * because the timer is the interesting part, and the handler owns it.
  */
 
 let dir: string;
@@ -97,9 +93,8 @@ describe("typing carries the thread it is happening in", () => {
   });
 
   it("stops the thread without stopping the channel", async () => {
-    // The timer used to be keyed by person and conversation alone, so the two
-    // shared one: starting in the thread cancelled the channel's stop, and the
-    // indicator under the channel timeline never went away.
+    // Keyed by person and conversation alone, the two shared a timer: starting
+    // in the thread cancelled the channel's stop.
     const { ctx, emitted } = makeContext();
     await seat(ctx);
     const handlers = registerTypingHandlers(ctx);

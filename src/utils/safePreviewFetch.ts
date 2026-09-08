@@ -3,22 +3,8 @@ import consola from "consola";
 import { checkPreviewUrl, type UrlRejection } from "./previewUrlSafety";
 
 /**
- * Fetch a URL on a user's behalf, checking every redirect hop rather than only
- * the one that was asked for.
- *
- * `redirect: "follow"` hands the whole chain to undici, which will happily land
- * on `http://169.254.169.254/` if that is where the third hop points — the
- * guard ran once, on the first URL, and saw none of the rest. Following by hand
- * costs a loop and means `checkPreviewUrl` applies to the address actually
- * connected to.
- *
- * This lived inside `routes/linkPreview.ts`. It is out here because it is the
- * one safe way for this server to fetch a URL somebody typed into chat, and the
- * oEmbed route needs the same thing — a second copy is how one of them ends up
- * following redirects again.
- *
- * The caller owns the body: on `{ res }` it must read or cancel it, the same as
- * any `fetch`. On `{ blocked: true }` there is nothing to clean up.
+ * Every redirect hop is checked, not just the first: `redirect: "follow"` will
+ * land on `http://169.254.169.254/` if the third hop says so.
  */
 
 const MAX_REDIRECTS = 5;
@@ -28,11 +14,8 @@ export type SafeFetchResult =
   | { res: Response; finalUrl: string }
   | { blocked: true };
 
-/**
- * The address check, injected so the redirect re-check can be tested without a
- * public host to redirect *from* — the same reason `linkResolvers` takes its
- * `fetchJson`. Production always uses the real `checkPreviewUrl`.
- */
+/** Injected so the redirect re-check tests without a public host to redirect
+    from. Production always uses the real `checkPreviewUrl`. */
 type UrlCheck = (raw: string) => Promise<{ ok: true } | { ok: false; reason: UrlRejection }>;
 
 export async function fetchFollowingSafely(

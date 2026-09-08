@@ -16,31 +16,8 @@ import type { EventHandlerMap, HandlerContext } from "./types";
 import { registerVoiceHandlers } from "./voice";
 
 /**
- * Whether joining a call tells anybody.
- *
- * The client announces a join as two events in a fixed order, ten milliseconds
- * apart: `voice:stream:set` and then `voice:channel:joined`. That order is not
- * incidental — it is what `sfuConnectFlow` does, and only the second one sets
- * `hasJoinedChannel`.
- *
- * `broadcastCallParticipants` counts a person as being in a call when
- * `hasJoinedChannel` is true and their room is a conversation. So when the
- * first of the two events was the only one that broadcast, the count it ran was
- * always the one taken before the flag was set. For the first person into a
- * call that count is zero, nothing is sent, and the second event set the flag
- * without telling anyone.
- *
- * What that looked like: press Call, and the voice view is empty. Your own tile
- * is there while the connection is opening and goes when it completes, because
- * `visibleClients` falls back to matching `voiceChannelId` and the server never
- * said yours. It fills the moment somebody answers — their `voice:stream:set`
- * runs the count again, and by then your flag is set, so the first broadcast of
- * the call finally names you (GRYT-713).
- *
- * A conversation is the case that breaks, and only a conversation: `server:clients`
- * carries `voiceChannelId` for a channel, so a channel draws itself from that
- * whether or not this broadcast happens. Both are asserted anyway — the channel
- * case is what says the member list is no longer a step behind either.
+ * Only `voice:channel:joined` sets `hasJoinedChannel`, so broadcasting on
+ * `voice:stream:set` alone counted first and left a caller on an empty view.
  */
 
 const HOST = "voicejoin.test:5001";
@@ -129,13 +106,8 @@ async function connectMember(nickname: string): Promise<Member> {
   return { clientId, serverUserId: user.server_user_id, handlers: registerVoiceHandlers(ctx) };
 }
 
-/**
- * The two events a client sends on connecting, in the order it sends them.
- *
- * The grant is skipped: `voice:room:request` needs an SFU and these tests have
- * none. Setting the field is what the grant does, and what it does is the part
- * that matters here.
- */
+/** The grant is skipped, since `voice:room:request` needs an SFU. Setting the
+    field is what it does, and that is the part that matters. */
 async function joinRoom(member: Member, roomId: string, streamId: string): Promise<void> {
   clientsInfo[member.clientId].voiceChannelId = roomId;
   member.handlers["voice:stream:set"](streamId);

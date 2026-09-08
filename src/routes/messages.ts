@@ -15,10 +15,8 @@ messagesRouter.get(
     const limit = req.query.limit ? Math.min(Number(req.query.limit), 200) : 50;
     const before = req.query.before ? new Date(String(req.query.before)) : undefined;
 
-    // The same rule the socket path uses, from the same file. A bearer token
-    // says who is asking and that they are a member of this server; it does
-    // not say this conversation is one they are party to, and this route is
-    // the easy one to forget when that distinction starts to matter.
+    // A bearer token says they are a member, not that this conversation is one
+    // of theirs. Same rule as the socket path, from the same file.
     Promise.resolve()
       .then(() => resolveConversationAccess(conversationId, req.tokenPayload?.serverUserId))
       .then((access) => {

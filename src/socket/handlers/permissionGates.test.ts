@@ -23,25 +23,8 @@ import type { EventHandlerMap, HandlerContext } from "./types";
 import { registerVoiceHandlers } from "./voice";
 
 /**
- * Every gate, driven twice.
- *
- * The point of this file is one property: an event that names a permission must
- * refuse a role without it, and must not refuse a role with it. That sounds
- * obvious enough not to need testing until you notice how a gate actually gets
- * broken — a permission renamed in the catalogue and not at the call site, a
- * handler that checks the caller and forgets the target, a new event added
- * beside an old one and gated by copy-paste from the wrong neighbour. None of
- * those fail to compile.
- *
- * Drives the handler functions directly rather than over a socket. There is no
- * network here and no socket.io: `requireAuth` wants a token and a `host`
- * header, both of which are a few lines to fake, and what is being tested is
- * the decision rather than the transport.
- *
- * The permitted half asserts "not refused" rather than "succeeded". Past the
- * gate the handler does its real work against a database with almost nothing in
- * it, so most of them fail on the next line for reasons that are not about
- * permissions. `forbidden` is the answer that means the gate fired.
+ * Every gate, driven with the permission and without it. The permitted half
+ * asserts "not refused": past the gate the database is almost empty.
  */
 
 const HOST = "gates.test:5001";
@@ -123,13 +106,8 @@ function allHandlers(ctx: HandlerContext): EventHandlerMap {
   };
 }
 
-/**
- * A member holding exactly the permissions given, and nothing else.
- *
- * One throwaway role and one throwaway user per case, so a refusal can never be
- * a leftover from the case before — and so the rank checks see a role well
- * below the target's, which is what a real non-owner moderator looks like.
- */
+/** One throwaway role and user per case, so a refusal cannot be a leftover and
+    the rank checks see a role below the target's. */
 let seq = 0;
 async function memberWith(permissions: Permission[]): Promise<{
   accessToken: string;
@@ -163,22 +141,14 @@ function refusals(emitted: Emitted[]): { message?: string; permission?: string }
     .filter((p) => p && typeof p === "object" && p.error === "forbidden");
 }
 
-/**
- * Events that carry an access token, which is most of them.
- *
- * `payload` is whatever else the handler needs to get as far as the gate. It is
- * deliberately minimal — anything past the gate is not what is under test.
- */
+/** `payload` is whatever the handler needs to reach the gate, and no more:
+    anything past it is not under test. */
 const TOKEN_GATES: {
   event: string;
   permission: Permission;
   payload?: Record<string, unknown>;
-  /**
-   * Refusal only. Past the gate this handler reaches the network, and a test
-   * that calls out to GitHub is a test that fails when GitHub is slow. The
-   * refusal half is what proves the gate is there and named right; the
-   * permitted half would only prove it does not fire.
-   */
+  /** Past the gate this handler reaches the network, and a test that calls out
+      to GitHub fails when GitHub is slow. */
   refusalOnly?: boolean;
 }[] = [
   { event: "chat:send", permission: "send_messages", payload: { conversationId: "general", text: "hi" } },
@@ -240,9 +210,8 @@ describe("every gated event refuses a role without the permission", () => {
       const handler = handlers[event];
       assert.ok(handler, `no handler registered for ${event}`);
 
-      // Everything except the one under test, so a gate that happens to check
-      // the wrong permission shows up as a pass where there should be a
-      // refusal — rather than being hidden by a caller who has nothing.
+      // Everything except the one under test, so a gate checking the wrong
+      // permission shows up rather than being hidden by a caller with nothing.
       const without = PERMISSIONS.filter((p) => p !== permission);
       const caller = await memberWith([...without]);
 
@@ -275,10 +244,8 @@ describe("every gated event lets a role with the permission through", () => {
       const caller = await memberWith([permission]);
       await handler({ accessToken: caller.accessToken, ...(payload ?? {}) });
 
-      // Past the gate the handler runs for real against an almost-empty
-      // database, so it may well fail — on a missing target, a made-up invite
-      // code, a role that does not exist. What it must not do is refuse for
-      // want of the permission it was just given.
+      // It may well fail past the gate, on a missing target or a made-up code.
+      // What it must not do is refuse for the permission it was just given.
       const named = refusals(emitted).filter((r) => r.permission === permission);
       assert.equal(
         named.length,
@@ -290,11 +257,8 @@ describe("every gated event lets a role with the permission through", () => {
 });
 
 describe("events that read the socket rather than a token", () => {
-  /**
-   * `chat:fetch`, `members:fetch` and the voice state stream carry no access
-   * token — they come off a socket that has already joined. So the caller is
-   * `clientsInfo`, and the gate has to read from there.
-   */
+  /** `chat:fetch`, `members:fetch` and the voice stream carry no access token,
+      so the caller is `clientsInfo` and the gate reads from there. */
   async function socketCaller(permissions: Permission[], clientsInfo: Clients, clientId: string) {
     const caller = await memberWith(permissions);
     clientsInfo[clientId] = {
@@ -401,21 +365,8 @@ describe("events that read the socket rather than a token", () => {
     assert.equal(clientsInfo[ctx.clientId].cameraEnabled, false);
   });
 
-  /**
-   * A socket mid-restore is not a socket that has been refused (GRYT-647).
-   *
-   * On a reconnect the client sends `session:restore` and its voice
-   * re-announce together and they race. Caught on prod three milliseconds
-   * apart: `voice:room:request` arrived while the socket still held its
-   * `temp_<id>` placeholder, every gate read that as no permissions, and the
-   * server said `forbidden`.
-   *
-   * `forbidden` is the one answer the client will not retry, because a
-   * permission decision does not change if you ask again. This one changed
-   * three milliseconds later. So the assertions below are about the *code*
-   * rather than about being refused: refusing is right, saying `forbidden` is
-   * what put people out of the channel.
-   */
+  /** A socket holding its `temp_` placeholder reads as no permissions, and
+      `forbidden` is the one answer a client will not retry. */
   function unidentifiedCaller(clientsInfo: Clients, clientId: string) {
     clientsInfo[clientId] = {
       ...clientsInfo[clientId],
@@ -458,9 +409,8 @@ describe("events that read the socket rather than a token", () => {
   });
 
   it("voice:camera:state tells an unidentified socket to retry, not that it is forbidden", async () => {
-    // What the client does on a reconnect: it says the camera is still on. The
-    // socket is mid-restore, so `forbidden` here is a state the client will not
-    // re-send — and the camera goes on sending while the room sees it as off.
+    // A reconnect says the camera is still on. `forbidden` mid-restore is not
+    // re-sent, so the camera sends while the room sees it as off.
     const { ctx, emitted, clientsInfo } = makeContext();
     await socketCaller(["share_video"], clientsInfo, ctx.clientId);
     unidentifiedCaller(clientsInfo, ctx.clientId);
@@ -571,9 +521,8 @@ describe("the catalogue and the gates agree", () => {
   });
 
   it("leaves the seeded roles alone", async () => {
-    // The probe roles above are created and never cleaned up. If one of them
-    // ever collided with a built-in, every case after it would be testing
-    // something else.
+    // The probe roles are never cleaned up, and one colliding with a built-in
+    // would leave every case after it testing something else.
     const ids = (await listRoleDefinitions()).map((r) => r.role_id);
     for (const id of ["owner", "admin", "mod", "member", "guest"]) {
       assert.ok(ids.includes(id), `built-in ${id} went missing`);

@@ -16,26 +16,13 @@ import {
   sweepMessageCache,
 } from "./messageCache";
 
-/*
- * `listMessages` orders by created_at and breaks ties on message_id, which is a
- * random UUID — so two messages written in the same millisecond come back in an
- * order nothing here decides. Anything read out of the database is compared as
- * a set. Order is asserted only where this module is the one that decided it.
- */
+/* `listMessages` breaks ties on a random UUID, so anything read out of the
+   database is compared as a set. */
 const texts = (items: { text: string | null }[]) => items.map((m) => m.text).sort();
 
 /**
- * The first page of a conversation, kept in memory (GRYT-936).
- *
- * This lived inside chat.ts as a bare Map that six places reached into, each
- * writing its own version of "replace this one" or "take this one out". It
- * moved because something outside chat.ts can now delete a message, and the
- * failure that matters is the one nobody would notice: a delete that updates
- * the database and forgets the cache leaves the message on the next person's
- * screen, and looks exactly like a delete that did not work.
- *
- * It is a cache, so every entry is reconstructable and no write here is allowed
- * to fail anything.
+ * A delete that forgets the cache leaves the message on the next person's screen.
+ * Every entry is reconstructable, so nothing here may fail an operation.
  */
 
 let dir: string;
@@ -116,9 +103,8 @@ describe("a new message", () => {
     // Order here *is* this module's: append puts it on the end.
   });
 
-  /* Appending to a conversation nobody has read yet is allowed. What it must
-     not do is leave an entry that reads as a full first page — the next read
-     past the TTL refills from the database either way. */
+  /* Allowed, as long as it does not leave an entry that reads as a full first
+     page. */
   it("can start an entry that did not exist", async () => {
     const c = conversation();
     appendCachedMessage(c, await message(c, "first anybody has seen"));
@@ -175,12 +161,8 @@ describe("a message that changed", () => {
   });
 });
 
-/*
- * The one this module was extracted for. A delete that updates the database and
- * not this leaves the message on the next person's first page until the entry
- * ages out — which reads as a delete that did not work, and is exactly the bug
- * a second caller outside chat.ts would have introduced.
- */
+/* A delete that skips this leaves the message on the next person's first page
+   until the entry ages out. */
 describe("a message that is gone", () => {
   it("goes from the cache too", async () => {
     const c = conversation();
@@ -212,11 +194,8 @@ describe("a message that is gone", () => {
   });
 });
 
-/*
- * The only interesting thing about a cache is what it does at the boundary. The
- * fresh half is covered above; this is the other one, and without it "always
- * serve from memory" passes every test in this file.
- */
+/* The boundary is the interesting part: without this, "always serve from
+   memory" passes every test in the file. */
 describe("an entry that has gone stale", () => {
   it("is re-read rather than served", async () => {
     const c = conversation();

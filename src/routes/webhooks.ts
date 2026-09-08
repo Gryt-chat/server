@@ -114,16 +114,8 @@ webhooksRouter.get(
         if (!await requireAdmin(req, res)) return;
         const webhooks = await listAllWebhooks();
 
-        // A webhook row names the channel it posts into. `manage_webhooks` is
-        // not `manage_channels` and carries no rank, so somebody holding only
-        // the first would otherwise read the id of every hidden channel that
-        // has a webhook.
-        //
-        // Deliberately different from `server:channels:list`, which stays
-        // unfiltered for `manage_channels`: managing channels means knowing
-        // which exist, managing webhooks does not. The cost is that a webhook
-        // in a channel you cannot see is one you cannot administer, which is
-        // the same answer the channel itself gives.
+        // `manage_webhooks` is not `manage_channels` and carries no rank, so
+        // without this it reads the id of every hidden channel with a webhook.
         const visible = await visibleChannelIds(
           req.tokenPayload?.serverUserId,
           req.tokenPayload?.grytUserId,

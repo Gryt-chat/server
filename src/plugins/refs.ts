@@ -1,16 +1,6 @@
 /**
- * The socket layer's handles, for the parts of the plugin API that need them
- * (GRYT-939).
- *
- * Plugins load at startup, before the first connection, so their API object
- * exists before there is an `io` to send anything through. Everything that
- * needs one checks, and answers "the server is not accepting connections yet"
- * rather than throwing at a plugin that started a timer in `activate`.
- *
- * Set the same way `setSocketRefs` sets its own for REST-triggered broadcasts.
- * Lifted out of `actions.ts` when messaging needed the same two handles —
- * moderation and messaging reaching for separate copies of `io` would be two
- * answers to which socket server this is.
+ * Plugins load before the first connection, so everything needing `io` checks
+ * rather than throwing at one that started a timer in `activate`.
  */
 
 import type { Server } from "socket.io";

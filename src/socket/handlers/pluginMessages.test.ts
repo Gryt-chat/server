@@ -20,18 +20,8 @@ import { registerPluginHandlers } from "./plugins";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
 /**
- * The socket event a client plugin's message arrives on (GRYT-939).
- *
- * This is one of two places on the server where a stranger's bytes are parsed —
- * the other is `packages/reports`. They joined, so they are not anonymous, and
- * that is worth much less than it sounds: an invite is not a character
- * reference, and the natural way to write a server plugin is to trust that its
- * own client half is on the other end.
- *
- * So what is checked here is everything that must be refused before a plugin
- * sees anything, and that the two fields a plugin might act on — who sent it
- * and which plugin it is for — come from the connection rather than from the
- * payload.
+ * Everything that must be refused before a plugin sees anything, and that who
+ * sent it and which plugin it is for come from the connection, not the payload.
  */
 
 const HOST = "plugin-messages.test:5001";
@@ -123,11 +113,8 @@ describe("a message from a client plugin", () => {
     assert.equal(received[0].topic, "presence");
   });
 
-  /*
-   * Both taken from the connection, never from the payload. Otherwise a member
-   * could claim to be somebody else to a plugin that acts on who sent
-   * something — which is every plugin with a reason to care.
-   */
+  /* From the connection, never the payload, or a member can claim to be somebody
+     else to a plugin that acts on who sent something. */
   it("says who sent it, from the connection", async () => {
     listen();
 
@@ -162,11 +149,8 @@ describe("a message nobody should see", () => {
     assert.equal(received.length, 0);
   });
 
-  /*
-   * Silently, and before the rate limit is charged. A client running a plugin
-   * this server does not is not misbehaving — it is two halves of a pair that
-   * were never introduced — and it will send on every change forever.
-   */
+  /* Before the rate limit is charged: a client running a plugin this server does
+     not is not misbehaving, and it sends on every change forever. */
   it("is dropped quietly when no plugin is listening", async () => {
     const emitted = await send({
       accessToken: token,
@@ -179,12 +163,8 @@ describe("a message nobody should see", () => {
     assert.deepEqual(emitted, [], "a client was told off for running a plugin the server does not");
   });
 
-  /*
-   * And stays quiet even when the message is malformed. Without the check for
-   * whether anybody is listening, a client running a plugin this server does
-   * not would be told off for its topic — a complaint about a conversation the
-   * server was never part of, arriving on every change forever.
-   */
+  /* Quiet even when malformed, or a client is told off about its topic in a
+     conversation this server was never part of. */
   it("is dropped quietly even when it is malformed", async () => {
     const emitted = await send({
       accessToken: token,
@@ -247,10 +227,8 @@ describe("a message that is malformed", () => {
   });
 });
 
-/*
- * The ceiling. A plugin channel must not become an unmetered pipe into the
- * server just because the member on the other end joined.
- */
+/* A plugin channel must not become an unmetered pipe just because the member on
+   the other end joined. */
 describe("a client that will not stop", () => {
   it("is cut off, and told", async () => {
     listen();

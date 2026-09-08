@@ -24,17 +24,8 @@ import { endRingsFor, registerCallHandlers } from "./calls";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
 /**
- * Ringing, and every way it stops.
- *
- * A call is not state — it is an SFU room with people in it — so there is
- * nothing here about calls being in progress. What is tested is the one piece
- * that does need state: reaching somebody who is not looking at the
- * conversation, and then reliably stopping.
- *
- * Everybody has two sockets, because that is where this gets interesting.
- * A ring is addressed to a person rather than to a socket, and the failure
- * this file exists to catch is a phone left ringing in a pocket after the call
- * was answered on a laptop.
+ * A ring is the one piece of a call that is state. Everybody has two sockets,
+ * because the failure to catch is a phone still ringing after a laptop answered.
  */
 
 const HOST = "calls.test:5001";
@@ -197,9 +188,8 @@ before(async () => {
 
 beforeEach(() => {
   resetRings();
-  // The limiter is global and keyed on the caller, so a file that rings as the
-  // same person eighteen times trips it partway through and every case after
-  // that fails for the wrong reason.
+  // The limiter is global and keyed on the caller, so ringing as one person
+  // eighteen times trips it partway through.
   resetRateLimits();
   [alice, bob, mallory].forEach((p) => p.clear());
 });
@@ -284,9 +274,8 @@ describe("starting a ring", () => {
   });
 
   it("needs start_calls, which is not the same as being able to answer one", async () => {
-    // The tier a server owner is buying with this: in every channel, in every
-    // conversation, reachable by anybody who wants to call them — and not able
-    // to place the call themselves.
+    // The tier this buys: reachable by anybody who wants to call them, and not
+    // able to place one themselves.
     const listener = await connectPerson(
       "Listener",
       PERMISSIONS.filter((p) => p !== "start_calls"),

@@ -74,11 +74,8 @@ const RL_DELETE: RateLimitRule = { limit: 30, windowMs: 60_000, scorePerAction: 
 const RL_EDIT: RateLimitRule = { limit: 20, windowMs: 60_000, scorePerAction: 1, maxScore: 10, scoreDecayMs: 2000 };
 const RL_FETCH: RateLimitRule = { limit: 15, windowMs: 10_000, scorePerAction: 0.3, maxScore: 8, scoreDecayMs: 1500 };
 
-/*
- * The member list mentions are matched against. Cached because it is the whole
- * users table, read on the way out of every message containing an `@`. Stale
- * in one direction only: a very recent joiner is not matched yet.
- */
+/* The whole users table, read on the way out of every message with an `@`.
+   Stale one way only: a very recent joiner is not matched yet. */
 const MENTIONABLE_TTL_MS = 30_000;
 let mentionableCache: { members: MentionableMember[]; fetchedAt: number } | null = null;
 
@@ -152,10 +149,8 @@ async function enrichMessages(messages: MessageRecord[]): Promise<MessageRecord[
       ...m,
       sender_nickname: info?.nickname ?? "Unknown",
       sender_avatar_file_id: info?.avatar_file_id,
-      // Rides on every message, not just on the member list. A reader deciding
-      // whether to act on what a message says is looking at the message, and
-      // making them cross-reference a sidebar to find out whether a person
-      // wrote it is exactly the gap somebody would build a bot to exploit.
+      // On every message, not only the member list: deciding whether a person
+      // wrote it should not need a cross-reference to the sidebar.
       sender_is_bot: isBotIdentity(info?.gryt_user_id),
     };
   });
@@ -207,16 +202,8 @@ async function enrichAttachments(messages: MessageRecord[]): Promise<MessageReco
 export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
   const { io, socket, clientId, serverId, clientsInfo, sfuClient, getClientIp } = ctx;
 
-  /**
-   * The connected clients that should hear about something in a conversation.
-   * Every chat event goes through this, reactions and deletions included —
-   * `io.emit` on a DM tells the whole server about a message they cannot read.
-   */
-  /**
-   * The same list, minus anybody who has blocked the sender. Enforced at
-   * delivery rather than in the client, and it has to be for a sealed DM: the
-   * server cannot read one, so not sending it is the only way to stop it.
-   */
+  /** Who hears about a conversation, minus anybody who blocked the sender.
+      Filtered here because a sealed DM cannot be filtered anywhere else. */
   async function deliverableClientIds(
     conversationId: string,
     access: AllowedConversationAccess,
@@ -226,9 +213,8 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
     const all = recipientClientIds(conversationId, access);
     if (blockers.size === 0) return all;
 
-    /* The sender still gets their own copy. Blocking somebody does not stop
-     * them seeing what they said, and a message that vanished as it was sent
-     * would read as a failure to send. */
+    /* The sender keeps their own copy: a message that vanished as it was sent
+       would read as a failure to send. */
     return all.filter(
       (cid) =>
         clientsInfo[cid]?.serverUserId === senderServerUserId ||
@@ -242,10 +228,8 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
     return recipientsOf(conversationId, access, clientsInfo, sfuClient);
   }
 
-  /**
-   * Resolve access, emitting the refusal itself and returning null, so every
-   * call site is one `if (!access) return;`.
-   */
+  /** Emits the refusal itself and returns null, so every call site is one
+      `if (!access) return;`. */
   async function requireConversationAccess(
     conversationId: string,
     serverUserId: string | null | undefined,
@@ -288,9 +272,8 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         const access = await requireConversationAccess(payload.conversationId, auth.tokenPayload.serverUserId);
         if (!access) return;
 
-        // Both have to be true: `send_messages` says whether they may talk at
-        // all, the channel scope whether they may talk here. A DM has no scope,
-        // so this falls through to the server-wide answer and only narrows.
+        // `send_messages` is whether they may talk, the scope whether they may
+        // talk here. A DM has no scope and falls through to the first.
         if (!(await mayInChannel(payload.conversationId, auth.tokenPayload.serverUserId, "send_messages", auth.tokenPayload.grytUserId))) {
           socket.emit("chat:error", {
             error: "forbidden",
@@ -299,10 +282,8 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        // An automated channel takes posts only from bots, webhooks and the
-        // system. Webhooks and system messages insert directly and never reach
-        // this handler, so the gate here is simply: a human is refused, a bot
-        // is not. DMs are never automated. GRYT-982.
+        // Webhooks and system messages insert directly and never reach here,
+        // so an automated channel just means: humans refused, bots not.
         const automatedChannel = access.kind === "dm" ? null : await getServerChannel(payload.conversationId);
         if (automatedChannel?.automated && !isBotIdentity(auth.tokenPayload.grytUserId)) {
           socket.emit("chat:error", {
@@ -312,10 +293,8 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        // A reply into a thread: same channel, same permissions as any other
-        // message here. It just carries a thread_id and is delivered so the
-        // client can place it in the thread rather than the main flow. Threads
-        // live in channels, not DMs (GRYT-981).
+        // Same channel and permissions as any other message, plus a thread_id
+        // so the client can place it. Threads live in channels, not DMs.
         let threadId: string | null = null;
         if (typeof payload.threadId === "string" && payload.threadId) {
           if (access.kind === "dm") {
@@ -360,35 +339,29 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        /*
-         * Both sealed and plaintext at once (GRYT-729). Refused rather than
-         * picking one: whichever is kept, the other was already written down.
-         */
+        /* Refused rather than picking one: whichever is kept, the other was
+           already written down. */
         if (sealed && text) {
           socket.emit("chat:error", "A message is sealed or it is not.");
           return;
         }
 
-        // Generous next to a real envelope, which is a body plus one wrapped
-        // key per member and is bounded by the member cap. A cap at all, because
-        // this column is not a place to park data.
+        // Generous next to a real envelope, which the member cap already
+        // bounds. A cap at all, so the column is not a place to park data.
         if (sealed && sealed.length > SEALED_MAX_LENGTH) {
           socket.emit("chat:error", "That message is too large to send encrypted.");
           return;
         }
 
-        // Refused rather than truncated. Silently keeping the first 4000
-        // characters of what somebody wrote and dropping the rest is a worse
-        // answer than saying no — they can see what they lost and decide.
+        // Refused rather than truncated, so somebody can see what they would
+        // lose and decide.
         if (text.length > MESSAGE_MAX_LENGTH) {
           socket.emit("chat:error", MESSAGE_TOO_LONG);
           return;
         }
 
-        // Checked here as well as at the upload endpoint: the file is already
-        // stored by the time a message names it, and an id can be reused from
-        // an earlier message. The cap is on how many — the size limit is per
-        // file, so one message could otherwise name a hundred.
+        // Also at the upload endpoint, but an id can be reused from an earlier
+        // message. This caps how many; the size limit is per file.
         if (attachments && attachments.length > MAX_ATTACHMENTS_PER_MESSAGE) {
           socket.emit("chat:error", {
             error: "too_many_attachments",
@@ -408,23 +381,15 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
 
         const cfg = await getServerConfig().catch(() => null);
 
-        // A server that has switched direct messages off stops accepting new
-        // ones without hiding what is already there. The conversation and its
-        // history stay readable, so turning the setting back on does not have
-        // to undo a deletion that cannot be undone.
+        // Switching DMs off stops new ones without hiding what is there, so
+        // turning it back on has nothing to undo.
         if (access.kind === "dm" && cfg && cfg.allow_dms === false) {
           socket.emit("chat:error", { error: "dms_disabled", message: "Direct messages are turned off on this server" });
           return;
         }
 
-        // Checking this only in `dm:open` would gate making a conversation
-        // while leaving every existing one open to post in, including for
-        // somebody whose role had the permission taken away.
-        /*
-         * Only a conversation can be sealed. A channel has no fixed set of keys
-         * to seal to, and anybody admitted later would find every message
-         * unreadable. Refused rather than stored in a column nothing can open.
-         */
+        /* A channel has no fixed set of keys to seal to, so anybody admitted
+           later would find every message unreadable. */
         if (sealed && access.kind !== "dm") {
           socket.emit("chat:error", {
             error: "sealed_not_allowed",
@@ -469,9 +434,8 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         let finalText = text;
         let profanityMatches: { startIndex: number; endIndex: number }[] | undefined;
 
-        // Nothing to filter, search or moderate on a sealed message, because
-        // there is no text here at all. That is the feature rather than a gap,
-        // and `finalText` stays empty so nothing below reads it.
+        // A sealed message has no text here to filter or moderate.
+        // `finalText` stays empty so nothing below reads it.
         if (profanityMode !== "off" && finalText) {
           const result = await processProfanity(finalText, profanityMode, censorStyle);
           if (result.action === "reject") {
@@ -482,9 +446,8 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           profanityMatches = result.matches;
         }
 
-        // A resend of something already stored. The nonce has to travel back
-        // with the reply, or the retrying client cannot tell this is the
-        // message it already holds and draws it twice. Only the sender is told.
+        // A resend. The nonce travels back or the retrying client cannot tell
+        // this is the message it holds and draws it twice.
         if (payload.nonce && recentNonces.has(payload.nonce)) {
           const cached = recentNonces.get(payload.nonce)!;
           socket.emit("chat:new", { ...cached.message, nonce: payload.nonce });
@@ -543,10 +506,8 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
             consola.warn("touchConversation failed", created.conversation_id, err),
           );
 
-          // A message brings back a conversation somebody hid: hiding means
-          // "not in my sidebar", and otherwise the only sign would be an unread
-          // count on nothing. After the send and swallowed on failure — a
-          // sidebar that has not caught up must not stop a message arriving.
+          // A message unhides a conversation, since hiding only means "not in
+          // my sidebar". After the send, and swallowed: it cannot block one.
           try {
             const restored = await clearConversationHidden(created.conversation_id);
             for (const serverUserId of restored) {
@@ -581,18 +542,8 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           recipients.forEach((cid) => io.sockets.sockets.get(cid)?.emit("thread:updated", threadUpdate));
         }
 
-        /*
-         * Plugins hear about it (GRYT-933). After delivery for the same reason
-         * as mentions below: nothing a plugin does may stop a message arriving,
-         * and `emit` neither throws nor waits.
-         *
-         * Two kinds of message are not offered at all rather than offered
-         * empty. A direct message is between two people and a plugin installed
-         * by the operator has no business in it. A sealed message is ciphertext
-         * — there is no plaintext copy on this server, which is the point of it
-         * — so an event carrying `text: ""` would read as somebody sending
-         * nothing rather than as something unreadable.
-         */
+        /* After delivery, so no plugin can stop a message arriving. DMs and
+           sealed messages are not offered at all rather than offered empty. */
         if (access.kind !== "dm" && !sealed) {
           pluginEvents().emit("message:created", {
             messageId: created.message_id,
@@ -605,11 +556,8 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           });
         }
 
-        /*
-         * Who this message named. After delivery, deliberately: a parse that
-         * threw must not stop a message arriving. Sealed messages are skipped
-         * because the server holds ciphertext and there is nothing to read.
-         */
+        /* After delivery, so a parse that threw cannot stop a message. Sealed
+           messages are skipped: the server holds ciphertext. */
         if (finalText?.includes("@")) {
           try {
             const named = findMentions(finalText, await getMentionableMembers());
@@ -621,9 +569,8 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
                 serverUserIds: named,
               });
 
-              // Told now if they are here, and left in the table if they are
-              // not. The row is what makes it survive being offline; this is
-              // only what makes it arrive without a refresh.
+              // The row is what survives being offline. This is only what makes
+              // it arrive without a refresh.
               const online = new Set(stored);
               for (const [cid, info] of Object.entries(clientsInfo)) {
                 if (!info?.serverUserId || !online.has(info.serverUserId)) continue;
@@ -632,9 +579,8 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
                   conversationId: created.conversation_id,
                   messageId: created.message_id,
                   createdAt: created.created_at,
-                  /* Absent until now, so a naming inside a thread arrived
-                     pointing at the channel with no way to say where in it.
-                     Null for one in the channel itself. */
+                  /* Null for a mention in the channel itself. Without it a
+                     mention in a thread cannot say where in the channel. */
                   threadId: created.thread_id ?? null,
                 });
               }
@@ -644,10 +590,8 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           }
         }
 
-        // After the message is out, not before: a promotion must never be the
-        // reason somebody's message is slow, and it must not be able to stop
-        // one being delivered. Costs a single read of the roles table on a
-        // server that has configured none of this.
+        // After the message is out, so a promotion can neither slow one down
+        // nor stop one. One roles read on a server using none of this.
         const promoted = await applyAutoRoles(
           auth.tokenPayload.serverUserId,
           auth.tokenPayload.grytUserId,
@@ -658,9 +602,8 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
             serverUserId: auth.tokenPayload.serverUserId,
             role: promoted.granted.role_id,
           });
-          // Their own permission list is part of server details, so it has to
-          // be re-sent — otherwise the tier they just earned does nothing until
-          // they reconnect.
+          // Their permissions ride on server details, so without this the tier
+          // they just earned does nothing until they reconnect.
           broadcastServerUiUpdate("other");
         }
       } catch (err) {
@@ -700,10 +643,8 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
       try {
         const ip = getClientIp();
         const userId = clientsInfo[clientId]?.serverUserId;
-        // No access token on this event — the client asks for history the
-        // moment a channel opens, off a socket that has already been verified.
-        // So the permission is read from who the socket is, the same way the
-        // voice events do it.
+        // No access token: history is asked for off an already-verified socket,
+        // so the permission is read from who the socket is.
         if (!(await socketMay(clientsInfo, clientId, "read_messages"))) {
           socket.emit("chat:error", {
             error: "forbidden",
@@ -719,10 +660,8 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         }
         if (!payload || typeof payload.conversationId !== "string") { socket.emit("chat:error", "Invalid fetch payload"); return; }
 
-        // The membership check the read path never had. `read_messages` above
-        // says this person may read channels here; it says nothing about
-        // whether this particular conversation is one of theirs, and for a
-        // direct message that is the only question that matters.
+        // `read_messages` says they may read channels here, not that this
+        // conversation is one of theirs, which is the DM question.
         if (!(await requireConversationAccess(payload.conversationId, userId))) return;
 
         if (userId && isConversationAVoiceChannel(payload.conversationId, sfuClient)) {
@@ -742,10 +681,8 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         const items = before
           ? await listMessages(payload.conversationId, limit, before)
           : await getMessagesCached(payload.conversationId, limit);
-        /* Blocked senders come out before enrichment, so nothing is spent on
-         * an avatar nobody will see. `hasMore` counts what is left, so a page
-         * can come back short rather than refetching an unbounded number of
-         * times for whoever has blocked the most people. */
+        /* Before enrichment, so nothing is spent on an avatar nobody sees.
+           `hasMore` counts what is left, so a page may come back short. */
         const hidden = await blockedServerIdsFor(clientsInfo[clientId]?.serverUserId ?? "");
         const visible = hidden.size === 0
           ? items
@@ -859,16 +796,13 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         const hidden = await blockedServerIdsFor(clientsInfo[clientId]?.serverUserId ?? "");
         const replies = await listThreadMessages(payload.threadId, limit, before);
         const visible = hidden.size === 0 ? replies : replies.filter((m) => !hidden.has(m.sender_server_id));
-        /* Counted before the block filter, unlike chat:fetch, which counts
-           after and says so. A full page that is entirely people you have
-           blocked comes back empty, and counting after would report no more
-           history and stop the scrollback there. */
+        /* Before the block filter, unlike chat:fetch: a page that is entirely
+           blocked senders would otherwise end the scrollback. */
         const hasMore = replies.length >= limit;
         let items = await enrichMessages(visible);
         items = await enrichAttachments(items);
-        /* Only on the first page. Paging backwards is asking for older
-           replies; sending the root again with each one would have the client
-           redraw the topic above the divider every time somebody scrolls. */
+        /* First page only: sending the root with every page would redraw the
+           topic above the divider on each scroll. */
         let root: (typeof items)[number] | null = null;
         if (!before) {
           const rootRaw = await getMessageById(payload.conversationId, thread.root_message_id);
@@ -902,9 +836,8 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    // Mark a topic open / solved / closed. The author or a moderator may.
-    // 'solved' keeps it repliable; 'closed' stops new replies (chat:send checks
-    // the status). GRYT-981 Stage 3.
+    // Author or moderator. 'solved' stays repliable; 'closed' stops new
+    // replies, which chat:send checks.
     'thread:status:set': async (payload: { conversationId: string; threadId: string; status: string; accessToken: string }) => {
       try {
         const ip = getClientIp();
@@ -1010,9 +943,8 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    // The topic index of a forum channel: every thread as a summary row, with
-    // its root preview, author and participant count. Token-less like
-    // chat:fetch. GRYT-981 Stage 2.
+    // Every thread as a summary row, with root preview, author and participant
+    // count. Token-less, like chat:fetch.
     'forum:topics': async (payload: { conversationId: string }) => {
       try {
         const ip = getClientIp();
@@ -1222,9 +1154,8 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        // Everything a delete has to touch — the bytes, the cache, the
-        // broadcast, the thread counters — lives in one place now, because a
-        // plugin can do this too and two copies of it drift (GRYT-936).
+        // Bytes, cache, broadcast and thread counters in one place, because a
+        // plugin deletes too and two copies drift.
         const deleted = await deleteMessageEverywhere({
           io,
           clientsInfo,
@@ -1285,10 +1216,8 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         const message = await getMessageById(payload.conversationId, payload.messageId);
         if (!message) { socket.emit("chat:error", "Message not found"); return; }
 
-        // Deliberately own-messages-only, with no permission that opens it up.
-        // Deleting somebody else's message removes their words; editing one
-        // puts different words under their name, and there is no moderation
-        // case that needs it.
+        // Own messages only, with no permission that opens it up: editing
+        // somebody else's puts different words under their name.
         if (message.sender_server_id !== auth.tokenPayload.serverUserId) {
           socket.emit("chat:error", "You can only edit your own messages");
           return;

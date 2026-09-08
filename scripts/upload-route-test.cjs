@@ -1,12 +1,6 @@
 /**
- * Exercises the real uploads router with the db, storage and auth modules
- * stubbed, so the thing under test is the route's own behaviour.
- *
- * What it is actually checking:
- *   1. the bytes reach storage as a path, not a buffer
- *   2. multer's temp file is gone afterwards, on success AND on rejection
- *   3. the ceiling is the server's configured number, not a hardcoded one
- *   4. zero means unlimited and is now reachable
+ * The real uploads router with db, storage and auth stubbed: the bytes reach
+ * storage as a path, the temp file always goes, and the ceiling is the setting.
  */
 const path = require("path");
 const fs = require("fs");
@@ -21,9 +15,8 @@ const req = (m) => require(path.join(BUILD, m));
 let serverConfig = { upload_max_bytes: 10 * 1024 * 1024 };
 const putCalls = [];
 
-// tsc compiles `export *` into getter-only, non-configurable properties, so
-// neither assignment nor defineProperty works on the barrel. Swap the module's
-// exports object in require.cache for a plain copy, then override on that.
+// tsc compiles `export *` into getter-only properties, so the barrel is swapped
+// in require.cache for a plain copy before anything is overridden.
 function patchModule(rel, overrides) {
   const full = require.resolve(path.join(BUILD, rel));
   const real = require(full);

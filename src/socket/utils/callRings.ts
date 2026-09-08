@@ -1,18 +1,10 @@
 /**
- * Who is being rung, and until when.
- *
- * A call itself is not state — it is an SFU room with people in it, and "is
- * there a call" is "does the room have anybody". Ringing is the exception,
- * because it has to interrupt somebody who is not looking at the conversation.
- *
- * In memory, deliberately not in the database: a row that survived a restart
- * would ring somebody about a call that ended before the server came back.
+ * A call is an SFU room with people in it; a ring is state, because it
+ * interrupts. In memory, or a restart rings about a call that has ended.
  */
 
-/**
- * How long a ring lasts. The number matters less than there being one: a caller
- * who closes their laptop mid-ring otherwise leaves a device ringing at nothing.
- */
+/** The number matters less than there being one: a caller closing their laptop
+    mid-ring otherwise leaves a device ringing at nothing. */
 export const RING_TTL_MS = 30_000;
 
 export interface CallRing {
@@ -59,11 +51,8 @@ export function getRing(conversationId: string): CallRing | null {
   return ring ? strip(ring) : null;
 }
 
-/**
- * Start ringing a conversation. Null when one is already going, so a second
- * caller cannot restart the clock and leave a ring that never times out.
- * `onExpire` fires only on the timeout.
- */
+/** Null when one is already going, so a second caller cannot restart the clock.
+    `onExpire` fires only on the timeout. */
 export function startRing(
   ring: Omit<CallRing, "startedAt" | "expiresAt">,
   now: number,
@@ -91,10 +80,8 @@ export function startRing(
   return strip(stored);
 }
 
-/**
- * Stop the ring in this conversation. Returns the one that was going, so the
- * caller has everybody to tell — the answerer's other devices included.
- */
+/** Returns the ring that was going, so the caller has everybody to tell —
+    the answerer's other devices included. */
 export function endRing(conversationId: string): CallRing | null {
   const ring = rings.get(conversationId);
   if (!ring) return null;
@@ -103,10 +90,8 @@ export function endRing(conversationId: string): CallRing | null {
   return strip(ring);
 }
 
-/**
- * Every ring this person started, for when they disconnect. Nobody else can end
- * it — the people being rung can only decline, which says something different.
- */
+/** For when they disconnect. Nobody else can end one: the people being rung
+    decline, which says something different. */
 export function ringsFrom(serverUserId: string): CallRing[] {
   return [...rings.values()].filter((r) => r.fromServerUserId === serverUserId).map(strip);
 }

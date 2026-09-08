@@ -7,13 +7,8 @@ import { after, describe, it } from "node:test";
 import { initPlugins, pluginEvents } from "./index";
 
 /**
- * That the bus a plugin subscribes to is the bus the server emits on (GRYT-933).
- *
- * Everything else in this folder tests a bus somebody handed in. The emit sites
- * — chat.ts, join.ts, evict.ts — call `pluginEvents()` instead, and if that ever
- * returned a second bus every unit test here would still pass while no plugin
- * ever heard anything. There is no failure this module can produce that looks
- * more like working software than that one.
+ * Everything else here tests a bus somebody handed in, while the emit sites call
+ * `pluginEvents()`. A second bus passes every unit test and reaches no plugin.
  */
 
 const dir = mkdtempSync(join(tmpdir(), "gryt-wiring-"));

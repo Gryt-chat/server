@@ -6,15 +6,8 @@ import { test } from "node:test";
 import { MESSAGE_MAX_LENGTH, MESSAGE_TOO_LONG } from "./messageLimits";
 
 /*
- * The cap is enforced in three places and the handlers are socket closures that
- * a unit test cannot reach without standing up a server. So what is tested here
- * is the constant, and then — by reading the source — that all three doors
- * actually go through it.
- *
- * That second part is the one that matters. The bug this fixes was not a wrong
- * number, it was two doors with no check at all while a third had its own copy
- * of 4000 written inline. A test that only asserted the constant would have
- * passed on the day the bug shipped.
+ * The constant, and then by reading the source that all three doors go through
+ * it: the bug was two doors with no check and a third with 4000 written inline.
  */
 
 const src = (path: string) => readFileSync(join(__dirname, "..", path), "utf8");
@@ -36,16 +29,8 @@ test("sending checks the length", () => {
 });
 
 test("every way to put text in a message checks the cap", () => {
-  // Send four characters, edit them into four million. That is the bypass, and
-  // it is why this counts call sites rather than asserting one exists.
-  //
-  // Three of them now: `chat:send`, `chat:edit`, and `forum:topic:create`,
-  // which arrived with GRYT-981 and does check. The count went to three at the
-  // same time and this test did not, so main was red for two merges.
-  //
-  // Failing here is the test working. A new way to put text into a message is
-  // exactly the thing that must not quietly skip the cap, so the answer is to
-  // go and look at the new call site rather than to raise the number.
+  // Four characters edited into four million is the bypass, so this counts call
+  // sites. Failing here means going to look at the new one, not raising it.
   const chat = src("socket/handlers/chat.ts");
   const checks = chat.match(/text\.length > MESSAGE_MAX_LENGTH/g) ?? [];
   assert.equal(

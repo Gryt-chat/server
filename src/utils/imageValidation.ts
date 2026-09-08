@@ -11,20 +11,12 @@ export type ImageValidationResult =
     }
   | { valid: false; reason: string };
 
-/**
- * The real ceiling on how much memory an upload can cost — a byte limit does
- * not stop a small file with absurd dimensions decoding into gigabytes.
- * **Every sharp call that touches an untrusted upload has to carry this.**
- */
+/** A byte limit does not stop a small file with absurd dimensions. Every sharp
+    call that touches an untrusted upload has to carry this. */
 export const MAX_INPUT_PIXELS = 100_000_000;
 
-/**
- * Raster formats an upload is allowed to be. **SVG is deliberately absent**,
- * which is the point of the list: it is a document, it can carry `<script>`,
- * and served inline from the server's own origin that is stored XSS.
- *
- * Sniffed, not taken from the request — the mime says nothing about the bytes.
- */
+/** SVG is deliberately absent: it is a document that can carry `<script>`.
+    Sniffed, not taken from the request. */
 const ALLOWED_IMAGE_FORMATS = new Set([
   "jpeg",
   "jpg",
@@ -40,11 +32,8 @@ export function isAllowedImageFormat(format: string | undefined): boolean {
   return !!format && ALLOWED_IMAGE_FORMATS.has(format.toLowerCase());
 }
 
-/**
- * Validates an image buffer by reading metadata and forcing a single-frame
- * pixel decode.  Catches corrupt / truncated / bomb images before heavier
- * processing that could crash the process via native libvips errors.
- */
+/** Forces a single-frame decode, so a corrupt or bomb image fails here rather
+    than in a native libvips error later. */
 export async function validateImage(
   buffer: Buffer,
   opts?: { animated?: boolean },
@@ -94,13 +83,8 @@ function toHex(value: number): string {
     .padStart(2, "0");
 }
 
-/**
- * The image's dominant colour, for tinting a surface that stands in for it.
- * Avatars never reach the image worker, and this route has already decoded the
- * buffer, so one more pass is the cheapest place left to get one.
- *
- * Never throws: a colour must not fail the upload carrying it.
- */
+/** Avatars never reach the image worker, and this route already decoded the
+    buffer. Never throws: a colour must not fail its upload. */
 export async function findDominantColor(
   buffer: Buffer,
   opts?: { animated?: boolean },

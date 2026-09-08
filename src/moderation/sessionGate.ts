@@ -3,18 +3,8 @@ import { isUserBanned } from "../db/sqlite/servers";
 import type { UserRecord } from "../db/interfaces";
 
 /**
- * The one place a session is allowed or refused. The ban check used to live
- * only at the fresh `server:verify` join, and a reconnecting client never
- * performs one — so a banned user could reconnect on a live token and refresh
- * it indefinitely.
- *
- * **If you assign `clientsInfo[id].grytUserId`, call this first.** That
- * invariant is greppable, which "remember to check bans" was not.
- *
- * There is no separate token invalidation, deliberately: checking live state
- * here *is* the invalidation, which is why a 15-minute token is not a
- * 15-minute hole and why nothing needs to touch the server-global
- * `token_version`.
+ * If you assign `clientsInfo[id].grytUserId`, call this first. Checking live
+ * state here is the invalidation, so a 15-minute token is not a 15-minute hole.
  */
 
 export type SessionDenialCode = "banned" | "membership_required";
@@ -34,11 +24,8 @@ const DENIAL_MESSAGES: Record<SessionDenialCode, string> = {
   membership_required: "You are no longer a member of this server. Please rejoin.",
 };
 
-/**
- * Whether this Gryt identity is allowed on the server at all, for the
- * fresh-join path where no server user exists yet. Keyed on `grytUserId`, so a
- * ban survives a reinstall, a new device and a new server user id.
- */
+/** For the fresh join, where no server user exists yet. Keyed on `grytUserId`,
+    so a ban survives a reinstall and a new device. */
 export async function checkIdentityAllowed(
   grytUserId: string,
 ): Promise<IdentityCheck> {
@@ -48,14 +35,8 @@ export async function checkIdentityAllowed(
   return { ok: true };
 }
 
-/**
- * Whether this identity may hold a session as this server user right now.
- * Returns the user record, which every admission path needs anyway.
- *
- * Membership is `users.is_active`: kicking clears it and `upsertUser` sets it
- * back on a fresh join, so a kicked user can return by joining and cannot be
- * restored by a reconnect.
- */
+/** Membership is `users.is_active`: kicking clears it and a fresh join sets it
+    back, so a kicked user returns by joining and not by reconnecting. */
 export async function checkSessionAllowed(params: {
   grytUserId: string;
   serverUserId: string;

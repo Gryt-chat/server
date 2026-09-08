@@ -4,24 +4,10 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 
 /**
- * No client's address reaches a log line.
- *
- * A unit test cannot catch this: the leak is not a wrong answer, it is a
- * correct answer written somewhere it should not be, and the fifth place
- * somebody adds it will look exactly like the four that were here. Two of those
- * four wrote an address on every connect and every disconnect, and the task
- * that found the other two said the rate limiter was the only one.
- *
- * So this reads the source. It is coarse — it asks whether a logging call
- * mentions the two functions that resolve a caller's address — and coarse is
- * the point: the fix is to wrap it in `addressLabel`, which the check accepts,
- * and anything else has to argue with a test.
- *
- * The server's *own* interface addresses are a different thing and not matched
- * here: `reachableAddresses` prints where the operator's machine can be
- * reached, which is the operator's own information and the reason it is
- * printed.
+ * A leak here is a correct answer written where it should not be, so this reads
+ * the source. The fix is to wrap the call in `addressLabel`.
  */
+
 /* `__dirname` rather than `import.meta`: this file is compiled as CommonJS. */
 const SOURCES = join(__dirname, "..");
 

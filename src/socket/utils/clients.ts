@@ -13,11 +13,8 @@ import { memberIdentity } from "./memberIdentity";
 import { scopedChannelIds, visibleChannelIds } from "../../services/channelPermissions";
 import { listRolesByMember } from "../../services/permissions";
 
-/**
- * Mark a socket as belonging to somebody the server has admitted, and cache
- * their permissions. A member whose permissions were never cached receives no
- * broadcasts, so all three admission paths call this and all three await it.
- */
+/** A member whose permissions were never cached receives no broadcasts, so all
+    three admission paths call this and all three await it. */
 export async function verifyClient(socket: Socket, clientsInfo: Clients) {
   socket.join("verifiedClients");
   await refreshClientPermissions(clientsInfo, socket.id);
@@ -27,32 +24,23 @@ export function unverifyClient(socket: Socket) {
   socket.leave("verifiedClients");
 }
 
-/**
- * The room to tell the whole server somebody is in: a channel, or nothing.
- * A one-to-one conversation id is derived from the sorted pair, so anybody
- * holding a member list could compute it and read back who is talking to whom.
- * `isConnectedToVoice` stays true, which is the part everyone may know.
- */
+/** A DM's id is derived from the sorted pair, so naming it says who is talking
+    to whom. `isConnectedToVoice` stays true, which everyone may know. */
 function publicVoiceRoom(voiceChannelId: string | undefined): string {
   const id = voiceChannelId || "";
   return isConversationId(id) ? "" : id;
 }
 
-/**
- * The same blanking, for a channel this particular recipient may not see — so
- * unlike `publicVoiceRoom` it takes the recipient. Only the id goes.
- */
+/** The same blanking for a channel this recipient may not see, so unlike
+    `publicVoiceRoom` it takes the recipient. */
 function voiceRoomFor(visible: Set<string>, voiceChannelId: string | undefined): string {
   const id = publicVoiceRoom(voiceChannelId);
   if (!id) return "";
   return visible.has(id) ? id : "";
 }
 
-/**
- * Drop the dedupe memory for both broadcasts. A gate is not part of the hashed
- * state, so hiding a channel while somebody sits in its voice room changes what
- * each recipient should be told without changing the hash.
- */
+/** A gate is not part of the hashed state, so hiding a channel changes what
+    each recipient should be told without changing the hash. */
 export function invalidateBroadcastDedupe(io: Server): void {
   lastClientsStateByIO.delete(io);
   lastMemberListStateByIO.delete(io);
@@ -71,16 +59,14 @@ async function emitClientsNow(io: Server, clientsInfo: Clients, stateHash: strin
   const registeredClients: Clients = {};
   Object.entries(clientsInfo).forEach(([clientId, client]) => {
     if (client.serverUserId && !client.serverUserId.startsWith('temp_')) {
-      // Copied rather than passed through: this is the live record the rest of
-      // the server reads, and blanking the field on it would take the person
-      // out of their own call.
+      // Copied, not passed through: this is the live record, and blanking the
+      // field on it would take the person out of their own call.
       registeredClients[clientId] = { ...client, voiceChannelId: publicVoiceRoom(client.voiceChannelId) };
     }
   });
 
-  // One payload to the room while no channel is gated, which is every server
-  // that has not used the setting. The per-socket branch below costs a standing
-  // lookup each and only earns it once somebody can be shown less.
+  // One payload to the room while nothing is gated. The per-socket branch below
+  // costs a standing lookup each and only earns it once.
   const scoped = await scopedChannelIds();
   if (scoped.size === 0) {
     io.to("verifiedClients").emit("server:clients", registeredClients);
@@ -155,20 +141,16 @@ const lastMemberListEmitByIO = new WeakMap<Server, number>();
 const lastMemberListStateByIO = new WeakMap<Server, string>();
 const pendingMemberListByIO = new WeakMap<Server, ReturnType<typeof setTimeout>>();
 
-/**
- * The member list, built once. There were two of these, disagreeing about which
- * session wins when somebody has two clients open — so the moderation menu's
- * contents depended on which builder had answered most recently.
- */
+/** Built once. Two of these disagreed about which session wins when somebody
+    has two clients open, and the moderation menu followed whichever answered. */
 export async function buildMemberList(clientsInfo: Clients) {
   const registeredUsers = await getAllRegisteredUsers();
   // Everybody's roles, highest ranked first. A member can hold several, and the
   // list carries all of them so a client can draw the rest as chips.
   const rolesByMember = await listRolesByMember();
 
-  // Avatar colours, so a client can tint a voice tile to match the person
-  // rather than to a hash of their id. Null until the image worker has
-  // processed that avatar — the client falls back.
+  // Avatar colours, so a voice tile can match the person rather than a hash of
+  // their id. Null until the image worker has been round; the client falls back.
   const avatarFiles = await getFilesByIds(
     registeredUsers
       .map((u) => u.avatar_file_id)
@@ -208,29 +190,22 @@ export async function buildMemberList(clientsInfo: Clients) {
         serverUserId: user.server_user_id,
         nickname: user.nickname,
         ...memberIdentity(user.gryt_user_id),
-        /**
-         * What this member says their DM public key is (GRYT-720). Passed
-         * through untouched: a server vouching for the binding would be
-         * vouching for the thing a peer has to establish for itself.
-         */
+        /** Passed through untouched: a server vouching for the binding would
+            be vouching for what a peer has to establish for itself. */
         dmKeyBinding: user.dm_key_binding,
         avatarFileId: user.avatar_file_id || null,
         avatarColor: user.avatar_file_id
           ? avatarFiles.get(user.avatar_file_id)?.dominant_color ?? null
           : null,
-        // What their owl is wearing. `avatarFileId` is still set, because
-        // saving a design uploads a PNG too and that is what an older client
-        // shows. Passed through as stored — see `utils/wornString.ts`.
+        // `avatarFileId` is still set, because saving a design uploads a PNG
+        // that an older client shows. Passed through as stored.
         avatarWorn: user.avatar_worn,
-        // The one their name is coloured by. Kept as a single string because
-        // every client that exists reads this field; `roles` beside it is the
-        // whole set, and a client that does not know about it loses nothing.
+        // The one their name is coloured by. A single string because every
+        // client reads this field; `roles` beside it is the whole set.
         role: rolesByMember.get(user.server_user_id)?.[0] || 'member',
         roles: rolesByMember.get(user.server_user_id) ?? [],
-        // Read off the id, so it cannot be wrong and cannot be spoofed by
-        // anything the member sends. Every surface that shows a name shows this
-        // beside it — the one question a reader needs answered instantly is
-        // whether they are talking to a person.
+        // Read off the id, so nothing the member sends can spoof it. Shown
+        // beside every name.
         isBot: isBotIdentity(user.gryt_user_id),
         status,
         lastSeen: user.last_seen.toISOString(),
@@ -239,9 +214,8 @@ export async function buildMemberList(clientsInfo: Clients) {
         // somebody may have had a good reason to leave behind.
         nicknameChangeCount: user.nickname_change_count,
         nicknameChangedAt: user.nickname_changed_at?.toISOString() ?? null,
-        /* What they say they are doing (GRYT-929). Undefined rather than null
-           when unset and when offline: it lives on the connection, so somebody
-           who is not here is not doing anything as far as this list knows. */
+        /* Undefined rather than null when unset or offline: it lives on the
+           connection, so somebody who is not here is not doing anything. */
         activity: onlineClient?.activity,
         isMuted: onlineClient?.isMuted || false,
         isDeafened: onlineClient?.isDeafened || false,
@@ -259,15 +233,8 @@ export async function buildMemberList(clientsInfo: Clients) {
 /** One member, as far as the dedupe below is concerned. */
 type MemberListEntry = Awaited<ReturnType<typeof buildMemberList>>[number];
 
-/**
- * What the broadcast compares against the last one it sent. **Add a field to
- * `buildMemberList` and it must land here too**, or the hash is unchanged, the
- * broadcast returns early, and the value reaches nobody with nothing erroring
- * (GRYT-65). `memberStateHash.test.ts` fails instead now.
- *
- * Not every field belongs: `lastSeen` moves constantly and would defeat the
- * dedupe entirely. This is the set that should repaint somebody's row.
- */
+/** Add a field to `buildMemberList` and it must land here too, or the hash is
+    unchanged and the value reaches nobody. `memberStateHash.test.ts` catches it. */
 export function memberStateHash(members: MemberListEntry[]): string {
   return JSON.stringify(
     members.map(m => ({
@@ -276,14 +243,11 @@ export function memberStateHash(members: MemberListEntry[]): string {
       // Changes when an identity is replaced (`replaceUserIdentity`), which
       // is exactly when a member list showing the old one would be wrong.
       identityFingerprint: m.identityFingerprint,
-      // A member replacing their DM key is the one change here that other
-      // clients must not miss: a peer holding the old one encrypts to a key
-      // nobody has. Left out of this hash, a new binding would sit unsent until
-      // something unrelated happened to move.
+      // A peer holding the old key encrypts to one nobody has, so a new binding
+      // must not sit unsent waiting for something else to move.
       dmKeyBinding: m.dmKeyBinding,
-      // A rename changes the name above too, so this is redundant for the
-      // dedupe — kept so that a rename back to a previous name, which leaves
-      // `nickname` looking untouched, still reaches the client.
+      // Redundant with `nickname`, except for a rename back to a previous name,
+      // which leaves that field looking untouched.
       nicknameChangedAt: m.nicknameChangedAt,
       avatarFileId: m.avatarFileId,
       avatarColor: m.avatarColor,
@@ -293,9 +257,8 @@ export function memberStateHash(members: MemberListEntry[]): string {
       role: m.role,
       isBot: m.isBot,
       status: m.status,
-      // Changes on its own schedule — a track ends and the next begins with
-      // nothing else about the member moving — so without it here the new one
-      // sits unsent until something unrelated happens.
+      // Changes on its own schedule, so without it here the new one sits unsent
+      // until something unrelated moves.
       activity: m.activity,
       isConnectedToVoice: m.isConnectedToVoice,
       hasJoinedChannel: m.hasJoinedChannel,
@@ -321,10 +284,8 @@ async function emitMemberListNow(io: Server, clientsInfo: Clients): Promise<void
     lastMemberListEmitByIO.set(io, Date.now());
     lastMemberListStateByIO.set(io, currentMemberStateHash);
 
-    // Per socket rather than to the room, because who may see the list is a
-    // permission. It is no longer the same list for everybody who gets it
-    // either: the row carries `voiceChannelId`, so a member sitting in a
-    // gated voice channel would otherwise name it to the whole server.
+    // Per socket, not to the room: the row carries `voiceChannelId`, so a member
+    // in a gated voice channel would otherwise name it to the whole server.
     const scoped = await scopedChannelIds();
     const anyScopedInUse = scoped.size > 0 && members.some((m) => scoped.has(m.voiceChannelId || ""));
 
@@ -344,17 +305,8 @@ async function emitMemberListNow(io: Server, clientsInfo: Clients): Promise<void
 
 const lastCallMembersByIO = new WeakMap<Server, Map<string, string>>();
 
-/**
- * Who is in each conversation call, told only to the people in it. Both clients
- * group participants by `voiceChannelId`, so the blanking `publicVoiceRoom`
- * does left a call showing nobody in it, including yourself.
- *
- * Addressing the socket.io room is the whole of the access rule — you cannot be
- * in the room without having gone through `resolveConversationAccess`, so there
- * is no second copy of it here to disagree.
- *
- * Channels are deliberately not sent; the member list already names those.
- */
+/** Told only to the people in the call, because `publicVoiceRoom`'s blanking
+    left a DM call showing nobody in it. The socket.io room is the access rule. */
 function broadcastCallParticipants(io: Server, clientsInfo: Clients, serverId: string): void {
   const byRoom = new Map<string, Set<string>>();
 
@@ -396,10 +348,8 @@ function broadcastCallParticipants(io: Server, clientsInfo: Clients, serverId: s
     tellConversation(io, clientsInfo, room, ids);
   }
 
-  // A room nobody is in any more. Nobody there to tell, but the conversation's
-  // other members were told it started and would keep a row saying it is still
-  // going. The entry is forgotten either way, or the next call between the same
-  // people is deduped against one that has ended.
+  // Nobody left to tell, but the rest of the conversation still shows a call.
+  // Forgotten either way, or the next call dedupes against one that ended.
   for (const room of [...seen.keys()]) {
     if (byRoom.has(room)) continue;
     seen.delete(room);
@@ -407,14 +357,8 @@ function broadcastCallParticipants(io: Server, clientsInfo: Clients, serverId: s
   }
 }
 
-/**
- * Tell the rest of the conversation who is in its call, so a DM row can say a
- * call is happening to somebody who has not joined — and stop saying so.
- *
- * Fire and forget, after the room has been told. It reads membership from the
- * database, which only pays because the dedupe above means this runs on a
- * change of who is in a call rather than on every voice event.
- */
+/** So a DM row can say a call is happening to somebody who has not joined.
+    Fire and forget, and only on a change of who is in the call. */
 function tellConversation(
   io: Server,
   clientsInfo: Clients,
@@ -463,10 +407,7 @@ export function broadcastMemberList(io: Server, clientsInfo: Clients, instanceId
   }
 }
 
-/**
- * Count how many OTHER sockets belong to the same grytUserId.
- * Used for logging when a user opens multiple clients concurrently.
- */
+/** How many other sockets belong to the same grytUserId. For logging. */
 export function countOtherSessions(
   clientsInfo: Clients,
   currentClientId: string,

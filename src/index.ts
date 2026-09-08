@@ -120,19 +120,16 @@ try {
   consola.error("S3 initialization failed", e);
 }
 
-// The server's own identity key, which clients pin on first join (GRYT-51).
-// Generated here so it exists before the first connection and any failure is
-// visible at boot; the module initializes itself on demand regardless.
+// Clients pin this on first join. Generated here so a failure is visible at
+// boot; the module initialises itself on demand regardless.
 logServerIdentity();
 
 // Database initialization (SQLite)
 initSqlite()
   .then(async () => {
     consola.success("SQLite initialized");
-    // SERVER_DISCOVERABLE seeds the row on first run only, so the "Discoverable
-    // on LAN" choice made when creating a server actually lands somewhere. After
-    // that the config owns the setting and this is ignored — changing it is done
-    // through server settings, which takes effect without a restart.
+    // SERVER_DISCOVERABLE seeds the row on first run only. After that the
+    // config owns the setting and this is ignored.
     await createServerConfigIfNotExists({
       discoverable: (process.env.SERVER_DISCOVERABLE || "").toLowerCase() !== "false",
     });
@@ -148,21 +145,16 @@ initSqlite()
       startEmojiQueueWorker();
     }
   })
-  // Plugins last, and only if GRYT_PLUGINS_DIR is set. After the database
-  // because a plugin reacting to a member joining is no use before there is
-  // one to read, and it never throws — a plugin folder somebody broke must not
-  // be a server that will not start.
+  // After the database, and never throws: a plugin folder somebody broke must
+  // not be a server that will not start.
   .then(() => initPlugins())
   .catch((e) => consola.error("SQLite initialization failed", e));
 
 // Initialize SFU client if host is configured
 let sfuClient: SFUClient | null = null;
 
-/**
- * Starts the SFU client, once the database can answer. Not at import time: the
- * signing key lives in `server_config`, and `initSqlite()` is started rather
- * than awaited. `io` is safe to touch even though it is declared below.
- */
+/** Not at import time: the signing key lives in `server_config` and
+    `initSqlite()` is started rather than awaited. */
 function startSfuClient(): void {
   if (!process.env.SFU_WS_HOST) {
     consola.error("No SFU host defined! Server will not send or retrieve streams.");
@@ -176,9 +168,8 @@ function startSfuClient(): void {
   const instanceId = process.env.SERVER_INSTANCE_ID || "default";
   const serverId = `${serverName}_${port}_${instanceId}`;
 
-  // SERVER_PASSWORD is not a password anybody types — it is the key this
-  // server signs SFU client tokens with, and an empty one is guessable, so a
-  // generated secret is used when it is unset. An explicit value still wins.
+  // Not a password anybody types: it is the key SFU client tokens are signed
+  // with, so an unset one is generated rather than left empty.
   const configured = (process.env.SERVER_PASSWORD || "").trim();
   const secret = configured || getOrCreateSfuSecret();
 
@@ -269,24 +260,19 @@ app.get("/info", httpRateLimit("http:public", RL_HTTP_PUBLIC), async (_req, res)
     name: displayName,
     description,
     members: memberCount.toString(),
-    // Members only. A precise build number lets anyone on the network scan for
-    // hosts running a version with a known vulnerability, and /info has to stay
-    // reachable unauthenticated for the add-server flow, so the field is
-    // omitted rather than the endpoint being closed.
+    // Members only: a build number lets anyone scan for a known vulnerability,
+    // and /info has to stay open for the add-server flow.
     ...(isMember ? { version: process.env.SERVER_VERSION || "1.0.0" } : {}),
     lanOpen,
-    // Unauthenticated on purpose, so a client can say "you don't need an
-    // account for this one" before anybody tries. Neither field says anything
-    // a failed join would not.
+    // Unauthenticated on purpose, so a client can say what is needed before
+    // anybody tries. Neither field says more than a failed join would.
     identityTiers: getAcceptedIdentityTiers(),
     joinPolicy,
   });
 });
 
-// Serve the uploaded server icon by streaming from S3.
-// Streams through the API instead of redirecting to presigned URLs, because in
-// dev/self-hosted setups the S3 endpoint is often an internal address (e.g.
-// http://minio:9000 or 127.0.0.1:9000) that browsers cannot reach.
+// Streamed rather than redirected to a presigned URL: a self-hosted S3 endpoint
+// is often an internal address a browser cannot reach.
 app.get("/icon", httpRateLimit("http:public", RL_HTTP_PUBLIC), async (req, res) => {
   try {
     const cfg = await getServerConfig();
@@ -311,8 +297,7 @@ app.get("/icon", httpRateLimit("http:public", RL_HTTP_PUBLIC), async (req, res) 
     }
 
     // Revalidate rather than cache blind: with max-age a cleared icon kept
-    // showing for a minute, and a reload does not bypass a fresh entry. The
-    // key is a fresh uuid per upload, so it doubles as an ETag.
+    // showing. The key is a fresh uuid per upload, so it doubles as an ETag.
     const etag = `"${iconKey}"`;
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("ETag", etag);
@@ -330,20 +315,12 @@ app.get("/icon", httpRateLimit("http:public", RL_HTTP_PUBLIC), async (req, res) 
   }
 });
 
-// Limits go in front of the routers, so a refused request never reaches body
-// parsing, signature checking or an outbound fetch. `webhooks` carries its own,
-// keyed per webhook rather than per address, and is left alone.
-//
-// /api/server matters most here: its routes write a server icon, and multer
-// buffered an anonymous 25 MB body into the heap before anything checked a
-// token (GRYT-788).
+// In front of the routers, so a refused request never reaches body parsing or
+// an outbound fetch. `webhooks` carries its own, keyed per webhook.
 app.use("/api/server", httpRateLimit("http:server", RL_HTTP_UPLOAD), serverRouter);
 app.use("/api/messages", httpRateLimit("http:api", RL_HTTP_API), messagesRouter);
-// Reading and writing a file share a mount and need different budgets: a busy
-// channel fetches hundreds of attachments while scrolling.
-//
-// The order matters and so does the skip. Express runs every matching mount, so
-// without it a file read is charged to the upload budget too.
+// Reads and writes share a mount and need different budgets. Express runs every
+// matching mount, so without the skip a read is charged to the write budget.
 const limitUploadWrites = httpRateLimit("http:upload", RL_HTTP_UPLOAD);
 app.use("/api/uploads/files", httpRateLimit("http:file", RL_HTTP_FILE));
 app.use(
@@ -353,14 +330,8 @@ app.use(
 );
 app.use("/api/members", httpRateLimit("http:api", RL_HTTP_API), membersRouter);
 
-// Same split as uploads above, and for a sharper reason: reading the emoji list
-// and staging an emoji shared one bucket, so an import's burst of writes banned
-// the mount and every client's GET of the list was refused with it. The list
-// answering 429 does not degrade — the client had no emoji to draw, so a server
-// mid-import looked like a server whose emoji had been deleted.
-//
-// Separate keys, not just separate budgets. A shared key would still let the
-// writes spend the reads' allowance.
+// Same split as uploads: one bucket meant an import's writes got the list
+// refused too. Separate keys, or the writes still spend the reads' allowance.
 const limitEmojiWrites = httpRateLimit("http:emoji:write", RL_HTTP_EMOJI_WRITE);
 const limitEmojiReads = httpRateLimit("http:emoji:read", RL_HTTP_API);
 app.use(
@@ -419,15 +390,12 @@ const httpServer = createServer(app); // Pass the Express app to createServer
 
 const io = new Server(httpServer, {
   cors: {
-    // Headers only. The decision is `allowRequest` below, which is the one
-    // place that can see the Host header and therefore tell a same-origin
-    // request from a cross-origin one. Reflecting here is safe because nothing
-    // reaches a socket without passing that.
+    // Headers only. `allowRequest` below is the decision, and the only place
+    // that sees the Host header; nothing reaches a socket without passing it.
     origin: (_origin, callback) => callback(null, true),
   },
-  // Here rather than in `cors.origin`, which is handed the origin and nothing
-  // else — "is this origin the host the request was sent to" needs the request,
-  // and that question is the whole of the native-client case.
+  // Not in `cors.origin`, which is handed the origin alone: the native-client
+  // case is whether the origin is the host the request was sent to.
   allowRequest: (req, callback) => {
     const origin = req.headers.origin;
     // No origin at all is a non-browser client — curl, a bot, the SFU. Those
@@ -469,11 +437,8 @@ function isLoopbackHost(host: string): boolean {
   );
 }
 
-// The management API, on its own listener. The main port is bound to HOST,
-// which defaults to 0.0.0.0, so mounting management there would put it wherever
-// the server is. This one is reached only through the Compose file's
-// `127.0.0.1:<port>:<port>` publish, and does not start without
-// GRYT_ADMIN_TOKEN.
+// Its own listener: the main port binds to HOST, which defaults to 0.0.0.0.
+// Reached only through Compose's 127.0.0.1 publish, and needs GRYT_ADMIN_TOKEN.
 if (adminTokenConfigured()) {
   const managementApp = express();
   managementApp.use("/management", managementRouter);
@@ -483,18 +448,8 @@ if (adminTokenConfigured()) {
   });
 }
 
-/*
- * Metrics get a port of their own, not the one the world talks to. Served from
- * the main app they published the whole Prometheus register — socket counts,
- * per-route timings, memory — to anybody behind a proxy or a tunnel.
- *
- * A separate port rather than a token, because a token is only safe for people
- * who set one, and the monitoring stack is opt-in.
- *
- * **Publishing this port, or running the server with host networking, puts it
- * back on the public internet.** Prometheus reaches it as `server:<port>` over
- * the Compose network and needs no published port.
- */
+/* Its own port, not the one the world talks to. Publishing it, or host
+   networking, puts the whole Prometheus register back on the internet. */
 const metricsPort = Number(process.env.METRICS_PORT || 9091);
 if (metricsPort > 0) {
   const metricsApp = express();
@@ -506,10 +461,8 @@ if (metricsPort > 0) {
     consola.success(`Metrics on ${metricsPort} (container-only; do not publish this port)`);
   });
 
-  // A telemetry port being unavailable is not a reason to refuse to run a chat
-  // server. Unhandled, this listen error takes the process down in a restart
-  // loop — which is how the second of two host-networked servers on one box
-  // was lost, with the logs saying EADDRINUSE and nothing about metrics.
+  // Unhandled, this takes the process down in a restart loop logging EADDRINUSE
+  // and nothing about metrics. A telemetry port is not worth that.
   metricsServer.on("error", (err: NodeJS.ErrnoException) => {
     const because = err.code === "EADDRINUSE"
       ? `port ${metricsPort} is already in use, most likely by another Gryt server on this host`
@@ -520,11 +473,8 @@ if (metricsPort > 0) {
   consola.info("METRICS_PORT=0, so metrics are recorded but not served anywhere");
 }
 
-/**
- * The addresses this server answers on. IPv4 in full, IPv6 as a count, since a
- * host can have thirty of those and nearly all are link-local. Loopback is kept
- * deliberately: "127.0.0.1 and nothing else" is the state worth spotting.
- */
+/** IPv4 in full, IPv6 as a count. Loopback is kept, because "127.0.0.1 and
+    nothing else" is the state worth spotting. */
 function reachableAddresses(port: number, host: string): string[] {
   if (host !== "0.0.0.0" && host !== "::") {
     return [`Bound to ${host}:${port} only, so nothing else can reach it.`];
@@ -578,10 +528,8 @@ httpServer.listen(PORT, HOST, () => {
     );
   }
 
-  // Advertising is not started here. It depends on the `discoverable` flag,
-  // which lives in the database, and that is not reliably open yet at this
-  // point — the SQLite init runs on its own promise chain. syncMdnsAdvertising
-  // is called from there instead, once the config is actually readable.
+  // Not started here: it depends on `discoverable` in the database, which is
+  // not reliably open yet. syncMdnsAdvertising runs off the SQLite chain.
 });
 
 const shutdownMdns = () => {

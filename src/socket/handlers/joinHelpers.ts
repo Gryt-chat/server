@@ -18,14 +18,8 @@ import {
 import { checkSessionAllowed } from "../../moderation/sessionGate";
 
 // ── Password cooldown ──────────────────────────────────────────────
-//
-// Two-tier brute-force protection:
-//   1. Per (IP + user) — prevents targeted attacks against a single account.
-//   2. Per IP only     — catches attackers cycling through accounts from one IP.
-//
-// Cooldowns escalate exponentially on repeated lockouts:
-//   base × 2^(lockouts-1), capped at SERVER_INVITE_MAX_COOLDOWN_MS.
-//   e.g. 1 min → 2 min → 4 min → … → 1 hour (default cap).
+// Keyed per IP+user and per IP, so cycling accounts from one address is caught
+// too. base × 2^(lockouts-1), capped at SERVER_INVITE_MAX_COOLDOWN_MS.
 
 type CooldownState = {
   count: number;
@@ -146,12 +140,8 @@ export function registerJoinHelpers(ctx: HandlerContext): EventHandlerMap {
 
         const { nickname, serverUserId } = clientInfo;
 
-        // The owner cannot leave. There is exactly one -- ownership is
-        // `server_config.owner_gryt_user_id`, not a role somebody else can also
-        // hold -- so leaving would put the server beyond anybody's reach, with
-        // no settings, no moderation and no way to hand it over. Nothing
-        // stopped this before, because until now the client's Leave button
-        // never reached this handler at all.
+        // Ownership is `server_config.owner_gryt_user_id`, not a role somebody
+        // else can hold, so leaving puts the server beyond anybody's reach.
         const config = await getServerConfig();
         if (clientInfo.grytUserId && config?.owner_gryt_user_id === clientInfo.grytUserId) {
           socket.emit("server:error", {
@@ -166,18 +156,14 @@ export function registerJoinHelpers(ctx: HandlerContext): EventHandlerMap {
 
         await setUserInactive(serverUserId);
 
-        // The picture goes, the row stays. Nothing points at the file once the
-        // column is cleared, so the media sweep collects it; what is kept is
-        // the nickname and the membership row, which is what the messages they
-        // wrote are attributed to. Rejoining rebinds to that same row and
-        // uploads a new picture, so this costs a re-upload and nothing else.
+        // The picture goes, the row stays: the membership row is what their
+        // messages are attributed to. Rejoining costs a re-upload.
         await setUserAvatar(serverUserId, null).catch((e) =>
           consola.warn("clearing the avatar on leave failed", e),
         );
 
-        // Plugins hear about it (GRYT-933). Emitted here rather than on a
-        // socket disconnect, which happens every time somebody closes a laptop
-        // lid and is not leaving.
+        // Here rather than on a socket disconnect, which happens every time
+        // somebody closes a laptop lid.
         pluginEvents().emit("member:left", {
           userId: serverUserId,
           nickname: nickname ?? null,
@@ -185,10 +171,8 @@ export function registerJoinHelpers(ctx: HandlerContext): EventHandlerMap {
           at: new Date().toISOString(),
         });
 
-        // A conversation nobody here can open again is one this server is
-        // holding on behalf of two people who have both gone. Swept on the way
-        // out rather than on a timer, so the answer to "how long do you keep my
-        // DMs" is "until you both leave" rather than a number.
+        // Swept on the way out rather than on a timer, so "how long do you keep
+        // my DMs" answers "until you both leave" rather than a number.
         await purgeOrphanedConversations()
           .then((ids) => {
             if (ids.length > 0) consola.info(`Purged ${ids.length} orphaned conversation(s) after leave`);
@@ -261,9 +245,8 @@ export function registerJoinHelpers(ctx: HandlerContext): EventHandlerMap {
             userTokenVersion: user.token_version ?? 0,
           };
           const newAccessToken = generateAccessToken(refreshedPayload);
-          // Re-minted with the access token rather than on its own timer. A
-          // file token outlives one by hours, so a session that keeps refreshing
-          // never reaches the point where its pictures stop loading.
+          // With the access token rather than on its own timer, so a session
+          // that keeps refreshing never has its pictures stop loading.
           const newFileToken = generateFileToken(refreshedPayload);
 
           if (clientsInfo[clientId]) {
@@ -299,22 +282,16 @@ export function registerJoinHelpers(ctx: HandlerContext): EventHandlerMap {
 
           const { grytUserId, serverUserId, nickname, serverHost } = decoded;
 
-          // This branch used to re-mint purely from the old token's claims,
-          // touching the database not at all — so it renewed sessions for
-          // banned users and for users who were no longer members.
+          // Reads the database rather than re-minting from the old token's
+          // claims, which renewed sessions for banned and departed users.
           const gate = await checkSessionAllowed({ grytUserId, serverUserId });
           if (!gate.ok) {
             socket.emit("token:error", { error: gate.code, message: gate.message });
             return;
           }
 
-          // The branch that made revocation not work. It re-mints from the
-          // claims of a token the caller already holds, so a client that
-          // refreshes before its fifteen minutes are up renews forever. The
-          // refresh-token branch above checks `revoked`; this one never did,
-          // so signing out of every device left a running client untouched.
-          // Now a token minted before the member's token_version was bumped is
-          // refused here too, and the new one carries the current value.
+          // This branch re-mints from a token the caller holds, so without the
+          // version check a client refreshing in time renews forever.
           if ((decoded.userTokenVersion ?? 0) !== (gate.user.token_version ?? 0)) {
             socket.emit("token:revoked", {
               reason: "user_token_version_mismatch",

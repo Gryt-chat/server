@@ -6,15 +6,8 @@ import type { Permission } from "../constants/permissions";
 import type { EffectiveStanding } from "../services/permissions";
 
 /**
- * The one rule standing between a plugin and the owner (GRYT-935).
- *
- * Every human moderation path compares ranks. A plugin holds no role, so there
- * is nothing to compare, and something has to take that check's place. This is
- * it: a plugin cannot act on a moderator.
- *
- * The failure being designed out is not subtle. It is a plugin with a bug that
- * bans everybody who speaks, at three in the morning, starting with whoever is
- * awake to stop it.
+ * A plugin holds no role, so there is no rank to compare and this takes that
+ * check's place: a plugin cannot act on a moderator.
  */
 
 const standing = (over: Partial<EffectiveStanding> = {}): EffectiveStanding => ({
@@ -101,9 +94,8 @@ describe("a moderator", () => {
     }
   });
 
-  /* One step removed, and the reason it is in the list: somebody who can edit
-     roles can give themselves ban_members and then be reachable no longer
-     matters — they were always able to become unreachable. */
+  /* One step removed: somebody who can edit roles can give themselves
+     ban_members, so they were always able to become unreachable. */
   it("is out of reach holding only manage_roles", () => {
     assert.equal(
       pluginMayActOn(standing({ permissions: new Set<Permission>(["manage_roles"]) })).allowed,
@@ -112,13 +104,8 @@ describe("a moderator", () => {
   });
 });
 
-/*
- * getEffectiveStanding fails shut: an unreadable member comes back with no
- * permissions and rank 0. That makes them *reachable* here, which is the right
- * way round — the failure this guards is a plugin acting on a moderator, and a
- * member with no evidence of being one is not one. Whether they exist at all is
- * a different question, answered before this is called.
- */
+/* An unreadable member comes back at rank 0 and so is reachable, which is the
+   right way round: no evidence of being a moderator is not being one. */
 describe("a standing that could not be resolved", () => {
   it("is reachable, and that is deliberate", () => {
     assert.deepEqual(

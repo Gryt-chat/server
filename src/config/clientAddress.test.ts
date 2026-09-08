@@ -45,9 +45,8 @@ describe("addressIsOwn", () => {
     assert.equal(addressIsOwn("", 0), true);
   });
 
-  // The case this exists for. A request that crossed a proxy leaves the socket
-  // address pointing at the proxy, and proxies live on the same private ranges
-  // that LAN open join accepts as proof of being on the local network.
+  // A proxied request leaves the socket address on the proxy, and proxies live
+  // on the same private ranges LAN open join accepts as proof.
   it("is false when a proxy appended to the chain and no hops are trusted", () => {
     assert.equal(addressIsOwn("203.0.113.10", 0), false);
     assert.equal(addressIsOwn(["203.0.113.10", "10.0.0.5"], 0), false);

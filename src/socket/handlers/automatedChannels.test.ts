@@ -15,11 +15,8 @@ import { registerChatHandlers } from "./chat";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
 /**
- * Automated channels, and the one rule they exist for: only bots (and webhooks
- * and system messages, which never reach this handler) may post. A human with
- * send_messages is refused. The gate keys off the identity in the verified
- * token — a BOT_ subject is a bot, anything else is a person — so it can't be
- * argued around by a client.
+ * Only bots may post, and a human with send_messages is refused. The gate keys
+ * off the BOT_ subject in the verified token, so a client cannot argue with it.
  */
 
 const HOST = "automated.test:5001";
@@ -92,9 +89,8 @@ before(async () => {
   const h = await upsertUser("account-human", "Human");
   await setServerRole(h.server_user_id, "owner");
 
-  // The bot is a member like anyone else, but a bot's permissions come from an
-  // approved registry grant, not a role. Grant it send_messages and bind the
-  // registration to its BOT_ identity — the prefix isBotIdentity reads.
+  // A bot's permissions come from an approved registry grant, not a role, bound
+  // to the BOT_ identity that `isBotIdentity` reads.
   const b = await upsertUser("BOT_deadbeef", "Release Bot");
   const reg = await createBotRegistration({
     nickname: "Release Bot",

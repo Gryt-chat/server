@@ -5,18 +5,8 @@ import { getServerConfig, createServerConfigIfNotExists } from "../db";
 import { applyServerSettings, settingsView, type SettingsPatch } from "../settings/serverSettings";
 
 /**
- * The management API: how a tool on this machine reads and changes the
- * settings that live in the server's database rather than its environment.
- *
- * It exists because those settings could not be changed from outside a
- * connected client. They are authorised by ownership, and an operator running
- * the server on their own machine is not necessarily its owner — and should
- * not have to be, to turn off LAN discovery on a box they administer.
- *
- * Every route goes through the shared apply path rather than writing rows, so
- * a change made here withdraws the mDNS advertisement, drops the caches it
- * needs to, writes an audit entry and reaches connected clients, exactly as
- * the same change made from a client would.
+ * Whoever runs the box is not necessarily the server's owner. Every route goes
+ * through the shared apply path, so the side effects still happen.
  */
 export const managementRouter = express.Router();
 

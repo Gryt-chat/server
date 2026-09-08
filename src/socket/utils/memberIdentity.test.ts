@@ -52,9 +52,8 @@ describe("member identity", () => {
   });
 
   it("is long enough that matching one means finding a collision", () => {
-    // The anti-impersonation property rests on this. A truncated fingerprint
-    // would be grindable by anyone who can mint keypairs, which is anybody
-    // using a local identity.
+    // A truncated fingerprint is grindable by anybody who can mint keypairs,
+    // which is anybody on a local identity.
     process.env.JWT_SECRET = "secret-a";
     const { identityFingerprint } = memberIdentity(LOCAL_SUB);
     assert.equal(identityFingerprint.length, 43); // 256 bits, base64url

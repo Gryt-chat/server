@@ -36,10 +36,8 @@ export function setSocketRefs(io: Server, serverId: string, clientsInfo: Clients
 export function broadcastServerUiUpdate(reason: "settings" | "icon" | "other" = "other"): void {
   if (!_io || !_serverId || !_clientsInfo) return;
   consola.info(`Broadcasting server UI update (${reason})`);
-  // Every caller of this is a change that can move somebody's standing — a role
-  // assigned, a definition edited, a joining default changed. Refreshing the
-  // cached copy here is what keeps broadcast delivery in step with it, and it
-  // is deliberately the only place the cache is written after a join.
+  // Every caller is a change that can move somebody's standing, and this is the
+  // only place the cache is written after a join.
   const clients = _clientsInfo;
   void refreshAllClientPermissions(clients).catch((e) =>
     consola.warn("refreshing client permissions failed", e),
@@ -57,9 +55,8 @@ export function broadcastServerUiUpdate(reason: "settings" | "icon" | "other" = 
 export function broadcastChatNew(message: Record<string, unknown>): void {
   if (!_io || !_clientsInfo) return;
   for (const [sid, s] of _io.sockets.sockets) {
-    // A role without `read_messages` is in the server and cannot see it, which
-    // has to mean the live stream as well as the history fetch — otherwise the
-    // gate only holds until somebody says something.
+    // The live stream as well as the history fetch, or the gate only holds
+    // until somebody says something.
     if (clientMayReceive(_clientsInfo, sid, "read_messages")) {
       s.emit("chat:new", message);
     }
@@ -186,23 +183,14 @@ export async function sendInfo(socket: Socket, clientsInfo: Clients | undefined,
     description,
     members: activeMembers.toString(),
     version: process.env.SERVER_VERSION || "1.0.0",
-    // Sent before anyone joins, and deliberately so: a client should be able to
-    // say "this server doesn't need an account" on the way in, rather than
-    // after a join has already been refused. This handler is unauthenticated,
-    // which is fine — it is the operator's own advertisement of their policy,
-    // and knowing it tells you nothing you would not learn by trying.
+    // Sent before anyone joins, so a client can say what is needed rather than
+    // after a refusal. Unauthenticated: it is the server's own advertisement.
     identityTiers: getAcceptedIdentityTiers(),
-    // Alongside the tiers because they answer different halves of the same
-    // question: which identities are accepted, and what is asked of one to get
-    // in. A client can only say "you don't need an account to join this
-    // server" when both are favourable.
+    // The other half of the tiers: which identities are accepted, and what is
+    // asked of one to get in.
     joinPolicy,
-    /**
-     * Whether this server carries DM key bindings (GRYT-720). A constant, not a
-     * setting — either the code relays the column or it does not. Here rather
-     * than inferred from `version`, which would make every client ship a table
-     * of which versions had which feature. Absent means no.
-     */
+    /** A constant, not a setting: either the code relays the column or it does
+        not. Absent means no, so no client needs a table of versions. */
     encryptedDirectMessages: true,
   };
   
@@ -229,10 +217,8 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
   let sidebar_items: { id: string; kind: string; position: number; channelId?: string; spacerHeight?: number; label?: string; parentItemId?: string }[] = [];
   let channels: { id: string; name: string; type: string; description?: string; requirePushToTalk?: boolean; disableRnnoise?: boolean; maxBitrate?: number; eSportsMode?: boolean; textInVoice?: boolean; layout?: "chat" | "forum"; automated?: boolean; forumTags?: { id: string; name: string; emoji?: string | null; color?: string | null }[]; permissionScopeId?: string | null; canSend?: boolean; canJoin?: boolean }[] = [];
   try {
-    // Seeding a brand-new server creates its first channels right here. The
-    // permission cache may already hold the empty channel list from a moment
-    // ago, and a stale one filters every channel out of the first join —
-    // an empty sidebar until it expires (GRYT-997).
+    // Seeding creates the first channels here, and a cache holding the empty
+    // list from a moment ago filters every one of them out of the first join.
     if (await ensureDefaultSidebarItems()) resetChannelPermissionCache();
 
     const [allItems, allChannels] = await Promise.all([
@@ -242,30 +228,19 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
 
     const channelById = new Map(allChannels.map((c) => [c.channel_id, c]));
 
-    // Both arrays below derive from `items`, so the filter goes here.
-    // Filtering `channels` alone leaves the id, position and label in
-    // `sidebar_items`, and the client draws the sidebar from those.
+    // Both arrays below derive from `items`. Filtering `channels` alone leaves
+    // the id, position and label in `sidebar_items`, which the client draws.
     const [visible, postable, joinable] = await Promise.all([
       visibleChannelIds(client.serverUserId, client.grytUserId),
-      // What the client draws a composer for, and what it draws an unlocked
-      // voice room for. The gates on `chat:send` and the voice grant are
-      // unchanged and still decide; these only stop the app offering something
-      // that was always going to refuse.
+      // What the client draws a composer and an unlocked voice room for.
+      // `chat:send` and the voice grant still decide.
       postableChannelIds(client.serverUserId, client.grytUserId),
       joinableChannelIds(client.serverUserId, client.grytUserId),
     ]);
     const items = allItems.filter((it) => it.kind !== "channel" || !it.channel_id || visible.has(it.channel_id));
 
-    /*
-     * `parentItemId` goes out with the rest. Without it the client has folders
-     * it cannot fill: a folder row arrives, its channels arrive, and nothing
-     * says which sits in which.
-     *
-     * A folder is never filtered by the visibility pass above, since that only
-     * drops channels. So a folder whose channels are all hidden from this
-     * person arrives empty rather than arriving broken, and the client decides
-     * whether an empty folder is worth drawing.
-     */
+    /* Without `parentItemId` the client has folders it cannot fill. A folder is
+       never filtered above, so an all-hidden one arrives empty, not broken. */
     sidebar_items = items.map((it) => ({
       id: it.item_id,
       kind: it.kind,
@@ -300,11 +275,8 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
         }];
       });
 
-    // If the sidebar exists but names no channels — manual DB edits, or every
-    // channel it named being hidden from this member — fall back to the channel
-    // list. Filtered too: this branch is reached precisely when somebody sees
-    // nothing, which is exactly when an unfiltered fallback would hand them
-    // everything.
+    // A sidebar naming no channels falls back to the channel list. Filtered
+    // too: this branch is reached exactly when somebody should see nothing.
     if (channels.length === 0) {
       channels = allChannels.filter((c) => visible.has(c.channel_id)).map((c) => ({
         id: c.channel_id,
@@ -362,9 +334,8 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
   let cfgUploadMaxBytes: number = DEFAULT_UPLOAD_MAX_BYTES;
   let isOwner = false;
   let role = FALLBACK_ROLE_ID;
-  // What this client may do, so the UI can stop offering what the server will
-  // refuse. Advisory only — every one of these is enforced server-side too, and
-  // a client that ignores the list gets an error rather than an action.
+  // Advisory only, so the UI can stop offering what the server will refuse.
+  // Every one is enforced here too.
   let permissions: string[] = [];
   let roleDefinitions: RoleDefinitionRecord[] = [];
   try {
@@ -382,9 +353,8 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
     } else if (isOwner) {
       role = "owner";
     }
-    // The full list, not just the caller's own role: the member sidebar colours
-    // and labels everybody, and a client that only knew its own role would have
-    // to ask again for each name it saw.
+    // The full list, not the caller's own role: the sidebar colours and labels
+    // everybody.
     roleDefinitions = await listRoleDefinitions();
   } catch {
     // ignore DB errors; fall back to env
@@ -406,11 +376,8 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
       is_owner: isOwner,
       role,
       permissions,
-      /**
-       * Every permission this build knows about, so a newer client can tell
-       * "denied" from "never heard of it" — both look like an absence in
-       * `permissions`, and reading the second as a denial blanks every channel.
-       */
+      /** So a newer client can tell "denied" from "never heard of it": both are
+          an absence in `permissions`, and the second reads as a blank server. */
       permission_catalogue: PERMISSIONS,
       roles: roleDefinitions.map((r) => ({
         id: r.role_id,
@@ -425,25 +392,8 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
       avatar_max_bytes: cfgAvatarMaxBytes,
       upload_max_bytes: cfgUploadMaxBytes,
       version: process.env.SERVER_VERSION || "1.0.0",
-      /**
-       * Every plugin this server is running, who wrote it, where to read
-       * about it, and what it may do (GRYT-939, GRYT-941).
-       *
-       * No version, deliberately: a version number is which known problem
-       * applies, and handing that to everybody who joins answers a question an
-       * attacker would otherwise have to ask.
-       *
-       * Not optional and not configurable. A member is the one whose messages
-       * are being read, and what code sits between them and the people they are
-       * talking to is theirs to know — an operator who would rather it were not
-       * seen is exactly the case this exists for.
-       *
-       * Still in `server:details` rather than `server:info`, which means
-       * somebody learns this after joining rather than before. That is the
-       * weaker half of the promise and it is filed as GRYT-941: info goes to
-       * anybody who can reach the port, so moving it there is a decision about
-       * scanners rather than about members.
-       */
+      /** What code sits between a member and the people they talk to, so it is
+          not configurable. No version: that names which known problem applies. */
       plugins: announcedPlugins(),
     },
   };

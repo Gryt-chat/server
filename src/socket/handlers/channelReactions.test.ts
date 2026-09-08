@@ -14,12 +14,8 @@ import { registerChatHandlers } from "./chat";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
 /**
- * Reacting in an ordinary text channel, end to end.
- *
- * `directMessages.test.ts` already covers a reaction in a DM, where the
- * broadcast goes to a known member list. A channel takes the other branch of
- * `recipientClientIds` — everybody connected — and had no coverage at all, so
- * "reactions do not appear" had nothing to rule the server out with.
+ * A channel takes the other branch of `recipientClientIds` from a DM, everybody
+ * connected, and had no coverage at all.
  */
 
 const HOST = "reactions.test:5001";
@@ -143,12 +139,8 @@ describe("reacting in a text channel", () => {
     assert.equal(alice.received("chat:reaction").length, 1, "the author was not told");
   });
 
-  /*
-   * The shape matters as much as the delivery. The client replaces
-   * `msg.reactions` with whatever arrives, and renders nothing at all when that
-   * is null or empty — so a broadcast carrying the right message id and an
-   * empty reactions array looks exactly like a reaction that never happened.
-   */
+  /* The client replaces `msg.reactions` with whatever arrives, so the right
+     message id and an empty array looks like a reaction that never happened. */
   it("carries the reaction on the broadcast", () => {
     const payload = alice.received("chat:reaction")[0] as {
       message_id?: string;

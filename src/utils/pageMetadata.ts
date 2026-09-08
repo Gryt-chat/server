@@ -1,10 +1,6 @@
 /**
- * What a page says about itself, read out of its `<head>`.
- *
- * Regex over HTML rather than a parse: only `<meta>` and `<link>` matter and
- * both are flat, so a real parser would mean handing untrusted markup to a
- * dependency for nothing. The regexes handle either attribute order, both
- * quote styles, unquoted values and XHTML's self-closing slash.
+ * Regex rather than a parse: only `<meta>` and `<link>` matter and both are
+ * flat, so a parser would hand untrusted markup to a dependency for nothing.
  */
 
 export interface PageMetadata {
@@ -108,11 +104,8 @@ function extractTitleTag(html: string): string | null {
   return text || null;
 }
 
-/**
- * `href` off the first `<link>` whose rel is one of `rels`. Tag at a time:
- * matching across tag boundaries takes the rel from one and the href from the
- * next.
- */
+/** Tag at a time: matching across boundaries takes the rel from one tag and the
+    href from the next. */
 function extractLinkHref(html: string, rels: string[]): string | null {
   const tags = html.match(/<link\b[^>]*>/gi);
   if (!tags) return null;
@@ -149,10 +142,8 @@ function asDimension(raw: string | null): number | null {
   return Number.isFinite(n) && n > 0 && n <= 20000 ? n : null;
 }
 
-/**
- * The favicon. `apple-touch-icon` first, since it has to be a real raster image
- * at a usable size where `/favicon.ico` is often 16px and sometimes an HTML 404.
- */
+/** `apple-touch-icon` first: it has to be a real raster at a usable size, where
+    `/favicon.ico` is often 16px and sometimes an HTML 404. */
 function extractFavicon(html: string, baseUrl: string): string | null {
   const href =
     extractLinkHref(html, ["apple-touch-icon", "apple-touch-icon-precomposed"]) ||
@@ -179,11 +170,8 @@ function sanitizeThemeColor(raw: string | null): string | null {
   return null;
 }
 
-/**
- * The JSON oEmbed endpoint a page advertises. Separate from `extractLinkHref`
- * because the rel is the generic "alternate" and only `type` tells it apart
- * from an RSS feed, so the match needs both attributes on one tag.
- */
+/** Separate from `extractLinkHref` because the rel is the generic "alternate",
+    so only `type` tells it from an RSS feed. */
 function extractOEmbedHref(html: string): string | null {
   const tags = html.match(/<link\b[^>]*>/gi);
   if (!tags) return null;
@@ -234,10 +222,8 @@ export function parsePageMetadata(html: string, baseUrl: string): PageMetadata {
   };
 }
 
-/**
- * The charset a response declares. Windows-1252 decoded as UTF-8 turns every
- * curly quote in a title into a replacement character.
- */
+/** Windows-1252 decoded as UTF-8 turns every curly quote in a title into a
+    replacement character. */
 export function charsetFromContentType(contentType: string): string {
   const m = contentType.match(/charset\s*=\s*["']?([\w-]+)/i);
   const raw = m?.[1]?.toLowerCase();

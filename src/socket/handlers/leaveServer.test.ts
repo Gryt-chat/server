@@ -12,13 +12,8 @@ import { registerJoinHelpers } from "./joinHelpers";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
 /**
- * Leaving a server, now that the client's Leave button actually reaches this.
- *
- * Two things are worth pinning. The owner cannot leave, because there is
- * exactly one and the server would be left with nobody able to administer it.
- * And what a leave keeps is as much the point as what it ends: the row and the
- * nickname stay, so the messages they wrote keep a name on them, while the
- * picture goes.
+ * The owner cannot leave, since there is one and the server would be left with
+ * nobody to administer it. The row and nickname stay so messages keep a name.
  */
 
 const HOST = "leave.test:5001";
@@ -111,9 +106,8 @@ describe("a member leaving", () => {
 
   it("deletes the picture, and keeps the row and the name on it", async () => {
     const user = await getUserByServerId(memberUserId);
-    // Falsy rather than null: the column is cleared to SQL NULL and the row
-    // mapper reports that as undefined. What matters is that nothing points at
-    // the file any more, so the media sweep collects it.
+    // Falsy rather than null, since the row mapper reports SQL NULL as
+    // undefined. Nothing points at the file, so the sweep collects it.
     assert.ok(!user?.avatar_file_id, "the picture must not still be referenced");
 
     // The row is what the messages they wrote are attributed to. Deleting it

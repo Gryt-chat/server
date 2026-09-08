@@ -1,10 +1,6 @@
 /**
- * The two tokens must not be interchangeable.
- *
- * They are signed with the same secret, so nothing but the scope claim keeps
- * them apart — and the whole point of the file token is that it is the weaker
- * of the two. If it verified as an access token, putting it in a URL would be
- * putting the session in a URL, which is what GRYT-740 set out to stop.
+ * Signed with the same secret, so nothing but the scope claim keeps them apart.
+ * A file token verifying as an access token puts the session in a URL.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";

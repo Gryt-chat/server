@@ -32,23 +32,8 @@ import { insertReport } from "../../db/sqlite/reports";
 import type { HandlerContext } from "./types";
 
 /**
- * Every path a hidden channel could travel, driven once each.
- *
- * The feature under test is a negative: a channel with `view_min_rank` set must
- * not appear in anything the server sends someone below it. A negative is easy
- * to believe and hard to check, and the failure is silent — the channel is
- * simply in the payload, and the person it leaked to has no reason to mention
- * it. So this file does not assert on the shape of one response. It runs a
- * path, collects everything that path emitted, and asserts the hidden id does
- * not appear anywhere in it, at any depth, under any key.
- *
- * That is deliberately blunt. A filter written for `channels` and forgotten for
- * `sidebar_items` passes a shaped assertion on `channels` and fails this — and
- * `sendServerDetails` builds the channel list three times in one function, so
- * that is not a hypothetical.
- *
- * The list below is the inventory. When a new event learns to name a channel,
- * it goes here, and the test that matters is the one that is missing.
+ * Asserts the hidden id appears nowhere in what a path emitted, at any depth.
+ * A filter written for `channels` and not `sidebar_items` fails this.
  */
 
 const HOST = "visibility.test:5001";
@@ -56,13 +41,8 @@ const HOST = "visibility.test:5001";
 const OPEN = "general";
 const HIDDEN = "staff";
 
-/**
- * The role the hidden channel is hidden from.
- *
- * Denying `read_messages` for this one role is the whole of the gate — there is
- * no separate visibility setting, so a template that takes reading away takes
- * the channel with it.
- */
+/** Denying `read_messages` is the whole of the gate: there is no separate
+    visibility setting. */
 const SHUT_OUT_ROLE = "vis-low";
 
 let dir: string;
@@ -116,9 +96,8 @@ before(async () => {
   ]);
   await setChannelPermissionScope(HIDDEN, staffOnly);
 
-  // Something for each of the new paths to leak: an audit entry naming the
-  // hidden channel, a report from it, and the server pointing its system
-  // messages at it. Without these the cases pass by having nothing to find.
+  // Something for each new path to leak, or the cases pass by having nothing
+  // to find.
   await insertServerAudit({
     actorServerUserId: high.serverUserId,
     action: "channel_upsert",
@@ -146,30 +125,15 @@ after(() => {
 });
 
 interface Emitted {
-  /**
-   * Which socket was sent this.
-   *
-   * Every socket in a case shares one list, and several of these paths send a
-   * different payload to each — which is the whole point of them. Without this
-   * field a case that masks correctly still fails, because the list also holds
-   * what the *other* member was correctly told. That is not hypothetical: it
-   * is how the first run of the two voice cases below failed.
-   *
-   * `null` for a room or server-wide emit, which by definition went to
-   * everybody and so cannot have been masked for anybody.
-   */
+  /** Every socket shares one list and several paths send a different payload to
+      each, so without this a correct mask still fails. `null` is a room emit. */
   to: string | null;
   event: string;
   payload: unknown;
 }
 
-/**
- * One socket, one member behind it, and a record of everything sent anywhere.
- *
- * `io.sockets.sockets` holds both members' sockets, because several of these
- * paths pick their audience out of that map rather than emitting to a room —
- * and picking the wrong audience is one of the ways this feature breaks.
- */
+/** `io.sockets.sockets` holds both members' sockets, because several of these
+    paths pick their audience out of that map rather than a room. */
 function harness(self: Member, others: Member[] = [], voice: Record<string, string> = {}) {
   const emitted: Emitted[] = [];
   const clientId = `sock-${self.serverUserId}`;
@@ -228,12 +192,8 @@ function harness(self: Member, others: Member[] = [], voice: Record<string, stri
     clientAddressIsOwn: () => true,
   } as unknown as HandlerContext;
 
-  /**
-   * What this member's own client was sent, plus anything sent to everybody.
-   *
-   * A room emit counts as theirs: it reached them along with everyone else, and
-   * an unmasked broadcast is exactly the leak these cases are looking for.
-   */
+  /** A room emit counts as theirs: it reached them with everyone else, and an
+      unmasked broadcast is the leak these cases look for. */
   function mine(): Emitted[] {
     return emitted.filter((e) => e.to === null || e.to === clientId);
   }
@@ -246,20 +206,14 @@ function leaked(emitted: Emitted[]): boolean {
   return JSON.stringify(emitted).includes(HIDDEN);
 }
 
-/**
- * The inventory. Each entry drives one path as one member and returns what that
- * member's client was sent.
- */
+/** Each entry drives one path as one member and returns what their client was
+    sent. */
 const PATHS: {
   name: string;
   /** Run the path as this member, and hand back everything they received. */
   run: (who: Member) => Promise<Emitted[]>;
-  /**
-   * Some paths refuse rather than filter — history on a hidden channel answers
-   * "no such conversation". Those still must not name the channel, so they are
-   * in the same table; this only says the high-rank half cannot be asserted the
-   * same way.
-   */
+  /** Some paths refuse rather than filter, and still must not name the channel.
+      Only the high-rank half cannot be asserted the same way. */
   skipPermittedHalf?: boolean;
 }[] = [
   {
@@ -442,17 +396,8 @@ describe("a channel with view_min_rank set", () => {
   });
 });
 
-/**
- * The two broadcasts that carry `voiceChannelId` to everyone.
- *
- * Separate from the table above because what leaks here is not a channel in a
- * list — it is one field on somebody else's row, saying which room they are
- * sitting in. `publicVoiceRoom` already blanks a direct call's id for the same
- * reason; this is the same blanking, decided per recipient.
- *
- * Both are debounced behind a timer, so each case waits rather than asserting
- * on the tick it fired.
- */
+/** What leaks here is one field on somebody else's row rather than a channel in
+    a list. Both are debounced, so each case waits. */
 describe("somebody sitting in a gated voice channel", () => {
   const settle = () => new Promise((r) => setTimeout(r, 250));
 
@@ -549,9 +494,8 @@ describe("hiding a channel somebody is already in", () => {
   });
 
   it("does the same when a template several channels share is edited", async () => {
-    // The case a per-channel edit does not cover: one save, four channels. If
-    // eviction only walked the channel being edited, everybody sitting in the
-    // other three would keep a room the server has stopped admitting them to.
+    // One save, four channels: eviction walking only the edited one leaves
+    // three rooms whose occupants are no longer admitted.
     const shared = "shared-room";
     await upsertServerChannel({ channelId: shared, name: "Shared", type: "voice", position: 50 });
 

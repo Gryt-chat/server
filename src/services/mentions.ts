@@ -1,16 +1,6 @@
 /**
- * Who a message mentions. **These are `remarkMention.ts`'s rules, restated, and
- * the two have to agree exactly** — a name drawn as a mention that notified
- * nobody looks like it worked.
- *
- * - `@` followed by a nickname, case-insensitive
- * - not preceded by a word character, so `foo@ada` is an email
- * - not followed by one, so `@ada` does not match inside `@adams`
- * - longest nickname wins at the same position
- * - left to right, and text after a match is not rescanned
- *
- * Resolved to ids at send time, because a nickname is not stable — stored as
- * text a mention would point at whoever took the name next.
+ * `remarkMention.ts`'s rules restated, and the two have to agree exactly: a name
+ * drawn as a mention that notified nobody looks like it worked.
  */
 
 export interface MentionableMember {
@@ -23,13 +13,8 @@ function isWordCharacter(character: string | undefined): boolean {
   return character !== undefined && /\w/.test(character);
 }
 
-/**
- * Every member the text mentions, in the order they are first mentioned.
- *
- * Deduplicated: naming somebody three times in one message is one mention. The
- * order is kept anyway, because "who did this message address first" is the
- * thing a reader would use to sort a list of them.
- */
+/** Deduplicated, but ordered: naming somebody three times is one mention, and
+    who a message addressed first is how a reader sorts a list. */
 export function findMentions(
   text: string,
   members: MentionableMember[],

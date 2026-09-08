@@ -12,31 +12,27 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          # 22, not the client's 24. The Dockerfile builds and runs on
-          # node:22-bookworm and Release Server sets up 22, so testing on
-          # anything newer would be testing something we do not ship.
+          # 22, not the client's 24: the Dockerfile and Release Server both use
+          # it, so anything newer tests something we do not ship.
           node-version: "22"
           cache: yarn
       - run: yarn install --frozen-lockfile
 
-      # The reason this workflow exists. There are ten test files and 87 tests
-      # in here, and until now nothing ran them on a pull request: the repo had
-      # bump-gitlink, discord-ci-notify and vikunja-task-done and no CI at all.
-      # server#53 merged with no automated verification beyond a local run.
+      # The reason this workflow exists: ten test files and 87 tests that
+      # nothing ran on a pull request.
       - run: yarn test
 
-      # examples/ is the plugin operators copy. It is plain .mjs against the
-      # same api object `createPluginApi` builds, so a change to that surface
-      # breaks here rather than in somebody's server log.
+      # examples/ is what operators copy, and it runs against the same api
+      # object, so a change to that surface breaks here.
       - run: yarn test:examples
 
-      # `build` is tsc. Named that way in package.json, but it is the
-      # type check, and it is what stops a PR compiling only on the author's
-      # machine.
+      # `build` is tsc: the name is from package.json, but this is the type
+      # check.
       - run: yarn build
 
       # The whole repo, now that the flat config describes scripts/ too.
-      # This was scoped to src/ when CI arrived, because 47 no-undef and
-      # no-require-imports errors in two ad-hoc scripts would have failed the
-      # job on day one. GRYT-309 fixed the config rather than the scripts.
       - run: npx eslint .
+
+      # No comment runs past two lines. The script carries the list of paths
+      # still to be swept, and that list only ever shrinks.
+      - run: node scripts/check-comment-length.mjs

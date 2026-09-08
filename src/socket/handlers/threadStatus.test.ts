@@ -15,9 +15,8 @@ import { registerChatHandlers } from "./chat";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
 /**
- * Marking a topic solved / open / closed, and who may. The author can settle
- * their own; a moderator can settle anyone's; an ordinary member can settle
- * nobody's.
+ * The author can settle their own topic, a moderator anyone's, and an ordinary
+ * member nobody's.
  */
 
 const HOST = "status.test:5001";

@@ -26,10 +26,8 @@ import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 const RL_REPORT: RateLimitRule = { limit: 10, windowMs: 60_000, scorePerAction: 2, maxScore: 10, scoreDecayMs: 5_000 };
 const RL_REPORT_ADMIN: RateLimitRule = { limit: 30, windowMs: 60_000, scorePerAction: 1, maxScore: 15, scoreDecayMs: 3_000 };
 
-/**
- * How much a reporter may write. Required, not optional: a report with nothing
- * attached tells a moderator to go and look without saying where.
- */
+/** Required, not optional: a report with nothing attached tells a moderator to
+    go and look without saying where. */
 const REASON_MAX = 1000;
 
 export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
@@ -112,16 +110,8 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    /**
-     * Report a person rather than one thing they said — somebody following you
-     * between channels, whose every message is fine on its own.
-     *
-     * No rank check: reporting somebody who outranks you is exactly the report
-     * that must not be refused. Hierarchy applies on the moderator side.
-     *
-     * **Nothing reaches the reported person.** No event, no marker, no error
-     * naming a reason — a report that announces itself invites retaliation.
-     */
+    /** No rank check: reporting somebody who outranks you is exactly the report
+        that must not be refused. Nothing reaches the reported person. */
     "user:report": async (payload: {
       accessToken: string;
       serverUserId: string;
@@ -181,10 +171,8 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
 
         socket.emit("report:user_submitted", { serverUserId: payload.serverUserId });
 
-        /* The reason is not written to the audit log. It is somebody's account
-         * of being harassed, and the log is read by everybody holding
-         * `view_audit_log` — a wider set than the reports queue's. The report
-         * row is where it belongs. */
+        /* The reason stays out of the audit log: `view_audit_log` is a wider set
+           than the reports queue's, and this is an account of being harassed. */
         insertServerAudit({
           actorServerUserId: auth.tokenPayload.serverUserId,
           action: "user_report",
@@ -213,18 +201,12 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
 
         const aggregated = await getAggregatedPendingReports();
 
-        /* Reports about people ride along on the same event rather than
-         * getting one of their own. They are two halves of one queue, a
-         * moderator opens both at once, and a separate event would have meant
-         * a second round trip and a second badge counting the same worry. */
+        /* Two halves of one queue, opened together, so a separate event would be
+           a second round trip and a second badge counting the same worry. */
         const userReports = await getAggregatedPendingUserReports();
 
-        // `view_reports` is not `read_messages`, so a moderator below a
-        // channel's scope would otherwise read its existence and a line of what
-        // was said out of the queue. Dropped rather than redacted.
-        //
-        // The cost: if nobody who can moderate can see the channel, nobody is
-        // told about the report at all.
+        // `view_reports` is not `read_messages`, so the queue would otherwise
+        // name a hidden channel. Dropped, at the cost of an unseen report.
         const readable = await Promise.all(
           aggregated.map((r) =>
             mayViewChannel(r.conversation_id, auth.tokenPayload.serverUserId, auth.tokenPayload.grytUserId),
@@ -398,9 +380,8 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
             affected_conversations: affectedConversations,
           });
 
-          // Same eviction as server:ban. This used to be its own inline copy of
-          // the ban-and-disconnect, which meant a ban issued from the reports
-          // panel skipped whatever the real one learned to do.
+          // Same eviction as server:ban: an inline copy meant a ban from the
+          // reports panel skipped whatever the real one learned to do.
           const targetGrytUserId = await resolveGrytUserId(
             clientsInfo,
             payload.senderServerUserId,
@@ -447,14 +428,8 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    /**
-     * Close every open report about one person, with or without acting.
-     *
-     * `manage_reports` gets you the card, not the buttons — kicking asks for
-     * `kick_members` and banning for `ban_members`, the same as the member
-     * list. A queue that did more than the screen next to it is how the message
-     * queue could once ban the owner.
-     */
+    /** `manage_reports` gets the card, not the buttons: kicking still asks for
+        `kick_members`, or the queue outranks the screen next to it. */
     "reports:resolve_user": async (payload: {
       accessToken: string;
       reportedServerUserId: string;
@@ -509,10 +484,8 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
         if (!requirePermission(socket, auth, action === "ban" ? "ban_members" : "kick_members")) return;
         if (!(await requireOutranks(socket, auth, payload.reportedServerUserId, action))) return;
 
-        /* Resolved before the eviction rather than after. Eviction disconnects
-         * sockets and can throw partway through; a report left pending after
-         * the person is already gone puts a card in the queue that no button
-         * can clear. */
+        /* Before the eviction, which can throw partway through and leave a card
+           in the queue that no button can clear. */
         await resolveUserReportsFor(
           payload.reportedServerUserId,
           "actioned",
@@ -529,9 +502,8 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
             payload.reason?.trim()?.slice(0, REASON_MAX) ||
             (action === "ban" ? "Banned via report review" : "Kicked via report review");
 
-          /* The ban row is written before the eviction so a reconnect cannot
-           * land in the gap between the two — the same order `server:ban`
-           * uses. */
+          /* Ban row before eviction, so a reconnect cannot land in the gap.
+             The same order `server:ban` uses. */
           if (action === "ban") {
             await banUser(targetGrytUserId, auth.tokenPayload.serverUserId, reason);
           }
