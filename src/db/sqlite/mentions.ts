@@ -98,28 +98,45 @@ export async function countUnseenMentions(
 }
 
 /**
- * Mark what they have read, by conversation rather than by message. No
- * conversation clears everything. Already-seen rows are left alone, so the time
- * recorded stays the first time they saw it.
+ * Mark what they have read.
  *
- * A conversation on its own clears what was on screen: the mentions whose
- * message sits in the channel timeline. A thread reply is not in that timeline
- * — the client filters replies out and shows the root — so opening the channel
- * is not reading it, and clearing it there would take the count off the topic
- * row before anybody could see which topic it pointed at (GRYT-1014). Those
- * clear when the thread is opened and named here.
+ * Three things decide how much, so they arrive named rather than as a run of
+ * positional arguments that are easy to pass in the wrong order:
+ *
+ * | Given | Cleared |
+ * |---|---|
+ * | nothing | everything on this server |
+ * | a conversation | the mentions in its timeline |
+ * | a conversation and a thread | that thread's |
+ * | a conversation and `includeThreads` | the conversation, threads and all |
+ *
+ * A conversation on its own clears what was on screen. A thread reply is not
+ * in the channel timeline — the client filters replies out and shows the root
+ * — so opening the channel is not reading it, and clearing it there would take
+ * the count off the topic row before anybody could see which topic it pointed
+ * at (GRYT-1014).
+ *
+ * `includeThreads` is for the other case: somebody saying they are done with a
+ * channel rather than glancing at it (GRYT-1030). Nothing infers it — it is
+ * always a thing the person asked for.
+ *
+ * Already-seen rows are left alone either way, so the time recorded stays the
+ * first time they saw it.
  */
-export async function markMentionsSeen(
-  serverUserId: string,
-  conversationId?: string,
-  threadId?: string,
-): Promise<number> {
+export async function markMentionsSeen(args: {
+  serverUserId: string;
+  conversationId?: string;
+  threadId?: string;
+  /** The conversation and every thread in it, not only its timeline. */
+  includeThreads?: boolean;
+}): Promise<number> {
+  const { serverUserId, conversationId, threadId, includeThreads } = args;
   const db = getSqliteDb();
   const seen_at = toIso(new Date());
 
   /* Which thread a mention is in lives on the message, not on the row being
-     updated, so both conversation-scoped statements go through a subquery
-     against `messages` on the pair the foreign key is built from. */
+     updated, so the thread-scoped statements go through a subquery against
+     `messages` on the pair the foreign key is built from. */
   let result;
   if (conversationId && threadId) {
     result = db
@@ -132,6 +149,14 @@ export async function markMentionsSeen(
             )`,
       )
       .run(seen_at, serverUserId, conversationId, conversationId, threadId);
+  } else if (conversationId && includeThreads) {
+    // No subquery: every mention in the conversation, wherever in it it sits.
+    result = db
+      .prepare(
+        `UPDATE mentions SET seen_at = ?
+          WHERE server_user_id = ? AND conversation_id = ? AND seen_at IS NULL`,
+      )
+      .run(seen_at, serverUserId, conversationId);
   } else if (conversationId) {
     result = db
       .prepare(
