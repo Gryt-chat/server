@@ -81,11 +81,8 @@ describe("identity link", () => {
   });
 
   it("accepts one from a clock that is merely wrong", async () => {
-    // Freshness here is the nonce, not the clock: this server issued it, reads
-    // it once and expires it on its own clock, so a proof cannot be reused
-    // however new its `exp` looks. The test above this one is what enforces
-    // that. Refusing a slow clock on top of it only cost people the carry-over
-    // of an identity they still hold the key to.
+    // Freshness is the nonce, not the clock: this server issues it, reads it once
+    // and expires it, so a proof cannot be reused however new its `exp` looks.
     const { jwt } = await makeLink({ expiresIn: "-1m" });
     const { priorSub } = await verifyIdentityLink(jwt, AUD, NONCE, ACCOUNT);
     assert.match(priorSub, /^key:/);

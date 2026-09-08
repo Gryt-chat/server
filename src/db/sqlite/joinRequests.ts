@@ -15,12 +15,8 @@ function rowToJoinRequest(r: Record<string, unknown>): ServerJoinRequestRecord {
   };
 }
 
-/**
- * Anything unrecognised reads as `pending`, never as `approved`.
- *
- * Same reasoning as normalizeJoinPolicy: a row written by a newer server, or
- * edited by hand, must leave somebody outside the door rather than inside it.
- */
+/** Anything unrecognised reads as `pending`: a row from a newer server, or one
+    edited by hand, must leave somebody outside the door. */
 export function normalizeStatus(v: unknown): ServerJoinRequestRecord["status"] {
   const s = String(v || "").toLowerCase();
   if (s === "approved" || s === "denied") return s;
@@ -49,14 +45,8 @@ export async function listJoinRequests(status?: ServerJoinRequestRecord["status"
   return (rows as Record<string, unknown>[]).map(rowToJoinRequest);
 }
 
-/**
- * Records somebody asking to be let in, or refreshes what they are asking with.
- *
- * Returns the row as it now stands, so the caller can tell an approval from a
- * fresh ask without a second read. A decided request is returned untouched:
- * re-asking must not wipe a denial, and must not reset an approval that is
- * waiting to be used.
- */
+/** Returns the row as it stands, so a caller can tell an approval from a fresh
+    ask. A decided request is untouched: re-asking wipes no denial. */
 export async function createOrRefreshJoinRequest(
   grytUserId: string,
   nickname: string,
@@ -71,9 +61,8 @@ export async function createOrRefreshJoinRequest(
   const cleanNote = normalizeNote(note);
 
   if (existing) {
-    // Still pending. Keep the original created_at so the queue stays in the
-    // order people actually arrived — otherwise reconnecting repeatedly is a
-    // way to jump it.
+    // The original created_at, so the queue stays in arrival order and
+    // reconnecting is not a way to jump it.
     db.prepare(
       `UPDATE join_requests SET nickname = ?, note = COALESCE(?, note) WHERE gryt_user_id = ?`,
     ).run(cleanNickname, cleanNote, grytUserId);
@@ -109,13 +98,8 @@ export async function decideJoinRequest(
   return await getJoinRequest(grytUserId);
 }
 
-/**
- * Called once the approved person has actually joined.
- *
- * The row goes rather than being left as `approved`, so that leaving the server
- * later puts somebody back at the door instead of letting a years-old approval
- * readmit them.
- */
+/** The row goes rather than staying `approved`, so leaving later puts somebody
+    back at the door rather than being readmitted by an old approval. */
 export async function clearJoinRequest(grytUserId: string): Promise<void> {
   const db = getSqliteDb();
   db.prepare(`DELETE FROM join_requests WHERE gryt_user_id = ?`).run(grytUserId);

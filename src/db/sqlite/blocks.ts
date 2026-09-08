@@ -1,13 +1,8 @@
 import { getSqliteDb, toIso } from "./connection";
 
 /**
- * Who somebody does not want to hear from. A personal act rather than a
- * moderator one: no permission, works against somebody who outranks you, and
- * the row is nobody's business but the blocker's.
- *
- * **Every function here takes gryt ids, not server ids.** One keyed on
- * `server_user_id` would last until the blocked person rejoined with a fresh
- * local identity, which is one tap.
+ * A personal act: no permission, and it works against somebody who outranks you.
+ * Gryt ids throughout, since a server id lasts until they rejoin.
  */
 
 export interface BlockedPerson {
@@ -39,13 +34,8 @@ export async function unblockUser(
   ).run(blockerGrytUserId, blockedGrytUserId);
 }
 
-/**
- * The people one person has blocked, for their own list.
- *
- * `LEFT JOIN`, because somebody blocked and then banned is gone from `users`
- * and the row here outlives them. A list that dropped those would look as
- * though the block had been undone.
- */
+/** `LEFT JOIN`, because somebody blocked and then banned is gone from `users`
+    and dropping the row would look like the block had been undone. */
 export async function listBlocks(blockerGrytUserId: string): Promise<BlockedPerson[]> {
   const db = getSqliteDb();
   const rows = db
@@ -71,14 +61,8 @@ export async function listBlocks(blockerGrytUserId: string): Promise<BlockedPers
   }));
 }
 
-/**
- * Whether either of two people has blocked the other.
- *
- * Both directions in one query, because every caller wants both: opening a
- * conversation is refused whichever of the two did the blocking, and asking
- * one way round would let the blocked person start the conversation the block
- * exists to prevent.
- */
+/** Both directions, because asking one way round lets the blocked person start
+    the conversation the block exists to prevent. */
 export async function eitherHasBlocked(
   aGrytUserId: string,
   bGrytUserId: string,
@@ -95,11 +79,8 @@ export async function eitherHasBlocked(
   return !!row;
 }
 
-/**
- * The `server_user_id`s whose owners have blocked this sender — the delivery
- * question in the ids delivery has, translated here rather than at every call
- * site.
- */
+/** The delivery question in the ids delivery has, translated here rather than at
+    every call site. */
 export async function blockersOfSender(senderServerUserId: string): Promise<Set<string>> {
   const db = getSqliteDb();
   const rows = db
@@ -115,12 +96,8 @@ export async function blockersOfSender(senderServerUserId: string): Promise<Set<
   return new Set(rows.map((r) => r.server_user_id));
 }
 
-/**
- * The `server_user_id`s one person has blocked, for filtering history.
- *
- * The other direction from `blockersOfSender`, and the one a fetch needs: it
- * knows who is reading and has to drop the senders they do not want.
- */
+/** The other direction from `blockersOfSender`: a fetch knows who is reading and
+    has to drop the senders they do not want. */
 export async function blockedServerIdsFor(
   blockerServerUserId: string,
 ): Promise<Set<string>> {
