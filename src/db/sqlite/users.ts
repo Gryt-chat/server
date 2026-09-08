@@ -30,14 +30,8 @@ function rowToUser(r: Record<string, unknown>): UserRecord {
   };
 }
 
-/**
- * The moderation state that should apply to this user right now.
- *
- * A mute with an expiry in the past reads as unmuted, the same way an expired
- * ban reads as not banned. The row is left alone rather than cleaned up here —
- * this is called on every admission, and a write on a read path is a good way
- * to turn a reconnect storm into a write storm.
- */
+/** An expired mute reads as unmuted, like an expired ban. The row is left alone:
+    this runs on every admission, and a write here turns a storm into a storm. */
 export function effectiveModerationState(user: UserRecord): {
   isServerMuted: boolean;
   isServerDeafened: boolean;
@@ -50,13 +44,8 @@ export function effectiveModerationState(user: UserRecord): {
   };
 }
 
-/**
- * Sets server mute or deafen, and optionally when the mute lifts.
- *
- * Only the fields passed are written, so muting does not silently clear a
- * deafen. Passing `mutedUntil: null` alongside `muted: true` is an indefinite
- * mute; a date makes it a timeout.
- */
+/** Only the fields passed are written, so muting does not clear a deafen.
+    `mutedUntil: null` with `muted: true` is indefinite; a date is a timeout. */
 export async function setUserModerationState(
   serverUserId: string,
   state: { muted?: boolean; deafened?: boolean; mutedUntil?: Date | null },
@@ -100,10 +89,8 @@ export async function upsertUser(
   if (existing) {
     const newAvatar = opts?.avatarFileId ?? existing.avatar_file_id ?? null;
 
-    // The stored nickname wins on a rejoin. A client with none set sends the
-    // literal default "Unknown", so overwriting meant a fresh install renamed
-    // you on every server you had ever joined — which is how live rows ended up
-    // reading "Unknown". Renaming stays an explicit `profile:update`.
+    // The stored nickname wins on a rejoin: a client with none sends the literal
+    // "Unknown", so overwriting renamed people on every server they had joined.
     db.prepare(
       `UPDATE users SET avatar_file_id = ?, last_seen = ?, is_active = 1 WHERE gryt_user_id = ?`
     ).run(newAvatar, toIso(now), grytUserId);
@@ -146,14 +133,8 @@ export async function upsertUser(
   };
 }
 
-/**
- * Record what a member says their DM public key is. Not parsed, verified or
- * trusted — see `UserRecord.dm_key_binding`. Null clears it.
- *
- * Last write wins. A changed seed sends a different binding and every peer who
- * pinned the old key refuses it. **That refusal is the feature**, so nothing
- * here smooths it over by keeping both.
- */
+/** Not parsed, verified or trusted. Last write wins: a changed seed makes every
+    peer who pinned the old key refuse it, which is the feature. */
 export async function setUserDmKeyBinding(
   serverUserId: string,
   binding: string | null,
@@ -195,11 +176,8 @@ export async function getRegisteredUserCount(): Promise<number> {
   return row.count;
 }
 
-/**
- * Rename a member, **counting it only when the name actually changes**. The
- * client sends `profile:update` for things that are not renames, and the member
- * list presents this count as a reason for suspicion.
- */
+/** Counted only when the name changes: the client sends `profile:update` for
+    other things, and the member list shows this count as suspicion. */
 export async function updateUserNickname(serverUserId: string, nickname: string): Promise<void> {
   const db = getSqliteDb();
   db.prepare(
@@ -220,25 +198,15 @@ export async function setUserAvatar(serverUserId: string, avatarFileId: string |
   db.prepare(`UPDATE users SET avatar_file_id = ? WHERE server_user_id = ?`).run(avatarFileId, serverUserId);
 }
 
-/**
- * Set or clear the look this member's owl is drawn in. Deliberately not folded
- * into `setUserAvatar`: designing an owl uploads a picture too, so an upload
- * cannot mean somebody stopped using a designed look. The client knows which
- * happened; the server would guess wrong on every save from the editor.
- */
+/** Not folded into `setUserAvatar`: designing an owl uploads a picture too, so
+    an upload cannot mean somebody stopped using a designed look. */
 export async function setUserWorn(serverUserId: string, worn: string | null): Promise<void> {
   const db = getSqliteDb();
   db.prepare(`UPDATE users SET avatar_worn = ? WHERE server_user_id = ?`).run(worn, serverUserId);
 }
 
-/**
- * Now carries `gryt_user_id` as well.
- *
- * Only so a caller can tell whether the sender is a bot, which is read off the
- * id's prefix. The id itself is never sent to a client — see the note on
- * `Clients` — so anything using this map has to derive the flag and pass that
- * on, rather than passing the id through.
- */
+/** Carries `gryt_user_id` only so a caller can read the bot prefix off it. The
+    id itself is never sent to a client, so derive the flag and pass that. */
 export async function getUsersByServerIds(ids: string[]): Promise<Map<string, { nickname: string; avatar_file_id?: string; avatar_worn: string | null; gryt_user_id: string }>> {
   const result = new Map<string, { nickname: string; avatar_file_id?: string; avatar_worn: string | null; gryt_user_id: string }>();
   if (ids.length === 0) return result;
@@ -250,9 +218,8 @@ export async function getUsersByServerIds(ids: string[]): Promise<Map<string, { 
     result.set(r.server_user_id as string, {
       nickname: (r.nickname as string) ?? "Unknown",
       avatar_file_id: (r.avatar_file_id as string) || undefined,
-      // Carried so a direct message draws the same avatar as the member list
-      // does. A field added to one of the two builders and not the other is
-      // how an owl silently stops being worn in half the UI.
+      // So a direct message draws the same avatar as the member list: a field on
+      // one builder and not the other unwears an owl in half the UI.
       avatar_worn: (r.avatar_worn as string) ?? null,
       gryt_user_id: (r.gryt_user_id as string) ?? "",
     });
@@ -272,27 +239,16 @@ export async function setUserInactive(serverUserId: string): Promise<void> {
 }
 
 /**
- * What happened when a membership was asked to move (GRYT-285). The two ways of
- * not carrying are not the same thing:
- *
- * - `no_prior_membership` is ordinary — nothing to carry, nobody to tell.
- * - `account_already_member` is the collision. The guest membership stays where
- *   it is with its roles and history, so something is left behind, and a caller
- *   that cannot tell this from "nothing to do" cannot say so.
+ * `no_prior_membership` is ordinary. `account_already_member` is the collision:
+ * the guest membership stays put, so something is left behind and is said so.
  */
 export type CarryIdentityResult =
   | { status: "carried" }
   | { status: "no_prior_membership" }
   | { status: "account_already_member" };
 
-/**
- * Move a membership from a local identity to the account that proved it owns
- * the key. Reuses `replaceUserIdentity`, which also carries ownership across
- * and revokes the old refresh tokens.
- *
- * **Never merges.** There is no correct way to reconcile two sets of roles and
- * two histories, so a collision is reported rather than resolved.
- */
+/** Reuses `replaceUserIdentity`, which carries ownership and revokes the old
+    refresh tokens. Never merges: a collision is reported, not resolved. */
 export async function carryIdentityForward(
   priorGrytUserId: string,
   newGrytUserId: string,
@@ -332,26 +288,9 @@ export async function replaceUserIdentity(
 }
 
 /**
- * End every session this member currently holds.
- *
- * Two things have to move together, which is why they live in one function.
- * Bumping `token_version` invalidates the access tokens already in their
- * client's hands: each token carries the value it was minted with, and every
- * gate refuses one that is behind. Revoking the refresh tokens stops a new
- * access token being minted from a stored one.
- *
- * Doing only the first leaves the client able to mint a fresh token from its
- * refresh token. Doing only the second leaves the token it is already holding
- * good until it expires, which is what made signing out of every device not
- * actually sign anybody out.
- *
- * Keyed on the account, not the membership, so a member with more than one row
- * here loses all of them at once.
- *
- * This is the lever. Nothing calls it yet — the places that should (signing out
- * everywhere, an email or password change, recovering a stolen session) are
- * wired up separately, and each one is a decision about when a session should
- * end rather than about how. GRYT-973.
+ * Both halves in one function: the bump invalidates tokens already held and the
+ * revoke stops new ones being minted, and either alone leaves a way in. Keyed on
+ * the account, so a member with several rows loses all of them.
  */
 export async function revokeUserSessions(grytUserId: string): Promise<void> {
   const db = getSqliteDb();
