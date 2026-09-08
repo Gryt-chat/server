@@ -63,12 +63,14 @@ export function registerMentionHandlers(ctx: HandlerContext): EventHandlerMap {
     /**
      * They have read them.
      *
-     * Passing a conversation clears that one, passing nothing clears the lot.
-     * The reply carries the list again rather than a bare acknowledgement, so
-     * two devices belonging to the same person cannot end up disagreeing about
-     * what is left.
+     * Passing a conversation clears the ones in its timeline, passing a thread
+     * as well clears that thread, and passing nothing clears the lot. The reply
+     * carries the list again rather than a bare acknowledgement, so two devices
+     * belonging to the same person cannot end up disagreeing about what is left.
      */
-    "mentions:seen": async (payload: { conversationId?: string } | undefined) => {
+    "mentions:seen": async (
+      payload: { conversationId?: string; threadId?: string } | undefined,
+    ) => {
       const userId = clientsInfo[clientId]?.serverUserId;
       if (!userId || userId.startsWith("temp_")) return;
 
@@ -84,7 +86,9 @@ export function registerMentionHandlers(ctx: HandlerContext): EventHandlerMap {
         if (!access.allowed) return;
       }
 
-      await markMentionsSeen(userId, conversationId);
+      /* A thread on its own is not a thing you can read: the gate above is on
+         the conversation, so the thread only means anything alongside one. */
+      await markMentionsSeen(userId, conversationId, conversationId ? payload?.threadId : undefined);
 
       const mentions = await visible(userId);
       const counts: Record<string, number> = {};
