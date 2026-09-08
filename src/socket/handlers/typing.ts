@@ -10,8 +10,16 @@ const TYPING_TIMEOUT_MS = 8_000;
 
 const typingTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-function timerKey(serverUserId: string, conversationId: string): string {
-	return `${serverUserId}:${conversationId}`;
+/**
+ * One timer per person per place they can be typing, and a thread is a place.
+ *
+ * With the thread left out of the key, starting a reply in a thread clears the
+ * timer for the channel the thread hangs off. The stop for the channel then
+ * never fires and the indicator under its timeline sits there for good
+ * (GRYT-1020).
+ */
+function timerKey(serverUserId: string, conversationId: string, threadId?: string | null): string {
+	return `${serverUserId}:${conversationId}:${threadId ?? ""}`;
 }
 
 export function registerTypingHandlers(ctx: HandlerContext): EventHandlerMap {
@@ -49,8 +57,12 @@ export function registerTypingHandlers(ctx: HandlerContext): EventHandlerMap {
 		return others.filter((_, i) => allowed[i]);
 	}
 
-	async function broadcastStopTyping(serverUserId: string, conversationId: string) {
-		const key = timerKey(serverUserId, conversationId);
+	async function broadcastStopTyping(
+		serverUserId: string,
+		conversationId: string,
+		threadId?: string | null,
+	) {
+		const key = timerKey(serverUserId, conversationId, threadId);
 		const existing = typingTimers.get(key);
 		if (existing) clearTimeout(existing);
 		typingTimers.delete(key);
@@ -60,12 +72,22 @@ export function registerTypingHandlers(ctx: HandlerContext): EventHandlerMap {
 		// is what you get otherwise, on the client that did see the start.
 		const audience = await typingAudience(conversationId, serverUserId);
 		for (const cid of audience ?? []) {
-			io.sockets.sockets.get(cid)?.emit("chat:stop_typing", { serverUserId, conversationId });
+			io.sockets.sockets.get(cid)?.emit("chat:stop_typing", {
+				serverUserId,
+				conversationId,
+				threadId: threadId ?? null,
+			});
 		}
 	}
 
 	return {
-		"chat:typing": async (payload: { conversationId: string }) => {
+		/*
+		 * The thread rides along and changes nothing about who hears it. A
+		 * thread has no gate of its own — anyone who can see the channel can
+		 * open every thread in it — so the audience is the channel's, and the
+		 * thread only says which composer the typing is happening in.
+		 */
+		"chat:typing": async (payload: { conversationId: string; threadId?: string | null }) => {
 			const userId = clientsInfo[clientId]?.serverUserId;
 			if (!userId || !payload?.conversationId) return;
 
@@ -88,12 +110,13 @@ export function registerTypingHandlers(ctx: HandlerContext): EventHandlerMap {
 			const audience = await typingAudience(payload.conversationId, userId);
 			if (!audience) return;
 
-			const key = timerKey(userId, payload.conversationId);
+			const threadId = payload.threadId ?? null;
+			const key = timerKey(userId, payload.conversationId, threadId);
 			const existing = typingTimers.get(key);
 			if (existing) clearTimeout(existing);
 
 			typingTimers.set(key, setTimeout(() => {
-				broadcastStopTyping(userId, payload.conversationId).catch(() => { /* the sockets went away */ });
+				broadcastStopTyping(userId, payload.conversationId, threadId).catch(() => { /* the sockets went away */ });
 			}, TYPING_TIMEOUT_MS));
 
 			for (const cid of audience) {
@@ -105,15 +128,16 @@ export function registerTypingHandlers(ctx: HandlerContext): EventHandlerMap {
 					// things every other face in the app is drawn from.
 					avatarWorn: user.avatar_worn ?? null,
 					conversationId: payload.conversationId,
+					threadId,
 				});
 			}
 		},
 
-		"chat:stop_typing": async (payload: { conversationId: string }) => {
+		"chat:stop_typing": async (payload: { conversationId: string; threadId?: string | null }) => {
 			const userId = clientsInfo[clientId]?.serverUserId;
 			if (!userId || !payload?.conversationId) return;
 
-			await broadcastStopTyping(userId, payload.conversationId);
+			await broadcastStopTyping(userId, payload.conversationId, payload.threadId ?? null);
 		},
 	};
 }
