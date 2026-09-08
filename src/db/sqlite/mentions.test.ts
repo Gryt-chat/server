@@ -89,7 +89,7 @@ describe("mentions", () => {
   });
 
   it("does not un-read a mention that was re-parsed", async () => {
-    await markMentionsSeen("u_tor", "chan_c");
+    await markMentionsSeen({ serverUserId: "u_tor", conversationId: "chan_c" });
     await recordMentions({
       conversationId: "chan_c",
       messageId: chanC,
@@ -109,15 +109,15 @@ describe("mentions", () => {
   });
 
   it("clears one conversation, then all of them", async () => {
-    assert.equal(await markMentionsSeen("u_tor", "chan_a"), 1);
+    assert.equal(await markMentionsSeen({ serverUserId: "u_tor", conversationId: "chan_a" }), 1);
     assert.equal(Object.keys(await countUnseenMentions("u_tor")).length, 1);
 
-    assert.equal(await markMentionsSeen("u_tor"), 1);
+    assert.equal(await markMentionsSeen({ serverUserId: "u_tor" }), 1);
     assert.deepEqual(await countUnseenMentions("u_tor"), {});
   });
 
   it("reports nothing changed when there is nothing left to read", async () => {
-    assert.equal(await markMentionsSeen("u_tor"), 0);
+    assert.equal(await markMentionsSeen({ serverUserId: "u_tor" }), 0);
   });
 
   it("goes away with the message it points at", async () => {
@@ -248,7 +248,7 @@ describe("marking mentions seen is scoped to what was on screen", () => {
   });
 
   it("clears the channel's own mentions and leaves the threads alone", async () => {
-    assert.equal(await markMentionsSeen(WHO, CONV), 1);
+    assert.equal(await markMentionsSeen({ serverUserId: WHO, conversationId: CONV }), 1);
 
     const left = await listUnseenMentions(WHO);
     assert.deepEqual(
@@ -258,7 +258,7 @@ describe("marking mentions seen is scoped to what was on screen", () => {
   });
 
   it("clears one thread without touching the other", async () => {
-    assert.equal(await markMentionsSeen(WHO, CONV, THREAD_A), 1);
+    assert.equal(await markMentionsSeen({ serverUserId: WHO, conversationId: CONV, threadId: THREAD_A }), 1);
 
     const left = await listUnseenMentions(WHO);
     assert.deepEqual(
@@ -267,10 +267,61 @@ describe("marking mentions seen is scoped to what was on screen", () => {
     );
   });
 
+  it("clears a conversation and its threads when asked for both", async () => {
+    // What "mark as read" on a channel means, as against looking at it. Two
+    // more on top of the thread the case above deliberately left behind, so
+    // this clears all three: the timeline one, the new thread's and that one.
+    for (const [id, thread] of [
+      ["done-channel", null],
+      ["done-thread", "thread-seen-c"],
+    ] as const) {
+      await insertMessage({
+        conversation_id: CONV,
+        message_id: id,
+        sender_server_id: "someone",
+        text: "@named",
+        attachments: null,
+        reactions: null,
+        ...(thread ? { thread_id: thread } : {}),
+      });
+      await recordMentions({
+        conversationId: CONV,
+        messageId: id,
+        senderServerUserId: "someone",
+        serverUserIds: [WHO],
+      });
+    }
+
+    assert.equal(
+      await markMentionsSeen({ serverUserId: WHO, conversationId: CONV, includeThreads: true }),
+      3,
+    );
+    assert.equal(
+      (await listUnseenMentions(WHO)).filter((r) => r.conversation_id === CONV).length,
+      0,
+    );
+  });
+
   it("clears everything when no conversation is named, threads included", async () => {
-    // What a "mark all read" wants, and the way out if a thread stops being
-    // reachable — a deleted forum topic would otherwise hold its count forever.
-    assert.equal(await markMentionsSeen(WHO), 1);
+    // What a "mark all read" on the whole server wants, and the way out if a
+    // thread stops being reachable — a deleted forum topic would otherwise
+    // hold its count forever.
+    await insertMessage({
+      conversation_id: "conv-seen-elsewhere",
+      message_id: "seen-elsewhere",
+      sender_server_id: "someone",
+      text: "@named",
+      attachments: null,
+      reactions: null,
+    });
+    await recordMentions({
+      conversationId: "conv-seen-elsewhere",
+      messageId: "seen-elsewhere",
+      senderServerUserId: "someone",
+      serverUserIds: [WHO],
+    });
+
+    assert.equal(await markMentionsSeen({ serverUserId: WHO }), 1);
     assert.equal((await listUnseenMentions(WHO)).length, 0);
   });
 });
