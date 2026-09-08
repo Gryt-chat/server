@@ -141,3 +141,70 @@ describe("mentions", () => {
     assert.deepEqual(await countUnseenMentions("u_nobody"), {});
   });
 });
+
+/**
+ * Where the naming happened, not just which channel it was in.
+ *
+ * `mention:new` and `mentions:list` carried a conversation id and nothing else,
+ * so being named inside a thread arrived pointing at the channel with no way to
+ * say where in it — and the thread panel is the only place that message is
+ * rendered. The thread is read off the message rather than stored on the
+ * mention, so a row cannot disagree with the message it points at.
+ */
+describe("a mention knows which thread it was in", () => {
+  const CONV = "conv-threads";
+  const THREAD = "thread-1";
+  const WHO = "user-named";
+
+  it("reports the thread for a mention inside one, and null for one outside", async () => {
+    await insertMessage({
+      conversation_id: CONV,
+      message_id: "in-channel",
+      sender_server_id: "someone",
+      text: "@named out here",
+      attachments: null,
+      reactions: null,
+    });
+    await insertMessage({
+      conversation_id: CONV,
+      message_id: "in-thread",
+      sender_server_id: "someone",
+      text: "@named in the thread",
+      attachments: null,
+      reactions: null,
+      thread_id: THREAD,
+    });
+
+    await recordMentions({
+      conversationId: CONV,
+      messageId: "in-channel",
+      senderServerUserId: "someone",
+      serverUserIds: [WHO],
+    });
+    await recordMentions({
+      conversationId: CONV,
+      messageId: "in-thread",
+      senderServerUserId: "someone",
+      serverUserIds: [WHO],
+    });
+
+    const rows = await listUnseenMentions(WHO);
+    const byId = new Map(rows.map((r) => [r.message_id, r]));
+    assert.equal(byId.get("in-channel")?.thread_id, null);
+    assert.equal(byId.get("in-thread")?.thread_id, THREAD);
+  });
+
+  it("still counts a thread mention against its channel", async () => {
+    // Both, not one instead of the other: the channel badge is how somebody
+    // notices, the thread count is how they find it.
+    const counts = await countUnseenMentions(WHO);
+    assert.equal(counts[CONV], 2);
+  });
+
+  it("drops the row when the message goes, so a badge cannot outlive it", async () => {
+    await deleteMessage(CONV, "in-thread");
+    const rows = await listUnseenMentions(WHO);
+    assert.equal(rows.some((r) => r.message_id === "in-thread"), false);
+    assert.equal(rows.length, 1);
+  });
+});

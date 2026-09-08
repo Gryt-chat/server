@@ -632,6 +632,10 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
                   conversationId: created.conversation_id,
                   messageId: created.message_id,
                   createdAt: created.created_at,
+                  /* Absent until now, so a naming inside a thread arrived
+                     pointing at the channel with no way to say where in it.
+                     Null for one in the channel itself. */
+                  threadId: created.thread_id ?? null,
                 });
               }
             }

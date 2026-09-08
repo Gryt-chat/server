@@ -47,12 +47,17 @@ export function registerMentionHandlers(ctx: HandlerContext): EventHandlerMap {
 
       const mentions = await visible(userId);
 
+      /* Both, not one instead of the other. A naming inside a thread still
+         belongs to the channel the thread hangs off — the channel badge is how
+         somebody notices, and the thread count is how they find it. */
       const counts: Record<string, number> = {};
+      const threadCounts: Record<string, number> = {};
       for (const m of mentions) {
         counts[m.conversation_id] = (counts[m.conversation_id] ?? 0) + 1;
+        if (m.thread_id) threadCounts[m.thread_id] = (threadCounts[m.thread_id] ?? 0) + 1;
       }
 
-      socket.emit("mentions:list", { mentions, counts });
+      socket.emit("mentions:list", { mentions, counts, threadCounts });
     },
 
     /**
@@ -83,11 +88,13 @@ export function registerMentionHandlers(ctx: HandlerContext): EventHandlerMap {
 
       const mentions = await visible(userId);
       const counts: Record<string, number> = {};
+      const threadCounts: Record<string, number> = {};
       for (const m of mentions) {
+        if (m.thread_id) threadCounts[m.thread_id] = (threadCounts[m.thread_id] ?? 0) + 1;
         counts[m.conversation_id] = (counts[m.conversation_id] ?? 0) + 1;
       }
 
-      socket.emit("mentions:list", { mentions, counts });
+      socket.emit("mentions:list", { mentions, counts, threadCounts });
     },
   };
 }
