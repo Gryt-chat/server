@@ -12,17 +12,8 @@ import type { RoleDefinitionRecord } from "../db";
 import { getEffectiveStanding } from "./permissions";
 
 /**
- * Roles that hand themselves out, so a public server can have a middle tier
- * nobody awards by hand. Four decisions, all the conservative reading:
- *
- * - **Both conditions, not either.** Time alone hands the tier to an account
- *   that signed up a month ago and never spoke — a patient spammer's account.
- * - **Promotion only.** Nothing here removes a role, and a member already at or
- *   above the rank is left alone, so this can never demote a quiet moderator.
- * - **Evaluated when the member is here**, on join and after a message, rather
- *   than by a sweeper that can fail quietly.
- * - **Audited with no actor**, because nobody performed it, so "why can this
- *   person suddenly upload" has an answer.
+ * Both conditions rather than either, promotion only, evaluated on join and
+ * after a message rather than by a sweeper, and audited with no actor.
  */
 
 /** What a role asked for, recorded on the audit entry that granted it. */
@@ -47,10 +38,8 @@ function qualifies(
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
-/**
- * Whether any role grants itself at all. Asked first so a server that has
- * configured none of this costs one small read and no message count.
- */
+/** Asked first, so a server using none of this costs one small read and no
+    message count. */
 function anyRoleAutoGrants(roles: RoleDefinitionRecord[]): boolean {
   return roles.some(
     (r) => r.auto_grant_after_days !== null || r.auto_grant_after_messages !== null,
@@ -62,10 +51,8 @@ export interface AutoGrantResult {
   reason: GrantReason;
 }
 
-/**
- * Promote somebody if they have earned it. Never throws — this runs off joining
- * and off sending a message, and neither should fail over a promotion.
- */
+/** Never throws: this runs off joining and off sending a message, and neither
+    should fail over a promotion. */
 export async function applyAutoRoles(
   serverUserId: string,
   grytUserId?: string,
@@ -115,9 +102,8 @@ export async function applyAutoRoles(
       messagesSent,
     };
 
-    // No actor: nobody did this. The moderation actions all name who performed
-    // them, and inventing a name here would make the log lie about the one
-    // entry where the answer is "the rules did".
+    // No actor, because nobody did this. Inventing one would make the log lie
+    // about the entry where the answer is "the rules did".
     insertServerAudit({
       actorServerUserId: null,
       action: "role_auto_granted",

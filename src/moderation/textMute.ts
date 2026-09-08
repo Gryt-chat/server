@@ -1,21 +1,8 @@
 import { effectiveModerationState, getUserByServerId } from "../db/sqlite/users";
 
 /**
- * Whether a member is muted, for the paths that put text in a channel.
- *
- * A mute stopped voice and nothing else. `server:mute` has written
- * `server_mute_expires_at` since timeouts landed, the member list has drawn the
- * flag, and the client has shown when it lifts — while `chat:send` never read
- * any of it. So a moderator muted somebody who was spamming, the room watched
- * them show as muted, and they carried on posting.
- *
- * Read here rather than in `sessionGate`, which is the other live-state check
- * on this path. That one decides whether a session may exist at all, and a
- * muted member is still a member: they read, they join voice and are silent
- * there, they are simply not talking. Refusing the session would kick them.
- *
- * The expiry is applied by `effectiveModerationState`, so a lapsed timeout is
- * not a mute even before anything clears the row.
+ * Not in `sessionGate`: a muted member is still a member, and refusing the
+ * session would kick them. `effectiveModerationState` applies the expiry.
  */
 export type TextMute = { muted: false } | { muted: true; until: Date | null };
 
@@ -31,14 +18,8 @@ export async function textMuteFor(serverUserId: string): Promise<TextMute> {
   return { muted: true, until: user.server_mute_expires_at ?? null };
 }
 
-/**
- * What to tell somebody who tried to talk while muted.
- *
- * Named, and carrying the expiry, so the composer can say "you are muted until
- * 14:20" rather than failing silently — a message that vanishes with no reason
- * reads as the app being broken, which is what the client does with an error it
- * has no case for.
- */
+/** Named, and carrying the expiry, so the composer can say when it lifts. A
+    message that vanishes with no reason reads as the app being broken. */
 export function textMuteError(mute: { until: Date | null }): {
   error: "muted";
   expiresAt: string | null;

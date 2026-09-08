@@ -1,10 +1,7 @@
 import mime from "mime-types";
 
-/**
- * A sealed upload cannot be validated, so its content type is replaced rather
- * than trusted — ciphertext labelled `image/svg+xml` would be stored XSS — and
- * its filename is dropped, since the real one is in the sealed message.
- */
+/** A sealed upload cannot be validated, so its content type is replaced rather
+    than trusted and its filename is dropped. */
 export interface UploadStorage {
   /** Where the bytes go in the bucket. */
   key: string;

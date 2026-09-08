@@ -62,21 +62,8 @@ export async function runMediaSweep(): Promise<{ deleted: number; errors: number
   return { deleted, errors };
 }
 
-/**
- * Delete named files now, without waiting for the sweep (GRYT-139). The sweep's
- * grace period runs from upload and protects a file not yet attached to a
- * message — so it holds exactly the content a moderator is trying to remove,
- * for up to half an hour, still fetchable by anyone with the URL.
- *
- * Failures are logged and stepped over. A ban that fails because S3 was
- * unhappy is worse than a file that survives, and it survives only until the
- * next sweep finds it orphaned.
- */
-/**
- * Which of `fileIds` nothing points at any more. Separate from the delete so
- * the selection can be asserted on its own. Reads the same two sources as the
- * periodic sweep, so it cannot select something the sweep would have kept.
- */
+/** Which of `fileIds` nothing points at any more. Reads the same two sources as
+    the periodic sweep, so it cannot select something the sweep would keep. */
 export async function unreferencedAmong(fileIds: string[]): Promise<string[]> {
   if (fileIds.length === 0) return [];
 
@@ -89,14 +76,8 @@ export async function unreferencedAmong(fileIds: string[]): Promise<string[]> {
   return fileIds.filter((id) => !referenced.has(id));
 }
 
-/**
- * Delete the ones among `fileIds` that nothing points at any more.
- *
- * `deleteFilesNow` trusts its caller to have checked; this does the checking,
- * which is what you want at a call site deleting one message that has no idea
- * what else might reference its attachments. A file can be attached to several
- * messages — forwarding one is enough.
- */
+/** `deleteFilesNow` trusts its caller; this does the checking. A file can be
+    attached to several messages, since forwarding one is enough. */
 export async function deleteUnreferencedFiles(fileIds: string[]): Promise<{ deleted: number; errors: number }> {
   return deleteFilesNow(await unreferencedAmong(fileIds));
 }

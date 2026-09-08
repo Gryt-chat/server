@@ -3,24 +3,8 @@ import { lookup } from "node:dns/promises";
 import { isPrivateIp } from "./isPrivateIp";
 
 /**
- * Whether a URL is safe for the server to fetch on a user's behalf.
- *
- * Link previews are the one place Gryt makes an outbound request to an address
- * somebody typed into a chat box, so the server is the attacker's HTTP client
- * unless something says no. Three of these checks look redundant and are not:
- *
- * A literal address (`http://169.254.169.254/`) is caught by the string pass.
- * A hostname that *resolves* to one (`http://metadata.example.com/`, an A
- * record pointing at the same place) is only caught by resolving it, which is
- * why the DNS pass exists at all. And the oEmbed endpoint discovered from a
- * page's `<link rel="alternate">` is a URL the remote page chose, so it goes
- * through the same door as the URL the user pasted rather than being trusted
- * for having come from a site we already fetched.
- *
- * What this does not close is the gap between the check and the request: DNS
- * can answer differently the second time. Closing that means resolving once and
- * connecting to the address rather than the name, which needs a custom agent
- * and is a bigger change than this one.
+ * A literal private address is caught by the string pass, a hostname resolving
+ * to one only by the DNS pass, and neither closes the gap before the request.
  */
 
 const BLOCKED_HOSTNAMES = new Set([
@@ -55,13 +39,8 @@ export function isBlockedPreviewHost(hostname: string): boolean {
   return isPrivateIp(stripBrackets(host));
 }
 
-/**
- * Parse and check a URL, resolving the hostname to be sure it does not point
- * somewhere private. Returns the parsed URL, or why it was refused.
- *
- * DNS failure is a refusal rather than a pass. A name that will not resolve was
- * never going to produce a preview, so failing closed costs nothing here.
- */
+/** DNS failure is a refusal: a name that will not resolve was never going to
+    produce a preview, so failing closed costs nothing. */
 export async function checkPreviewUrl(
   raw: string,
 ): Promise<{ ok: true; url: URL } | { ok: false; reason: UrlRejection }> {

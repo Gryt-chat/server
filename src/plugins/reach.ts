@@ -1,7 +1,6 @@
 /**
- * A plugin holds no role, so `requireOutranks` has nothing to compare. The rule
- * is a sentence instead: a plugin cannot act on a moderator. Not a rank
- * threshold, or renumbering roles would quietly change who it can ban.
+ * A plugin holds no role, so the rule is a sentence rather than a rank: it
+ * cannot act on a moderator. A threshold would move when roles are renumbered.
  */
 
 import type { EffectiveStanding } from "../services/permissions";

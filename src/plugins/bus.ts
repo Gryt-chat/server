@@ -1,7 +1,6 @@
 /**
- * Observe-only, and `emit` never waits: a plugin that could refuse a message
- * would have to be awaited, and then a slow plugin is a slow server. The
- * containment is in `guard.ts`.
+ * Observe-only, and `emit` never waits: one that could refuse a message would
+ * have to be awaited, and then a slow plugin is a slow server.
  */
 
 import {

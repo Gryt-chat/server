@@ -8,13 +8,8 @@ interface ServerRegistrationData {
   room_id: string;
 }
 
-/**
- * What the client is given so it can join a room on the SFU.
- *
- * Deliberately without `server_password`. It used to carry one, which meant
- * every browser that ever joined a call held the secret shared between this
- * server and the SFU. `user_token` replaces it — see clientToken.ts.
- */
+/** Deliberately without `server_password`, which meant every browser that had
+    joined a call held the secret shared with the SFU. */
 interface ClientJoinData {
   room_id: string;
   server_id: string;
@@ -111,12 +106,8 @@ export class SFURoomManager {
     consola.info(`Unregistered room ${roomId} from SFU client`);
   }
 
-  /**
-   * `capabilities` is what the SFU will let this client do beyond listening.
-   * Required rather than defaulted: the callers are the two places that know
-   * whether the member may speak in this particular room, and a default here
-   * would be one of them silently getting it wrong.
-   */
+  /** Required rather than defaulted: the callers are the two places that know
+      whether the member may speak in this room. */
   generateClientJoinToken(roomId: string, userId: string, capabilities: readonly string[]): ClientJoinData {
     if (!roomId || !userId) {
       throw new Error('Room ID and User ID are required for token generation');

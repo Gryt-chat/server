@@ -187,17 +187,8 @@ export class SFUClient {
       }
     }, 15000);
 
-    // Every two seconds, not every minute.
-    //
-    // This is the server reconciling its idea of who is in voice against the
-    // SFU's, and it is the thing that catches a divergence nothing else did.
-    // A minute of being wrong is a bug report; two seconds is a blink.
-    //
-    // Cheap enough to do at this rate because of where it runs. One WebSocket,
-    // server to SFU, usually the same box — the payload is a room id and a list
-    // of user ids. What it must not do is fan out: `onSyncResponse` only calls
-    // `syncAllClients` / `broadcastMemberList` when it actually changed
-    // something, so a quiet server costs a message and a set comparison.
+    // Two seconds, because a minute of disagreeing with the SFU is a bug report.
+    // Cheap only while `onSyncResponse` fans out solely on an actual change.
     this.syncInterval = setInterval(() => {
       if (this.ws && this.ws.readyState === WebSocket.OPEN && this.roomManager.registeredRooms.size > 0) {
         this.roomManager.requestSync();
