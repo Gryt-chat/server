@@ -12,23 +12,15 @@ declare module "bonjour-service" {
 
 const AVAHI_SERVICE_DIR = "/etc/avahi/services";
 
-/**
- * Where this server writes its avahi advertisement. One file per server: two
- * on one host share this directory, both wrote `gryt.service`, and the second
- * to start overwrote the first with nothing erroring (GRYT-227).
- *
- * Keyed on the port as well as the instance id — SERVER_INSTANCE_ID defaults to
- * "default", so on its own it collides for exactly this deployment.
- */
+/** One file per server: both used to write `gryt.service` and the second to
+    start overwrote the first. Keyed on port too, since the id defaults. */
 function avahiServicePath(serverId: string, port: number): string {
   const slug = `${serverId}-${port}`.replace(/[^a-zA-Z0-9._-]/g, "_");
   return `${AVAHI_SERVICE_DIR}/gryt-${slug}.service`;
 }
 
-/**
- * Remove the shared file older versions wrote. Quiet on failure: another server
- * may still be on the old build and using it.
- */
+/** Quiet on failure: another server may still be on the old build and using
+    it. */
 function removeLegacyServiceFile(): void {
   try {
     const legacy = `${AVAHI_SERVICE_DIR}/gryt.service`;
@@ -54,21 +46,14 @@ export function advertiseMdns(port: number): void {
   advertising = true;
   advertisedPort = port;
 
-  // The version is deliberately not in the advertisement. mDNS is a broadcast
-  // with no requester to identify, so there is no authorised variant of it —
-  // publishing the build number here hands anyone on the network a list of
-  // hosts to match against known vulnerabilities. /info still reports it, to
-  // members. server_id stays: discovery needs it to dedupe.
+  // No version: mDNS has no requester to identify, so a build number here is a
+  // list of hosts to match against known vulnerabilities.
   if (tryAvahiServiceFile(name, port, serverId)) return;
   void tryBonjour(name, port, serverId);
 }
 
-/**
- * Advertise, or stop, to match `discoverable` — a server withholding its
- * details over /info while broadcasting them to the LAN meant very little.
- *
- * Pass the port once at startup; later calls reuse it.
- */
+/** Matches `discoverable`, which meant little while /info withheld details and
+    the LAN broadcast did not. Pass the port once at startup. */
 export async function syncMdnsAdvertising(port?: number): Promise<void> {
   if (typeof port === "number") advertisedPort = port;
   if (advertisedPort == null) return;
@@ -126,11 +111,8 @@ function tryAvahiServiceFile(
     avahiServicePathWritten = path;
     usingAvahi = true;
 
-    // A server that ran before this change left /etc/avahi/services/gryt.service
-    // behind, and nothing will ever clean it up now that we write elsewhere.
-    // Avahi would keep publishing whatever that file says, so a stale entry for
-    // a server that has moved port or stopped would sit on the network
-    // indefinitely.
+    // Nothing else cleans up the old shared path, and avahi keeps publishing
+    // whatever it says — a server that moved port would sit there for good.
     removeLegacyServiceFile();
     consola.success(
       `mDNS: advertising "${name}" as _gryt._tcp on port ${port} (avahi service file)`
@@ -192,11 +174,8 @@ export async function stopMdns(): Promise<void> {
     const instance = bonjourInstance;
     bonjourInstance = null;
 
-    // destroy() alone tears down the socket without telling anyone, so the
-    // record sits in every responder's cache until it times out — measured at
-    // over a minute, during which a server that has been made undiscoverable is
-    // still listed. unpublishAll() sends the goodbye packets that actually
-    // retract it, so wait for that before destroying.
+    // destroy() alone leaves the record cached for over a minute. unpublishAll()
+    // sends the goodbye packets, so wait for it first.
     await new Promise<void>((resolve) => {
       let settled = false;
       const done = () => {

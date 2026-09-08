@@ -5,18 +5,8 @@ import {
 } from "../constants/permissions";
 
 /**
- * Which roles an invite may hand out, and whether it still may.
- *
- * An invite is a stored capability, granted at a moment nobody is present for,
- * which breaks two of the checks `resolveRoleChange` makes with the actor in
- * the room. The creator can be demoted and still hold a link that mints
- * moderators. And the role can move under the invite — bind a rank-10 role,
- * then edit it to rank 90 with everything ticked, and the link grants
- * near-owner with no check ever failed.
- *
- * **So the rules below are applied twice**: once when the invite is made, and
- * again when it is redeemed, against the world as it is then. A creation-time
- * check on its own is decoration.
+ * Checked when the invite is made and again when it is redeemed. A creator can
+ * be demoted, and a bound role can be edited upward, after the link exists.
  */
 
 export interface RoleFacts {
@@ -43,18 +33,14 @@ export interface InviteRoleVerdict {
 const OK: InviteRoleVerdict = { ok: true };
 const no = (reason: InviteRoleRefusal): InviteRoleVerdict => ({ ok: false, reason });
 
-/**
- * The rules that hold whatever the moment. Every one can stop being true
- * between creation and redemption, so both ends check them.
- */
+/** Every one can stop being true between creation and redemption, so both ends
+    check them. */
 function alwaysTrue(role: RoleFacts | null): InviteRoleVerdict {
   if (!role) return no("unknown_role");
   if (role.roleId === OWNER_ROLE_ID) return no("owner_role");
 
-  // By id as well as by permission, because `admin` holds none of the four
-  // escalation permissions — those are owner-only — and would otherwise pass a
-  // permission-only test. Admin is the role people mean when they say somebody
-  // has to be made an admin by hand.
+  // By id as well as permission: `admin` holds none of the four escalation
+  // permissions and would pass a permission-only test.
   if (ADMIN_ONLY_ROLE_IDS.has(role.roleId)) return no("admin_role");
 
   if (role.permissions.some((p) => ESCALATION_PERMISSIONS.has(p))) {
@@ -64,11 +50,8 @@ function alwaysTrue(role: RoleFacts | null): InviteRoleVerdict {
   return OK;
 }
 
-/**
- * May this actor bind this role to an invite? Strictly below their own rank,
- * matching `resolveRoleChange` — binding a role you do not outrank is granting
- * yourself a promotion two steps removed.
- */
+/** Strictly below their own rank, matching `resolveRoleChange`: binding a role
+    you do not outrank is a promotion two steps removed. */
 export function mayBindRoleToInvite(
   role: RoleFacts | null,
   actorRank: number,
@@ -79,14 +62,8 @@ export function mayBindRoleToInvite(
   return OK;
 }
 
-/**
- * May this invite still grant the role it was bound to? `rankAtCreation` is
- * what was agreed to, so a role that has climbed since is refused rather than
- * honoured at the new height. Falling is fine.
- *
- * Deliberately does not consult the creator's standing today — they may have
- * left, and the snapshot already bounds what the link can do.
- */
+/** `rankAtCreation` is what was agreed to, so a role that has climbed since is
+    refused. The creator's standing today is not consulted. */
 export function mayRedeemInviteRole(
   role: RoleFacts | null,
   rankAtCreation: number,
@@ -108,11 +85,8 @@ export const INVITE_ROLE_REFUSAL_TEXT: Record<InviteRoleRefusal, string> = {
   rank_raised_since: "the role has been raised since the invite was made",
 };
 
-/**
- * Grant the role an invite was bound to, if it still may. On a refusal it
- * writes an audit row and carries on — somebody arriving without the role they
- * expected is indistinguishable from the feature being broken otherwise.
- */
+/** On a refusal it writes an audit row and carries on, or arriving without the
+    expected role looks like the feature being broken. */
 export async function applyInviteRole(
   inviteCode: string,
   serverUserId: string,

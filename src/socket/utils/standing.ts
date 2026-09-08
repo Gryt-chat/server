@@ -2,13 +2,8 @@ import type { Permission } from "../../constants/permissions";
 import { getEffectiveStanding, hasPermission } from "../../services/permissions";
 import type { Clients } from "../../types";
 
-/**
- * Whether the person behind a socket may do something, for the events that
- * carry no access token. An unidentified socket is refused.
- *
- * **Reads the database every time.** The cached copy below is not used here: a
- * stale cache saying yes is a permission that outlives its removal.
- */
+/** For events that carry no access token. Reads the database every time: a
+    stale cache saying yes is a permission that outlives its removal. */
 export async function socketMay(
   clientsInfo: Clients,
   clientId: string,
@@ -20,15 +15,8 @@ export async function socketMay(
   return hasPermission(serverUserId, permission, client?.grytUserId);
 }
 
-/**
- * Whether this socket has said who it is yet. `socketMay` answers false for a
- * `temp_` socket, correctly, but that is the same false it gives a refusal —
- * one is a decision and the other is a moment.
- *
- * Callers that gate an action can treat both as no. Callers that *report* the
- * refusal need this: "forbidden" when the truth is "not yet" makes a client
- * stop asking (GRYT-647).
- */
+/** `socketMay` gives the same false for "not yet" as for a refusal. Callers that
+    report the refusal need this, or a client told forbidden stops asking. */
 export function socketIsIdentified(
   clientsInfo: Clients,
   clientId: string,
@@ -37,15 +25,8 @@ export function socketIsIdentified(
   return Boolean(serverUserId) && !serverUserId!.startsWith("temp_");
 }
 
-/**
- * The same answer, cached on the socket, for deciding who a broadcast goes to.
- * Refreshed whenever the server rebroadcasts its details, which already happens
- * on every role change, definition edit and settings update.
- *
- * **Delivery only. Nothing authorises against this.** The worst a stale entry
- * does is send one message to somebody who just lost `read_messages`. That is
- * why this and `socketMay` are two functions rather than one with a flag.
- */
+/** Delivery only; nothing authorises against this. Worst case a stale entry
+    sends one message to somebody who just lost `read_messages`. */
 export async function refreshClientPermissions(
   clientsInfo: Clients,
   clientId: string,
@@ -66,13 +47,8 @@ export async function refreshAllClientPermissions(clientsInfo: Clients): Promise
   );
 }
 
-/**
- * Whether a broadcast should reach this socket.
- *
- * A socket with no cached standing yet — one that has connected but not
- * finished joining — is not sent anything. It has not proved who it is, and the
- * refresh runs as part of joining, so the gap is measured in milliseconds.
- */
+/** A socket with no cached standing has not proved who it is. The refresh runs
+    as part of joining, so the gap is milliseconds. */
 export function clientMayReceive(
   clientsInfo: Clients,
   clientId: string,

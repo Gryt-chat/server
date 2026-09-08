@@ -14,13 +14,8 @@ import { syncMdnsAdvertising } from "../mdns";
 import { VALID_CENSOR_STYLES, type CensorStyle } from "../utils/profanityFilter";
 
 /**
- * Applying a settings change, in one place — the socket handler and the CLI's
- * management endpoint both come through here.
- *
- * The side effects are why, not the validation. Turning discovery off has to
- * withdraw the mDNS advertisement, changing the system channel drops a cache,
- * and every client has to be told. A caller that only wrote the row would leave
- * a server that believes it is hidden and is still broadcasting itself.
+ * One place, for the side effects rather than the validation: a caller that only
+ * wrote the row leaves a server that thinks it is hidden and is still shouting.
  */
 
 export interface SettingsPatch {
@@ -42,11 +37,8 @@ export interface SettingsPatch {
 export interface SettingsActor {
   /** The server user, when a person did it through a client. */
   serverUserId: string | null;
-  /**
-   * How the change arrived. A change made through the management endpoint is
-   * recorded as such, so the audit log distinguishes "the owner changed this"
-   * from "something holding the admin token changed this".
-   */
+  /** So the audit log tells the owner changing something from the admin token
+      changing it. */
   via: "client" | "management";
 }
 
@@ -58,11 +50,8 @@ const clampBytes = (v: number | null | undefined, min: number, max: number): num
   return Math.max(min, Math.min(max, Math.floor(n)));
 };
 
-/**
- * Same as clampBytes, except zero survives, because zero means unlimited and
- * the 256 KB floor would otherwise make that unreachable. Uploads only:
- * avatars and emoji are held in memory to be re-encoded.
- */
+/** Zero survives, because zero means unlimited and the floor would otherwise
+    make it unreachable. Uploads only. */
 const clampBytesAllowingZero = (v: number | null | undefined, min: number, max: number): number | null | undefined => {
   const n = typeof v === "number" ? v : Number(v);
   if (v !== undefined && v !== null && Number.isFinite(n) && Math.floor(n) === 0) return 0;
@@ -98,13 +87,8 @@ export async function applyServerSettings(
 
   const lanOpen: boolean | undefined = typeof patch.lanOpen === "boolean" ? patch.lanOpen : undefined;
 
-  // Against the shared list, not a second copy: the copy knew "open" and
-  // "invite" while everything else knew three, so "request" was dropped with no
-  // error and the join-request path was unreachable (GRYT-792).
-  //
-  // `undefined` for anything unrecognised means "not being changed" —
-  // deliberately not the normaliser, which answers `invite` for junk and would
-  // rewrite a typo into a real policy change.
+  // The shared list, not a second copy that knew two of the three policies.
+  // `undefined` means not being changed, so a typo is not a policy change.
   const joinPolicy: JoinPolicy | undefined = isJoinPolicy(patch.joinPolicy)
     ? patch.joinPolicy
     : undefined;
@@ -129,10 +113,8 @@ export async function applyServerSettings(
 
   if (systemChannelId !== undefined) invalidateSystemChannelCache();
 
-  // Take effect immediately rather than at the next restart. There is no
-  // periodic re-sync: this call and the one at boot are the only two, so a
-  // change that skipped it would leave the server advertising itself over
-  // mDNS while its own configuration says it is hidden.
+  // This call and the one at boot are the only two, so skipping it leaves the
+  // server advertising itself while its config says it is hidden.
   if (discoverable !== undefined) {
     void syncMdnsAdvertising().catch((e) =>
       consola.warn("mDNS: re-sync after a settings change failed", e)
