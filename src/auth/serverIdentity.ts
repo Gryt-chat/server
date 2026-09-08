@@ -11,25 +11,15 @@ import {
   type JWK,
 } from "jose";
 
-// The server's long-lived identity, used to prove to a client that it is the
-// same server the client joined before (GRYT-51). This is the server proving
-// who *it* is, and has nothing to do with the certificates users present to
-// prove who *they* are — those are verified in `identity.ts` and this key never
-// signs one.
-//
-// It is also separate from `server_id`, which goes out unauthenticated over
-// mDNS and is a discovery hint, never a credential.
+// The server proving who it is, never a user: this key signs no certificate.
+// Separate from `server_id`, which is a discovery hint and not a credential.
 
 interface ServerIdentity {
   privateKey: CryptoKey | Uint8Array;
   publicJwk: JWK;
   keyId: string;
-  /**
-   * Succession statements, oldest first. Each is a JWT signed by a key this
-   * server used to hold, naming the key that replaced it, so a client pinned to
-   * an older key can follow the chain forward instead of treating the change as
-   * an impersonation attempt (GRYT-54).
-   */
+  /** Each is signed by a key this server used to hold and names its replacement,
+      so a client pinned to an older one can follow the chain forward. */
   vouches: string[];
 }
 
@@ -41,23 +31,15 @@ interface StoredIdentity {
 
 const PROOF_TTL_SECONDS = 60;
 
-/**
- * How long a succession statement stays usable.
- *
- * Long, because its whole job is to let a client that was offline during the
- * rotation catch up — a short window would send exactly those users to the
- * manual unblock path this exists to avoid. Not unlimited, because it bounds
- * how long a leaked old key can be used to redirect trust.
- */
+/** Long, because its job is to let a client offline during the rotation catch
+    up. Not unlimited: it bounds how long a leaked old key redirects trust. */
 const VOUCH_TTL = "180d";
 
 /** Guards against a malformed file turning into an unbounded walk. */
 const MAX_VOUCH_CHAIN = 16;
 
-// Everything in index.ts initializes fire-and-forget, so a join can arrive
-// before startup has finished. Memoizing the promise here means the first
-// caller starts the work and every other caller waits for the same result,
-// rather than depending on an ordering that isn't guaranteed.
+// index.ts initialises fire-and-forget, so a join can arrive before startup has
+// finished. Memoized, so every caller waits on the first one's work.
 let identityPromise: Promise<ServerIdentity> | null = null;
 
 function keyPath(): string {
@@ -87,9 +69,8 @@ async function load(): Promise<ServerIdentity> {
     publicJwk = await exportJWK(kp2.publicKey);
     const privateJwk = await exportJWK(kp2.privateKey);
 
-    // 0600: the private half is the server's identity. Another user on the box
-    // reading this file can impersonate this server to every client that has
-    // pinned it.
+    // 0600: another user on the box reading this can impersonate the server to
+    // every client that has pinned it.
     writeFileSync(kp, JSON.stringify({ publicJwk, privateJwk }, null, 2), {
       encoding: "utf-8",
       mode: 0o600,
@@ -99,23 +80,16 @@ async function load(): Promise<ServerIdentity> {
   publicJwk.use = "sig";
   publicJwk.alg = "ES256";
 
-  // The thumbprint (RFC 7638) is what a client pins, and what it files the
-  // server under. It survives the host and port changing, which today's
-  // host:port keying does not.
+  // The thumbprint is what a client pins and files the server under, and it
+  // survives the host and port changing.
   const keyId = await calculateJwkThumbprint(publicJwk, "sha256");
   publicJwk.kid = keyId;
 
   return { privateKey, publicJwk, keyId, vouches };
 }
 
-/**
- * Replace this server's identity key, leaving a statement signed by the outgoing
- * key that names its replacement (GRYT-54).
- *
- * **Deliberate rotation only.** Anyone holding the retired key can sign such a
- * statement too, so rotating away from a compromised key does not lock the
- * holder out — clients pinned to it have to be re-verified by hand.
- */
+/** Deliberate rotation only: anybody holding the retired key can sign the same
+    statement, so a compromised key needs clients re-verified by hand. */
 export async function rotateServerIdentity(): Promise<{ from: string; to: string }> {
   const current = await initServerIdentity();
 
@@ -176,24 +150,15 @@ export async function getServerPublicJwk(): Promise<JWK> {
   return (await initServerIdentity()).publicJwk;
 }
 
-/**
- * Sign a proof of possession of the server identity key, bound to a nonce the
- * client chose for this connection.
- *
- * The public key travels in the protected header so a first-time client has
- * something to pin. **That embedded key proves nothing on its own** — the JWT
- * is self-signed and an impostor can produce an equally valid one. It means
- * something only once the client has a pinned key to check against.
- */
+/** The embedded public key gives a first-time client something to pin and proves
+    nothing on its own: an impostor can produce an equally valid one. */
 export async function signServerProof(clientNonce: string): Promise<string> {
   const { privateKey, publicJwk, keyId } = await initServerIdentity();
 
   return new SignJWT({
     nonce: clientNonce,
-    // Advisory only. A client cannot use this to detect a relay: the value is
-    // whatever this server was configured with, and an impostor forwarding a
-    // genuine proof passes it along unchanged. See the channel-binding note on
-    // GRYT-51.
+    // Advisory only: an impostor forwarding a genuine proof passes this along
+    // unchanged, so it cannot detect a relay.
     host: process.env.EXTERNAL_HOST || undefined,
   })
     .setProtectedHeader({ alg: "ES256", kid: keyId, jwk: publicJwk })

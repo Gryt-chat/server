@@ -30,10 +30,8 @@ async function makeKeyPair() {
   return { privateKey, publicJwk };
 }
 
-/**
- * Build a self-signed certificate the way a client would, with the escape
- * hatches a hostile client would reach for exposed as options.
- */
+/** A self-signed certificate the way a client makes one, with the escape hatches
+    a hostile client would reach for exposed as options. */
 async function makeSelfSignedCert(opts?: {
   claimSub?: string;
   jwkOverride?: JWK;
@@ -101,8 +99,7 @@ describe("self-signed certificates", () => {
 
   it("ignores a sub the certificate claims for itself", async () => {
     // The attack this tier lives or dies on: a self-signed certificate naming
-    // somebody else's account id. The sub must come from the key, never the
-    // payload.
+    // somebody else's account id.
     const stolen = "0c8f2e1a-4b6d-4f2a-9c3e-71b0a5d9e4f7";
     const { jwt, publicJwk } = await makeSelfSignedCert({ claimSub: stolen });
     const expected = await calculateJwkThumbprint(publicJwk, "sha256");
@@ -148,13 +145,8 @@ describe("self-signed certificates", () => {
   });
 
   it("does not treat a CA-issued certificate as self-signed", async () => {
-    // An unknown issuer goes down the CA path, where it fails for want of a
-    // trusted issuer rather than being given a second chance under the rules
-    // it named for itself.
-    //
-    // Pinned at a closed port so the CA path fails on a refused connection
-    // instead of reaching for the real id.gryt.chat, which would make this
-    // test need the network and the network's opinion of it.
+    // An unknown issuer goes down the CA path and fails there. Pinned at a closed
+    // port so it never reaches the real id.gryt.chat.
     process.env.GRYT_TRUSTED_CERT_ISSUERS = "http://127.0.0.1:1";
     try {
       const { jwt } = await makeSelfSignedCert({ issuer: "https://id.example" });
@@ -169,17 +161,13 @@ describe("self-signed certificates", () => {
   });
 });
 
-// ── Issuer-qualified ids (GRYT-267) ─────────────────────────────────
-//
-// These stand up real JWKS endpoints on loopback rather than pointing at a
-// closed port, because the property under test only exists on the far side of a
-// successful CA verification: two trusted CAs, and whether one of them can name
-// the other's user.
+// ── Issuer-qualified ids ────────────────────────────────────────────
+// Real JWKS endpoints on loopback, because the property only exists past a
+// successful CA verification: whether one trusted CA can name another's user.
 
 async function startJwksServer(publicJwk: JWK, kid: string) {
-  // Counted, because "did this server phone home" is the property GRYT-721 is
-  // about and it cannot be seen any other way — a fetch that happens and
-  // succeeds looks exactly like one that never happened.
+  // Counted, because a fetch that happens and succeeds looks exactly like one
+  // that never happened.
   let hits = 0;
 
   const server = createServer((req, res) => {
@@ -227,22 +215,8 @@ async function startCa(kid: string) {
 }
 
 describe("the CA's keys are shipped, not fetched", () => {
-  /**
-   * Whether a server phones home (GRYT-721).
-   *
-   * Fetching `/.well-known/jwks.json` told the identity service that a Gryt
-   * server exists at this address, and — paired with a certificate request from
-   * the same address — that this person runs it. The keys are public, so the
-   * fix was to ship them; what has to be checked is that the normal path
-   * genuinely stops asking, and that is invisible from the result. A fetch that
-   * happens and succeeds verifies exactly the same certificate as one that
-   * never happened. So these count requests to the CA rather than reading the
-   * outcome.
-   *
-   * `BUNDLED_IDENTITY_JWKS` is written into rather than mocked: the loopback CA
-   * gets a real entry under its own origin, which is the same shape
-   * `id.gryt.chat` has in the shipped file.
-   */
+  /** `BUNDLED_IDENTITY_JWKS` is written into rather than mocked, so the loopback
+      CA gets a real entry in the same shape as the shipped one. */
   function bundle(origin: string, keys: JWK[]) {
     BUNDLED_IDENTITY_JWKS[origin] = { keys };
     return () => {
@@ -296,10 +270,8 @@ describe("the CA's keys are shipped, not fetched", () => {
   });
 
   it("does not ask the CA about a certificate forged under a bundled kid", async () => {
-    // The amplification this closes: falling back on any failure would let
-    // anybody who can reach a join endpoint make this server fetch a URL, as
-    // often as they like, by sending a certificate that was never going to
-    // verify. The remote set holds the same key and would reject it too.
+    // Falling back on any failure lets anybody reaching a join endpoint make
+    // this server fetch a URL, as often as they like.
     const ca = await startCa("bundled-kid");
     const impostor = await makeKeyPair();
     const holder = await makeKeyPair();
@@ -353,9 +325,8 @@ describe("the CA's keys are shipped, not fetched", () => {
   });
 
   it("still fetches for an issuer nothing is bundled for", async () => {
-    // Somebody running their own CA through GRYT_TRUSTED_CERT_ISSUERS. A key
-    // pinned in a binary is pinned by whoever built it, which is only true of
-    // the project's own — so this path is unchanged, deliberately.
+    // Somebody running their own CA: a key pinned in a binary is pinned by
+    // whoever built it, so this path is unchanged.
     const ca = await startCa("theirs");
     const holder = await makeKeyPair();
     process.env.GRYT_TRUSTED_CERT_ISSUERS = ca.origin;
@@ -372,9 +343,8 @@ describe("the CA's keys are shipped, not fetched", () => {
   });
 
   it("ships a key for the issuer it trusts by default", async () => {
-    // The file is only worth having if it covers the CA a default install
-    // actually uses. A typo in the origin here is silent: every server falls
-    // through to the network and nothing else changes.
+    // A typo in the origin is silent: every server falls through to the network
+    // and nothing else changes.
     assert.ok(
       BUNDLED_IDENTITY_JWKS["https://id.gryt.chat"],
       "no bundled keys for the default issuer, so nothing stops phoning home",
@@ -431,10 +401,8 @@ describe("issuer-qualified ids", () => {
   });
 
   it("refuses to let a second CA name the first CA's user", async () => {
-    // The whole point. The `sub` is not a secret — it is handed to every server
-    // on every join — so an operator who runs a trusted CA already knows it and
-    // can put it in their own Keycloak. What must not follow is inheriting that
-    // user's roles, ownership and ban state, all of which key on the stored id.
+    // A `sub` is handed to every server on every join, so a trusted CA already
+    // knows one. What must not follow is inheriting that user's stored id.
     const primary = await startCa("primary");
     const hostile = await startCa("hostile");
     const victim = await makeKeyPair();
@@ -486,9 +454,8 @@ describe("issuer-qualified ids", () => {
   });
 
   it("rejects an untrusted issuer without contacting it", async () => {
-    // Dispatching on the claimed issuer means an unknown one costs nothing:
-    // no signature check per trusted issuer, and no JWKS fetch. The unroutable
-    // address in the trusted list would hang if it were still being tried.
+    // An unknown issuer costs nothing: no signature check per trusted issuer and
+    // no JWKS fetch. The unroutable address would hang if it were tried.
     const rogue = await startCa("rogue");
     const holder = await makeKeyPair();
     process.env.GRYT_TRUSTED_CERT_ISSUERS = "http://192.0.2.1:1";
@@ -502,10 +469,8 @@ describe("issuer-qualified ids", () => {
   });
 });
 
-/**
- * An assertion signed by a client whose clock reads `offsetSeconds` away from
- * ours. Negative is behind, which is the direction that used to fail.
- */
+/** Signed by a client whose clock reads `offsetSeconds` away from ours. Negative
+    is behind, which is the direction that used to fail. */
 async function makeAssertion(
   privateKey: Awaited<ReturnType<typeof makeKeyPair>>["privateKey"],
   opts: { sub: string; aud: string; nonce: string; offsetSeconds?: number }

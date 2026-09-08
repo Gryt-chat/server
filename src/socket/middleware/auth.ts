@@ -9,10 +9,8 @@ import {
   type EffectiveStanding,
 } from "../../services/permissions";
 
-/**
- * A role id. Used to be the four names this file knew about; a server defines
- * its own now, so the name is only ever passed through to the client.
- */
+/** A server defines its own roles, so a name here is only passed through to the
+    client. */
 export type Role = string;
 
 export interface ServerConfig {
@@ -38,33 +36,16 @@ export interface AuthResult {
   isOwner: boolean;
 }
 
-/**
- * The caller's standing, and the target's, both resolved the same way.
- *
- * They used to be resolved differently: the handlers read *both* sides with
- * `listMemberRoles`, which knows nothing about `server_config.owner_gryt_user_id`.
- * A config-owner whose roles row said `admin` therefore passed the owner-or-admin
- * gate and was then refused by the handler's own check when acting on an admin —
- * blocked from moderating their own server. Both sides go through
- * `services/permissions` now, so there is one answer to "who is this".
- */
+/** Both sides through `services/permissions`, so there is one answer to who
+    somebody is: `listMemberRoles` does not know about the config owner. */
 function standingOf(
   tokenPayload: TokenPayload,
 ): Promise<EffectiveStanding> {
   return getEffectiveStanding(tokenPayload.serverUserId, tokenPayload.grytUserId);
 }
 
-/**
- * Whether the actor outranks the target, emitting the refusal if not.
- *
- * One rule in one place. It was copied verbatim into kick, ban, mute and
- * deafen — and left out of `voice:disconnect:user` and the reports panel's
- * delete-all-and-ban entirely, which is how an admin could voice-kick the owner
- * and ban them through a different screen than the one that says no.
- *
- * Strictly greater, so equal ranks cannot act on each other: one admin cannot
- * kick another, and only the owner can act on an admin.
- */
+/** One rule in one place, having been copied into four handlers and left out of
+    two. Strictly greater, so one admin cannot kick another. */
 export async function requireOutranks(
   socket: Socket,
   auth: AuthResult,
@@ -91,13 +72,8 @@ export async function requireOutranks(
   return true;
 }
 
-/**
- * Validates an access token from the event payload, checks token version,
- * resolves the user's role, and optionally enforces a minimum role.
- *
- * Returns the validated AuthResult or null (after emitting the appropriate
- * error to the socket).
- */
+/** Validates the token, checks both version counters and resolves the role.
+    Null once it has emitted the refusal. */
 export async function requireAuth(
   socket: Socket,
   payload: { accessToken?: string },
@@ -134,10 +110,8 @@ export async function requireAuth(
     return null;
   }
 
-  // Not redundant with the admission points. Those cover the ways a socket
-  // becomes somebody; this covers a socket that never restored a session at all
-  // and simply presents a still-valid token with each event. Without it a
-  // banned user keeps full access for the life of that token.
+  // The admission points cover a socket becoming somebody; this covers one that
+  // never restored a session and presents a valid token with each event.
   const gate = await checkSessionAllowed({
     grytUserId: tokenPayload.grytUserId,
     serverUserId: tokenPayload.serverUserId,
@@ -147,11 +121,8 @@ export async function requireAuth(
     return null;
   }
 
-  // Per-member revocation, read off the row the gate just loaded. The check
-  // above is the server-wide counter, which ends everybody's sessions at once;
-  // this ends one member's. Emitted as token:revoked, the same event the
-  // server-wide bump uses, so a client that already knows how to react to one
-  // needs no new handling for the other.
+  // Per-member revocation off the row the gate loaded; the check above is the
+  // server-wide counter. Same event, so a client needs no new handling.
   if ((tokenPayload.userTokenVersion ?? 0) !== (gate.user.token_version ?? 0)) {
     socket.emit("token:revoked", {
       reason: "user_token_version_mismatch",
