@@ -10,14 +10,8 @@ const TYPING_TIMEOUT_MS = 8_000;
 
 const typingTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-/**
- * One timer per person per place they can be typing, and a thread is a place.
- *
- * With the thread left out of the key, starting a reply in a thread clears the
- * timer for the channel the thread hangs off. The stop for the channel then
- * never fires and the indicator under its timeline sits there for good
- * (GRYT-1020).
- */
+/** A thread is a place somebody can be typing, and left out of the key a reply
+    clears the channel's timer, so its stop never fires. */
 function timerKey(serverUserId: string, conversationId: string, threadId?: string | null): string {
 	return `${serverUserId}:${conversationId}:${threadId ?? ""}`;
 }
@@ -67,12 +61,8 @@ export function registerTypingHandlers(ctx: HandlerContext): EventHandlerMap {
 	}
 
 	return {
-		/*
-		 * The thread rides along and changes nothing about who hears it. A
-		 * thread has no gate of its own — anyone who can see the channel can
-		 * open every thread in it — so the audience is the channel's, and the
-		 * thread only says which composer the typing is happening in.
-		 */
+		/* A thread has no gate of its own, so the audience is the channel's and
+		   the thread only says which composer the typing is in. */
 		"chat:typing": async (payload: { conversationId: string; threadId?: string | null }) => {
 			const userId = clientsInfo[clientId]?.serverUserId;
 			if (!userId || !payload?.conversationId) return;

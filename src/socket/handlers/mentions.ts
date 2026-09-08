@@ -64,10 +64,8 @@ export function registerMentionHandlers(ctx: HandlerContext): EventHandlerMap {
         if (!access.allowed) return;
       }
 
-      /* A thread on its own is not a thing you can read: the gate above is on
-         the conversation, so the thread only means anything alongside one, and
-         neither does asking for a conversation's threads without the
-         conversation (GRYT-1030). */
+      /* The gate above is on the conversation, so neither a thread nor
+         `includeThreads` means anything without one. */
       await markMentionsSeen({
         serverUserId: userId,
         conversationId,
