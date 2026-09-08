@@ -17,35 +17,21 @@ import { CAP_SPEAK } from "../../sfu/clientToken";
 
 const RL_REQUEST_ROOM: RateLimitRule = { limit: 10, windowMs: 60_000, scorePerAction: 1, maxScore: 8, scoreDecayMs: 5000 };
 const RL_JOINED_CHANNEL: RateLimitRule = { limit: 10, windowMs: 60_000, scorePerAction: 0.5, maxScore: 6, scoreDecayMs: 3000 };
-// Tighter than a real room request. Nobody needs to run the Doctor twice a
-// minute, and this grants a live SFU credential, so the cheap way to abuse it
-// is to ask repeatedly.
+// Tighter than a real room request: this grants a live SFU credential, and
+// nobody needs the Doctor twice a minute.
 const RL_DOCTOR_ROOM: RateLimitRule = { limit: 3, windowMs: 60_000, scorePerAction: 2, maxScore: 6, scoreDecayMs: 10_000 };
 
 export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
   const { io, socket, clientId, serverId, clientsInfo, sfuClient, getClientIp } = ctx;
 
-  /**
-   * Whether the socket's own member may do something. Voice events carry no
-   * access token — they come continuously from a client that already joined,
-   * so the socket's identity in `clientsInfo` is what answers.
-   */
+  /** Voice events carry no access token, so the socket's identity in
+      `clientsInfo` is what answers. */
   function socketMay(permission: Permission): Promise<boolean> {
     return socketMayFor(clientsInfo, clientId, permission);
   }
 
-  /**
-   * Refuse without closing the door, for a socket that has not said who it is.
-   *
-   * On a reconnect `session:restore` and the voice re-announce race, and a
-   * placeholder user holds no permissions — so the gates said `forbidden`,
-   * which is the one answer the client will not retry. Three milliseconds
-   * later it would have worked; instead it fell back to a full reconnect and
-   * put the user out of the channel.
-   *
-   * An unidentified socket gets its own code, which the client backs off on.
-   * Returns true when it has answered, so callers read as a guard.
-   */
+  /** `session:restore` and the voice re-announce race, and `forbidden` is the
+      one answer a client will not retry. Its own code, which backs off. */
   function refusedAsUnidentified(): boolean {
     if (socketIsIdentified(clientsInfo, clientId)) return false;
 
@@ -63,9 +49,8 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
       if (!clientsInfo[clientId]) return;
       const enabled = typeof payload === 'boolean' ? payload : Boolean(payload?.enabled);
       const streamId = typeof payload === 'object' ? (payload.streamId || "") : "";
-      // Same race as the room request, one event later (GRYT-717): the camera
-      // stayed off in the room while still sending. Guarded before the
-      // permission check, not instead of it.
+      // Same race as the room request, one event later: the camera stayed off
+      // in the room while still sending. Before the permission check, not instead.
       if (enabled && refusedAsUnidentified()) return;
       // Turning a camera *off* is never refused. A permission that was taken
       // away mid-call would otherwise leave somebody unable to stop streaming.
@@ -106,13 +91,11 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
 
     'voice:state:update': async (clientState: { isMuted: boolean; isDeafened: boolean; isAFK: boolean }) => {
       if (!clientsInfo[clientId]) return;
-      // A listener: `join_voice` without `speak`. Enforced by refusing to
-      // record them as unmuted rather than refusing the event, so the mute
-      // button still works in the direction that always has to.
+      // `join_voice` without `speak`. Refuses to record them as unmuted rather
+      // than refusing the event, so the mute button still works.
       let isMuted = Boolean(clientState.isMuted);
-      /* Unidentified is not unpermitted. Forcing the mute on a socket
-         mid-restore records the wrong state on the strength of not knowing
-         yet, and `temp_` sockets are filtered out of the member list anyway. */
+      /* Unidentified is not unpermitted: muting a socket mid-restore records
+         the wrong state on the strength of not knowing yet. */
       if (!isMuted && socketIsIdentified(clientsInfo, clientId) && !(await socketMay("speak"))) {
         isMuted = true;
         socket.emit("voice:room:error", {
@@ -136,12 +119,8 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    /**
-     * Where the sender's face sits in their own frame, so others can match the
-     * crop. Deliberately not part of `voice:state:update`, which rebuilds the
-     * whole member list — this arrives a few times a second per camera. Not
-     * stored: a client joining mid-call sees a centred crop for a moment.
-     */
+    /** Not part of `voice:state:update`, which rebuilds the member list: this
+        arrives a few times a second per camera. Not stored. */
     'voice:framing:set': (framing: { x: number; y: number }) => {
       const ci = clientsInfo[clientId];
       if (!ci || !ci.hasJoinedChannel) return;
@@ -231,15 +210,8 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
       broadcastMemberList(io, clientsInfo, serverId);
     },
 
-    /**
-     * A room of one, for finding out whether media actually flows — reaching
-     * the SFU over HTTP proves nothing without a real ICE negotiation.
-     *
-     * Its own event rather than `voice:room:request` with a made-up name: it
-     * must not set `voiceChannelId`, which would show the person in the member
-     * list as being in a channel that does not exist, and it should be
-     * refusable without taking voice with it. Same permission as joining.
-     */
+    /** A room of one, because reaching the SFU over HTTP proves nothing. Its
+        own event so it never sets `voiceChannelId` to a channel that is not real. */
     'voice:doctor:request': async () => {
       const userId = clientsInfo[clientId]?.serverUserId;
       consola.info(`[Voice:Doctor] request from client=${clientId} user=${userId}`);
@@ -272,9 +244,8 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        // Named for the member, so two people testing at once do not land in
-        // the same room and hear each other. Nothing else can address it: the
-        // channel list is the server's, and this is not in it.
+        // Named for the member, so two people testing at once do not hear each
+        // other. Nothing else can address it.
         const uniqueRoomId = sfuRoomId(serverId, `doctor:${userId ?? clientId}`);
         await sfuClient.registerRoom(uniqueRoomId);
 
@@ -330,27 +301,14 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
           });
           return;
         }
-        /**
-         * Whether this room is one of theirs. `join_voice` says whether
-         * somebody may use voice here, not *where* — and a conversation id is
-         * derived from the sorted pair of member ids, so anybody with a member
-         * list can compute one and sit in a private call by working out its
-         * name.
-         *
-         * The same answer the chat events get, deliberately: two rules for who
-         * may touch a conversation is two rules to disagree.
-         */
+        /* `join_voice` says whether somebody may use voice, not where, and a
+           DM's id is computable from a member list. Same answer chat gets. */
         const access = await resolveConversationAccess(roomId, userId);
         if (!access.allowed) {
           const denial = DENIAL_RESPONSES[access.reason];
           consola.warn(`[Voice:Step 1] REFUSED client=${clientId} user=${userId} room=${roomId} reason=${access.reason}`);
-          /*
-           * `undetermined` carries a retry delay, the same shape the
-           * unidentified branch above uses. It means this server could not read
-           * the rules rather than that the room is gone, and voice gives up
-           * after five attempts across twenty seconds — short enough to lose
-           * somebody over a database that was busy for a moment.
-           */
+          /* `undetermined` means the rules were unreadable, not that the room
+             is gone. Voice gives up after five tries across twenty seconds. */
           socket.emit("voice:room:error", {
             error: denial.error,
             message: denial.message,
@@ -393,14 +351,8 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
 
         const serverUserId = clientsInfo[clientId]?.serverUserId;
 
-        /* What the SFU will let them publish. Audio never reaches this server,
-         * so the token is the whole mechanism.
-         *
-         * Against the channel id, not `uniqueRoomId` — that has the server id
-         * folded in, matches no scope, and would answer server-wide every time.
-         *
-         * Denied `speak` still joins and is dropped at the SFU, which is the
-         * announcement-channel case. */
+        /* Audio never reaches this server, so the token is the whole mechanism.
+           Against the channel id: `uniqueRoomId` matches no scope. */
         const capabilities = (await mayInChannel(roomId, serverUserId, "speak")) ? [CAP_SPEAK] : [];
 
         consola.info(`[Voice:Step 4] Generating join token for client=${clientId} user=${serverUserId} room=${uniqueRoomId} caps=[${capabilities.join(",")}]`);
@@ -432,10 +384,8 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
       const newJoinedState = Boolean(hasJoined);
       if (wasInChannel === newJoinedState) return;
 
-      // Joining is refused; leaving never is. Without a room grant this socket
-      // has no media path anyway, but the flag is what puts somebody in the
-      // member list as being in voice — so left ungated it is a way to appear
-      // in a channel you were not let into.
+      // Joining is refused, leaving never is. The flag is what puts somebody in
+      // the member list, so ungated it is a way to appear where you may not be.
       if (newJoinedState && refusedAsUnidentified()) return;
 
       if (newJoinedState && !(await socketMay("join_voice"))) {
@@ -453,9 +403,8 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
       if (newJoinedState) {
         if (roomName) socket.join(roomName);
 
-        // Answering a call is joining its room; there is no `call:accept`.
-        // Ends the ring for the caller and for this person's other devices —
-        // answering on the laptop has to stop the phone.
+        // Answering is joining the room; there is no `call:accept`. Ends the
+        // ring on this person's other devices too.
         if (channelId && isConversationId(channelId)) {
           endRingsFor(io, clientsInfo, {
             conversationId: channelId,
@@ -468,10 +417,8 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
 
       clientsInfo[clientId].hasJoinedChannel = newJoinedState;
       if (!newJoinedState) {
-        // Leaving on purpose. Drop anything held against this user so the SFU
-        // sync cannot put them back on the way out — the media connection takes
-        // a moment to actually close, and for that moment the SFU still has
-        // them (GRYT-611).
+        // Drop what is held, or the SFU sync puts them back: the media
+        // connection takes a moment to close and the SFU still has them.
         const leavingUserId = clientsInfo[clientId].serverUserId;
         if (leavingUserId) forgetStashedVoiceState(leavingUserId);
         clientsInfo[clientId].isConnectedToVoice = false;
@@ -485,13 +432,8 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
 
       syncAllClients(io, clientsInfo);
 
-      /*
-       * This sets `hasJoinedChannel`, so it is the event that has to announce
-       * the call. Without it the count ran on `voice:stream:set` ten
-       * milliseconds earlier — before the flag that puts somebody in the room
-       * — so the first caller got an empty voice view until somebody answered
-       * (GRYT-713).
-       */
+      /* This sets `hasJoinedChannel`, so it is what announces the call. On
+         `voice:stream:set` the first caller got an empty voice view. */
       broadcastMemberList(io, clientsInfo, serverId);
 
       if (newJoinedState && !wasInChannel) {
@@ -543,9 +485,8 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
 
         const targetUserId = payload.targetServerUserId.trim();
 
-        // There was no target check here at all — only the self-check — so an
-        // admin could disconnect the owner from voice, which server:kick has
-        // always refused.
+        // Without a target check an admin can disconnect the owner from voice,
+        // which server:kick has always refused.
         if (!(await requireOutranks(socket, auth, targetUserId, "disconnect"))) return;
 
         // Find the target user's socket(s)
@@ -565,10 +506,8 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
 
         // Tell the SFU to force-close the user's WebRTC connection
         if (sfuClient && targetClient.streamID) {
-          // The channel id, not the stream id. The room registered with the SFU
-          // is `${serverId}_${voiceChannelId}` (see the join path above), so
-          // this was addressing a room that does not exist and the forced
-          // disconnect quietly did nothing.
+          // The channel id, not the stream id: the SFU room is
+          // `${serverId}_${voiceChannelId}`, so the other addresses nothing.
           const uniqueRoomId = sfuRoomId(serverId, targetClient.voiceChannelId);
           sfuClient.disconnectUser(uniqueRoomId, targetUserId).catch((e) => {
             consola.error("[Voice:kick] SFU disconnectUser failed:", e);

@@ -46,14 +46,8 @@ function emitRateLimited(ctx: HandlerContext, rl: { retryAfterMs?: number }) {
   });
 }
 
-/**
- * Turn out anybody sitting in a voice channel they can no longer see, or the
- * gate only decides who may *arrive* — they keep hearing the room and the SFU
- * keeps routing their audio.
- *
- * Deliberately not shared with the delete path: that one forgets the stashed
- * voice state, and this one must not, because a lowered gate can put them back.
- */
+/** Without this the gate only decides who may arrive, and they keep hearing the
+    room. Not shared with the delete path, which forgets the stashed state. */
 async function evictNewlyHidden(ctx: HandlerContext, channelId: string): Promise<void> {
   const { io, clientsInfo, serverId } = ctx;
   const roomName = voiceRoomName(serverId, channelId);
@@ -86,10 +80,8 @@ async function evictNewlyHidden(ctx: HandlerContext, channelId: string): Promise
   }
 }
 
-/**
- * The same eviction, across every channel — editing a template can hide four
- * channels from three roles in one save.
- */
+/** The same eviction across every channel: one template save can hide four of
+    them from three roles. */
 async function evictNewlyHiddenEverywhere(ctx: HandlerContext): Promise<void> {
   const channels = await listServerChannels().catch(() => []);
   for (const channel of channels) {
@@ -113,14 +105,8 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
   return {
     // ── Channels ─────────────────────────────────────────────────
 
-    /**
-     * Every channel, gates included, for the channel editor. Needs
-     * `manage_channels` — signed-in alone would hand any member the name,
-     * description and gate of every channel hidden from them.
-     *
-     * Deliberately unfiltered for whoever holds the permission: an editor that
-     * hid rows would produce an admin setting a gate twice.
-     */
+    /** Needs `manage_channels`: signed-in alone hands any member the name and
+        gate of every hidden channel. Unfiltered for whoever holds it. */
     'server:channels:list': async (payload: { accessToken: string }) => {
       try {
         const auth = await requireAuth(socket, payload, { permission: "manage_channels" });
@@ -166,16 +152,8 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
 
         const channelId = (payload.channelId?.trim() || `chan_${randomUUID().slice(0, 10)}`);
 
-        /*
-         * Create or edit, decided before the write. A new channel needs a
-         * sidebar row or nobody sees it — `server:details` builds its list from
-         * the sidebar, and nothing else was going to add one. The desktop sent
-         * its own upsert, so any other client created a channel that answers
-         * `chat:fetch`, accepts `chat:send`, and appears to nobody (GRYT-839).
-         *
-         * On an edit nothing is added: taking a channel out of the sidebar is
-         * deliberate, and a rename must not undo it.
-         */
+        /* A new channel needs a sidebar row or nobody sees it. An edit adds
+           nothing, so a rename cannot undo one deliberately taken out. */
         let isNewChannel = false;
         try {
           const existing = await listServerChannels();
@@ -275,11 +253,8 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
         }
 
         await deleteServerChannel(channelId);
-        // Both caches hold this id. Leaving the visibility one would let a
-        // recreated channel inherit the deleted one's gate for fifteen seconds;
-        // leaving the existence one would refuse history in a channel that is
-        // gone anyway, which is harmless, but they are dropped together so
-        // nobody has to work out which is which later.
+        // Both caches hold this id, and a recreated channel would inherit the
+        // deleted one's gate for fifteen seconds. Dropped together.
         resetChannelPermissionCache();
         resetChannelIdCache();
         invalidateBroadcastDedupe(io);
@@ -301,10 +276,8 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
 
     // ── Permission scopes and templates ──────────────────────────
 
-    /**
-     * Every template and its rules. Templates only — a channel's private
-     * "Custom" scope comes down with the channel in `…:scope:get`.
-     */
+    /** Templates only: a channel's private "Custom" scope comes down with the
+        channel in `…:scope:get`. */
     'server:permissions:templates:list': async (payload: { accessToken: string }) => {
       try {
         const auth = await requireAuth(socket, payload, { permission: "manage_roles" });
@@ -316,10 +289,8 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
           listServerChannels(),
         ]);
 
-        // How many channels each template decides. Editing a template changes
-        // every one of them at once, so this is the number somebody wants
-        // before they touch a row — and the one that makes the difference
-        // between a safe edit and a frightening one.
+        // Editing a template changes every channel using it at once, so this is
+        // the number somebody wants before they touch a row.
         const usedBy = new Map<string, number>();
         for (const channel of channels) {
           if (!channel.permission_scope_id) continue;
@@ -347,11 +318,8 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
       }
     },
 
-    /**
-     * Create a template, or replace the rules in one. `rules` is the whole
-     * matrix, not a patch: a cell set back to inherit is simply absent, and
-     * patching would leave inherit unreachable once anything had been set.
-     */
+    /** `rules` is the whole matrix, not a patch: inherit is an absent cell, and
+        patching would make it unreachable once anything was set. */
     'server:permissions:template:save': async (payload: {
       accessToken: string;
       templateId?: string;
@@ -375,9 +343,8 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
         });
         await replacePermissionRules(scopeId, payload.rules ?? []);
 
-        // Every channel pointing at this template just changed, so this is the
-        // one edit that can hide several channels at once. Cache first, then
-        // evict, then tell everybody.
+        // The one edit that can hide several channels at once. Cache first,
+        // then evict, then tell everybody.
         resetChannelPermissionCache();
         invalidateBroadcastDedupe(io);
         await evictNewlyHiddenEverywhere(ctx);
@@ -415,15 +382,8 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
       }
     },
 
-    /**
-     * One channel's scope and rules, plus the names and ids of templates it
-     * could point at. Choosing a scope is `manage_channels`; what a template
-     * *says* is policy and stays behind `manage_roles`.
-     *
-     * Without the names, somebody holding only `manage_channels` was offered
-     * Everyone and Custom — allowed to pick a template, unable to discover one
-     * existed. Invisible while the owner holds everything.
-     */
+    /** Choosing a scope is `manage_channels`; what a template says is policy and
+        stays behind `manage_roles`. The names come without the rules. */
     'server:channels:scope:get': async (payload: { accessToken: string; channelId: string }) => {
       try {
         const auth = await requireAuth(socket, payload, { permission: "manage_channels" });
@@ -446,9 +406,8 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
           channelId: payload.channelId,
           permissions: CHANNEL_PERMISSIONS,
           scopeId,
-          // Names to choose from, without what they decide. Somebody who may
-          // point a channel at "Staff only" can already watch what that does;
-          // the rules behind it are the part they may not read.
+          // Names without what they decide: pointing a channel at "Staff only"
+          // shows you what it does anyway, but the rules are not readable.
           templates: templates.map((t) => ({
             id: t.scope_id,
             name: t.name,
@@ -472,11 +431,8 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
       }
     },
 
-    /**
-     * Point a channel at a template, at nothing, or at its own custom rules.
-     * `templateId` picks one, `custom: true` writes `rules` into the channel's
-     * private scope, neither goes back to inheriting.
-     */
+    /** `templateId` picks a template, `custom: true` writes `rules` into the
+        channel's private scope, neither goes back to inheriting. */
     'server:channels:scope:set': async (payload: {
       accessToken: string;
       channelId: string;
@@ -503,10 +459,8 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
         }
 
         if (payload.custom) {
-          // Reuse the channel's own scope if it already has one, so switching
-          // Custom -> template -> Custom does not leave scopes behind. A
-          // template id is never reused: writing this channel's rules into a
-          // shared template would change every other channel using it.
+          // Reuse the channel's own scope, so Custom to template and back leaves
+          // none behind. Never a template id: that is shared.
           const existing = channel.permission_scope_id
             ? await getPermissionScope(channel.permission_scope_id)
             : null;
@@ -526,10 +480,8 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
           await setChannelPermissionScope(channelId, null);
         }
 
-        // Cache before eviction before broadcast. broadcastDetails calls
-        // sendServerDetails for every socket and each reads the rules; off a
-        // stale cache it would tell everybody about a channel that was just
-        // hidden, which is the one ordering that leaks.
+        // Cache, then evict, then broadcast: off a stale cache the broadcast
+        // names a channel that was just hidden.
         resetChannelPermissionCache();
         invalidateBroadcastDedupe(io);
         await evictNewlyHidden(ctx, channelId);
@@ -560,11 +512,8 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
         for (const id of payload.order) {
           const ch = byId.get(id);
           if (!ch) continue;
-          // Reorder writes the full record, not just the new position:
-          // upsertServerChannel sets every column on conflict, so passing only
-          // name/type/description/position would reset the rest to defaults.
-          // That already quietly cleared the voice flags; layout/automated ride
-          // the same fix. GRYT-982.
+          // The full record, not just the position: upsertServerChannel sets
+          // every column on conflict, so a partial one resets the rest.
           await upsertServerChannel({
             channelId: ch.channel_id, name: ch.name, type: ch.type, description: ch.description, position: pos,
             requirePushToTalk: ch.require_push_to_talk, disableRnnoise: ch.disable_rnnoise,
@@ -616,12 +565,8 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
 
         await upsertServerSidebarItem({ itemId: payload.itemId, kind: payload.kind, position: payload.position, channelId: payload.channelId ?? null, spacerHeight: payload.spacerHeight ?? null, label: payload.label ?? null, parentItemId: payload.parentItemId ?? null });
 
-        /*
-         * One row per channel, or the sidebar draws it twice — which the fix
-         * above would otherwise cause, since the desktop sends this right after
-         * `server:channels:upsert` with an item id of its own. The row named in
-         * this payload wins, being the explicit instruction.
-         */
+        /* One row per channel, or the sidebar draws it twice: the desktop sends
+           this right after `server:channels:upsert`. The payload's row wins. */
         if (payload.kind === "channel" && payload.channelId) {
           try {
             const items = await listServerSidebarItems();
@@ -663,17 +608,8 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
       }
     },
 
-    /*
-     * Order and folder membership arrive together, because one drag changes
-     * both: pulling a channel right puts it in the folder above it, and where
-     * it lands in the list is the same gesture.
-     *
-     * An entry may be a bare id, which is what every client sent before folders
-     * existed and still means "this position, whatever folder it is already in".
-     * Passing `parent_item_id` through on that path is not optional — `upsert`
-     * writes the column every time, so a reorder that left it out would empty
-     * every folder on the next drag of anything.
-     */
+    /* One drag changes order and folder together. A bare id still has to pass
+       `parent_item_id` through, or `upsert` empties every folder. */
     'server:sidebar:reorder': async (payload: {
       accessToken: string;
       order: (string | { itemId: string; parentItemId?: string | null })[];
