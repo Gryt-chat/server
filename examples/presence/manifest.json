@@ -5,6 +5,6 @@
   "main": "index.mjs",
   "author": "Gryt",
   "description": "Shows what people are playing, for anybody running the client half",
-  "homepage": "https://docs.gryt.chat/docs/guide/plugin-pairs",
+  "homepage": "https://docs.gryt.chat/docs/build/plugin-pairs",
   "capabilities": ["messaging", "members:read"]
 }

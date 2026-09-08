@@ -48,6 +48,6 @@ Installing one is trusting whoever wrote it with the whole server.
 
 ## Writing your own
 
-[Server plugins](https://docs.gryt.chat/docs/server/plugins) covers the API.
-[Plugin pairs](https://docs.gryt.chat/docs/guide/plugin-pairs) covers the two
+[Server plugins](https://docs.gryt.chat/docs/build/server-plugins) covers the API.
+[Plugin pairs](https://docs.gryt.chat/docs/build/plugin-pairs) covers the two
 halves and the pipe between them.
