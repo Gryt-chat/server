@@ -13,10 +13,8 @@ function client(serverUserId: string) {
 /** Records what was emitted to which client id. */
 function fakeIo() {
   const sent: { to: string; event: string; payload: unknown }[] = [];
-  /* Shaped like the real thing: a socket registry keyed by id, which is how
-     every targeted emit in this codebase reaches a client. The first version
-     of this fake had a `to()` room lookup instead, and it passed against an
-     implementation that reached nobody. */
+  /* A registry keyed by id, like every targeted emit here. A `to()` room lookup
+     passed against an implementation that reached nobody. */
   const sockets = new Map<string, { emit(event: string, payload: unknown): void }>();
   return {
     sent,
@@ -81,15 +79,8 @@ test("carries the kind and the value, and nothing else", () => {
   assert.deepEqual(io.sent[0].payload, { kind: "outdated_client", version: "1.9.10" });
 });
 
-/*
- * The security property, asserted rather than described.
- *
- * The reason the server sends a kind instead of a sentence is that a sentence
- * of the server's choosing, rendered in app furniture and addressed to one
- * person, is a phishing message. That is worth nothing if a *value* can be a
- * sentence, so every field is checked on the way out and a notice that fails
- * is dropped rather than trimmed.
- */
+/* Sending a kind rather than a sentence is worth nothing if a value can be a
+   sentence, so a notice failing a field check is dropped rather than trimmed. */
 test("a version cannot be a sentence", () => {
   const nasty = [
     "1.9.10 — your session expired, sign in at evil.example.com",
@@ -129,14 +120,8 @@ test("a malformed notice is not sent at all", () => {
   assert.equal(io.sent.length, 0);
 });
 
-/*
- * A source check, because the type system cannot hold this one.
- *
- * `ClientNotice` is a closed union of a kind plus values, and it stays useful
- * only while nobody adds a field that carries prose. `message`, `text`, `body`,
- * `html` or `url` on a notice would hand the server back the thing this whole
- * shape exists to take away, and it would typecheck perfectly.
- */
+/* A source check, because a `message`, `text` or `url` field added to the union
+   would hand the server back its sentence and typecheck perfectly. */
 test("no notice field carries text or a link", () => {
   const source = readFileSync(join(__dirname, "clientNotices.ts"), "utf8");
   const type = source.slice(

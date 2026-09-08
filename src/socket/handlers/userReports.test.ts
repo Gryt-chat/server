@@ -17,18 +17,8 @@ import { registerReportHandlers } from "./reports";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
 /**
- * Reporting a person, driven through the handlers.
- *
- * `permissionGates.test.ts` already proves both new events refuse a role
- * without the permission they name. Nothing here repeats that. What is left is
- * the part a gate cannot answer: whether the queue holds what the reporter
- * wrote, whether the reported person is ever told, and whether the two
- * eviction buttons ask for more than `manage_reports` before they fire.
- *
- * The last one is the reason this file exists. `manage_reports` gets you the
- * card; a queue that could ban on it alone would be a way around the member
- * list, which is exactly the hole the message queue had until GRYT-576 put
- * `requireOutranks` on delete-all-and-ban.
+ * What a gate cannot answer: what the queue holds, whether the reported person
+ * is told, and whether the eviction buttons ask for more than `manage_reports`.
  */
 
 const HOST = "userreports.test:5001";
@@ -51,13 +41,8 @@ interface Actor {
   clear: () => void;
 }
 
-/**
- * One shared `io`, so an eviction has sockets it can actually reach.
- *
- * `disconnect` is on here because `evictUser` calls it — a stub with only
- * `emit` throws inside the handler, and the handler's catch turns that into a
- * refusal that looks exactly like a permission check firing.
- */
+/** `disconnect` is here because `evictUser` calls it, and a stub without it
+    throws into a catch that looks exactly like a permission check firing. */
 interface FakeSocket {
   emit: (event: string, payload?: unknown) => boolean;
   disconnect: () => void;
@@ -75,13 +60,8 @@ const io = {
 
 let seq = 0;
 
-/**
- * A connected member holding exactly the permissions given.
- *
- * `rank` rises with the permission set on purpose: the moderators below need to
- * outrank the people they act on, and a rank tie is refused before any
- * permission is read.
- */
+/** `rank` rises with the permission set: the moderators below have to outrank
+    their targets, and a tie is refused before any permission is read. */
 async function connect(nickname: string, permissions: Permission[], rank = 10): Promise<Actor> {
   seq += 1;
   const clientId = `socket-${seq}`;

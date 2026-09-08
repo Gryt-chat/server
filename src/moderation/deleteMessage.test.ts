@@ -12,15 +12,8 @@ import type { Clients } from "../types";
 import { deleteMessageEverywhere } from "./deleteMessage";
 
 /**
- * The five things a delete has to do, minus the one it deliberately does not
- * (GRYT-936).
- *
- * This module exists because a member with `manage_messages` and a plugin both
- * delete messages, and two copies of a five-step operation drift. What is
- * checked here is the two steps that would go quietly missing in a second copy:
- * the attachment bytes, where the failure is a deleted image still being served
- * to anybody holding the link, and the guard that stops everything else running
- * when the row did not actually go.
+ * The two steps a second copy of the delete would go quietly missing: the
+ * attachment bytes, and the guard that stops the rest when the row did not go.
  */
 
 let dir: string;
@@ -77,13 +70,8 @@ describe("an ordinary delete", () => {
   });
 });
 
-/*
- * The media sweep's grace period runs from upload, so a picture posted and
- * deleted a minute later would otherwise sit in storage for the best part of an
- * hour, reachable by URL. This is the step a second copy of the delete would
- * have left out, and nothing about the message being gone would have looked
- * wrong.
- */
+/* The sweep's grace period runs from upload, so a picture posted and deleted a
+   minute later would sit in storage for the best part of an hour. */
 describe("the bytes behind it", () => {
   it("are cleaned up", async () => {
     const message = await post(["file-a", "file-b"]);
@@ -115,9 +103,8 @@ describe("the bytes behind it", () => {
     assert.equal(called, false);
   });
 
-  /* Not awaited, and its failure is swallowed: a storage backend having a bad
-     minute must not turn a successful delete into a failure. What is left
-     behind is orphaned, so the sweep still collects it later. */
+  /* Not awaited and swallowed: a bad minute from storage must not fail a
+     successful delete, and what is left is orphaned for the sweep. */
   it("do not fail the delete when the cleanup does", async () => {
     const message = await post(["file-a"]);
 
@@ -138,10 +125,8 @@ describe("the bytes behind it", () => {
   });
 });
 
-/*
- * Telling everybody a message is gone when it is not is worse than the failure
- * that stopped it going.
- */
+/* Telling everybody a message is gone when it is not is worse than the failure
+   that stopped it going. */
 describe("a row that did not go", () => {
   it("stops everything else", async () => {
     const message = await post(["file-a"]);

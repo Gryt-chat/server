@@ -16,22 +16,9 @@ import { broadcastMemberList } from "./clients";
 import { voiceRoomName } from "./voiceRooms";
 
 /**
- * Who hears who is in a call.
- *
- * There are two ways to get this wrong and they pull in opposite directions.
- *
- * Tell everybody, and a one-to-one conversation id — which is a hash of the
- * sorted pair, and computable by anybody holding a member list — announces who
- * is talking to whom. That is what `publicVoiceRoom` stops.
- *
- * Tell nobody, and the people in the call cannot see each other: both clients
- * group participants by `voiceChannelId`, so blanking it everywhere meant a
- * call drew nobody in it, including yourself. That shipped.
- *
- * The answer is the room. Everybody in a call is in that call's socket.io room
- * and nobody else is, so the address *is* the access rule. These cases assert
- * both halves: the room hears it, and the broadcast to everyone does not carry
- * it.
+ * Telling everybody announces who is talking to whom, since a DM id is
+ * computable; telling nobody drew a call with nobody in it, which shipped. The
+ * room is the answer, so these assert both halves.
  */
 
 const SERVER_ID = "participants-test";
@@ -269,9 +256,8 @@ describe("who is in a conversation call", () => {
     const clientsInfo: Clients = { a: connected("user_alice", PAIR) };
     broadcastMemberList(world.io, clientsInfo, SERVER_ID);
 
-    // The half `publicVoiceRoom` is responsible for, asserted here as well:
-    // this file is where somebody would go to make the call visible, and the
-    // easy wrong fix is to unblank it.
+    // `publicVoiceRoom`'s half, asserted here too: this is where somebody would
+    // come to make a call visible, and unblanking is the easy wrong fix.
     const everyone = JSON.stringify(world.broadcasts);
     assert.equal(
       everyone.includes(PAIR),
@@ -316,9 +302,8 @@ describe("who is in a conversation call", () => {
     delete clientsInfo.a;
     broadcastMemberList(world.io, clientsInfo, SERVER_ID);
 
-    // The same person, the same conversation. Remembering the last list past
-    // the end of the call would swallow this one — and it is the first message
-    // of the new call, so swallowing it means an empty view again.
+    // Remembering the last list past the end of a call swallows the first
+    // message of the next one, which is an empty view again.
     clientsInfo.a = connected("user_alice", PAIR);
     broadcastMemberList(world.io, clientsInfo, SERVER_ID);
 

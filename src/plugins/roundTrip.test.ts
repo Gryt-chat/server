@@ -16,21 +16,9 @@ import { initPlugins, PLUGIN_MESSAGE_EVENT } from "./index";
 import { setPluginRefs } from "./refs";
 
 /**
- * One message all the way through, in one test (GRYT-939).
- *
- * Every piece of this is covered on its own: the handler parses and refuses,
- * the bus routes, `send` picks who to reach. What none of those cover is
- * whether the pieces are connected — and the failure that would look most like
- * working software is a second bus somewhere in the middle, where every unit
- * test still passes and no plugin ever hears anything.
- *
- * So this loads a real plugin from a real folder through `initPlugins`, hands
- * the socket handler a real signed token, and watches what comes back out at
- * the sockets. The only thing standing in for the real world is socket.io
- * itself, which is somebody else's code doing the one job it has.
- *
- * The plugin under test is the shape the docs describe: hear that somebody is
- * playing something, tell everybody else.
+ * Every piece is covered on its own, and none of them covers whether the pieces
+ * are connected: a second bus in the middle passes every unit test and reaches
+ * no plugin. A real folder, a real token, and socket.io standing in.
  */
 
 const HOST = "round-trip.test:5001";
@@ -83,11 +71,8 @@ before(async () => {
   } as never;
   setPluginRefs({ io, serverId: "round-trip-test", clientsInfo, sfuClient: null });
 
-  /*
-   * A real plugin, on disk, loaded the way a server loads one. Written as the
-   * docs describe the worked pair: hear who is playing something, tell
-   * everybody else.
-   */
+  /* A real plugin on disk, loaded the way a server loads one, written as the
+     docs describe the worked pair. */
   const folder = join(dir, "plugins", "presence");
   mkdirSync(folder, { recursive: true });
   writeFileSync(
@@ -173,11 +158,8 @@ describe("a message from one client to everybody else's plugin", () => {
     assert.equal(emitted[0].event, PLUGIN_MESSAGE_EVENT);
   });
 
-  /*
-   * The failure this file exists for. Every unit test in this folder passes
-   * against a bus nothing is connected to, so the thing worth asserting is that
-   * the plugin the loader started is the plugin the handler reaches.
-   */
+  /* Every unit test here passes against a bus nothing is connected to, so what
+     matters is that the loader's plugin is the handler's plugin. */
   it("goes nowhere for a plugin this server does not run", async () => {
     resetRateLimits();
     emitted.length = 0;

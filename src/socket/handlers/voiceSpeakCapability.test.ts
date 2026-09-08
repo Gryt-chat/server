@@ -16,16 +16,8 @@ import type { EventHandlerMap, HandlerContext } from "./types";
 import { registerVoiceHandlers } from "./voice";
 
 /**
- * What the SFU is told this member may publish.
- *
- * `speak` is the one channel permission this server cannot enforce itself —
- * audio goes to the SFU, not here — so the whole gate is the capability list on
- * the token. If this handler mints a token granting `speak` to somebody the
- * scope denied, the SFU forwards their microphone and the permission is a
- * setting that does nothing. Nothing downstream would notice: the call works,
- * the UI shows the denial, and the person is audible.
- *
- * The SFU side is `internal/websocket/handler_speakgate_test.go`.
+ * Audio never reaches this server, so the capability list on the token is the
+ * whole gate. The SFU side is `internal/websocket/handler_speakgate_test.go`.
  */
 
 const HOST = "voicespeak.test:5001";
@@ -50,12 +42,8 @@ const io = {
 
 let seq = 0;
 
-/**
- * A stand-in SFU that records what it was asked to mint and nothing else.
- *
- * The real one needs a socket to a running SFU. What is under test is the
- * argument, not the transport.
- */
+/** Records what it was asked to mint and nothing else: the argument is what is
+    under test, not the transport. */
 function fakeSfu(minted: MintedToken[]) {
   return {
     isConnected: () => true,
@@ -180,11 +168,8 @@ describe("the speak capability on a voice join token", () => {
     );
   });
 
-  // The mistake this is really guarding: `mayInChannel` has to be asked about
-  // the channel, not about the SFU's name for the room. `sfuRoomId` folds the
-  // server id in, so the id handed to the SFU matches no scope at all — asking
-  // with it answers from the server-wide permission and quietly grants speak to
-  // everybody, in every channel, with the UI still showing the denial.
+  // `sfuRoomId` folds the server id in and matches no scope, so asking with it
+  // answers server-wide and grants speak to everybody, in every channel.
   it("asks about the channel rather than the SFU room id", async () => {
     const minted: MintedToken[] = [];
     const { handlers } = await connectMember("Stage listener two", "member", minted);

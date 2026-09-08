@@ -17,12 +17,8 @@ import { registerAdminHandlers } from "./admin";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
 /**
- * How every member got in, in one answer (GRYT-923).
- *
- * The gate is covered by permissionGates.test.ts. What is here is the payload,
- * because the useful failures are all about members the simple version would
- * quietly drop: somebody who arrived before invites existed, somebody whose
- * invite has since been deleted, and somebody who left.
+ * The gate is `permissionGates.test.ts`. Here is the payload, and the failures
+ * are the members a simple version drops: no invite, a deleted one, and a leaver.
  */
 
 const HOST = "member-invites.test:5001";
@@ -136,26 +132,16 @@ describe("who came in on what", () => {
     assert.equal(row?.revoked, true);
   });
 
-  /*
-   * Somebody who arrived without one is not a row.
-   *
-   * The first member claims the server, and a LAN or open join needs no code,
-   * so this is ordinary rather than an edge case. A row with an empty code
-   * would read as "we lost their invite" instead of "there wasn't one".
-   */
+  /* The first member claims the server and a LAN join needs no code, so an empty
+     code would read as a lost invite rather than none. */
   it("leaves out anybody who arrived without an invite", async () => {
     const member = await upsertUser("account-owner", "Owner");
     const rows = await fetchRows();
     assert.equal(rows.some((r) => r.serverUserId === member.server_user_id), false);
   });
 
-  /*
-   * An invite that no longer exists still names itself.
-   *
-   * They did come in on that code, and dropping the row would imply they
-   * arrived some other way. The nulls say the invite is gone rather than that
-   * it is fine.
-   */
+  /* They did come in on that code, and dropping the row implies they arrived
+     some other way. */
   it("keeps the code when the invite itself is gone", async () => {
     const member = await upsertUser("account-ada", "Ada", { inviteCode: "deleted-code" });
 
@@ -167,14 +153,8 @@ describe("who came in on what", () => {
     assert.equal(row.usesConsumed, null);
   });
 
-  /*
-   * Somebody who has left is not a member of this list.
-   *
-   * `is_active = 0` is what leaving sets, and their row stays in `users` so a
-   * return keeps their history. The Members tab is about who is here, and a
-   * departed member appearing beside the current ones would send somebody
-   * revoking an invite over an arrival that is already undone.
-   */
+  /* Their `users` row stays so a return keeps their history, but the Members tab
+     is about who is here. */
   it("leaves out anybody who is no longer a member", async () => {
     const invite = await createServerInvite(null, { maxUses: 1, note: "gone" });
     const member = await upsertUser("account-left", "Left", { inviteCode: invite.code });
