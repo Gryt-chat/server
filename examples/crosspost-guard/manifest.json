@@ -5,6 +5,6 @@
   "main": "index.mjs",
   "author": "Gryt",
   "description": "Deletes the same message when it lands in several channels at once, and bans whoever keeps doing it",
-  "homepage": "https://docs.gryt.chat/docs/server/plugins",
+  "homepage": "https://docs.gryt.chat/docs/build/server-plugins",
   "capabilities": ["messages:read", "moderation"]
 }

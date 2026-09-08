@@ -27,12 +27,12 @@ Starts on **http://localhost:5000**.
 
 ## Documentation
 
-Full docs at **[docs.gryt.chat/docs/server](https://docs.gryt.chat/docs/server)**:
+Full docs at **[docs.gryt.chat/docs/host/server](https://docs.gryt.chat/docs/host/server)**:
 
-- [API Reference](https://docs.gryt.chat/docs/server/api-reference) — WebSocket events, REST endpoints, data structures
-- [Rate Limiting](https://docs.gryt.chat/docs/server/rate-limiting) — score-based system, configuration
-- [Multi-Server](https://docs.gryt.chat/docs/server/multi-server) — server isolation, room IDs
-- [Deployment](https://docs.gryt.chat/docs/deployment) — Docker Compose, Kubernetes
+- [API Reference](https://docs.gryt.chat/docs/build/server-api) — WebSocket events, REST endpoints, data structures
+- [Rate Limiting](https://docs.gryt.chat/docs/host/rate-limiting) — score-based system, configuration
+- [Multi-Server](https://docs.gryt.chat/docs/host/multi-server) — server isolation, room IDs
+- [Deployment](https://docs.gryt.chat/docs/host) — Docker Compose, Kubernetes
 
 ## Issues
 
