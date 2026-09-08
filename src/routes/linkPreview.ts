@@ -29,18 +29,11 @@ export interface LinkPreviewData {
   type: string | null;
   author: string | null;
   publishedAt: string | null;
-  /**
-   * The oEmbed endpoint the page advertises, if it advertises one.
-   *
-   * Its presence is what tells a client there is a real player to be had
-   * without keeping a list of which sites have one. See the oEmbed route.
-   */
+  /** Its presence is how a client knows there is a real player, without
+      keeping a list of which sites have one. */
   oembedUrl: string | null;
-  /**
-   * What the page answered with, so a client can tell "publishes no metadata"
-   * from "private or gone". A private GitHub repo 404s with GitHub's own
-   * metadata, which parses into a card titled "Build software better, together".
-   */
+  /** So a client can tell "no metadata" from "private or gone": a private
+      GitHub repo 404s with GitHub's own metadata attached. */
   status: number | null;
 }
 
@@ -48,14 +41,8 @@ const cache = new Map<string, { data: LinkPreviewData; fetchedAt: number }>();
 const CACHE_TTL_MS = 60 * 60 * 1000;
 const MAX_CACHE_SIZE = 500;
 
-/**
- * How much of a page to read before giving up on its `<head>`. Measured
- * 2026-09-03: MDN closes at 5.9 KB and GitHub at 32 KB, but Modrinth's
- * `og:title` sits at byte 246,740 and YouTube's at 699,799.
- *
- * The read stops at `</head>` regardless, so this only bounds a page that never
- * closes one.
- */
+/** Measured: MDN closes its head at 5.9 KB, YouTube's `og:title` sits at byte
+    699,799. The read stops at `</head>`, so this bounds a page that has none. */
 const MAX_BYTES = 1_048_576;
 
 const FETCH_TIMEOUT_MS = 8000;
@@ -84,23 +71,12 @@ async function readHead(res: Response, charset: string): Promise<string> {
   return html;
 }
 
-/**
- * How much JSON a resolver may read. Their design endpoint answers 86 KB for
- * one model, most of which is instances and comments that get thrown away, so
- * this is generous rather than tight — but it is still a bound on a response
- * from somebody else's server.
- */
+/** Generous rather than tight — one design endpoint answers 86 KB — but still a
+    bound on a response from somebody else's server. */
 const MAX_JSON_BYTES = 512 * 1024;
 
-/**
- * The one door a resolver has to the network (GRYT-913).
- *
- * Handed in rather than imported by `linkResolvers.ts`, so a resolver cannot
- * quietly reach the network another way and that module stays testable without
- * one. Everything guarding the ordinary path applies here: the same
- * hop-by-hop host check, the same abort signal, a size cap, and a refusal to
- * parse anything that does not call itself JSON.
- */
+/** Handed in rather than imported, so a resolver cannot reach the network
+    another way. Same host check, abort signal, size cap and JSON refusal. */
 function jsonFetcher(signal: AbortSignal) {
   return async (target: string): Promise<unknown> => {
     const fetched = await fetchFollowingSafely(target, signal, "application/json");
@@ -128,17 +104,8 @@ function jsonFetcher(signal: AbortSignal) {
   };
 }
 
-/**
- * The image's real size, when whoever gave us the URL did not say.
- *
- * The card sets `aspect-ratio` from these and leaves a gap the right shape
- * while the picture loads; without them the message reflows underneath
- * somebody as it arrives.
- *
- * Only when neither is known. Most of the web sets `og:image:width`, and
- * skipping the request saves a round trip on every preview that does — a
- * resolver, which builds its own image URL, never does.
- */
+/** The card sets `aspect-ratio` from these, so without them the message reflows
+    as the picture loads. Only when neither is known. */
 async function measureIfUnsized(
   meta: Pick<LinkPreviewData, "image" | "imageWidth" | "imageHeight">,
 ): Promise<{ imageWidth: number | null; imageHeight: number | null }> {
@@ -161,28 +128,16 @@ async function fetchPreview(url: string): Promise<LinkPreviewData> {
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
   try {
-    /*
-     * A site-specific answer first, where there is one.
-     *
-     * Only for a host that has a resolver and a URL it recognises, so this
-     * costs nothing on the rest of the web. A resolver returning null — the id
-     * was not found, the request failed, the shape was not what it expected —
-     * falls through to the ordinary fetch below, which is what happened before
-     * this existed.
-     *
-     * `status: 200` because the card came from somewhere that answered. The
-     * client reads that field to tell "publishes no metadata" from "gone", and
-     * the HTML page's own 403 is not the answer to what happened here.
-     */
+    /* A resolver returning null falls through to the ordinary fetch below.
+       `status: 200` because the card came from somewhere that answered. */
     const resolver = resolverFor(new URL(url));
     if (resolver) {
       try {
         const resolved = await resolver.resolve(new URL(url), jsonFetcher(controller.signal));
         if (resolved) {
           const card = { ...empty, ...resolved, url, status: 200 };
-          // Measured here too. A resolver builds its own image URL, so there is
-          // never an `og:image:width` to take the size from, and a card with no
-          // aspect ratio reflows the message under somebody as it loads.
+          // A resolver builds its own image URL, so there is never an
+          // `og:image:width` to take the size from.
           return { ...card, ...(await measureIfUnsized(card)) };
         }
       } catch (err) {
@@ -264,9 +219,8 @@ router.get("/", requireBearerToken, async (req, res) => {
   }
 });
 
-// Unref'd so importing this module does not by itself hold the process open;
-// it only sweeps a preview cache. Same reasoning as the nonce sweeper in
-// auth/identity.
+// Unref'd, so importing this module does not hold the process open for a
+// preview cache sweep. Same as the nonce sweeper in auth/identity.
 setInterval(() => {
   const now = Date.now();
   for (const [key, entry] of cache) {

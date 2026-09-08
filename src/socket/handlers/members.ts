@@ -12,26 +12,20 @@ export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
   const { io, socket, clientId, serverId, clientsInfo } = ctx;
 
   return {
-    // Was open to any socket, authenticated or not — the full member list,
-    // nicknames and roles included, for anyone who could reach the port. It is
-    // gated on being a verified member rather than on a role, since that is
-    // what the broadcast copy of this list already assumes.
+    // Gated on being a verified member rather than on a role, which is what the
+    // broadcast copy of this list already assumes.
     'members:fetch': async () => {
       try {
         const requester = clientsInfo[clientId];
         if (!requester?.grytUserId) {
-          // Refuse quietly. The client fetches this optimistically the moment a
-          // socket connects, before the session has been restored, so answering
-          // with server:error made every page load show "Failed to join server"
-          // — the gate is here to withhold the data, not to complain about a
-          // call the client is supposed to make. It asks again after joining.
+          // Quietly: the client fetches this before the session is restored, so
+          // an error here showed "Failed to join server" on every page load.
           return;
         }
 
         if (!(await socketMay(clientsInfo, clientId, "view_members"))) {
-          // Quiet, like the join gate above it. The client asks for this
-          // optimistically on every connect, and a role that may not see the
-          // list is not a state worth an error toast on every page load.
+          // Quiet, like the gate above: a role that may not see the list is not
+          // worth an error toast on every connect.
           return;
         }
 
@@ -44,37 +38,19 @@ export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    /**
-     * What this person says they are doing, in their own words (GRYT-929).
-     *
-     * Gated on `set_activity`, which sits beside `change_nickname` for the same
-     * reason: both are a line about yourself that everybody on the server
-     * reads, and an operator who does not want free text under people's names
-     * should be able to take it away. The client hides the control when it is
-     * missing, so a refusal here is a client that is out of step rather than
-     * somebody's ordinary path.
-     *
-     * Held on the connection rather than stored, so it stops being true when
-     * they close the app. That means it does not survive a reconnect and the
-     * client re-sends it on join, the same as voice state.
-     *
-     * Clearing goes through the same door: an empty string, or one that is
-     * only spaces, normalises to null and takes the status down.
-     */
+    /** Held on the connection, not stored, so it stops being true when the app
+        closes and the client re-sends it on join. Empty clears it. */
     'presence:activity': async (data: { activity?: unknown }) => {
       const info = clientsInfo[clientId];
       if (!info) return;
-      // Not for a socket that has not said who it is. `temp_` clients are
-      // filtered out of the member list anyway, so this would be a status
-      // nobody could see attached to nobody in particular.
+      // `temp_` clients are filtered out of the member list, so this would be a
+      // status nobody can see on nobody in particular.
       if (!info.serverUserId || info.serverUserId.startsWith("temp_")) return;
 
       const activity = normaliseActivity(data?.activity);
 
-      /* Checked on the way up only, the same as turning a camera off. A
-         permission taken away mid-session must not leave somebody wearing a
-         status they can no longer remove — the alternative is a line under
-         their name that only a moderator can take down. */
+      /* On the way up only, like turning a camera off: losing the permission
+         must not leave somebody wearing a status they cannot remove. */
       if (activity !== null && !(await socketMay(clientsInfo, clientId, "set_activity"))) {
         socket.emit("server:error", {
           error: "forbidden",
@@ -104,9 +80,8 @@ export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
           : undefined;
 
         if (nickname !== undefined && nickname.length > 0) {
-          // Only checked when a name is actually being set. This event is also
-          // the client's way of asking for its own profile back, and refusing
-          // that would break the read for everybody who cannot write.
+          // Only when a name is being set: this event is also how a client asks
+          // for its own profile back.
           if (looksLikeABotName(nickname)) {
             socket.emit("profile:error", 'Names that start with "bot" are reserved.');
             return;
@@ -125,14 +100,8 @@ export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
           clientsInfo[clientId].nickname = nickname;
         }
 
-        // The look, which rides along with the nickname because that is what it
-        // is: a second thing about how somebody appears here, set from the same
-        // screen and synced by the same button.
-        //
-        // Gated on nothing. `change_nickname` exists because a name is what
-        // everybody reads and a name can be abusive; a hat cannot, and the
-        // options are a fixed registry rather than free text. A member barred
-        // from renaming should still be able to choose a hat.
+        // Gated on nothing: `change_nickname` exists because a name is free text
+        // that can be abusive, and a hat is a fixed registry.
         const wornUpdate = readWornUpdate(data?.avatarWorn);
         if (wornUpdate.kind === "invalid") {
           socket.emit("profile:error", "That avatar could not be read.");
