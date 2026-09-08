@@ -1,7 +1,6 @@
 /**
- * Reuses `utils/rateLimiter` rather than adding `express-rate-limit`, so there is
- * one place to reason about the window, the ban and the key — and one
- * limitation: counters live in memory, so a restart clears them.
+ * Reuses `utils/rateLimiter` rather than `express-rate-limit`, so one place holds
+ * the window, the ban and the key. Counters are in memory; a restart clears them.
  */
 import type { NextFunction, Request, Response } from "express";
 
@@ -47,11 +46,8 @@ export const RL_HTTP_OUTBOUND: RateLimitRule = { limit: 20, windowMs: 60_000, ba
 /** Writing bytes to disk, which costs storage rather than only time. */
 export const RL_HTTP_UPLOAD: RateLimitRule = { limit: 30, windowMs: 60_000, banMs: 30_000 };
 
-/**
- * An import is one gesture that becomes a request per emoji. No `banMs`: this
- * burst is somebody using it as intended, and the ban is what took the emoji
- * list down with the writes while the mount had one bucket.
- */
+/** An import is one gesture that becomes a request per emoji. No `banMs`: the
+    ban is what took the emoji list down with the writes. */
 export const RL_HTTP_EMOJI_WRITE: RateLimitRule = { limit: 150, windowMs: 60_000 };
 
 /** Generous, because a busy channel fetches many files as it scrolls and a limit

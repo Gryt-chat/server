@@ -52,24 +52,17 @@ export async function ensureBucket(bucket: string): Promise<void> {
   }
 }
 
-// S3 multipart: at most 10,000 parts, and no part under 5 MB except the last.
-// The object ceiling is therefore part size times 10,000, which is why the part
-// size cannot be a constant if the upload limit is meant to be "none".
+// At most 10,000 parts and none under 5 MB, so the object ceiling is part size
+// times 10,000 — which is why a constant part size is a cap in disguise.
 const MAX_PARTS = 10_000;
 const PART_TARGET = Math.floor(MAX_PARTS * 0.95); // 5% headroom for rounding
 const MIN_PART_SIZE = 8 * 1024 * 1024;
-// queueSize * partSize is what is actually held in memory at once. Keep that
-// bounded rather than the part count, so a small upload stays cheap and a huge
-// one costs one part's worth of extra RAM rather than four.
+// queueSize * partSize is what is held in memory at once, so bound that rather
+// than the part count.
 const MAX_IN_FLIGHT = 64 * 1024 * 1024;
 
-/**
- * Part size and concurrency for a file of a known size.
- *
- * A fixed 8 MB part caps the object at 10,000 * 8 MB = 80 GB, which is a cap
- * wearing a disguise. Sizing the part to the file removes it: 500 GB needs
- * ~53 MB parts, 5 TB (S3's own object ceiling) needs ~550 MB.
- */
+/** A fixed 8 MB part caps the object at 80 GB. Sized to the file: 500 GB needs
+    ~53 MB parts and 5 TB, S3's own ceiling, needs ~550 MB. */
 export function multipartPlan(size: number): { partSize: number; queueSize: number } {
   const needed = Math.ceil(size / PART_TARGET);
   const partSize = Math.max(MIN_PART_SIZE, Math.ceil(needed / (1024 * 1024)) * 1024 * 1024);
@@ -77,12 +70,8 @@ export function multipartPlan(size: number): { partSize: number; queueSize: numb
   return { partSize, queueSize };
 }
 
-/**
- * Streams a file from disk in multipart chunks. Not `PutObjectCommand` with a
- * read stream: a single PUT is capped at 5 GB, and the SDK cannot retry a
- * request whose body is a consumed stream. Upload retries parts individually
- * and aborts on failure, so no orphaned parts are left being billed for.
- */
+/** Not `PutObjectCommand`: a single PUT caps at 5 GB and cannot be retried once
+    its stream is consumed. This retries parts and aborts on failure. */
 async function putObjectFromPath(params: { bucket: string; key: string; sourcePath: string; contentType?: string; aclPublicRead?: boolean; }): Promise<void> {
   const client = getS3();
   const { size } = await stat(params.sourcePath);

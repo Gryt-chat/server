@@ -238,10 +238,8 @@ export async function setUserInactive(serverUserId: string): Promise<void> {
   db.prepare(`UPDATE users SET is_active = 0 WHERE server_user_id = ?`).run(serverUserId);
 }
 
-/**
- * `no_prior_membership` is ordinary. `account_already_member` is the collision:
- * the guest membership stays put, so something is left behind and is said so.
- */
+/** `no_prior_membership` is ordinary; `account_already_member` is the collision,
+    where the guest membership stays put and something is left behind. */
 export type CarryIdentityResult =
   | { status: "carried" }
   | { status: "no_prior_membership" }
@@ -287,11 +285,8 @@ export async function replaceUserIdentity(
   return { oldGrytUserId, ownerUpdated };
 }
 
-/**
- * Both halves in one function: the bump invalidates tokens already held and the
- * revoke stops new ones being minted, and either alone leaves a way in. Keyed on
- * the account, so a member with several rows loses all of them.
- */
+/** Both halves together: the bump invalidates tokens already held and the revoke
+    stops new ones being minted, and either alone leaves a way in. */
 export async function revokeUserSessions(grytUserId: string): Promise<void> {
   const db = getSqliteDb();
   db.prepare("UPDATE users SET token_version = token_version + 1 WHERE gryt_user_id = ?").run(grytUserId);

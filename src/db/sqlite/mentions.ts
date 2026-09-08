@@ -80,8 +80,7 @@ export async function countUnseenMentions(
 
 /**
  * Nothing clears the server, a conversation its timeline, a thread that thread,
- * and `includeThreads` both. A reply is not in the channel timeline, so opening
- * the channel is not reading it, and nothing infers `includeThreads`.
+ * `includeThreads` both. A reply is not on screen when a channel opens.
  */
 export async function markMentionsSeen(args: {
   serverUserId: string;

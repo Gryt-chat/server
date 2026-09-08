@@ -154,13 +154,8 @@ export async function requireAuth(
   };
 }
 
-/**
- * A permission check on an already-authenticated caller, for handlers that need
- * a second one.
- *
- * Emits the same refusal `requireAuth` would, so a gate reached this way is
- * indistinguishable from one reached at the door.
- */
+/** For a handler needing a second check. Emits the same refusal `requireAuth`
+    would, so a gate reached this way looks like one reached at the door. */
 export function requirePermission(
   socket: Socket,
   auth: AuthResult,

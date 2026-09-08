@@ -1,9 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 
 /**
- * A gate at 60 denies every role below it and leaves the rest inheriting. The
- * columns are not dropped, or a rollback finds NULL and reopens the channel, and
- * the marker is written in the same transaction so a second pass cannot run.
+ * A gate at 60 denies every role below and leaves the rest inheriting. The
+ * columns stay, or a rollback finds NULL; the marker is written in the same tx.
  */
 
 export const RANK_GATE_MIGRATION_KEY = "channel_rank_gates_migrated";

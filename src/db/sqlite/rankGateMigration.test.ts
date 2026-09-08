@@ -4,18 +4,8 @@ import { describe, it } from "node:test";
 import { rulesForRankGates } from "./rankGateMigration";
 
 /**
- * The arithmetic that turns "rank 60 and above" into a set of rules.
- *
- * Tested on its own rather than through a database, because the translation is
- * the part that can be wrong and it reads as a table of cases when it is not
- * wrapped in schema. Whether the migration runs once, and inside a transaction,
- * is a different property and is checked in `channelPermissions.test.ts` where
- * a real database is already open.
- *
- * The failure mode worth guarding: an off-by-one at the boundary. A gate at 60
- * always admitted rank 60 — `auth.rank < postGate` was the comparison — so a
- * translation that denied at 60 would silently lock the moderators out of the
- * channel the gate was written to give them.
+ * The translation without a database. `auth.rank < postGate` admitted rank 60 at
+ * a gate of 60, so denying it locks the moderators out.
  */
 
 const ROLES = [
@@ -42,9 +32,8 @@ describe("translating a rank gate into rules", () => {
   });
 
   it("admits the role standing exactly on the gate", () => {
-    // `auth.rank < postGate` was the old comparison, so 60 could post in a
-    // channel gated at 60. Denying it here would lock out the very role the
-    // gate was set to admit.
+    // `auth.rank < postGate` admitted 60 at a gate of 60, so denying it locks out
+    // the role the gate was set to admit.
     const rules = rulesForRankGates(ROLES, 60, null);
     assert.ok(!denied(rules, "send_messages").includes("mod"));
   });
@@ -56,9 +45,8 @@ describe("translating a rank gate into rules", () => {
   });
 
   it("keeps the two gates apart when a channel had both", () => {
-    // Independent before, independent after. Folding them together — dropping
-    // the send denial because the role cannot read anyway — would mean a later
-    // edit that restores reading silently restores posting with it.
+    // Independent before and after: folding them means a later edit restoring
+    // reading silently restores posting.
     const rules = rulesForRankGates(ROLES, 80, 40);
     assert.deepEqual(denied(rules, "read_messages"), ["guest"]);
     assert.deepEqual(denied(rules, "send_messages"), ["guest", "member", "mod"]);
@@ -76,8 +64,7 @@ describe("translating a rank gate into rules", () => {
   });
 
   it("writes only deny rules", () => {
-    // A rank gate could never grant something the role lacked server-wide, so
-    // the translation must not invent an allow — that would hand a role a
+    // A rank gate never granted anything, so an invented allow hands a role a
     // permission it did not have before the upgrade.
     const rules = rulesForRankGates(ROLES, 50, 50);
     assert.ok(rules.every((r) => r.effect === "deny"));

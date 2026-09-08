@@ -7,12 +7,8 @@ import { after, before, describe, it } from "node:test";
 import { initSqlite } from "./connection";
 import { getUserByServerId, updateUserNickname, upsertUser } from "./users";
 
-/**
- * Runs against a real database in a temporary directory rather than a stub,
- * because what is being tested is the SQL — the counter increments inside the
- * same UPDATE that does the rename, and the guard against counting a no-op is
- * a WHERE clause. A fake would only test the call.
- */
+/** A real database, because the SQL is what is under test: the counter is in the
+    same UPDATE and the no-op guard is a WHERE clause. */
 let dir: string;
 
 before(async () => {
@@ -44,9 +40,8 @@ describe("rename visibility", () => {
   });
 
   it("does not count setting the same name again", async () => {
-    // The guard that matters. `profile:update` arrives for things that are not
-    // renames, and a count that fires on those would accuse somebody who has
-    // never renamed once.
+    // `profile:update` arrives for things that are not renames, and a count that
+    // fires on those accuses somebody who never renamed.
     const user = await upsertUser("key:ccc", "Carol");
     await updateUserNickname(user.server_user_id, "Carol");
     await updateUserNickname(user.server_user_id, "Carol");

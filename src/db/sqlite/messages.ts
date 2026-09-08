@@ -53,8 +53,8 @@ export async function listMessages(conversationId: string, limit = 50, before?: 
 }
 
 /**
- * Newest-first window, reversed on the way out, like `listMessages`: ascending
- * with a limit took the oldest N, so a thread past 200 replies hid the new ones.
+ * Newest-first, reversed on the way out: ascending with a limit took the oldest
+ * N, so a thread past its page hid the new replies.
  */
 export async function listThreadMessages(
   threadId: string,
@@ -308,15 +308,8 @@ export async function purgeUserContent(senderServerUserId: string): Promise<{
   return { deletedMessages, updatedReactions, orphanedAttachmentIds };
 }
 
-/**
- * How many messages one member has sent, ever.
- *
- * For the automatic-promotion thresholds. Counts what is still there rather
- * than what was ever posted, which means a purge or a moderator's delete moves
- * somebody back down the count — that is the honest reading of "has posted
- * fifty messages", and it costs nothing to say so here since nothing is ever
- * taken away once granted.
- */
+/** Counts what is still there, so a delete moves somebody back down. Costs
+    nothing, since the promotion thresholds never take a role away. */
 export async function countMessagesBySender(senderServerUserId: string): Promise<number> {
   const db = getSqliteDb();
   const row = db

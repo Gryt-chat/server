@@ -64,11 +64,8 @@ describe("httpRateLimit", () => {
     assert.equal(passed, 2, "one caller being limited must not limit another");
   });
 
-  /**
-   * The budgets differ by an order of magnitude on purpose, so they must not
-   * share a counter. Reading attachments while scrolling would otherwise
-   * exhaust the upload budget and start refusing image loads.
-   */
+  /** The budgets differ by an order of magnitude, so a shared counter would let
+      scrolling exhaust the upload budget and refuse image loads. */
   it("keeps separate budgets separate", () => {
     const upload = httpRateLimit("t:upload", RL_HTTP_UPLOAD);
     hammer(upload, RL_HTTP_UPLOAD.limit + 5);
@@ -77,15 +74,8 @@ describe("httpRateLimit", () => {
     assert.equal(passed, 10, "exhausting the upload budget must not touch the file budget");
   });
 
-  /**
-   * The emoji incident, as a test.
-   *
-   * Staging an emoji and reading the emoji list shared one key, and the write
-   * rule carries a ban. So importing a pack — one request per emoji, six at a
-   * time — spent the budget, banned the address, and the ban refused the list
-   * as well. A client with no list draws no emoji, so a server halfway through
-   * an import was indistinguishable from one whose emoji had been deleted.
-   */
+/** Staging and reading shared one key and the write rule carries a ban, so an
+    import banned the address and took the emoji list down with it. */
   it("keeps reading an emoji list possible while writes are banned", () => {
     const writes = httpRateLimit("t:emoji:write", RL_HTTP_UPLOAD);
     hammer(writes, RL_HTTP_UPLOAD.limit + 20);
@@ -94,11 +84,8 @@ describe("httpRateLimit", () => {
     assert.equal(passed, 10, "a banned write budget must not refuse the list");
   });
 
-  /**
-   * A burst is the normal shape of this endpoint rather than a sign of abuse,
-   * so it answers 429 and lets the caller retry instead of shutting the address
-   * out for another window.
-   */
+  /** A burst is the normal shape here rather than abuse, so it answers 429 and
+      lets the caller retry. */
   it("does not ban an address for staging emoji quickly", () => {
     assert.equal(RL_HTTP_EMOJI_WRITE.banMs, undefined);
     assert.ok(

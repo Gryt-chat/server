@@ -31,20 +31,16 @@ describe("the SFU signing key", () => {
   });
 
   it("is the same on the next call", () => {
-    // The property that matters. The SFU memorises what a server registers
-    // under its id and never forgets it, so a key that changed per boot would
-    // be refused on every restart and voice would never come back.
+    // The SFU memorises what a server registered under its id, so a key that
+    // changed per boot is refused on every restart and voice never comes back.
     const first = getOrCreateSfuSecret();
     const second = getOrCreateSfuSecret();
     assert.equal(first, second);
   });
 
   it("does not travel with the server config", async () => {
-    // server_config is read with SELECT * and mapped by rowToConfig, and that
-    // record is what server:settings:get sends to every member. If this key
-    // ever appears in it, every member of the server can mint their own SFU
-    // token. Pinned here because the leak would be one careless field away and
-    // nothing would look wrong.
+    // `rowToConfig` is what `server:settings:get` sends to every member, so this
+    // key appearing there lets any of them mint their own SFU token.
     const secret = getOrCreateSfuSecret();
     const cfg = await getServerConfig();
     assert.ok(cfg);

@@ -1,10 +1,8 @@
 import type { JWK } from "jose";
 
 /**
- * Shipped rather than fetched, because fetching put every server in the identity
- * service's log with its address. Update with
- * `curl https://id.gryt.chat/.well-known/jwks.json`, keeping the retiring key
- * for 30 days — the certificate lifetime — or its certificates fall back to a fetch.
+ * Shipped, not fetched, which put every server in the CA's log with its address.
+ * Update from `id.gryt.chat/.well-known/jwks.json`, keeping the old key 30 days.
  */
 export const BUNDLED_IDENTITY_JWKS: Record<string, { keys: JWK[] }> = {
   "https://id.gryt.chat": {
