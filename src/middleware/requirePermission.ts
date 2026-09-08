@@ -4,15 +4,8 @@ import type { Permission } from "../constants/permissions";
 import { hasPermission } from "../services/permissions";
 
 /**
- * The HTTP half of the permission check, so both halves say the same thing.
- * Routes each writing their own `role !== "owner"` stops working the moment a
- * server can define a role allowed to manage emoji and nothing else.
- *
- * Returns false having already answered the request, so callers read as
- * `if (!(await ensurePermission(req, res, "manage_emojis"))) return;`.
- *
- * Not express middleware despite living here: the routes it replaces work
- * inside a promise chain after the body is parsed.
+ * The HTTP half, because a route writing its own `role !== "owner"` breaks once a
+ * server can define an emoji-only role. Returns false having already answered.
  */
 export async function ensurePermission(
   req: Request,

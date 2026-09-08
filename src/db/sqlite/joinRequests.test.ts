@@ -15,10 +15,8 @@ describe("join request status", () => {
   });
 
   it("fails shut on anything else", () => {
-    // The property that matters, and the same one normalizeJoinPolicy has. A
-    // row written by a newer server, a hand-edited status or a typo must leave
-    // somebody outside the door, never inside it. "approved" is the only value
-    // that admits anyone, so it has to be spelled exactly.
+    // Anything unrecognised must leave somebody outside the door: "approved" is
+    // the only value that admits anyone, so it has to be spelled exactly.
     for (const v of [
       undefined,
       null,

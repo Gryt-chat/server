@@ -29,26 +29,16 @@ function normalizeProfanityMode(v: unknown): ProfanityMode {
   return "censor";
 }
 
-/**
- * Anything unrecognised reads as `invite`, so a value this build does not know
- * about — a column written by a newer server, a hand-edited row — fails shut
- * rather than throwing the doors open.
- */
+/** Anything unrecognised reads as `invite`, so a column written by a newer
+    server fails shut rather than throwing the doors open. */
 export function normalizeJoinPolicy(v: unknown): JoinPolicy {
   const s = String(v || "").toLowerCase();
   return isJoinPolicy(s) ? s : "invite";
 }
 
 /**
- * A stored role id, in the shape ids are compared in. Case and shape only —
- * this module cannot know a server's own role ids without a second read, so an
- * id with no definition is resolved where roles are *used*: see `resolveRole`.
- */
-/**
- * Anything unrecognised reads as `disabled`, never as `request`.
- *
- * Same rule as the join policy above it: a value this build does not know
- * about must leave the door shut rather than open.
+ * Anything unrecognised reads as `disabled`, never `request`: the same rule as
+ * the join policy above, since an unknown value must leave the door shut.
  */
 export function normalizeBotJoinPolicy(v: unknown): BotJoinPolicy {
   return String(v || "").toLowerCase() === "request" ? "request" : "disabled";
@@ -91,14 +81,8 @@ function rowToConfig(r: Record<string, unknown>): ServerConfigRecord {
 
 const SERVER_CONFIG_ID = "config";
 
-/**
- * The key this server signs SFU client tokens with. Generated once and kept:
- * the SFU memorises what a server registers under its id, so a value that
- * changed per boot is refused as "already registered with different password".
- *
- * `SERVER_PASSWORD` still wins when set. **Not on `ServerConfigRecord` and not
- * returned by `getServerConfig`** — the only caller is the SFU client at boot.
- */
+/** Kept, because the SFU memorises what a server registered under its id.
+    Deliberately off `ServerConfigRecord`; the SFU client at boot is the caller. */
 export function getOrCreateSfuSecret(): string {
   const db = getSqliteDb();
 
@@ -113,10 +97,8 @@ export function getOrCreateSfuSecret(): string {
   // out, so there is no reason for it to be shorter than the hash it keys.
   const secret = randomBytes(32).toString("hex");
 
-  // The row is created by `createServerConfigIfNotExists` before this runs, so
-  // an UPDATE is enough. If it somehow is not there yet, nothing is written and
-  // the caller sees an empty string, which the SFU client refuses loudly rather
-  // than signing with.
+  // The row exists by now, so an UPDATE is enough. If not, the caller sees an
+  // empty string, which the SFU client refuses loudly rather than signing with.
   db.prepare(`UPDATE server_config SET sfu_secret = ? WHERE id = ?`).run(secret, SERVER_CONFIG_ID);
 
   const stored = db
@@ -291,9 +273,8 @@ export async function updateServerConfig(patch: {
     const raw = (patch as Record<string, unknown>)[key];
     if (raw === undefined) continue;
     setClauses.push(`${col} = ?`);
-    // FIELD_MAP only ever maps to scalar columns, and every transform above
-    // returns a string or a number, so this is always a bindable value — but
-    // `raw` comes out of an index signature typed unknown, so it needs saying.
+    // Always a bindable value, since FIELD_MAP maps only scalars, but `raw` comes
+    // out of an index signature typed unknown.
     params.push((transform ? transform(raw) : (raw ?? null)) as SQLInputValue);
   }
   params.push(SERVER_CONFIG_ID);
@@ -304,14 +285,8 @@ export async function updateServerConfig(patch: {
   return updated;
 }
 
-/**
- * Every role somebody holds, oldest first.
- *
- * Order is the order they were given, which is not the order they are shown in
- * -- that is by rank, and rank lives with the definitions. Kept stable anyway,
- * because it is what breaks a tie between two roles of equal rank, and a tie
- * broken differently on each read would move somebody's name colour around.
- */
+/** Oldest first, which is not display order — that is by rank. Stable anyway,
+    because it breaks a tie and an unstable one moves a name colour. */
 export async function listMemberRoles(serverUserId: string): Promise<ServerRole[]> {
   const db = getSqliteDb();
   const rows = db
@@ -320,25 +295,14 @@ export async function listMemberRoles(serverUserId: string): Promise<ServerRole[
   return rows.map((r) => normalizeRoleId(r.role));
 }
 
-/**
- * Replace everything somebody holds with this one role.
- *
- * The old single-role setter, kept under its own name because that is still
- * what most callers mean: a moderation action that says "you are a member now"
- * is replacing the set, not adding to it. Adding is addMemberRole.
- */
+/** Most callers mean this: a moderation action saying "you are a member now"
+    replaces the set rather than adding to it. Adding is `addMemberRole`. */
 export async function setServerRole(serverUserId: string, role: ServerRole): Promise<void> {
   await setMemberRoles(serverUserId, [role]);
 }
 
-/**
- * Replace everything somebody holds with exactly these. **One transaction** —
- * the gap between the delete and the insert is a moment where they hold
- * nothing, and a permission check landing in it would refuse them.
- *
- * An empty list means no row, which the read path resolves to the default for
- * their tier. Not the same as holding the fallback role.
- */
+/** One transaction: between the delete and the insert they hold nothing, and a
+    permission check landing there refuses them. An empty list means no row. */
 export async function setMemberRoles(serverUserId: string, roles: ServerRole[]): Promise<void> {
   const db = getSqliteDb();
   const now = toIso(new Date());
@@ -368,13 +332,8 @@ export async function addMemberRole(serverUserId: string, role: ServerRole): Pro
   ).run(serverUserId, role, now, now);
 }
 
-/**
- * Take one role away, leaving the rest.
- *
- * Taking the last one away is allowed. It leaves them on the joiner default
- * rather than on nothing, which is the same place somebody who has never been
- * given a role sits.
- */
+/** Taking the last one is allowed: it leaves them on the joiner default, where
+    somebody never given a role also sits. */
 export async function removeMemberRole(serverUserId: string, role: ServerRole): Promise<boolean> {
   const db = getSqliteDb();
   const result = db
@@ -396,11 +355,8 @@ export async function listServerRoles(): Promise<ServerRoleRecord[]> {
   }));
 }
 
-/**
- * A ban is in force when it exists and has not expired. A predicate rather than
- * a sweeper: a ban outliving its expiry because a timer did not fire is worse
- * than a row of garbage. `listBans` clears dead rows as a side effect.
- */
+/** A predicate rather than a sweeper: a ban outliving its expiry because a timer
+    did not fire is worse than a stale row. */
 const ACTIVE_BAN_PREDICATE = `gryt_user_id = ? AND (expires_at IS NULL OR expires_at > ?)`;
 
 export async function banUser(
@@ -426,12 +382,8 @@ export async function unbanUser(grytUserId: string): Promise<void> {
   db.prepare(`DELETE FROM bans WHERE gryt_user_id = ?`).run(grytUserId);
 }
 
-/**
- * Stays a boolean deliberately. The session gate calls this on every admission
- * path, and a function that returns a record invites `if (await getBan(id))` —
- * which is true for an expired ban and would quietly make every temporary ban
- * permanent. Callers that need the detail use `getActiveBan`.
- */
+/** A boolean deliberately: returning a record invites `if (await getBan(id))`,
+    which is true for an expired ban and makes every temporary one permanent. */
 export async function isUserBanned(grytUserId: string): Promise<boolean> {
   const db = getSqliteDb();
   const row = db
@@ -461,13 +413,8 @@ function rowToBan(r: Record<string, unknown>): ServerBanRecord {
   };
 }
 
-/**
- * Bans in force, newest first, with names attached.
- *
- * The join is the point: without it this returns bare OIDC subject strings,
- * which is unusable in a UI and most of why there was never a bans screen. The
- * nicknames are LEFT JOINed because a banned user's row can be gone entirely.
- */
+/** Without the join this returns bare subject strings, which is unusable in a
+    UI. LEFT JOINed, because a banned user's row can be gone entirely. */
 export async function listBans(): Promise<ServerBanRecord[]> {
   const db = getSqliteDb();
   const now = toIso(new Date());

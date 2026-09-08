@@ -14,9 +14,8 @@ describe("join policy", () => {
   });
 
   it("fails shut on anything else", () => {
-    // The property that matters. A column written by a newer server, a
-    // hand-edited row or a typo must leave a server harder to get into, never
-    // easier.
+    // A column written by a newer server, a hand-edited row or a typo must leave
+    // a server harder to get into, never easier.
     for (const v of [
       undefined,
       null,

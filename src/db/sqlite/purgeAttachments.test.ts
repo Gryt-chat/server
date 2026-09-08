@@ -42,9 +42,8 @@ describe("what a purge orphans", () => {
   });
 
   it("leaves a file alone when somebody else's message still points at it", async () => {
-    // The case that makes a blind delete wrong. Nothing in Gryt attaches one
-    // file to two messages today, but the purge should not be the thing that
-    // assumes so.
+    // Nothing attaches one file to two messages today, but the purge should not
+    // be the thing that assumes so.
     await post("spammer2", ["shared", "only-theirs"]);
     await post("innocent", ["shared"]);
 

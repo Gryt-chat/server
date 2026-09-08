@@ -41,14 +41,8 @@ export async function getPermissionScope(scopeId: string): Promise<ChannelPermis
   return row ? rowToScope(row) : null;
 }
 
-/**
- * Every rule in the server, keyed by scope.
- *
- * One read rather than one per scope. Resolution needs whichever scope the
- * channel points at, and the visibility filter needs all of them at once to
- * answer "which channels may this member see" — so the caller that reads them
- * all is the common one, and it caches.
- */
+/** One read rather than one per scope: the visibility filter needs all of them
+    at once, so the caller reading everything is the common one, and it caches. */
 export async function listAllPermissionRules(): Promise<Map<string, ChannelPermissionRuleRecord[]>> {
   const db = getSqliteDb();
   const rows = db.prepare(`SELECT * FROM channel_permission_rules`).all() as Record<string, unknown>[];
@@ -97,14 +91,8 @@ export async function renamePermissionTemplate(scopeId: string, name: string): P
     .run(String(name).trim().slice(0, 60), toIso(new Date()), scopeId);
 }
 
-/**
- * Replace a scope's rules wholesale. The editor sends the matrix it is showing,
- * so a rule absent from the payload has been set back to inherit and its row
- * has to go — applying only what is present makes inherit unreachable.
- *
- * One transaction: a half-applied matrix is a channel with permissions nobody
- * chose.
- */
+/** A rule absent from the payload was set back to inherit, so applying only what
+    is present makes inherit unreachable. One transaction. */
 export async function replacePermissionRules(
   scopeId: string,
   rules: { roleId: string; permission: string; effect: string }[],
@@ -122,10 +110,8 @@ export async function replacePermissionRules(
     }))
     .filter((r) => r.roleId.length > 0);
 
-  // node:sqlite has no transaction() wrapper, so this is bracketed by hand the
-  // way emojis.ts does it. Stopping between the delete and the inserts would
-  // leave the scope with no rules at all, which reads as "inherit everything" —
-  // a channel briefly open to everyone.
+  // Bracketed by hand, since node:sqlite has no wrapper: stopping between the
+  // delete and the inserts reads as inherit everything.
   db.exec("BEGIN");
   try {
     db.prepare(`DELETE FROM channel_permission_rules WHERE scope_id = ?`).run(scopeId);
@@ -142,14 +128,8 @@ export async function replacePermissionRules(
   }
 }
 
-/**
- * Point a channel at a scope, or at nothing.
- *
- * Deleting the scope it used to own is part of this. A private "Custom" scope
- * belongs to exactly one channel, so switching that channel to a template
- * leaves it unreachable — and a row nothing points at is a row somebody has to
- * work out the meaning of later. A shared template is left alone.
- */
+/** Deleting the private scope it owned is part of this, since that belongs to
+    one channel and would be left unreachable. A template is left alone. */
 export async function setChannelPermissionScope(channelId: string, scopeId: string | null): Promise<void> {
   const db = getSqliteDb();
   const now = toIso(new Date());
@@ -183,13 +163,8 @@ export async function setChannelPermissionScope(channelId: string, scopeId: stri
   }
 }
 
-/**
- * Delete a template, and put every channel using it back to inheriting.
- *
- * Not left dangling. A channel pointing at a scope that is gone would resolve
- * to no rules, which is the same answer as inheriting — but only by accident,
- * and the settings UI would show a dropdown with nothing selected.
- */
+/** Not left dangling: a channel pointing at a gone scope resolves to inheriting
+    only by accident, and the settings dropdown shows nothing selected. */
 export async function deletePermissionTemplate(scopeId: string): Promise<void> {
   const db = getSqliteDb();
   const now = toIso(new Date());

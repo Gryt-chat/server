@@ -34,9 +34,8 @@ export async function putObject(params: {
   const filePath = resolvePath(params.bucket, params.key);
   await mkdir(dirname(filePath), { recursive: true });
 
-  // Already on disk: copy rather than read into memory and write back out.
-  // copyFile, not rename — the temp directory is frequently on a different
-  // filesystem from DATA_DIR, and rename fails across devices with EXDEV.
+  // Copy rather than read into memory, and copyFile rather than rename: the temp
+  // directory is often on another filesystem, where rename fails with EXDEV.
   if (params.sourcePath) {
     await copyFile(params.sourcePath, filePath);
     if (params.contentType) {

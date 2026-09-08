@@ -105,10 +105,8 @@ export async function upsertServerChannel(channel: {
   const forumTags = Array.isArray(channel.forumTags) ? JSON.stringify(parseForumTags(JSON.stringify(channel.forumTags))) : null;
 
   db.prepare(
-    // permission_scope_id is deliberately absent. It is set by
-    // setChannelPermissionScope, which also cleans up an orphaned private
-    // scope; letting a general channel update carry it would mean every caller
-    // that renames a channel could silently change who can see it.
+    // Absent on purpose: `setChannelPermissionScope` sets it and cleans up an
+    // orphaned scope, so a rename would otherwise change who can see it.
     `INSERT INTO channels (channel_id, name, type, position, description, require_push_to_talk, disable_rnnoise, max_bitrate, esports_mode, text_in_voice, layout, automated, forum_tags, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(channel_id) DO UPDATE SET name=?, type=?, position=?, description=?, require_push_to_talk=?, disable_rnnoise=?, max_bitrate=?, esports_mode=?, text_in_voice=?, layout=?, automated=?, forum_tags=?, updated_at=?`
@@ -127,12 +125,8 @@ export async function deleteServerChannel(channelId: string): Promise<void> {
   db.prepare(`DELETE FROM channels WHERE channel_id = ?`).run(channelId);
 }
 
-/**
- * Seed the starting channels on a server that has none.
- *
- * Answers whether it actually wrote any, because whoever asked has a
- * permission cache keyed on the channel list and it is now wrong (GRYT-997).
- */
+/** Answers whether it wrote any, because the caller's permission cache is keyed
+    on the channel list and is now wrong. */
 export async function ensureDefaultChannels(): Promise<boolean> {
   const existing = await listServerChannels();
   if (existing.length > 0) return false;
@@ -167,16 +161,8 @@ export async function listServerSidebarItems(): Promise<ServerSidebarItemRecord[
   return rows.map(rowToSidebarItem);
 }
 
-/**
- * The folder an item may sit in, resolved rather than trusted.
- *
- * Answers null unless the id names an item that exists right now and is a
- * folder. That covers a channel dragged into a folder somebody else deleted a
- * moment earlier, and it covers a client that sends whatever it likes: the
- * worst outcome is a channel at the top level, where it is visible. Storing an
- * id that resolves to nothing would hide it instead, since the sidebar draws
- * children under their folder and nothing else.
- */
+/** Null unless the id is a folder that exists now, so the worst case is a
+    channel at the top level. A stored id resolving to nothing hides it. */
 function resolveParentFolder(
   db: ReturnType<typeof getSqliteDb>,
   itemId: string,
@@ -220,15 +206,8 @@ export async function upsertServerSidebarItem(item: {
   ).run(itemId, kind, position, channelId, spacerHeight, label, parentItemId, now, now, kind, position, channelId, spacerHeight, label, parentItemId, now);
 }
 
-/**
- * Deleting a folder empties it rather than taking the channels with it.
- *
- * The row being removed is one sidebar entry, and a channel's entry is the only
- * thing that puts it on screen. Cascading would make "remove this folder" mean
- * "remove these six channels from the sidebar", which is not what the words say
- * and is not recoverable from the sidebar itself — the channels would still
- * exist, with no way to reach them.
- */
+/** A channel's sidebar entry is the only thing that puts it on screen, so
+    cascading would leave six channels existing with no way to reach them. */
 export async function deleteServerSidebarItem(itemId: string): Promise<void> {
   const db = getSqliteDb();
   const norm = String(itemId || "").trim().slice(0, 64);

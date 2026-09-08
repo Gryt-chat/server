@@ -13,12 +13,8 @@ import {
   recordMentions,
 } from "./mentions";
 
-/**
- * A real database, because two of the things being checked are the schema
- * rather than the code around it: the primary key that makes a re-parse
- * harmless, and the cascade that takes a mention with the message it points at.
- * Neither of those exists in a mock.
- */
+/** A real database, because two of these are the schema rather than the code:
+    the primary key that makes a re-parse harmless, and the cascade. */
 let dir: string;
 
 before(async () => {
@@ -143,13 +139,8 @@ describe("mentions", () => {
 });
 
 /**
- * Where the naming happened, not just which channel it was in.
- *
- * `mention:new` and `mentions:list` carried a conversation id and nothing else,
- * so being named inside a thread arrived pointing at the channel with no way to
- * say where in it — and the thread panel is the only place that message is
- * rendered. The thread is read off the message rather than stored on the
- * mention, so a row cannot disagree with the message it points at.
+ * A mention in a thread used to arrive pointing at the channel, which is not
+ * where it renders. Read off the message, so a row cannot disagree with it.
  */
 describe("a mention knows which thread it was in", () => {
   const CONV = "conv-threads";
@@ -210,12 +201,8 @@ describe("a mention knows which thread it was in", () => {
 });
 
 /**
- * Reading a channel is not reading the threads hanging off it.
- *
- * The client filters thread replies out of the channel timeline and shows the
- * root instead, so a reply that named somebody was never on screen. Clearing
- * it when the channel opened took the count off the topic row on the way in,
- * before anybody could see which topic it pointed at (GRYT-1014).
+ * A reply is filtered out of the channel timeline, so it was never on screen and
+ * clearing it on open took the count off the topic row on the way in.
  */
 describe("marking mentions seen is scoped to what was on screen", () => {
   const CONV = "conv-seen";
@@ -268,9 +255,8 @@ describe("marking mentions seen is scoped to what was on screen", () => {
   });
 
   it("clears a conversation and its threads when asked for both", async () => {
-    // What "mark as read" on a channel means, as against looking at it. Two
-    // more on top of the thread the case above deliberately left behind, so
-    // this clears all three: the timeline one, the new thread's and that one.
+    // What marking a channel read means, as against looking at it: three
+    // mentions, the timeline one and two threads'.
     for (const [id, thread] of [
       ["done-channel", null],
       ["done-thread", "thread-seen-c"],
@@ -303,9 +289,8 @@ describe("marking mentions seen is scoped to what was on screen", () => {
   });
 
   it("clears everything when no conversation is named, threads included", async () => {
-    // What a "mark all read" on the whole server wants, and the way out if a
-    // thread stops being reachable — a deleted forum topic would otherwise
-    // hold its count forever.
+    // Marking the whole server read, and the way out when a thread stops being
+    // reachable: a deleted topic would hold its count forever.
     await insertMessage({
       conversation_id: "conv-seen-elsewhere",
       message_id: "seen-elsewhere",

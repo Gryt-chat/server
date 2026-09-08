@@ -80,9 +80,8 @@ describe("carrying an identity forward", () => {
   });
 
   it("tells the two refusals apart", async () => {
-    // The whole point of the typed result. Both used to be `false`, so a
-    // caller could not say "there was nothing to carry" rather than "you have
-    // two memberships here and one of them stayed behind".
+    // Both used to be `false`, so a caller could not tell "nothing to carry" from
+    // "one of your two memberships stayed behind".
     await upsertUser("key:ccc", "Local");
     await upsertUser("account-4", "Account");
 

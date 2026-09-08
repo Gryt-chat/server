@@ -32,11 +32,8 @@ const CUSTOM_CODE_RE = /^[a-z0-9][a-z0-9_-]{1,30}[a-z0-9]$/;
 
 export async function createServerInvite(createdByServerUserId: string | null, opts?: {
   expiresAt?: Date | null; infinite?: boolean; maxUses?: number; note?: string | null; customCode?: string | null;
-  /**
-   * Already validated by the caller against `mayBindRoleToInvite`. Taken as
-   * given here: this layer writes rows, and putting the rule in two places is
-   * how one of them ends up a check short.
-   */
+  /** Validated by the caller against `mayBindRoleToInvite`: this layer writes
+      rows, and the rule in two places ends up a check short in one. */
   grantedRole?: { roleId: string; rank: number } | null;
 }): Promise<ServerInviteRecord> {
   const db = getSqliteDb();
@@ -77,10 +74,8 @@ export async function listServerInvites(): Promise<ServerInviteRecord[]> {
   return rows.map(rowToInvite);
 }
 
-/**
- * One invite by code, or null. For answering "how did this person get in, and
- * is that door still open" without listing every invite on the server.
- */
+/** For answering how somebody got in, and whether that door is still open,
+    without listing every invite on the server. */
 export async function getServerInvite(code: string): Promise<ServerInviteRecord | null> {
   const db = getSqliteDb();
   const row = db.prepare(`SELECT * FROM invites WHERE code = ?`).get(code) as Record<string, unknown> | undefined;

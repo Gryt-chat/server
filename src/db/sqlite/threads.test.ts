@@ -16,12 +16,8 @@ import {
   listThreadsByConversation,
 } from "./threads";
 
-/**
- * Threads, and the one rule the whole feature leans on: a thread's replies live
- * in the messages table like anything else, but they never come back from
- * listMessages — the channel's main flow only ever shows thread_id IS NULL. If
- * that filter breaks, every reply doubles up in the parent channel.
- */
+/** Replies live in the messages table and never come back from `listMessages`,
+    which shows `thread_id IS NULL`. Break that and every reply doubles up. */
 
 let dir: string;
 
@@ -77,9 +73,8 @@ describe("threads persistence", () => {
       created_by: "u_alice",
     });
 
-    // Explicit, increasing timestamps: two replies in the same millisecond
-    // would tie on created_at and fall back to the message_id order, which is
-    // stable but not insertion order. Real replies are always seconds apart.
+    // Two replies in the same millisecond tie on created_at and fall back to
+    // message_id order, which is stable but not insertion order.
     await insertMessage({
       conversation_id: CONV,
       sender_server_id: "u_bob",

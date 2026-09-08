@@ -7,14 +7,8 @@ interface PutObjectCommon {
   aclPublicRead?: boolean;
 }
 
-/**
- * Store an object either from memory or from a file already on disk.
- * `sourcePath` exists so a large upload never has to be held in RAM — nothing
- * between the socket and the bucket materialises the whole file.
- *
- * The union makes the two mutually exclusive at compile time rather than
- * leaving a runtime "exactly one of these" check to be forgotten.
- */
+/** `sourcePath` is so a large upload is never held in RAM. The union makes the
+    two exclusive at compile time rather than by a runtime check. */
 export type PutObjectParams =
   | (PutObjectCommon & { body: Buffer | Uint8Array | Blob | string; sourcePath?: never })
   | (PutObjectCommon & { sourcePath: string; body?: never });

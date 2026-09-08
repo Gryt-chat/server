@@ -7,13 +7,8 @@ import {
 import type { RoleDefinitionRecord } from "../interfaces";
 import { fromIso, getSqliteDb, toIso } from "./connection";
 
-/**
- * A stored `permissions` column, back as a list this build understands.
- *
- * Anything unparseable reads as no permissions at all. That is the fail-shut
- * direction: a role whose column got corrupted should stop working, not stop
- * being checked.
- */
+/** Anything unparseable reads as no permissions: a corrupted column should stop
+    working rather than stop being checked. */
 function parsePermissions(raw: unknown): Permission[] {
   if (typeof raw !== "string") return [];
   try {
@@ -23,14 +18,8 @@ function parsePermissions(raw: unknown): Permission[] {
   }
 }
 
-/**
- * A stored threshold, or null when there isn't one.
- *
- * Zero and negatives read as null rather than as "grant immediately". A role
- * that grants itself the instant somebody arrives is a joining default, and
- * there is already a setting for that — reading a stray 0 as one would be a
- * promotion nobody configured.
- */
+/** Zero and negatives read as null, not "grant immediately": a role granted on
+    arrival is a joining default, and there is already a setting for that. */
 function positiveOrNull(value: unknown): number | null {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
@@ -112,14 +101,8 @@ export async function createRoleDefinition(
   return created;
 }
 
-/**
- * Change a role's name, colour, rank or permissions.
- *
- * `is_system` is not patchable and `role_id` is not renameable — the id is what
- * every `roles` row and both join defaults point at, so renaming it is a
- * migration wearing an edit's clothes. Delete and recreate if you want a
- * different id.
- */
+/** `role_id` is not renameable: every `roles` row and both join defaults point
+    at it, so a rename is a migration wearing an edit's clothes. */
 export async function updateRoleDefinition(
   roleId: string,
   patch: Partial<RoleDefinitionInput>,
@@ -165,12 +148,8 @@ export async function updateRoleDefinition(
   return getRoleDefinition(roleId);
 }
 
-/**
- * How many members hold this role.
- *
- * Asked before a delete so the caller can say what it is about to move, rather
- * than finding out afterwards from a member list that changed shape.
- */
+/** Asked before a delete, so the caller can say what it is about to move rather
+    than find out from a member list that changed shape. */
 export async function countRoleHolders(roleId: string): Promise<number> {
   const db = getSqliteDb();
   const row = db
@@ -187,11 +166,8 @@ export async function reassignRoleHolders(
   const db = getSqliteDb();
   const now = toIso(new Date());
 
-  // Two statements rather than one UPDATE, because somebody can hold both roles
-  // already and the primary key is the pair: renaming one onto the other would
-  // fail the whole statement for everybody, and OR REPLACE would drop the
-  // created_at of the role they keep. Insert what is missing, then delete what
-  // was moved.
+  // Two statements, because somebody can hold both and the key is the pair: one
+  // UPDATE fails for everybody and OR REPLACE drops the surviving created_at.
   db.exec("BEGIN");
   let moved = 0;
   try {
@@ -212,14 +188,8 @@ export async function reassignRoleHolders(
   return { moved };
 }
 
-/**
- * Delete a role, moving whoever held it onto `reassignTo` first. A dangling id
- * already resolves to the fallback on read, but leaving one has the member list
- * and the role editor disagree about what somebody is.
- *
- * System roles are refused: the seeder would put the row back on the next
- * restart, so allowing it is a delete that silently undoes itself.
- */
+/** A dangling id resolves to the fallback on read, but leaves the member list
+    and the editor disagreeing. System roles are refused; the seeder returns them. */
 export async function deleteRoleDefinition(
   roleId: string,
   reassignTo: string,
@@ -235,13 +205,8 @@ export async function deleteRoleDefinition(
   return { deleted: Number(result.changes ?? 0) > 0, moved };
 }
 
-/**
- * The rank a role id carries, for the outranks checks.
- *
- * An id with no definition behind it — a role deleted out from under a `roles`
- * row — reads as rank 0, which loses every comparison. That is the fail-shut
- * direction for a caller asking "may this person act on that one".
- */
+/** An id with no definition reads as rank 0 and loses every comparison, which is
+    fail-shut for "may this person act on that one". */
 export async function getRoleRank(roleId: string): Promise<number> {
   const def = await getRoleDefinition(roleId);
   if (def) return def.rank;

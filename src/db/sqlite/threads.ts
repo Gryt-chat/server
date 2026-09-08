@@ -4,12 +4,8 @@ import type { ThreadRecord, ThreadStatus } from "../interfaces";
 import { fromIso, getSqliteDb, toIso } from "./connection";
 
 /*
- * A thread is a discussion that hangs off one message. The root message stays
- * in the channel's normal timeline; the replies do not — they carry a
- * `thread_id` and are filtered out of `listMessages` (see messages.ts), so they
- * never pollute the main flow. `reply_count` / `last_message_at` are
- * denormalised counters kept up to date on every reply and delete, so the
- * "N replies" summary and the activity sort never have to scan the messages.
+ * The root stays in the channel timeline and the replies carry a `thread_id`
+ * that `listMessages` filters out. The counters save the summary a scan.
  */
 
 function rowToThread(r: Record<string, unknown>): ThreadRecord {
@@ -120,13 +116,6 @@ export async function decrementThreadReply(threadId: string): Promise<ThreadReco
   return getThread(threadId);
 }
 
-/**
- * Removes a thread and every reply in it, returning what it pointed at so the
- * caller can tell connected clients. The root message itself is a normal
- * channel message and is left alone — deleting it is the caller's separate
- * `deleteMessage` call.
- */
-/** Set a thread's status: open, solved (answered, still repliable) or closed (locked). */
 export async function setThreadTags(threadId: string, tags: string[]): Promise<ThreadRecord | null> {
   const db = getSqliteDb();
   const value = Array.isArray(tags) && tags.length > 0 ? JSON.stringify(tags.slice(0, 20)) : null;
@@ -135,6 +124,7 @@ export async function setThreadTags(threadId: string, tags: string[]): Promise<T
   return getThread(threadId);
 }
 
+/** open, solved (answered, still repliable) or closed (locked). */
 export async function setThreadStatus(threadId: string, status: ThreadStatus): Promise<ThreadRecord | null> {
   const db = getSqliteDb();
   const res = db.prepare(`UPDATE threads SET status = ? WHERE thread_id = ?`).run(status, threadId);
@@ -142,6 +132,8 @@ export async function setThreadStatus(threadId: string, status: ThreadStatus): P
   return getThread(threadId);
 }
 
+/** Returns what it pointed at, so the caller can tell clients. The root message
+    is the caller's own `deleteMessage`. */
 export async function deleteThread(
   threadId: string,
 ): Promise<{ conversation_id: string; root_message_id: string } | null> {

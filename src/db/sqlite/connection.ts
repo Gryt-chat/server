@@ -10,12 +10,8 @@ import {
   PERMISSION_SCHEMA_VERSION,
 } from "../../constants/permissions";
 
-/**
- * Re-exported so the query modules can type their dynamic parameter arrays
- * without importing the driver themselves. This file is the only one that knows
- * which driver is in use, and it is worth keeping it that way — the move off
- * better-sqlite3 touched one import because of it.
- */
+/** So the query modules can type their parameters without importing the driver.
+    This file is the only one that knows which driver is in use. */
 export type { SQLInputValue } from "node:sqlite";
 
 let db: DatabaseSync | null = null;
@@ -34,10 +30,8 @@ export async function initSqlite(): Promise<void> {
 
   db = new DatabaseSync(dbPath);
 
-  // node:sqlite has no pragma() helper, so these go through exec(). Same
-  // statements as before, in the same order — and the order matters: WAL is
-  // what lets the image worker write to this file from its own process while
-  // the server holds it open.
+  // The order matters: WAL is what lets the image worker write to this file from
+  // its own process while the server holds it open.
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA busy_timeout = 5000");
   db.exec("PRAGMA foreign_keys = ON");
@@ -571,11 +565,8 @@ function runMigrations(d: DatabaseSync): void {
     }
   }
 
-  // Per-member token invalidation, the counterpart to server_config's
-  // token_version. Additive with a constant default, so existing members start
-  // at 0 and every token they already hold still matches until something bumps
-  // it. No index: an index here would have to be built after this column
-  // exists, and createSchema runs first (GRYT-974).
+  // Additive with a constant default, so existing tokens still match. No index:
+  // one would have to be built after this column, and createSchema runs first.
   if (!hasColumn(d, "users", "token_version")) {
     d.exec("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0");
   }
@@ -584,9 +575,8 @@ function runMigrations(d: DatabaseSync): void {
     d.exec("ALTER TABLE channels ADD COLUMN post_min_rank INTEGER");
   }
 
-  // NULL on every existing row, so an upgrade leaves every channel visible to
-  // everybody. A migration that guessed a threshold would hide channels people
-  // were already using.
+  // NULL on every existing row, or a migration guessing a threshold hides
+  // channels people were already using.
   if (!hasColumn(d, "channels", "view_min_rank")) {
     d.exec("ALTER TABLE channels ADD COLUMN view_min_rank INTEGER");
   }
@@ -595,9 +585,7 @@ function runMigrations(d: DatabaseSync): void {
     d.exec("ALTER TABLE channels ADD COLUMN permission_scope_id TEXT");
   }
 
-  // NULL on every existing row, which is the top level, so an upgrade leaves
-  // the sidebar exactly as it was. Nothing is in a folder until somebody drags
-  // it into one.
+  // NULL is the top level, so an upgrade leaves the sidebar exactly as it was.
   if (!hasColumn(d, "sidebar_items", "parent_item_id")) {
     d.exec("ALTER TABLE sidebar_items ADD COLUMN parent_item_id TEXT");
   }
@@ -625,18 +613,14 @@ function runMigrations(d: DatabaseSync): void {
       ON channel_permission_rules (scope_id);
   `);
 
-  // A role an invite is allowed to hand out, off for every role until somebody
-  // ticks it. Rank alone would make every role below the creator silently
-  // grantable the moment it existed, which is the opposite of a default that
-  // hands out nothing.
+  // Off until somebody ticks it: rank alone makes every role below the creator
+  // silently grantable the moment it exists.
   if (!hasColumn(d, "role_definitions", "grantable_by_invite")) {
     d.exec("ALTER TABLE role_definitions ADD COLUMN grantable_by_invite INTEGER NOT NULL DEFAULT 0");
   }
 
-  // The role an invite grants, and the rank that role carried when it was
-  // bound. The snapshot is the whole defence against the role being edited
-  // upward afterwards: without it the link hands out whatever the role has
-  // grown into, and nothing anywhere failed a check.
+  // The snapshot is the whole defence against the role being edited upward:
+  // without it the link hands out whatever it grew into.
   if (!hasColumn(d, "invites", "granted_role_id")) {
     d.exec("ALTER TABLE invites ADD COLUMN granted_role_id TEXT");
   }
@@ -652,26 +636,14 @@ function runMigrations(d: DatabaseSync): void {
     d.exec("ALTER TABLE server_config ADD COLUMN discoverable INTEGER NOT NULL DEFAULT 1");
   }
 
-  // The key this server signs SFU client tokens with, generated on first use.
-  // Not derived from JWT_SECRET, so rotating the login secret does not silently
-  // take voice down with it.
-  //
-  // **Deliberately not on ServerConfigRecord.** `rowToConfig` names its fields
-  // one by one, so this cannot ride out on `server:settings:get` because
-  // somebody widened a type (GRYT-786).
+  // Not derived from JWT_SECRET, so rotating that does not take voice down, and
+  // deliberately not on ServerConfigRecord, which names its fields one by one.
   if (!hasColumn(d, "server_config", "sfu_secret")) {
     d.exec("ALTER TABLE server_config ADD COLUMN sfu_secret TEXT");
   }
 
-  // Whether a non-member needs an invite. Text rather than a boolean because
-  // the third answer — hold them until a moderator says yes — is what a busy
-  // public server wants, and a second flag later would be two columns that can
-  // disagree. Defaults to 'invite'.
-  //
-  // Then: how often somebody has renamed themselves, and when. A count and a
-  // timestamp rather than the old names, which are the part somebody may have
-  // had a good reason to leave behind. Existing rows start at zero, which reads
-  // as "never renamed" and is wrong for anyone who has.
+  // Text rather than a boolean, because the third answer is holding somebody for
+  // a moderator and two flags can disagree. Then a rename count, not the names.
   if (!hasColumn(d, "users", "nickname_change_count")) {
     d.exec("ALTER TABLE users ADD COLUMN nickname_change_count INTEGER NOT NULL DEFAULT 0");
   }
@@ -684,47 +656,32 @@ function runMigrations(d: DatabaseSync): void {
     d.exec("ALTER TABLE server_config ADD COLUMN join_policy TEXT NOT NULL DEFAULT 'invite'");
   }
 
-  // The dominant colour of an uploaded image, as #rrggbb. Written by the image
-  // worker, which already decodes every upload to build a thumbnail. Null for
-  // everything uploaded before this column existed and for images the worker
-  // could not read — consumers fall back rather than backfilling.
+  // Written by the image worker, which already decodes every upload. Null where
+  // it could not read one, and consumers fall back rather than backfilling.
   if (!hasColumn(d, "files", "dominant_color")) {
     d.exec("ALTER TABLE files ADD COLUMN dominant_color TEXT");
   }
 
-  // How big a thumbnail actually is, so a consumer can tell whether it is still
-  // the size we would write today. Null for everything made before this column,
-  // which the image worker treats as "unknown, rebuild it".
+  // So a consumer can tell whether a thumbnail is still the size we would write.
+  // Null is "unknown, rebuild it" to the image worker.
   if (!hasColumn(d, "files", "thumbnail_px")) {
     d.exec("ALTER TABLE files ADD COLUMN thumbnail_px INTEGER");
   }
 
-  // The avatar thumbnail size this server writes, published for the image
-  // worker. It runs from a separate repository with no package shared with this
-  // one, and the alternative was the same constant written down in both and
-  // kept in step by hand — where a disagreement makes the worker's rebuild pass
-  // either run forever or never. Written on every start so it tracks the
-  // constant rather than whatever was true when the row was created.
+  // Published for the image worker, which shares no package with this one, and
+  // written every start so it tracks the constant rather than the row's age.
   if (!hasColumn(d, "server_config", "avatar_thumb_px")) {
     d.exec("ALTER TABLE server_config ADD COLUMN avatar_thumb_px INTEGER");
   }
 
-  // When a ban lifts by itself, as ISO-8601. NULL means permanent, matching
-  // what NULL already means in invites.expires_at and refresh_tokens.expires_at.
-  //
-  // Nullable rather than NOT NULL because SQLite cannot add a NOT NULL column
-  // without a constant default, and there is no sensible constant here — every
-  // ban that predates this column is permanent, which is exactly NULL.
+  // NULL is permanent, as in invites.expires_at. Nullable because there is no
+  // sensible constant default, and every ban predating this column is permanent.
   if (!hasColumn(d, "bans", "expires_at")) {
     d.exec("ALTER TABLE bans ADD COLUMN expires_at TEXT");
   }
 
-  // Server mute and deafen used to live only on the socket, and were reset to
-  // false on every connection — so reconnecting, or opening a second tab,
-  // cleared them. They belong to the user rather than to the connection.
-  //
-  // NOT NULL with a constant default is legal on ADD COLUMN, unlike a
-  // non-constant one, so these need no backfill: everyone starts unmuted.
+  // Mute and deafen belong to the user, not the connection, which reset them on
+  // reconnect. A constant default is legal on ADD COLUMN, so no backfill.
   if (!hasColumn(d, "users", "is_server_muted")) {
     d.exec("ALTER TABLE users ADD COLUMN is_server_muted INTEGER NOT NULL DEFAULT 0");
   }
@@ -732,14 +689,12 @@ function runMigrations(d: DatabaseSync): void {
     d.exec("ALTER TABLE users ADD COLUMN is_server_deafened INTEGER NOT NULL DEFAULT 0");
   }
 
-  // A timeout is a mute that lifts by itself. Same shape as a temporary ban:
-  // nullable ISO-8601, NULL meaning "until somebody removes it", evaluated on
-  // read rather than swept by a job.
+  // Same shape as a temporary ban: NULL means until somebody removes it, and it
+  // is evaluated on read rather than swept.
   if (!hasColumn(d, "users", "server_mute_expires_at")) {
     d.exec("ALTER TABLE users ADD COLUMN server_mute_expires_at TEXT");
   }
-  // Which role a first-time joiner gets, split by identity tier. Both start at
-  // 'member' — the role everybody used to be given — so the columns appearing
+  // Both start at 'member', the role everybody used to get, so these appearing
   // changes nothing until somebody edits them.
   if (!hasColumn(d, "server_config", "default_role_account")) {
     d.exec("ALTER TABLE server_config ADD COLUMN default_role_account TEXT NOT NULL DEFAULT 'member'");
@@ -748,9 +703,8 @@ function runMigrations(d: DatabaseSync): void {
     d.exec("ALTER TABLE server_config ADD COLUMN default_role_local TEXT NOT NULL DEFAULT 'member'");
   }
 
-  // What a role asks of somebody before it grants itself. NULL means that half
-  // of the condition is not being asked, and a role with both NULL is never
-  // granted automatically — which is every role that existed before this.
+  // NULL means that half is not asked, and both NULL is never granted
+  // automatically — which is every role that existed before this.
   if (!hasColumn(d, "role_definitions", "auto_grant_after_days")) {
     d.exec("ALTER TABLE role_definitions ADD COLUMN auto_grant_after_days INTEGER");
   }
@@ -758,50 +712,32 @@ function runMigrations(d: DatabaseSync): void {
     d.exec("ALTER TABLE role_definitions ADD COLUMN auto_grant_after_messages INTEGER");
   }
 
-  // Whether an unknown bot may knock. `request` writes one pending row per bot
-  // identity and admits nothing; `disabled` refuses outright. Defaults to
-  // `request`, which widens only a rate-limited row in a table that grants
-  // nothing.
+  // `request` writes one pending row per bot identity and admits nothing, so the
+  // default widens only a rate-limited row in a table that grants nothing.
   if (!hasColumn(d, "server_config", "bot_join_policy")) {
     d.exec("ALTER TABLE server_config ADD COLUMN bot_join_policy TEXT NOT NULL DEFAULT 'request'");
   }
 
-  // What somebody's owl is wearing, as `@gryt/owl` encodes it. Drawn on the
-  // client at the size it is shown, unlike `avatar_file_id`.
-  //
-  // Null means no designed look. **That is not the same as the string for a
-  // look with every slot empty**, which is somebody who took everything off and
-  // draws differently from the owl their seed would have picked.
-  //
-  // Never parsed here — see `utils/wornString.ts`.
+  // Null is no designed look, which is not the string for a look with every slot
+  // empty — that one draws differently. Never parsed here.
   if (!hasColumn(d, "users", "avatar_worn")) {
     d.exec("ALTER TABLE users ADD COLUMN avatar_worn TEXT");
   }
 
-  // Whether members can open DMs here. Off means no conversation can be opened
-  // and none can be posted in; the rows stay, so turning it back on does not
-  // throw away history. Defaults to on.
-  //
-  // Then: what a group is called. **Only groups** — a one-to-one is named after
-  // the other person, and a copy here would go stale when they rename
-  // themselves. NULL means the clients build a name from who is in it.
+  // Off stops conversations being opened or posted in and keeps the rows. The
+  // name is groups only: a copy of a person's name would go stale.
   if (!hasColumn(d, "conversations", "name")) {
     d.exec("ALTER TABLE conversations ADD COLUMN name TEXT");
   }
 
-  // A picture somebody uploaded for a group.
-  //
-  // Only an upload. A group with none is drawn from its name, by the clients,
-  // the same way a server with no icon is — so the generated one follows a
-  // rename instead of being a file that has to be regenerated and stored.
+  // Uploads only. A group without one is drawn from its name by the clients, so
+  // the generated icon follows a rename rather than being stored.
   if (!hasColumn(d, "conversations", "icon_file_id")) {
     d.exec("ALTER TABLE conversations ADD COLUMN icon_file_id TEXT");
   }
 
-  // When somebody took this conversation out of their own sidebar. On the
-  // membership row rather than the conversation, since it is one person's
-  // answer. Nothing is deleted, and a new message brings it back — see
-  // `clearConversationHidden`.
+  // On the membership row, since it is one person's answer. Nothing is deleted,
+  // and a new message brings it back.
   if (!hasColumn(d, "conversation_members", "hidden_at")) {
     d.exec("ALTER TABLE conversation_members ADD COLUMN hidden_at TEXT");
   }
@@ -810,47 +746,29 @@ function runMigrations(d: DatabaseSync): void {
     d.exec("ALTER TABLE server_config ADD COLUMN allow_dms INTEGER NOT NULL DEFAULT 1");
   }
 
-  // What a member says their DM public key is (GRYT-720). Stored whole, handed
-  // back whole, and nothing here reads it — a server that verified the binding
-  // would assert what a client has to check for itself.
-  //
-  // **One column rather than a key and a signature side by side**, so there is
-  // no way to hand out one member's key with another's signature.
+  // Stored and handed back whole, and never read here. One column rather than a
+  // key beside a signature, so the two cannot be mixed between members.
   if (!hasColumn(d, "users", "dm_key_binding")) {
     d.exec("ALTER TABLE users ADD COLUMN dm_key_binding TEXT");
   }
 
-  // A message this server cannot read (GRYT-729). The whole envelope, stored
-  // untouched. When it is set `text` is null and there is nothing to filter,
-  // search, moderate or export — which is why the handler refuses a sealed
-  // message on a channel, where there is no fixed set of keys to seal to.
-  //
-  // A conversation is a mix of both until everybody has updated.
+  // The whole envelope, untouched. With it set `text` is null and there is
+  // nothing to filter or moderate, so a channel cannot hold one.
   if (!hasColumn(d, "messages", "sealed")) {
     d.exec("ALTER TABLE messages ADD COLUMN sealed TEXT");
   }
 
-  // The thread a message belongs to (null for a normal message). Additive and
-  // idempotent like the others; the threads table itself is created by
-  // createSchema, which runs CREATE TABLE IF NOT EXISTS on every boot. GRYT-981.
+  // Null for a normal message. The threads table itself is created by
+  // createSchema, which runs IF NOT EXISTS on every boot.
   if (!hasColumn(d, "messages", "thread_id")) {
     d.exec("ALTER TABLE messages ADD COLUMN thread_id TEXT");
   }
 
-  // Built here rather than in createSchema, because createSchema runs first and
-  // an index cannot name a column that only this migration adds. It used to sit
-  // beside the other message indexes, where on every already-existing database
-  // it threw `no such column: thread_id` — which aborted createSchema, so
-  // runMigrations never ran, the column was never added, and the threads table
-  // and everything after that statement were never created either. The server
-  // came up and could not read a single message, on every boot, for good. Fresh
-  // databases were fine, because there CREATE TABLE names the column itself,
-  // which is why beta was healthy while every upgraded server was not. GRYT-974.
+  // Here rather than createSchema, which runs first: beside the other message
+  // indexes it threw `no such column`, aborting the schema on every upgrade.
   d.exec("CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id)");
 
-  // A text channel's presentation and its write policy. Additive and
-  // idempotent; existing channels default to a normal chat everyone can post
-  // in. GRYT-981 / GRYT-982.
+  // Existing channels default to a normal chat everyone can post in.
   if (!hasColumn(d, "channels", "layout")) {
     d.exec("ALTER TABLE channels ADD COLUMN layout TEXT NOT NULL DEFAULT 'chat'");
   }
@@ -876,22 +794,14 @@ function runMigrations(d: DatabaseSync): void {
   seedBuiltInRoles(d);
   backfillRolePermissions(d);
 
-  // After the roles exist, because the translation reads their ranks. Before
-  // anything serves a request, because between the columns being ignored and
-  // the scopes existing a gated channel would be open to everybody.
+  // After the roles, whose ranks it reads, and before anything serves a request,
+  // or a gated channel is open to everybody in between.
   migrateRankGatesToScopes(d);
 }
 
 /**
- * Give the roles table room for more than one role per member. SQLite cannot
- * widen a primary key in place, so this is the standard rebuild.
- *
- * Detected by asking the table what its key is rather than by a version number,
- * which would have to be right about a file this has already run on.
- *
- * **Rolling back leaves the wider table in place**, and an old build's inserts
- * then fail for anybody holding two roles — loud rather than silently dropping
- * every second role.
+ * SQLite cannot widen a primary key in place, so this is the standard rebuild.
+ * A rollback leaves the wider table and an old build's inserts fail loudly.
  */
 function migrateRolesToMultiple(d: DatabaseSync): void {
   const cols = d.prepare("PRAGMA table_info(roles)").all() as unknown as {
@@ -942,14 +852,8 @@ function writeSchemaMeta(d: DatabaseSync, key: string, value: string): void {
 const PERMISSION_SCHEMA_KEY = "permission_schema_version";
 
 /**
- * Give existing roles the permissions that did not exist when they were
- * written. A build that adds one changes no stored role, so the release that
- * made reading a permission would leave every role unable to read. The seeder
- * cannot fix it: it only inserts missing roles and must never overwrite what an
- * operator chose.
- *
- * **Grants only, never removals.** Stamped so it runs once, though
- * `backfillFor` skips what a role already has.
+ * A build that adds a permission changes no stored role, and the seeder cannot
+ * fix that without overwriting an operator's choices. Grants only.
  */
 function backfillRolePermissions(d: DatabaseSync): void {
   const stamped = Number(readSchemaMeta(d, PERMISSION_SCHEMA_KEY) ?? 0);
@@ -971,9 +875,8 @@ function backfillRolePermissions(d: DatabaseSync): void {
       const parsed = JSON.parse(row.permissions);
       held = Array.isArray(parsed) ? parsed.filter((v) => typeof v === "string") : [];
     } catch {
-      // A column that will not parse reads as no permissions, same as
-      // everywhere else. The backfill then grants it the ungated set, which is
-      // the closest thing to what the role could actually do before.
+      // An unparseable column reads as no permissions, so the backfill grants the
+      // ungated set — the closest thing to what the role could do before.
       held = [];
     }
 
@@ -992,14 +895,8 @@ function backfillRolePermissions(d: DatabaseSync): void {
   writeSchemaMeta(d, PERMISSION_SCHEMA_KEY, String(PERMISSION_SCHEMA_VERSION));
 }
 
-/**
- * Write the five roles that ship with the server, if they are missing. **INSERT
- * OR IGNORE, never a replace** — these rows are editable, so this brings back a
- * deleted row without touching the permissions an operator chose.
- *
- * `is_system` is rewritten every start, because that flag is this file's
- * opinion rather than the operator's.
- */
+/** INSERT OR IGNORE, never a replace: these rows are editable, so a deleted one
+    comes back without touching what an operator chose. */
 function seedBuiltInRoles(d: DatabaseSync): void {
   const now = new Date().toISOString();
   const insert = d.prepare(

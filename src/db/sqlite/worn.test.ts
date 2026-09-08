@@ -7,12 +7,8 @@ import { after, before, describe, it } from "node:test";
 import { initSqlite } from "./connection";
 import { getUserByServerId, setUserAvatar, setUserWorn, upsertUser } from "./users";
 
-/**
- * A real database in a temporary directory, like rename.test.ts, and for the
- * same reason: what is being checked is that the column exists and that a null
- * survives the round trip as a null rather than as the empty string SQLite is
- * happy to hand back.
- */
+/** A real database, like rename.test.ts: the column has to exist and a null has
+    to survive the round trip rather than come back as an empty string. */
 let dir: string;
 
 before(async () => {
@@ -53,10 +49,8 @@ describe("the look a member's owl is drawn in", () => {
   });
 
   it("survives an avatar upload", async () => {
-    // The one that would break the editor if it were wrong. Saving a design
-    // uploads a PNG as well — it is what an older client shows and where the
-    // voice tile's colour comes from — so an upload must not be taken to mean
-    // the person has stopped using a designed look.
+    // Saving a design uploads a PNG too, so an upload must not be taken to mean
+    // somebody stopped using a designed look.
     const user = await upsertUser("key:ddd", "Dan");
     await setUserWorn(user.server_user_id, "aiac----adab");
     await setUserAvatar(user.server_user_id, "file_123");
@@ -67,10 +61,8 @@ describe("the look a member's owl is drawn in", () => {
   });
 
   it("survives a rejoin", async () => {
-    // `upsertUser` runs on every join and rewrites the row. It touches the
-    // avatar and the timestamps by name, so the look should be untouched — but
-    // this is the path a wrong UPDATE would empty every wardrobe on the next
-    // reconnect, silently.
+    // `upsertUser` runs on every join, so a wrong UPDATE here empties every
+    // wardrobe on the next reconnect, silently.
     const user = await upsertUser("key:eee", "Erin");
     await setUserWorn(user.server_user_id, "aiac----adab");
 

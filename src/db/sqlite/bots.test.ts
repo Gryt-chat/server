@@ -20,14 +20,8 @@ import {
 import { upsertUser } from "./users";
 
 /**
- * The bot registry, and the one property everything else is in service of:
- *
- * **a bot cannot widen what it is allowed to do.**
- *
- * Not by asking again, not by asking for more on a later join, and not by an
- * operator being handed a screen where "approve" means something bigger than
- * what was on it. The threat is a bot image that has been taken over between
- * the day it was approved and today.
+ * A bot cannot widen what it is allowed to do: not by asking again, and not by
+ * an operator's screen meaning more than it says. The threat is a taken-over image.
  */
 
 let dir: string;
@@ -88,9 +82,8 @@ describe("a bot that knocks", () => {
   });
 
   it("cannot change what it asked for by asking again", async () => {
-    // The property this whole file exists for. A bot whose image has been taken
-    // over comes back wanting the keys to the building; the answer it gets is
-    // the question it asked the first time.
+    // A taken-over bot comes back wanting the keys to the building, and gets the
+    // question it asked the first time.
     const { bot, created } = await recordBotKnock({
       botId: BOT_A,
       nickname: "Helper But Evil Now",

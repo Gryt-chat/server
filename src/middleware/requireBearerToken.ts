@@ -9,10 +9,8 @@ declare module "express-serve-static-core" {
   }
 }
 
-/**
- * Express middleware that validates the Bearer access token JWT
- * and attaches the decoded payload to `req.tokenPayload`.
- */
+/** Validates the Bearer access token and attaches the payload to
+    `req.tokenPayload`. */
 export async function requireBearerToken(req: Request, res: Response, next: NextFunction): Promise<void> {
   const header = req.headers["authorization"];
   if (!header || typeof header !== "string") {
@@ -51,9 +49,8 @@ export async function requireBearerToken(req: Request, res: Response, next: Next
     // If DB is unavailable, let the request through (token is valid JWT)
   }
 
-  // Deliberately *not* fail-open, unlike the token-version check above. A
-  // banned user holding a valid token is exactly the case this exists to stop,
-  // so a database we cannot read has to mean "no" rather than "yes".
+  // Not fail-open, unlike the check above: a banned user holding a valid token is
+  // what this exists to stop, so an unreadable database means no.
   try {
     const gate = await checkSessionAllowed({
       grytUserId: payload.grytUserId,
@@ -64,11 +61,8 @@ export async function requireBearerToken(req: Request, res: Response, next: Next
       return;
     }
 
-    // Per-member revocation, on the row the gate above already loaded, so it
-    // costs no extra query. A token minted before this member's token_version
-    // was bumped is refused here — which is what makes signing out of every
-    // device, or changing an email or password, end the sessions that are
-    // already running instead of waiting for each token to expire.
+    // On the row the gate already loaded, so no extra query. This is what makes
+    // signing out everywhere end the running sessions rather than wait them out.
     if ((payload.userTokenVersion ?? 0) !== (gate.user.token_version ?? 0)) {
       res.status(401).json({ error: "token_revoked", message: "Session ended. Please sign in again." });
       return;

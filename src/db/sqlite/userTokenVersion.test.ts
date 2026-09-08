@@ -7,17 +7,8 @@ import { after, before, describe, it } from "node:test";
 import { getSqliteDb, initSqlite } from "./connection";
 import { getUserByServerId, revokeUserSessions, upsertUser } from "./users";
 
-/**
- * The per-member half of token invalidation.
- *
- * `server_config.token_version` ends everybody's sessions at once, which is
- * what a ban uses. This one ends a single member's, so signing out of every
- * device or changing an email does not have to take the whole server with it.
- *
- * What is proved here is that the counter exists on the row, starts where a
- * freshly minted token expects it to, and moves when it is revoked. The gates
- * that compare it against a token live elsewhere; this is the state they read.
- */
+/** The counter exists on the row, starts where a fresh token expects, and moves
+    when revoked. The gates that compare it live elsewhere. */
 
 let dir: string;
 

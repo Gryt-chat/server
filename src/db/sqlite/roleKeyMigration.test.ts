@@ -8,15 +8,8 @@ import { after, before, describe, it } from "node:test";
 import { initSqlite } from "./connection";
 import { addMemberRole, listMemberRoles } from "./servers";
 
-/**
- * Upgrading a database written before a member could hold two roles.
- *
- * The old table keyed on server_user_id alone, and SQLite cannot widen a
- * primary key in place — so this is a rebuild, and the thing worth proving is
- * that the rows come out the other side. A migration that quietly emptied this
- * table would leave every member on the joining default, which reads as the
- * server having forgotten who its moderators are.
- */
+/** SQLite cannot widen a primary key in place, so this is a rebuild and the rows
+    have to survive it: an emptied table forgets who the moderators are. */
 let dir: string;
 
 before(async () => {

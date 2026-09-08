@@ -8,14 +8,8 @@ import { BUILT_IN_ROLES, PERMISSION_SCHEMA_VERSION } from "../../constants/permi
 import { getSqliteDb, initSqlite } from "./connection";
 import { getRoleDefinition, createRoleDefinition } from "./roleDefinitions";
 
-/**
- * The backfill as it actually runs, rather than as a pure function.
- *
- * `permissionBackfill.test.ts` proves the mapping is right. This proves the
- * wiring is: that the stamp is read and written, that a database left at an
- * older version gets swept on the next start, and that one already at the
- * current version is left alone.
- */
+/** `permissionBackfill.test.ts` proves the mapping; this proves the wiring: the
+    stamp is read and written, and an older database is swept on next start. */
 
 let dir: string;
 

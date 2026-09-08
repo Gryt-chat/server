@@ -5,14 +5,8 @@ import type { BotRecord, BotStatus } from "../interfaces";
 import { fromIso, fromIsoNullable, getSqliteDb, toIso } from "./connection";
 
 /**
- * The bot registry. One row per bot an operator has been asked about, whether
- * or not they said yes.
- *
- * - **What the bot asked for**, written once and never rewritten, so a bot
- *   whose image has been taken over cannot change the question after it has
- *   been answered. `updateRequest` does not exist, and its absence is the point.
- * - **What the operator agreed to**, which is the bot's whole permission set —
- *   not a role, so no role edit can widen what a bot may do.
+ * What the bot asked is written once, so a taken-over image cannot re-ask a
+ * question already answered. What was granted is its whole set, not a role.
  */
 
 const NAME_MAX = 32;
@@ -90,14 +84,8 @@ export async function getBotByRegistrationId(
   return row ? rowToBot(row) : null;
 }
 
-/**
- * Record that a bot turned up and said what it wants.
- *
- * Creates nothing if the bot is already known, and — this is the point —
- * returns the row it already had rather than the declaration it just made. A
- * bot that comes back asking for more gets the answer it was given the first
- * time.
- */
+/** Returns the row a known bot already had rather than the declaration it just
+    made, so one coming back for more gets its first answer. */
 export async function recordBotKnock(input: {
   botId: string;
   nickname: string;
@@ -127,14 +115,8 @@ export async function recordBotKnock(input: {
   return { bot, created: true };
 }
 
-/**
- * Write down what a bot may do before there is a bot.
- *
- * The unattended path: an operator decides the name and the permissions up
- * front and hands the token to whoever is deploying it. Approved from the
- * start, because the operator has already made the decision that approving a
- * knock would have made.
- */
+/** The unattended path: an operator decides up front and hands over a token.
+    Approved from the start, since the decision has already been made. */
 export async function createBotRegistration(input: {
   nickname: string;
   description?: string | null;
@@ -173,13 +155,8 @@ export async function createBotRegistration(input: {
   return bot;
 }
 
-/**
- * Bind an unclaimed registration to the identity presenting its token.
- *
- * Atomic on `claim_token IS NOT NULL`, so two bots racing the same token end
- * with one of them claimed and the other refused rather than both admitted
- * under one registration.
- */
+/** Atomic on `claim_token IS NOT NULL`, so two bots racing one token end with
+    one claimed and the other refused rather than both admitted. */
 export async function claimBotRegistration(
   claimToken: string,
   botId: string,
@@ -197,14 +174,8 @@ export async function claimBotRegistration(
   return getBotById(botId);
 }
 
-/**
- * Answer a knock.
- *
- * `grantedPermissions` is intersected with what the bot asked for, here rather
- * than only at the caller, because "the operator cannot grant more than was
- * requested" is a property of the record and should hold however it is reached.
- * The operator may grant less, and usually should.
- */
+/** Intersected with what was asked for, here as well as at the caller: the
+    operator cannot grant more than was requested, however it is reached. */
 export async function decideBot(
   botId: string,
   decision: "approved" | "denied",
@@ -238,14 +209,8 @@ export async function decideBot(
   return getBotById(botId);
 }
 
-/**
- * Change what an approved bot may do, after the fact.
- *
- * Still bounded by what it originally asked for. An operator who wants to give
- * a bot something it never asked for is being asked for a permission by a bot
- * that has learned to ask through a different channel, and the answer to that
- * is a new registration rather than a wider grant on this one.
- */
+/** Still bounded by what it originally asked for: giving a bot something it
+    never asked for is a new registration, not a wider grant on this one. */
 export async function updateBotGrant(
   registrationId: string,
   grantedPermissions: Permission[],
@@ -270,14 +235,8 @@ export async function updateBotGrant(
   return getBotByRegistrationId(registrationId);
 }
 
-/**
- * Remove a bot's registration entirely.
- *
- * The membership row it left behind is somebody else's problem — a kick or a
- * ban — because deleting the registration is about withdrawing permission, and
- * withdrawing permission has to work whether or not the bot is currently
- * connected. Without a registration a bot is refused at the door.
- */
+/** The membership row is a kick or a ban: this withdraws permission, which has
+    to work whether or not the bot is connected. */
 export async function deleteBotRegistration(registrationId: string): Promise<boolean> {
   const db = getSqliteDb();
   const result = db

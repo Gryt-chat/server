@@ -8,16 +8,8 @@ import { initSqlite } from "./connection";
 import { insertMessage, listThreadMessages } from "./messages";
 
 /**
- * Which end of a long thread you get.
- *
- * The query was `ORDER BY created_at ASC ... LIMIT 200`, and ascending with a
- * limit takes the *oldest* rows. So a thread past its limit stopped showing the
- * new replies — the recent end was the part that vanished, which is the
- * opposite of what a limit is normally for, and there was no cursor to fetch
- * them back with.
- *
- * The first assertion below is the whole bug: open a thread longer than one
- * page and the last reply has to be in it.
+ * Ascending with a limit takes the oldest rows, so a thread past its limit hid
+ * the new replies with no cursor to fetch them back. The first assertion is it.
  */
 describe("listThreadMessages", () => {
   const dir = mkdtempSync(join(tmpdir(), "gryt-thread-page-"));
