@@ -9,13 +9,8 @@ import {
 } from "./manifest";
 
 /**
- * Reading somebody else's manifest.json (GRYT-933).
- *
- * This runs once at startup and everything after it trusts the result, so the
- * cases that matter are the ones where a manifest is wrong rather than the one
- * where it is right. A plugin is arbitrary code either way — what is being
- * defended here is that the operator gets told which line to fix, and that a
- * declaration cannot be written to mean more than it says.
+ * Read once at startup and trusted afterwards, so the cases that matter are the
+ * wrong manifests: the operator is told which line to fix.
  */
 
 const valid = {
@@ -52,9 +47,8 @@ describe("an ordinary manifest", () => {
     assert.equal(result.manifest.author, undefined);
   });
 
-  /* A blank one is absent, not present-and-empty. The required fields cannot
-     tell the difference — "" is falsy and refused either way — so the optional
-     ones are the only place this is visible. */
+  /* Blank is absent, not present-and-empty. Only visible on the optional
+     fields, since "" is refused either way on the required ones. */
   it("treats a blank optional field as absent", () => {
     const result = readManifest({ ...valid, description: "   ", author: "" });
     assert.ok(result.ok);
@@ -63,11 +57,8 @@ describe("an ordinary manifest", () => {
   });
 });
 
-/*
- * Members see this, and a manifest is written by whoever wrote the plugin. A
- * `javascript:` URL here is a link injection into every member's client and a
- * `data:` one is a way to serve them a page that looks like Gryt.
- */
+/* Members see this and the plugin author wrote it, so `javascript:` is an
+   injection into every client and `data:` a page that looks like Gryt. */
 describe("a link to read about the plugin", () => {
   for (const homepage of [
     "https://example.com/automod",
@@ -119,11 +110,8 @@ describe("a manifest that is not one", () => {
   }
 });
 
-/*
- * Each of these names the field. An operator looking at this is reading
- * somebody else's folder, and "invalid manifest" sends them to read the whole
- * thing rather than the line that is wrong.
- */
+/* Each names the field: an operator is reading somebody else's folder, and
+   "invalid manifest" sends them through the whole thing. */
 describe("a missing field", () => {
   for (const field of ["id", "name", "version", "main"] as const) {
     it(`says which one, for ${field}`, () => {
@@ -146,11 +134,8 @@ describe("a missing field", () => {
   }
 });
 
-/*
- * The id becomes a path segment — the storage namespace and the config key —
- * so it is kept to something that cannot climb out of one here, rather than at
- * each place it is joined onto a path.
- */
+/* The id becomes a path segment, so it is bounded here rather than at each
+   place it is joined onto a path. */
 describe("an id that would not survive being a folder name", () => {
   for (const id of ["../escape", "a/b", "a\\b", ".hidden", "Automod", "", "x".repeat(65), "-lead"]) {
     it(`is refused: ${JSON.stringify(id)}`, () => {
@@ -215,9 +200,8 @@ describe("what a manifest asked for", () => {
     assert.deepEqual(declaredCapabilities(["members:read", "members:read"]), ["members:read"]);
   });
 
-  /* Written against the catalogue rather than a fixed pair, so it keeps meaning
-     something as capabilities are added. Two manifests asking for the same
-     things must produce the same list whichever order they wrote them in. */
+  /* Against the catalogue rather than a fixed pair, so two manifests asking the
+     same things produce the same list whatever order they wrote them in. */
   it("comes back in catalogue order", () => {
     assert.deepEqual(
       declaredCapabilities([...PLUGIN_CAPABILITIES].reverse()),

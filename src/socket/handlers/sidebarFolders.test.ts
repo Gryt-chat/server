@@ -18,13 +18,8 @@ import { registerAdminChannelHandlers } from "./adminChannels";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
 /**
- * Folders are a `parent_item_id` on the sidebar row, and everything here is
- * about that column holding only what the sidebar can actually draw.
- *
- * The sidebar renders a child under its folder and nowhere else, so a parent id
- * that resolves to nothing is not a cosmetic problem — the channel disappears.
- * Every case that cannot be drawn therefore falls back to the top level, which
- * is visible and recoverable, rather than being stored and hidden.
+ * A child renders under its folder and nowhere else, so a parent id resolving to
+ * nothing loses the channel. Anything undrawable falls back to the top level.
  */
 
 const HOST = "folders.test:5001";
@@ -105,11 +100,8 @@ describe("sidebar folders", () => {
     assert.equal(await parentOf("c1"), "f1");
   });
 
-  /*
-   * One indent step, so a folder never sits inside another. Refused here rather
-   * than in the client: the client is where the drag is drawn, and this is the
-   * only place that can promise the shape.
-   */
+  /* One indent step. Refused here rather than in the client, which is where the
+     drag is drawn but not where the shape can be promised. */
   it("refuses to nest a folder in a folder", async () => {
     await upsertServerSidebarItem({ itemId: "f2", kind: "folder", label: "Inner", position: 30, parentItemId: "f1" });
     assert.equal(await parentOf("f2"), null);
@@ -137,12 +129,8 @@ describe("sidebar folders", () => {
     assert.equal(await parentOf("c4"), null);
   });
 
-  /*
-   * Deleting a folder empties it. Cascading would take the channels off the
-   * sidebar with it, and a channel with no sidebar row still exists and answers
-   * `chat:fetch` while being unreachable — the shape of GRYT-839, arrived at
-   * from the other direction.
-   */
+  /* Cascading would take the channels off the sidebar, and one with no row still
+     exists and answers `chat:fetch` while being unreachable. */
   it("promotes the children when a folder is deleted", async () => {
     await upsertServerSidebarItem({ itemId: "f3", kind: "folder", label: "Temporary", position: 90 });
     await upsertServerSidebarItem({ itemId: "c5", kind: "channel", channelId: "chan-5", position: 100, parentItemId: "f3" });

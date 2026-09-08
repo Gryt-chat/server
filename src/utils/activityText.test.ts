@@ -4,13 +4,8 @@ import { describe, it } from "node:test";
 import { MAX_ACTIVITY_LENGTH, normaliseActivity } from "./activityText";
 
 /**
- * What somebody may put in "what I'm doing" (GRYT-929).
- *
- * Two things make this worth more than a trim. It is free text on a member row
- * shown to everybody on the server, and — once plugins can set it — the bytes
- * are chosen by arbitrary JavaScript running in somebody's client rather than
- * typed by a person. So the cases that matter are the ones nobody would type
- * on purpose.
+ * Free text on a member row that everybody reads, and a plugin can choose the
+ * bytes, so the cases are the ones nobody would type on purpose.
  */
 
 describe("an ordinary status", () => {
@@ -30,11 +25,8 @@ describe("an ordinary status", () => {
   });
 });
 
-/*
- * Null is "not set", and it is also how somebody takes theirs down — clearing
- * goes through the same door as setting rather than needing an event of its
- * own.
- */
+/* Null is not-set, and also how somebody takes theirs down: clearing goes
+   through the same door as setting. */
 describe("nothing to say", () => {
   for (const empty of ["", "   ", "\n", "\t\t", "\u200B", null, undefined, 42, {}, []]) {
     it(`is null for ${JSON.stringify(empty)}`, () => {
@@ -43,14 +35,8 @@ describe("nothing to say", () => {
   }
 });
 
-/*
- * The half this exists for.
- *
- * A member list is a column of names, and this is the one field in it whose
- * bytes somebody else picks. A newline makes one row into two; a
- * right-to-left override reverses the names around it; a zero-width run pads a
- * status out of its own row without looking long.
- */
+/* A newline makes one row into two, a right-to-left override reverses the names
+   around it, and a zero-width run pads a status out of its row. */
 describe("things that would break the row", () => {
   it("makes one line out of several", () => {
     assert.equal(normaliseActivity("line\nbreak"), "line break");
@@ -84,11 +70,8 @@ describe("things that would break the row", () => {
   });
 });
 
-/*
- * Truncated rather than refused. A plugin sending a long track name is not
- * misbehaving, and a status that silently fails to appear is harder to explain
- * than one a little shorter than expected.
- */
+/* Truncated rather than refused: a long track name is not misbehaviour, and a
+   status that silently fails to appear is harder to explain. */
 describe("something far too long", () => {
   it("is cut to the cap, ellipsis included", () => {
     const out = normaliseActivity("x".repeat(500));

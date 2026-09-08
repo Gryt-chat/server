@@ -10,17 +10,8 @@ import {
 } from "./permissions";
 
 /**
- * What an upgrade does to the roles already on a server.
- *
- * The property under test is that nobody's ability changes. A role that could
- * post yesterday can post today; a role that could not read — because reading
- * was not yet a thing you could be denied — can still read. Getting this wrong
- * is a privilege change nobody asked for, in one direction or the other, and it
- * would land silently on every server that upgrades.
- *
- * The sets a *fresh* server seeds are the yardstick: run the backfill over what
- * a role held one version ago and it should arrive at exactly what a new server
- * would give it.
+ * Nobody's ability changes across an upgrade, in either direction. The yardstick
+ * is what a fresh server seeds: backfilling last version's set must reach it.
  */
 
 /** The permission sets as they stood at schema version 1 (GRYT-444). */
@@ -87,9 +78,8 @@ describe("upgrading a role's permissions", () => {
   });
 
   it("does not hand replace_identity to an admin", () => {
-    // The one carved out of manage_server. An admin never had manage_server, so
-    // the upgrade must not be how they acquire the ability to hand somebody
-    // else's membership to a new key.
+    // Carved out of manage_server, which an admin never had, so the upgrade must
+    // not be how they gain it.
     const v1Admin = PERMISSIONS.filter(
       (p) =>
         !PERMISSION_BACKFILLS.some((b) => b.permission === p) &&
@@ -118,9 +108,8 @@ describe("what the backfill will and will not do", () => {
   });
 
   it("gives a role that was stripped bare only the ungated four", () => {
-    // A custom role an operator had emptied on purpose. It could still read,
-    // see the member list, report and unfurl links, because none of those had a
-    // gate — and it should still be able to, and nothing more.
+    // A role emptied on purpose. It could still read, see members, report and
+    // unfurl, because none had a gate, and it should still do exactly those.
     assert.deepEqual(backfillFor([], 1).sort(), [
       "read_messages",
       "report_messages",
@@ -153,9 +142,8 @@ describe("what the backfill will and will not do", () => {
   });
 
   it("covers every permission added since version 1", () => {
-    // The check that catches the real mistake: a permission added to the
-    // catalogue and not to the backfill list, which upgrades to a server where
-    // that permission is silently held by nobody.
+    // Catches a permission added to the catalogue and not the backfill list,
+    // which upgrades to one silently held by nobody.
     const v1 = new Set([
       ...V1.mod,
       "manage_messages",
@@ -183,14 +171,8 @@ describe("what the backfill will and will not do", () => {
     }
   });
 
-  /**
-   * Version 6, spelled out.
-   *
-   * The sweep above only asks whether an entry exists. This asks what it does,
-   * because the whole point of the split is that an upgrade takes nothing away:
-   * uploading a picture was part of `change_avatar`, so everybody who could
-   * already do it keeps being able to, and the operator decides afterwards.
-   */
+  /** The sweep above only asks whether an entry exists. Uploading a picture was
+      part of `change_avatar`, so everybody who could already do it keeps it. */
   it("hands picture uploads to whoever could already set an avatar", () => {
     const withAvatar = backfillFor(["change_avatar"], 5, 6);
     assert.deepEqual(withAvatar, ["upload_avatar_image"]);

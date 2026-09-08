@@ -17,17 +17,8 @@ import { clearPluginRefs, setPluginRefs } from "./refs";
 import type { Clients } from "../types";
 
 /**
- * The pipe between a client plugin and the server plugin with the same id
- * (GRYT-939).
- *
- * The security question here points the other way from the rest of this folder.
- * Everywhere else the note is that a plugin is code the operator installed and
- * trusts. What arrives *here* was written by a member's client — arbitrary and
- * attacker-controllable, the same class of input as `packages/reports`.
- *
- * So the cases that matter are the ones a plugin author would not think to
- * write: a payload nobody could send, a topic that is not one, and one plugin
- * addressing another's half.
+ * What arrives here was written by a member's client, so the cases are the ones
+ * a plugin author would not think to write.
  */
 
 function recorder(): GuardLogger & { warns: string[]; errors: string[] } {
@@ -123,12 +114,8 @@ describe("a payload", () => {
   });
 });
 
-/*
- * The size cap covers none of this, which is the point of checking it
- * separately. A payload built to be expensive or dangerous to *handle* is not
- * the plugin's problem to discover, because by the time it discovers it, it has
- * already handled it.
- */
+/* The size cap covers none of this. A payload expensive to handle is not the
+   plugin's to discover, because by then it has handled it. */
 describe("a payload built to break something", () => {
   const nest = (depth: number): unknown => {
     let out: unknown = 1;
@@ -141,9 +128,8 @@ describe("a payload built to break something", () => {
     assert.equal(inspectPayload(nest(MAX_PAYLOAD_DEPTH + 1)).ok, false);
   });
 
-  /* Thousands of levels fit inside the byte cap, and what breaks is not this
-     server — it is structuredClone on the way to each handler, and every plugin
-     that does the obvious recursive thing with what it was handed. */
+  /* Thousands of levels fit inside the byte cap, and what breaks is
+     structuredClone on the way to each handler. */
   it("is refused for nesting that would still fit in the size cap", () => {
     /* Each level is six bytes of JSON, so a thousand of them is well inside
        eight kilobytes and a hundred and twenty-five times the depth cap. */
@@ -174,12 +160,8 @@ describe("a payload built to break something", () => {
     assert.equal(inspectPayload(new Array(MAX_PAYLOAD_NODES + 10).fill(1)).ok, false);
   });
 
-  /*
-   * JSON.parse does not set a prototype from these, so nothing is exploited by
-   * parsing. It is exploited by what a plugin does next: the obvious way to
-   * merge an update into stored state is a deep merge, and a deep merge written
-   * the obvious way walks straight into it.
-   */
+  /* Nothing is exploited by parsing; it is exploited by what a plugin does next,
+     and the obvious deep merge walks into it. */
   for (const key of ["__proto__", "constructor", "prototype"]) {
     it(`is refused for a ${key} key`, () => {
       const payload = JSON.parse(`{"a":{"${key}":{"admin":true}}}`);
@@ -269,11 +251,8 @@ describe("delivering a message to a plugin", () => {
   });
 });
 
-/*
- * The failure count is shared with the event bus, which is why the guard was
- * pulled out at all. A plugin throwing five times on events and five times on
- * messages has thrown ten times.
- */
+/* The failure count is shared with the event bus: five throws on events and
+   five on messages is ten. */
 describe("a plugin that throws on a message", () => {
   it("does not reach the code that delivered it", () => {
     const bus = createMessageBus(createPluginGuard(recorder()));

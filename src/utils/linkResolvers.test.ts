@@ -10,15 +10,8 @@ import {
 } from "./linkResolvers";
 
 /**
- * The site-specific half of link previews (GRYT-913).
- *
- * A resolver runs instead of reading a page, so the failure that matters is not
- * "it got the title wrong" — it is a resolver that claims a URL it cannot
- * answer, or returns half a card, and so replaces a working OpenGraph fetch
- * with a worse one. Most of this file is about it returning null.
- *
- * No network. `resolve` takes its fetcher as an argument precisely so this can
- * hand it a function that returns whatever the case is about.
+ * A resolver runs instead of reading a page, so the failure is one that claims a
+ * URL it cannot answer. Most of this file is about it returning null.
  */
 
 const MODEL = "https://makerworld.com/en/models/1642496-old-vikings-jewelry-box";
@@ -52,11 +45,8 @@ describe("which URLs a resolver claims", () => {
     }
   });
 
-  /*
-   * The half that keeps this cheap. A resolver that claimed every MakerWorld
-   * URL would spend a request on a search page to discover it has no model id,
-   * and would then have to fall back anyway.
-   */
+  /* A resolver claiming every MakerWorld URL spends a request on a search page
+     to discover it has no model id. */
   it("leaves alone anything that is not a model", () => {
     for (const url of [
       "https://makerworld.com/en",
@@ -103,10 +93,8 @@ describe("what it makes of a good answer", () => {
     ]);
   });
 
-  /*
-   * The raw cover is 1.68 MB and arrives as application/octet-stream. The card
-   * has to ask for something an <img> will take.
-   */
+  /* The raw cover is 1.68 MB of application/octet-stream, which an <img> will
+     not take. */
   it("asks the CDN for a card-sized webp rather than the original", async () => {
     const meta = await makerWorld.resolve(new URL(MODEL), async () => DESIGN);
     const image = new URL(meta!.image!);
@@ -126,12 +114,8 @@ describe("what it makes of a good answer", () => {
   });
 });
 
-/*
- * Everything here has to come back null so the caller falls through to the
- * ordinary OpenGraph fetch. A resolver that returns a half-filled object is
- * worse than one that returns nothing: it replaces a working card with a
- * broken one, and the fallback never runs.
- */
+/* All null, so the caller falls through to the ordinary fetch: a half-filled
+   object replaces a working card and the fallback never runs. */
 describe("when the answer is not one", () => {
   const bad: [string, unknown][] = [
     ["null", null],
@@ -180,8 +164,7 @@ describe("their summary, which is rich text", () => {
   it("comes out as one line of prose", () => {
     assert.equal(summaryToText("<p>SKOL</p><p>&nbsp;</p><p>die Box</p>"), "SKOL die Box");
     assert.equal(summaryToText("a<br>b"), "a b");
-    /* Not only <p> and <br>. A summary is a WYSIWYG field, so it carries
-       links, images and spans, and any tag left in reaches the card as
+    /* A summary is a WYSIWYG field, so any tag left in reaches the card as
        literal markup. */
     assert.equal(
       summaryToText('<a href="https://x.test">click</a> and <img src="y"> <span>more</span>'),
