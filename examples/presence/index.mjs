@@ -1,13 +1,6 @@
 /*
- * Presence — the server half.
- *
- * Keeps a roster of who is playing what and sends it to everybody running the
- * client half. That is the whole job. The client half is in the client repo,
- * under examples/presence.
- *
- * What arrives on `playing` was written by somebody's client, so all of it is
- * checked before it goes anywhere near the roster. Gryt caps how big and how
- * deep a payload is and stops there — the shape is this plugin's to establish.
+ * The server half; the client half is in the client repo. Gryt caps only a
+ * payload's size and depth, so the shape is this plugin's to check.
  */
 
 /** Bump this if you change what the two halves say to each other. */
@@ -17,11 +10,8 @@ const PROTOCOL = 1;
 const MAX_GAME = 80;
 
 export function activate(api) {
-  /*
-   * userId -> { who, game }. In memory, so a restart empties it. That is fine:
-   * every client says hello again when it reconnects, and a roster that
-   * survived a restart would be a list of people who logged off during it.
-   */
+  /* userId -> { who, game }. In memory: every client says hello again on
+     reconnect, and a surviving roster would list people who logged off. */
   const playing = new Map();
 
   function roster() {
@@ -35,12 +25,8 @@ export function activate(api) {
     const raw = message.data.game;
     const game = typeof raw === "string" ? raw.trim().slice(0, MAX_GAME) : "";
 
-    /*
-     * `nickname` and `userId` come off the connection, not out of the payload,
-     * so nobody can put somebody else on the roster. Null nickname means they
-     * never set one; the client half is showing this to people, so it gets a
-     * word rather than the literal null.
-     */
+    /* Off the connection, not the payload, so nobody puts somebody else on the
+       roster. A null nickname gets a word, since this is shown to people. */
     const who = message.nickname ?? "Somebody";
 
     if (game) playing.set(message.userId, { who, game });
@@ -49,15 +35,8 @@ export function activate(api) {
     api.messaging.send("roster", roster());
   });
 
-  /*
-   * Somebody arriving needs the roster, and nobody else needs telling about
-   * it, so this answers one member.
-   *
-   * `member:joined` would look like the event for this and is not. It fires
-   * for a new member, not for the reconnects an existing one makes all day, so
-   * a plugin leaning on it hands the roster to somebody's first evening and
-   * never again. Let the client ask instead.
-   */
+  /* `member:joined` looks like the event for this and is not: it fires for a
+     new member, not the reconnects an existing one makes all day. */
   api.messaging.on("hello", (message) => {
     if (playing.size === 0) return;
     api.messaging.send("roster", roster(), [message.userId]);
