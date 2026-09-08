@@ -18,8 +18,8 @@ import { registerAdminChannelHandlers } from "./adminChannels";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
 /**
- * A child renders under its folder and nowhere else, so a parent id resolving to
- * nothing loses the channel. Anything undrawable falls back to the top level.
+ * A child renders under its folder and nowhere else, so anything undrawable
+ * falls back to the top level rather than being stored and hidden.
  */
 
 const HOST = "folders.test:5001";
@@ -144,14 +144,8 @@ describe("sidebar folders", () => {
     assert.equal(child?.parent_item_id, null);
   });
 
-  /*
-   * The regression that would empty every folder on the next drag of anything.
-   *
-   * `upsert` writes `parent_item_id` on every call, and a reorder is a series of
-   * upserts. A client that sends the old flat array of ids says nothing about
-   * folders, and the handler has to read parentage back off the stored row
-   * rather than defaulting it to null.
-   */
+  /* `upsert` writes `parent_item_id` every call and a flat array of ids says
+     nothing about folders, so parentage is read back off the stored row. */
   it("keeps folder membership through a reorder sent as bare ids", async () => {
     assert.equal(await parentOf("c1"), "f1");
 

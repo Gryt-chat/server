@@ -7,18 +7,8 @@ import { fetchFollowingSafely } from "./safePreviewFetch";
 import type { UrlRejection } from "./previewUrlSafety";
 
 /**
- * The property this exists for: a redirect to a blocked address is refused,
- * even when the URL first asked for was allowed.
- *
- * This is the bug it fixes. `/api/oembed` fetched the page a member named with
- * `redirect: "follow"`, so a page answering `302 -> 169.254.169.254` walked the
- * server onto an internal address the initial check had passed. The guard has
- * to apply to the address actually connected to, not only the first.
- *
- * The address check is injected so both hops can be loopback — a real redirect
- * *from* a public host is not something a hermetic test can stand up. The check
- * allows the first server and blocks the second, which is exactly the shape of
- * a public page redirecting somewhere internal.
+ * A page answering `302 -> 169.254.169.254` walked the server onto an internal
+ * address the first check had passed. The check is injected so both hops are local.
  */
 describe("fetchFollowingSafely", () => {
   let internal: Server;
@@ -70,9 +60,8 @@ describe("fetchFollowingSafely", () => {
   });
 
   it("would have reached it under a check that allows everything (the old behaviour)", async () => {
-    // Proves the test's teeth: with a check that never blocks, the redirect is
-    // followed and the internal server IS reached. So the assertion above is
-    // catching the re-check, not passing for some unrelated reason.
+    // With a check that never blocks, the redirect is followed and the internal
+    // server is reached, so the assertion above is catching the re-check.
     reachedInternal = false;
     const controller = new AbortController();
 

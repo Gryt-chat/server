@@ -15,9 +15,8 @@ import { registerChatHandlers } from "./chat";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
 /**
- * Forum topics end to end: creating one makes a root message and a titled
- * thread together, the index lists it with its preview and counts, and a reply
- * from a second person moves the participant count.
+ * Creating a topic makes a root message and a titled thread together, and a
+ * reply from a second person moves the participant count.
  */
 
 const HOST = "forum.test:5001";

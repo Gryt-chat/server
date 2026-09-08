@@ -6,9 +6,8 @@ import { uploadsRouter } from "./uploads";
 import { emojisRouter } from "./emojis";
 
 /**
- * Multer reads the body into the heap before handing off, so ahead of the auth
- * check an anonymous 20 MB POST answered 401 and moved RSS by 26 MiB. The order
- * is the bug, so the order is what is asserted.
+ * Multer reads the body into the heap first, so ahead of the auth check an
+ * anonymous 20 MB POST answered 401 having moved RSS by 26 MiB.
  */
 
 type Layer = { name?: string; handle?: unknown };

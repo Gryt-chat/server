@@ -9,13 +9,8 @@ import { deleteMessage, insertMessage } from "../db/sqlite/messages";
 import { unreferencedAmong } from "./mediaSweep";
 
 /**
- * Deleting a message takes its attachment with it, unless something else still
- * points at the file. A file can be attached to more than one message —
- * forwarding one is enough — so the check is the whole point of the helper.
- *
- * The selection is tested rather than the delete, because the two failures are
- * not equally visible: leaving rubbish in storage costs disk, while removing a
- * file another message still shows is a broken image somebody else sees.
+ * A file can be attached to more than one message, since forwarding is enough,
+ * and removing one another message shows is a broken image somebody else sees.
  */
 
 let dir: string;
@@ -46,10 +41,8 @@ describe("unreferencedAmong", () => {
     assert.deepEqual(await unreferencedAmong([]), []);
   });
 
-  /**
-   * The case that would lose somebody else's copy. Two messages carry the same
-   * file; deleting one must leave the bytes alone.
-   */
+  /** Two messages carry the same file, and deleting one must leave the bytes
+      alone. */
   it("keeps a file another message still points at", async () => {
     const shared = "file-shared";
     const a = await post("c1", [shared]);

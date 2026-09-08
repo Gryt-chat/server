@@ -4,9 +4,8 @@ import { describe, it } from "node:test";
 import { addressLabel } from "./addressLabel";
 
 /**
- * The two properties that matter, and they pull in opposite directions: the
- * label has to be stable enough to tell one caller from another, and useless
- * enough that it is not the address.
+ * Two properties pulling opposite ways: stable enough to tell one caller from
+ * another, useless enough not to be the address.
  */
 describe("labelling an address", () => {
   it("gives the same address the same label", () => {

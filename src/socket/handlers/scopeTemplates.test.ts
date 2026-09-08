@@ -18,14 +18,8 @@ import { registerAdminChannelHandlers } from "./adminChannels";
 import type { HandlerContext } from "./types";
 
 /**
- * What a channel can be pointed at, asked by somebody who may point it.
- *
- * Two permissions meet here and they are deliberately different: arranging one
- * channel is `manage_channels`, and deciding what a template says is
- * `manage_roles`. The bug was that the names lived behind the second one, so
- * the first was a permission you held and could not use — and it is invisible
- * on a server where one person holds both, which is every server until it has
- * moderators.
+ * Arranging a channel is `manage_channels` and what a template says is
+ * `manage_roles`, so the names behind the second made the first unusable.
  */
 const HOST = "scopes.test";
 const CHANNEL = "arena";

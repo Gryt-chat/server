@@ -5,15 +5,8 @@ import { validateImage } from "../utils/imageValidation";
 import { MAX_ICON_FRAMES } from "./server";
 
 /**
- * A real animated GIF, built by hand rather than by sharp.
- *
- * sharp will not write one from a stacked strip — `pageHeight` on the output
- * produces a single tall frame, which is exactly the failure this test would
- * otherwise be blind to. So the bytes are assembled here: header, a global
- * colour table of two, a NETSCAPE loop block, then one graphic-control
- * extension + image descriptor + LZW block per frame, then the trailer.
- *
- * 1x1 pixels, because the frame count is the only thing under test.
+ * Built by hand because sharp will not write an animation from a stacked strip,
+ * which is exactly the failure this would otherwise be blind to.
  */
 function animatedGif(frames: number): Buffer {
   const b: number[] = [];

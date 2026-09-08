@@ -6,8 +6,8 @@ import { describe, it } from "node:test";
 import { isSealedUpload, storageForUpload } from "./uploadStorage";
 
 /**
- * A sealed upload skips validation, and keeping the client's content type while
- * doing so serves ciphertext labelled `image/svg+xml` inline from this origin.
+ * A sealed upload skips validation, so keeping the client's content type serves
+ * ciphertext labelled `image/svg+xml` inline from this origin.
  */
 
 const base = { fileId: "abc", mimetype: "image/png", originalName: "cat.png" };
@@ -112,10 +112,8 @@ describe("an ordinary upload", () => {
 });
 
 describe("the route uses it", () => {
-  /** `uploads.ts` cannot be imported here, so this reads it: a decision not
-      asked for over there passes every assertion above. */
-  // `__dirname` rather than `import.meta.url`, which does not compile under
-  // `ts-node/register` in CommonJS.
+  /** `uploads.ts` cannot be imported here, so this reads it. */
+  // `__dirname`, because `import.meta.url` does not compile in CommonJS.
   const file = readFileSync(join(__dirname, "uploads.ts"), "utf8");
 
   /** The attachment route only. The avatar route's own `insertFile` calls are

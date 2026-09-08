@@ -4,17 +4,8 @@ import { describe, it } from "node:test";
 import { DENIAL_RESPONSES } from "./conversationAccess";
 
 /**
- * "I could not check" must not answer as "there is no such conversation".
- *
- * A failed rules read used to be swallowed inside `mayViewChannel`, which
- * returned false, which the caller reported as `unknown_conversation` — the
- * same 404 a guessed id gets. A client cannot tell those apart, and voice gives
- * up after five attempts across twenty seconds, so a database that was busy for
- * a moment took somebody out of a call they could have rejoined.
- *
- * These pin the contract that separates them. The two 404s still say the same
- * thing as each other, which is deliberate and unrelated: telling *those* apart
- * would say whether a conversation exists.
+ * A swallowed rules read reported as `unknown_conversation`, the same 404 a
+ * guessed id gets. The two 404s still match each other, deliberately.
  */
 
 describe("undetermined access", () => {
@@ -34,11 +25,8 @@ describe("undetermined access", () => {
     assert.equal(DENIAL_RESPONSES.undetermined.error, "unavailable");
   });
 
-  /*
-   * The reason this is safe to distinguish at all. `undetermined` describes
-   * this server's own state, so it says nothing about whether the conversation
-   * exists or who is in it — unlike telling the two 404s apart, which would.
-   */
+  /* `undetermined` describes this server's own state, so unlike the two 404s it
+     says nothing about whether the conversation exists. */
   it("says nothing about the conversation", () => {
     const message = DENIAL_RESPONSES.undetermined.message.toLowerCase();
     for (const leak of ["channel", "conversation", "member", "permission", "role"]) {

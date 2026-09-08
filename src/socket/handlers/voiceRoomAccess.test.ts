@@ -16,9 +16,8 @@ import type { EventHandlerMap, HandlerContext } from "./types";
 import { registerVoiceHandlers } from "./voice";
 
 /**
- * A DM's id is a hash of the sorted pair and is not a secret, so naming one
- * proves nothing and this handler has to ask who is in it. The member list is
- * asserted on too, since a gated call still leaks if the id is announced.
+ * A DM's id is a hash of the sorted pair and not a secret, so naming one proves
+ * nothing. The member list is asserted on too, since announcing the id leaks.
  */
 
 const HOST = "voiceroom.test:5001";

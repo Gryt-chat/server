@@ -13,11 +13,8 @@ import { registerSessionHandlers } from "./sessions";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
 /**
- * Signing out of the other devices, and staying signed in on this one.
- *
- * The bump invalidates every token the member holds, this socket's included,
- * so the thing most worth pinning here is that the device doing the asking
- * survives it — that is the half that is easy to get backwards.
+ * The bump invalidates every token the member holds, this socket's included, so
+ * what is pinned is that the device doing the asking survives it.
  */
 
 const HOST = "sessions.test:5001";

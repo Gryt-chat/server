@@ -16,9 +16,8 @@ import { broadcastMemberList } from "./clients";
 import { voiceRoomName } from "./voiceRooms";
 
 /**
- * Telling everybody announces who is talking to whom, since a DM id is
- * computable; telling nobody drew a call with nobody in it, which shipped. The
- * room is the answer, so these assert both halves.
+ * Telling everybody announces who is talking to whom; telling nobody drew a call
+ * with nobody in it, which shipped. The room is the answer.
  */
 
 const SERVER_ID = "participants-test";

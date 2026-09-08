@@ -23,9 +23,8 @@ import { registerAdminHandlers } from "./admin";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
 /**
- * Colour is the one field on the owner role that saves. Most of this file is
- * about the hole being no wider: a payload slipping a rank in beside it is
- * refused outright rather than half-applied.
+ * Colour is the one field on the owner role that saves, and a payload slipping a
+ * rank in beside it is refused outright rather than half-applied.
  */
 
 const HOST = "owner-colour.test:5001";

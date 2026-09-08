@@ -5,9 +5,8 @@ import { normalizeJoinPolicy } from "../db/sqlite/servers";
 import { isJoinPolicy, JOIN_POLICIES } from "../db/interfaces";
 
 /**
- * Reading a policy out of a column and accepting one on the way in used to carry
- * a list each, so `request` was implemented everywhere and selectable nowhere.
- * A fourth policy that reaches only one half fails here.
+ * Reading a policy and accepting one used to carry a list each, so `request` was
+ * implemented everywhere and selectable nowhere.
  */
 describe("join policy, in and out", () => {
   it("has the three the rest of the server implements", () => {

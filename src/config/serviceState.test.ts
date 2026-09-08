@@ -57,9 +57,8 @@ describe("service state", () => {
   });
 
   it("refuses joins on a value it does not understand, rather than guessing", () => {
-    // Neither answer is safe. Reading "requried" as on ignores somebody who
-    // meant to close the server; reading it as off takes a server down over a
-    // typo. Saying so is the only honest option.
+    // Neither answer is safe: on ignores somebody closing their server, off
+    // takes one down over a typo.
     const state = readServiceState(env({ GRYT_SERVER_ENABLED: "requried" }));
     assert.equal(state.inService, false);
     assert.equal("misconfigured" in state && state.misconfigured, "requried");

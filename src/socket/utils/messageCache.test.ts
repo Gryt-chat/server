@@ -21,9 +21,8 @@ import {
 const texts = (items: { text: string | null }[]) => items.map((m) => m.text).sort();
 
 /**
- * A delete that updates the database and forgets the cache leaves the message on
- * the next person's screen. Every entry is reconstructable, so nothing here
- * may fail an operation.
+ * A delete that forgets the cache leaves the message on the next person's screen.
+ * Every entry is reconstructable, so nothing here may fail an operation.
  */
 
 let dir: string;

@@ -19,8 +19,7 @@ import type { EventHandlerMap, HandlerContext } from "./types";
 
 /**
  * `conversationAccess.test.ts` proves the rule answers correctly, not that the
- * handlers ask it or who they then send to. Three sockets sharing one
- * `clientsInfo`, so "who received this" is an assertion rather than a hope.
+ * handlers ask it or who they then send to.
  */
 
 const HOST = "dm.test:5001";
@@ -701,10 +700,8 @@ describe("group conversations", () => {
   });
 });
 
-/**
- * An envelope the server cannot read, and the two shapes that would put a copy
- * in the clear beside it: both at once, and sealed on a channel.
- */
+/** An envelope the server cannot read, and the two shapes that would put a copy
+    in the clear beside it. */
 describe("a sealed direct message", () => {
   const envelope = JSON.stringify({
     type: "gryt-sealed-message",
@@ -756,9 +753,8 @@ describe("a sealed direct message", () => {
       sealed: envelope,
     });
 
-    /* Two layers in front of the column hand back copies that never touched it,
-       so a `rowToMessage` dropping `sealed` passes every handler assertion and
-       empties the message once the cache expires. */
+    /* Two layers hand back copies that never touched the column, so a
+       `rowToMessage` dropping `sealed` passes every handler assertion. */
     const { listMessages } = await import("../../db/sqlite/messages");
     const stored = await listMessages(conversationId, 50);
 

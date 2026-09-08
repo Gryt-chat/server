@@ -16,9 +16,8 @@ import { initPlugins, PLUGIN_MESSAGE_EVENT } from "./index";
 import { setPluginRefs } from "./refs";
 
 /**
- * Every piece is covered on its own, and none of them covers whether the pieces
- * are connected: a second bus in the middle passes every unit test and reaches
- * no plugin. A real folder, a real token, and socket.io standing in.
+ * Whether the pieces are connected: a second bus in the middle passes every unit
+ * test and reaches no plugin. A real folder, a real token, real socket.io.
  */
 
 const HOST = "round-trip.test:5001";

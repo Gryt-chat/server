@@ -20,13 +20,8 @@ import { upsertUser } from "../db/sqlite/users";
 import { applyInviteRole } from "./inviteRoles";
 
 /**
- * The invite role binding against a real database.
- *
- * The rules have their own tests and are pure. What is only reachable here is
- * everything between them and SQLite: three columns added by migration, a
- * snapshot written at creation and read back at redemption, and an UPDATE whose
- * argument list has to line up with its placeholders. That last one was wrong
- * once already and would have written a role id into the flag column.
+ * What is only reachable here is everything between the pure rules and SQLite,
+ * including an UPDATE whose arguments once did not line up with its placeholders.
  */
 
 let dir: string;

@@ -17,20 +17,8 @@ import { upsertServerChannel } from "../../db/sqlite/channels";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
 /**
- * Blocking, driven through the handlers rather than around them.
- *
- * The queries in `db/sqlite/blocks.ts` can be right while nothing asks them,
- * which is the failure this file exists to catch: a block that is recorded and
- * then changes nothing is worse than no block at all, because the person who
- * used it believes they are covered.
- *
- * So every case here is about who received something. Three participants share
- * one `clientsInfo` and one `io.sockets.sockets` map, which is what makes "did
- * this reach them" an assertion rather than a hope.
- *
- * Mallory is a member in good standing throughout. Nothing here is a
- * permission: blocking has to work against somebody who outranks you, and none
- * of these cases give anybody a role.
+ * The queries can be right while nothing asks them, and a block that changes
+ * nothing is worse than none. Nobody here holds a role, deliberately.
  */
 
 const HOST = "blocks.test:5001";
@@ -77,13 +65,8 @@ const world = makeWorld();
 
 let seq = 0;
 
-/**
- * A member of this server, connected, holding the default member permissions.
- *
- * `hasJoinedChannel` and the rest of the voice fields are what a socket looks
- * like once a join has finished; the chat handlers read `serverUserId` off this
- * and nothing else here matters to them.
- */
+/** The voice fields are what a socket looks like once a join has finished; the
+    chat handlers read `serverUserId` and nothing else. */
 async function connectMember(
   nickname: string,
   grytUserIdOverride?: string,

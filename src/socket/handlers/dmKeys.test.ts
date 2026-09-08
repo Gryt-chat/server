@@ -12,10 +12,8 @@ import { buildMemberList } from "../utils/clients";
 import { registerDmKeyHandlers } from "./dmKeys";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
-/**
- * Both assertions are about what the server does not do: read or vouch for the
- * binding, and let a member park unbounded data in a broadcast column.
- */
+/** Both assertions are about what the server does not do: vouch for the binding,
+    or let a member park unbounded data in a broadcast column. */
 
 let dir: string;
 
@@ -195,13 +193,8 @@ describe("publishing a DM key binding", () => {
   });
 
   it("does not let one member set another's", async () => {
-    /*
-     * The payload names a victim, several ways. Alice publishing her own key
-     * and Bob's staying put does not test this — with the member read off the
-     * payload the fallback to the socket still runs when no name is there, so
-     * that version passes with the check inverted. The payload has to actually
-     * carry one.
-     */
+    /* The payload has to actually name a victim: without one the fallback to the
+       socket still runs, and the case passes with the check inverted. */
     for (const field of ["serverUserId", "who", "userId", "target", "member"]) {
       const before = await bindingOf(bob.serverUserId);
       await alice.handlers["dm:key:publish"]({

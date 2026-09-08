@@ -44,9 +44,8 @@ test("a very long string is refused", () => {
 });
 
 test("a string longer than this build writes is accepted", () => {
-  // The point of the cap being generous. A client that has grown a sixth slot
-  // writes 18 characters, and this server has to store it rather than refuse
-  // the release — the clients are what decide which fields they can draw.
+  // A client grown a sixth slot writes 18 characters, and this server has to
+  // store it rather than refuse the release.
   assert.deepEqual(readWornUpdate("aiac----adabacab"), {
     kind: "set",
     worn: "aiac----adabacab",

@@ -26,14 +26,8 @@ describe("the versions this server is willing to compare", () => {
 		assert.equal(parseVersion("v1.6.12"), null);
 	});
 
-	/**
-	 * The door GRYT-306 closed, still closed.
-	 *
-	 * `git describe` gives this for a build that is not sitting exactly on a
-	 * tag. The semver grammar would read `1-gafa06e4` as a valid prerelease of
-	 * 1.0.48 and compare it, which is why the stage list is a closed set rather
-	 * than "any identifier".
-	 */
+	/** `git describe` gives this off a tag, and semver reads `1-gafa06e4` as a
+	    valid prerelease, which is why the stage list is closed. */
 	it("refuses git describe output", () => {
 		assert.equal(parseVersion("1.0.48-1-gafa06e4"), null);
 	});
@@ -76,12 +70,8 @@ describe("ordering", () => {
 });
 
 /**
- * The bug this was opened for (GRYT-722).
- *
- * A client release embeds the newest *stable* server, so nobody had run a
- * server on a beta of itself. Doing it fell down the unparseable branch: the
- * server called itself stable, took the newest stable release as `latest` —
- * older than the thing running — and reported no update, for good.
+ * A server on a beta of itself fell down the unparseable branch, called itself
+ * stable, took an older stable release as latest and reported no update.
  */
 describe("a server running a beta of itself", () => {
 	const stable = "1.6.12";
