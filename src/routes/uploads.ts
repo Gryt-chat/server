@@ -44,15 +44,8 @@ async function extractVideoThumbnail(inputPath: string, fileId: string): Promise
   }
 }
 
-/**
- * Types a browser may render straight from this endpoint. Everything else is a
- * download.
- *
- * **SVG is on the list, and three things have to stay true for that.** Anything
- * stored as image/svg+xml has been through sanitizeSvg(); the client only draws
- * these through `<img>`, never innerHTML; and the CSP two lines below sandboxes
- * one opened directly as a document. That header is not optional.
- */
+/** SVG is on this list only because it has been through sanitizeSvg(), is drawn
+    through `<img>`, and is sandboxed by the CSP below. That header is required. */
 function isInlineSafe(contentType: string | undefined): boolean {
   if (!contentType) return false;
   const type = contentType.split(";")[0].trim().toLowerCase();
@@ -63,20 +56,15 @@ function isInlineSafe(contentType: string | undefined): boolean {
   );
 }
 
-// Avatars and emoji stay in memory. Both are re-encoded through sharp
-// immediately and both carry their own small ceilings, so a temp file would be
-// written and deleted for no benefit.
+// Avatars and emoji stay in memory: both are re-encoded through sharp at once
+// and carry their own ceilings, so a temp file would be written and deleted.
 
-/**
- * A validation ceiling, not an upload one: validating an image means decoding
- * it, and decoding means holding it. Files and videos are not subject to this.
- */
+/** A validation ceiling, not an upload one: decoding an image means holding it.
+    Files and videos are not subject to this. */
 const IMAGE_VALIDATION_MAX_BYTES = 64 * 1024 * 1024;
 
-/**
- * multer for the general upload route. One ceiling, the operator's, refused as
- * it streams rather than after the file has landed. Zero means unlimited.
- */
+/** One ceiling, the operator's, refused as it streams rather than after the
+    file has landed. Zero means unlimited. */
 function uploadToDisk(field: string) {
   return function bufferUploadToDisk(req: Request, res: Response, next: NextFunction): void {
     Promise.resolve()
@@ -90,12 +78,8 @@ function uploadToDisk(field: string) {
   };
 }
 
-/**
- * Buffer an avatar, refusing an oversized one **before** it is in memory. This
- * path re-encodes rather than streaming, so a check after multer finished meant
- * the limit governed what was stored and nothing governed what was allocated.
- * The check further down stays; it is what produces the readable error.
- */
+/** Refuses an oversized avatar before it is in memory: this path re-encodes
+    rather than streaming, so a later check governs storage, not allocation. */
 function uploadAvatarToMemory(field: string) {
   return function bufferAvatarToMemory(req: Request, res: Response, next: NextFunction): void {
     Promise.resolve()
@@ -109,10 +93,8 @@ function uploadAvatarToMemory(field: string) {
   };
 }
 
-/**
- * Deletes multer's temp file on every exit path, including the ones that threw.
- * Otherwise a failed validation leaves its bytes on the host's disk.
- */
+/** Every exit path, including the ones that threw: otherwise a failed
+    validation leaves its bytes on the host's disk. */
 async function discardTemp(file: Express.Multer.File | undefined): Promise<void> {
   if (!file?.path) return;
   await unlink(file.path).catch((e: NodeJS.ErrnoException) => {
@@ -155,9 +137,8 @@ uploadsRouter.post(
 
     const fileId = uuidv4();
 
-    // What to store it as, and what to do to it on the way in. In its own file
-    // because nothing in here can be loaded in a test, and because sealing is
-    // the one part of it with a security answer — see `uploadStorage.ts`.
+    // In its own file because nothing in here loads in a test, and because
+    // sealing is the part with a security answer. See `uploadStorage.ts`.
     const storage = storageForUpload({
       sealed: isSealedUpload(req.body),
       fileId,
@@ -171,12 +152,8 @@ uploadsRouter.post(
         const maxBytes = (typeof cfg?.upload_max_bytes === "number" ? cfg.upload_max_bytes : DEFAULT_UPLOAD_MAX_BYTES);
         const hasLimit = typeof maxBytes === "number" && maxBytes > 0;
 
-        // Applies to images too. Exempting them on the assumption the image
-        // worker shrinks them was never a limit: the worker runs after the
-        // original is written, and a desktop-hosted server has no worker.
-        //
-        // Belt and braces — multer already refused as it streamed, so getting
-        // here means the setting changed between the two reads.
+        // Images too: the worker runs after the original is written, and a
+        // desktop-hosted server has none. Multer already refused as it streamed.
         if (hasLimit && file.size > maxBytes) {
           res.status(413).json({
             error: "file_too_large",
@@ -190,10 +167,8 @@ uploadsRouter.post(
         let width: number | null = null;
         let height: number | null = null;
 
-        // SVG is accepted here as the vector, sanitised, and deliberately never
-        // queued as an image job below — the worker would hand it to sharp, and
-        // sharp renders SVG through librsvg. Storing the vector is what keeps a
-        // memory-unsafe parser away from a stranger's bytes.
+        // Stored as the sanitised vector and never queued as an image job: the
+        // worker would hand it to sharp, which renders SVG through librsvg.
         if (storage.treatAsSvg) {
           const svg = sanitizeSvg(await readFile(file.path));
           if (!svg.valid) {
@@ -224,10 +199,8 @@ uploadsRouter.post(
         }
 
         if (storage.validateAsImage) {
-          // Anything claiming to be an image has to decode as one of the
-          // raster formats we allow — the mime off the request is a claim, and
-          // taking it meant an SVG carrying <script> was served back inline.
-          // A file this size claiming to be a PNG is not a photograph.
+          // The mime off the request is a claim, and taking it meant an SVG
+          // carrying <script> was served back inline.
           if (file.size > IMAGE_VALIDATION_MAX_BYTES) {
             res.status(413).json({
               error: "file_too_large",
@@ -246,10 +219,8 @@ uploadsRouter.post(
           width = parseDimField(req.body?.width);
           height = parseDimField(req.body?.height);
 
-          // `validateImage` has already decoded this through sharp and read
-          // its dimensions off the same bytes, so a second library decoding it
-          // again was work for an answer we were holding. It was also the only
-          // use of `image-size`, whose advisory has no patched release.
+          // `validateImage` already read the dimensions off the same decode.
+          // The second library was `image-size`, whose advisory has no fix.
           if (!width || !height) {
             width = validation.width;
             height = validation.height;
@@ -293,9 +264,8 @@ uploadsRouter.post(
 
         res.status(201).json({ fileId, key, thumbnailKey: thumbKey });
       })
-      // Every exit path, including the early returns for a bad SVG, an oversized
-      // image, and anything that threw. multer's temp file is ours from the
-      // moment it exists and nothing else will remove it.
+      // Every exit path, including the early returns and anything that threw:
+      // multer's temp file is ours and nothing else removes it.
       .finally(() => discardTemp(file))
       .catch(next);
   },
@@ -304,11 +274,8 @@ uploadsRouter.post(
 uploadsRouter.post(
   "/avatar",
   requireBearerToken,
-  /*
-   * `upload_avatar_image`, not `change_avatar`. This endpoint only ever
-   * receives a picture — an owl is a string on the profile and never came
-   * through here, so there is no flag for a modified client to lie about.
-   */
+  /* `upload_avatar_image`, not `change_avatar`: this endpoint only ever gets a
+     picture, so there is no flag for a modified client to lie about. */
   (req: Request, res: Response, next: NextFunction): void => {
     ensurePermission(req, res, "upload_avatar_image")
       .then((ok) => { if (ok) next(); })
@@ -338,9 +305,8 @@ uploadsRouter.post(
         const cfg = await getServerConfig().catch(() => null);
         const maxBytes = (typeof cfg?.avatar_max_bytes === "number" ? cfg.avatar_max_bytes : DEFAULT_AVATAR_MAX_BYTES);
 
-        // Animated files used to be exempt here, and were accepted oversized on
-        // the understanding that the resize below would bring them down. The
-        // limit is the limit: a file over it is refused, whatever is in it.
+        // No exemption for animated files: a file over the limit is refused
+        // whatever is in it.
         if (typeof maxBytes === "number" && maxBytes > 0 && file.size > maxBytes) {
           res.status(413).json({
             error: "file_too_large",
@@ -358,10 +324,8 @@ uploadsRouter.post(
         let thumbKey: string | null = null;
         let processing = false;
 
-        // SVG takes its own path and never reaches sharp. It is stored as the
-        // vector it is — one small file that stays sharp at whatever size the
-        // UI asks for, where a raster needs a set of them — and sanitised on
-        // the way in. See svgSanitize.ts for why that is enough.
+        // SVG never reaches sharp. Stored as the sanitised vector; see
+        // svgSanitize.ts for why that is enough.
         if ((file.mimetype || "").toLowerCase() === "image/svg+xml") {
           const svg = sanitizeSvg(file.buffer);
           if (!svg.valid) {
@@ -373,9 +337,8 @@ uploadsRouter.post(
           key = `avatars/${fileId}.svg`;
           await putObject({ bucket, key, body, contentType: "image/svg+xml" });
 
-          // No thumbnail. A thumbnail exists to avoid sending a large raster
-          // where a small one will do, and a vector is already the small one.
-          // Consumers that ask for a thumb fall back to the file itself.
+          // No thumbnail: a vector is already the small one, and anything
+          // asking for a thumb falls back to the file.
           await insertFile({
             file_id: fileId,
             s3_key: key,
@@ -400,9 +363,8 @@ uploadsRouter.post(
         width = validation.width;
         height = validation.height;
 
-        // Dimensions, not bytes: what is left to catch is the modestly-sized
-        // animated avatar with large dimensions (GRYT-66). The byte comparison
-        // is redundant only while the check above sits before this one.
+        // Dimensions, not bytes: what is left is the modestly-sized animated
+        // avatar with large dimensions.
         const withinBounds =
           file.size <= maxBytes &&
           (width ?? 0) <= AVATAR_MAX_PX &&
@@ -441,9 +403,8 @@ uploadsRouter.post(
           }
           storedMime = "image/avif";
           storedSize = storedBody.length;
-          // What was stored, not what was uploaded. `cover` with both axes set
-          // crops to exactly this box, and recording the original meant the row
-          // described a file that no longer existed.
+          // What was stored, not what was uploaded: `cover` crops to exactly
+          // this box, so the original describes a file that is gone.
           width = AVATAR_MAX_PX;
           height = AVATAR_MAX_PX;
         } else {
@@ -494,9 +455,8 @@ uploadsRouter.post(
           return;
         }
 
-        // Taken from the original upload rather than from `storedBody`, which
-        // for an oversized animated avatar is a single-frame placeholder that
-        // gets replaced further down. The source image is the same either way.
+        // From the original upload, not `storedBody`, which for an oversized
+        // animated avatar is a placeholder replaced further down.
         const dominantColor = await findDominantColor(file.buffer, { animated: isAnimated });
 
         await insertFile({
@@ -570,10 +530,8 @@ uploadsRouter.delete(
     const serverUserId = req.tokenPayload?.serverUserId;
     if (!serverUserId) { res.status(401).json({ error: "auth_required" }); return; }
 
-    // Removing an avatar needs the same permission as setting one. Somebody who
-    // may not change their picture may not clear it either — otherwise the
-    // permission only bites in one direction and "reset to default" becomes a
-    // way around it.
+    // Same permission as setting one, or the gate bites in one direction and
+    // "reset to default" walks around it.
     Promise.resolve()
       .then(async () => {
         if (!(await ensurePermission(req, res, "change_avatar"))) return;
@@ -587,19 +545,8 @@ uploadsRouter.delete(
   }
 );
 
-/**
- * Whether the caller may read files on this server at all.
- *
- * The credential is in the query string because these URLs end up in `<img
- * src>` and an image element cannot send an Authorization header. A cookie
- * would need `SameSite=None; Secure` and would stop working on every
- * self-hosted server reached over plain http on a LAN.
- *
- * No per-file check beyond this, on purpose. A file token is only minted for
- * somebody who joined, so holding one is the membership test. Narrowing to a
- * channel or conversation is a real thing to want and was not GRYT-740, where
- * the hole was a stranger with a UUID reading anything at all.
- */
+/** In the query string because these URLs end up in `<img src>`. No per-file
+    check: a file token is only minted for a member, so holding one is the test. */
 async function mayReadFiles(req: Request): Promise<boolean> {
   const raw = req.query.t;
   const token = typeof raw === "string" ? raw : null;
@@ -616,11 +563,8 @@ async function mayReadFiles(req: Request): Promise<boolean> {
     const currentVersion = cfg?.token_version ?? 0;
     if ((payload.tokenVersion ?? 0) !== currentVersion) return false;
 
-    // Per-member revocation. This one matters more here than anywhere else: a
-    // file token lives twelve hours against an access token's fifteen minutes,
-    // so without this a session that was ended keeps reading uploads for the
-    // rest of the day. Costs one indexed lookup on a request that is already
-    // hitting the database for the config. GRYT-973.
+    // A file token lives twelve hours against an access token's fifteen
+    // minutes, so an ended session would keep reading uploads all day.
     const member = await getUserByServerId(payload.serverUserId);
     if (!member) return false;
     if ((payload.userTokenVersion ?? 0) !== (member.token_version ?? 0)) return false;
@@ -676,20 +620,13 @@ uploadsRouter.get(
           ? (mime.lookup(fileMeta.thumbnail_key || "") || "image/avif")
           : (fileMeta.mime || undefined);
         if (contentType) res.setHeader("Content-Type", contentType);
-        // `private`, not `public`. The URL now carries a credential, and a
-        // shared cache keying on it would hand one person's token to whoever
-        // asked for the same URL next. The browser still caches it, which is
-        // what keeps an avatar from being refetched on every render.
+        // `private`, not `public`: the URL carries a credential, and a shared
+        // cache would hand one person's token to whoever asked next.
         res.setHeader("Cache-Control", "private, max-age=60");
         res.setHeader("Accept-Ranges", "bytes");
 
-        // Defence in depth, on the assumption that something unwanted got past
-        // the upload checks anyway. nosniff stops a mislabelled file being
-        // re-interpreted as something executable; the CSP neuters scripts and
-        // subresources if it is rendered as a document regardless; and anything
-        // outside the inline allowlist is handed over as a download rather than
-        // rendered. Uploads are served from the API's own origin, so a document
-        // that runs here runs with the session.
+        // Uploads are served from the API's own origin, so a document that runs
+        // here runs with the session. These three assume the checks were passed.
         res.setHeader("X-Content-Type-Options", "nosniff");
         res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
 
