@@ -1,17 +1,6 @@
 /**
- * Finding plugins on disk and starting them (GRYT-933).
- *
- * A plugin is a folder with a manifest.json and an entry point. No registry, no
- * install command: the operator puts a folder there, which is the honest
- * version of "run somebody else's code on your server" and matches how client
- * addons work. Anything resembling a registry would be a supply chain, and a
- * bad plugin here is not one person's client — it is everybody on that server
- * and the database.
- *
- * Nothing here is a security boundary. Loading a plugin is running its code
- * with this process's privileges. What this does is make the failures legible:
- * a folder that is not a plugin is named and skipped, a plugin that throws on
- * startup is named and skipped, and the rest of the server comes up either way.
+ * A plugin is a folder with a manifest and an entry point. Nothing here is a
+ * security boundary; it only makes the failures legible.
  */
 
 import { readdirSync, readFileSync, statSync } from "fs";
@@ -39,13 +28,8 @@ export interface Discovery {
   rejected: Rejection[];
 }
 
-/**
- * Read every plugin folder under `dir`.
- *
- * Never throws. A plugins directory that does not exist is the normal case —
- * almost nobody runs plugins — and an unreadable one is worth a line in the log
- * rather than a server that will not start.
- */
+/** Never throws: a missing plugins directory is the normal case, and an
+    unreadable one is a log line rather than a server that will not start. */
 export function discoverPlugins(dir: string): Discovery {
   const plugins: DiscoveredPlugin[] = [];
   const rejected: Rejection[] = [];
@@ -71,9 +55,8 @@ export function discoverPlugins(dir: string): Discovery {
       raw = JSON.parse(readFileSync(join(folder, "manifest.json"), "utf8"));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      /* A folder with no manifest at all is not a broken plugin, it is not a
-         plugin — an editor's backup directory, a half-finished checkout. Saying
-         so once is useful; treating it as a failure is noise. */
+      /* No manifest at all is not a broken plugin, it is an editor's backup
+         directory. Said once, not treated as a failure. */
       const missing = (err as NodeJS.ErrnoException)?.code === "ENOENT";
       rejected.push({
         folder: name,
@@ -88,14 +71,8 @@ export function discoverPlugins(dir: string): Discovery {
       continue;
     }
 
-    /*
-     * The manifest already refuses a `main` containing `..` or starting at the
-     * root. This is the same check made again against the resolved path, which
-     * is the one that is actually opened — a symlinked folder, or a platform
-     * quirk in how the two are joined, could turn an innocent-looking relative
-     * path into one that leaves. Cheap, and the alternative is trusting that
-     * two string checks and a path join agree.
-     */
+    /* The same check the manifest makes, against the resolved path that is
+       actually opened: a symlink or a path-join quirk can differ. */
     const entry = resolve(folder, result.manifest.main);
     const inside = resolve(folder);
     if (!entry.startsWith(inside + "/") && entry !== inside) {
@@ -120,29 +97,16 @@ export function discoverPlugins(dir: string): Discovery {
   return { plugins, rejected };
 }
 
-/**
- * Where plugins live.
- *
- * Off unless `GRYT_PLUGINS_DIR` is set. A default path would mean a server
- * upgrade could start executing whatever happened to be in a directory the
- * operator had never thought about, which is the wrong way round for a feature
- * whose whole nature is running somebody else's code.
- */
+/** Off unless `GRYT_PLUGINS_DIR` is set: a default path means an upgrade could
+    execute whatever was in a directory nobody had thought about. */
 export function pluginsDir(env: NodeJS.ProcessEnv = process.env): string | null {
   const raw = env.GRYT_PLUGINS_DIR?.trim();
   if (!raw) return null;
   return isAbsolute(raw) ? raw : resolve(process.cwd(), raw);
 }
 
-/*
- * Hidden from the bundler.
- *
- * `dist/bundle.js` is CommonJS, and esbuild rewrites a literal `import()` into
- * a require of something it tried to bundle at build time. A plugin does not
- * exist at build time, so the import has to be built where esbuild cannot see
- * it. Dynamic import rather than require, so a plugin may be written as either
- * ESM or CommonJS.
- */
+/* Hidden from esbuild, which rewrites a literal `import()` into a require of
+   something it bundled. Dynamic import, so a plugin may be ESM or CommonJS. */
 const importPlugin: (path: string) => Promise<Record<string, unknown>> = new Function(
   "path",
   "return import(path)",
@@ -150,11 +114,8 @@ const importPlugin: (path: string) => Promise<Record<string, unknown>> = new Fun
 
 interface StartOptions {
   dir: string;
-  /**
-   * Called for each plugin that started, so members can be told what this
-   * server runs (GRYT-941). Injected rather than imported so the loader has no
-   * opinion about where that list lives.
-   */
+  /** Injected rather than imported, so the loader has no opinion about where
+      the announced list lives. */
   announce?: (plugin: {
     id: string;
     name: string;
@@ -171,14 +132,8 @@ interface StartOptions {
   load?: (entry: string) => Promise<Record<string, unknown>>;
 }
 
-/**
- * Load and start everything in the directory. Returns the ids that started.
- *
- * A plugin starts by exporting a function — `activate`, or a default export —
- * which is called with the API. Exporting nothing callable is allowed and does
- * nothing, because a plugin whose whole job is a side effect at import time is
- * a reasonable thing to write, if a hard one to debug.
- */
+/** A plugin starts by exporting `activate` or a default function. Exporting
+    nothing callable is allowed: import-time side effects are legitimate. */
 export async function startPlugins({
   dir,
   bus,
@@ -207,23 +162,8 @@ export async function startPlugins({
       }
 
       started.push(manifest.id);
-      /*
-       * Every plugin that started, with what it may do. Not optional and not
-       * configurable (GRYT-941): a member is the one whose messages are being
-       * read, and knowing what code sits between them and the people they are
-       * talking to is theirs to know. An operator who would rather it were not
-       * seen is the case this exists for.
-       *
-       * After the load, so a plugin that failed to start is not announced —
-       * saying it is here would send its client half talking to nothing, and
-       * would tell a member about something that is not reading anything.
-       *
-       * **No version.** A version number is which known problem applies, and
-       * handing that to everybody who joins is a free answer to a question an
-       * attacker would otherwise have to ask. What a member needs is what it
-       * is, who wrote it, where to read about it, and what it may do — none of
-       * which narrows an attack.
-       */
+      /* Not configurable, after the load so a failed plugin is not announced,
+         and without a version, which would name which known problem applies. */
       announce({
         id: manifest.id,
         name: manifest.name,
@@ -239,16 +179,8 @@ export async function startPlugins({
             : " (no capabilities declared)"),
       );
     } catch (err) {
-      /*
-       * A plugin that throws on startup is dropped and the server carries on.
-       * The alternative — refusing to start — hands anybody who can write to
-       * that folder a way to take the server down, and leaves an operator with
-       * a server that will not boot because of a plugin they installed for fun.
-       *
-       * Anything it managed to subscribe before throwing is removed, so a
-       * half-initialised plugin does not keep receiving events it is not ready
-       * for.
-       */
+      /* Dropped, not fatal: refusing to start hands anybody who can write to
+         that folder a way to take the server down. Subscriptions go too. */
       bus.remove(manifest.id);
       const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
       logger.error(`plugin ${manifest.id} failed to start and was skipped: ${message}`);

@@ -1,27 +1,6 @@
 /**
- * The things a plugin can do to somebody (GRYT-935).
- *
- * Stage one gave plugins events and nothing else, which is enough for a
- * summariser and not enough for the thing people actually want: an automod
- * that removes somebody who is being malicious. This is that, for kicking and
- * banning. Deleting a message is GRYT-936 — `chat:delete` does six things
- * inline and needs pulling out before a second caller can have it.
- *
- * Nothing here is new moderation. It calls `evictUser`, the same module the
- * socket handlers call, so a plugin's kick and a moderator's kick are the same
- * kick. What is new is the three checks around it, because a plugin has none
- * of what a moderator's request carries:
- *
- * 1. **Who it may act on.** A plugin holds no role, so the rank comparison
- *    every human path uses has nothing to compare. `pluginMayActOn` takes its
- *    place: a plugin cannot act on a moderator or the owner.
- * 2. **How often.** Not against abuse from outside — the plugin is already
- *    inside. Against a loop. A plugin with a bug that bans everybody who
- *    speaks is a plausible Tuesday, and a ceiling with a loud log is the
- *    difference between losing five members and losing the server.
- * 3. **Who it was.** A ban row and an audit row both want an actor, and a
- *    plugin is not a member. Attributing it to one would be a lie in the one
- *    record that exists to answer "who did this".
+ * Calls `evictUser`, so a plugin's kick is a moderator's kick. What is added is
+ * who it may act on, how often, and an actor that is not a member.
  */
 
 import consola from "consola";
@@ -35,14 +14,8 @@ import { checkRateLimit, type RateLimitRule } from "../utils/rateLimiter";
 import { pluginRefs } from "./refs";
 import { pluginMayActOn } from "./reach";
 
-/**
- * A ceiling on a runaway plugin, not a defence against a hostile one.
- *
- * A plugin that means harm has the Node runtime and does not need this API. So
- * the number is chosen against the accident: twenty in a minute is far more
- * than any real automod does on a normal day, and far fewer than a loop
- * manages before somebody notices.
- */
+/** Against a loop, not a hostile plugin, which has the Node runtime anyway.
+    More than a real automod does, fewer than a loop manages unnoticed. */
 export const PLUGIN_ACTION_RULE: RateLimitRule = {
   limit: 20,
   windowMs: 60_000,
@@ -51,56 +24,30 @@ export const PLUGIN_ACTION_RULE: RateLimitRule = {
   scoreDecayMs: 5_000,
 };
 
-/**
- * The actor written to the ban row and the audit row.
- *
- * A plugin has no `server_user_id`, and the ban list joins that column against
- * `users` for a name — so this leaves `banned_by_nickname` null rather than
- * borrowing a member's. That is the point: an operator reading the ban list
- * must not be told a person did something a plugin did. The id itself carries
- * which plugin, for anybody reading the rows.
- */
+/** Leaves `banned_by_nickname` null rather than borrowing a member's: the ban
+    list must not say a person did what a plugin did. */
 export function pluginActorId(pluginId: string): string {
   return `plugin:${pluginId}`;
 }
 
 export type ModerationOutcome =
   | { ok: true }
-  /**
-   * Returned rather than thrown. A refusal here is an ordinary answer — the
-   * member is a moderator, or already gone, or the plugin has done twenty of
-   * these in a minute — and a plugin should be able to log it and carry on.
-   * Throwing would count towards the bus's disable threshold and take a
-   * working plugin off the air for asking a reasonable question.
-   */
+  /** Returned, not thrown: a refusal is an ordinary answer, and throwing counts
+      towards the bus's disable threshold. */
   | { ok: false; reason: string };
 
 export interface PluginModeration {
-  /**
-   * Remove somebody from the server. They can come back.
-   *
-   * @param serverUserId The member's id on this server, as carried by every event.
-   */
+  /** Remove somebody from the server. They can come back.
+      @param serverUserId The member's id, as carried by every event. */
   kick(serverUserId: string, options?: { reason?: string }): Promise<ModerationOutcome>;
-  /**
-   * Remove somebody and stop them returning.
-   *
-   * @param options.durationMs Omit for permanent.
-   */
+  /** Remove somebody and stop them returning.
+      @param options.durationMs Omit for permanent. */
   ban(
     serverUserId: string,
     options?: { reason?: string; durationMs?: number },
   ): Promise<ModerationOutcome>;
-  /**
-   * Take a message down. Usually the more proportionate answer — most spam
-   * wants the post gone rather than the person.
-   *
-   * Channels only. A direct message is between two people and a plugin the
-   * operator installed has no business in it, the same rule that keeps DMs out
-   * of `message:created`.
-   *
-   * @param channelId The `channelId` carried on `message:created`.
-   */
+  /** Channels only, the same rule that keeps DMs out of `message:created`.
+      @param channelId The `channelId` carried on that event. */
   deleteMessage(channelId: string, messageId: string): Promise<ModerationOutcome>;
 }
 
@@ -135,9 +82,8 @@ async function act(
   if (!target) {
     return { ok: false, reason: "no member with that id" };
   }
-  /* Somebody already gone. Worth refusing rather than doing again: a plugin
-     reacting to `member:left` and kicking is a loop that would otherwise write
-     an audit row every time round. */
+  /* Already gone. A plugin reacting to `member:left` by kicking is a loop that
+     would write an audit row every time round. */
   if (!target.is_active) {
     return { ok: false, reason: "that member is not on this server" };
   }
@@ -172,12 +118,8 @@ async function act(
     reason,
   });
 
-  /*
-   * A distinct action string rather than the same "kick" a person writes. An
-   * audit row that reads like a human did it, when a plugin did, is the exact
-   * failure the actor field exists to prevent — and the operator scanning for
-   * "what has this plugin been doing" can grep one prefix.
-   */
+  /* A distinct action string, so an audit row never reads as a human doing what
+     a plugin did, and one prefix greps a plugin's whole history. */
   await insertServerAudit({
     actorServerUserId: actor,
     action: `plugin:${action}`,
@@ -214,12 +156,8 @@ async function remove(
     return { ok: false, reason: "too many moderation actions from this plugin" };
   }
 
-  /*
-   * Channels only, established by asking whether this is one rather than by
-   * asking whether it is a DM. A conversation id that is neither is refused for
-   * the same reason: `deleteMessageEverywhere` is told this is a channel, and
-   * it decides who to notify from that.
-   */
+  /* Asks whether this is a channel rather than whether it is a DM, because
+     `deleteMessageEverywhere` decides who to notify from being told it is. */
   if (!(await channelExists(channelId.trim()))) {
     return { ok: false, reason: "no channel with that id — plugins cannot touch direct messages" };
   }
@@ -229,12 +167,8 @@ async function remove(
     return { ok: false, reason: "no message with that id in that channel" };
   }
 
-  /*
-   * The same reach rule as kicking, applied to whoever wrote it. Deleting a
-   * moderator's message is acting on a moderator — quieter than banning them
-   * and the same kind of thing, and a plugin that could do it could delete
-   * every message a moderator posted about the plugin.
-   */
+  /* The same reach rule as kicking: a plugin that could delete a moderator's
+     message could delete every message a moderator posted about the plugin. */
   const author = await getUserByServerId(message.sender_server_id);
   if (author) {
     const reach = pluginMayActOn(await getEffectiveStanding(author.server_user_id, author.gryt_user_id));
