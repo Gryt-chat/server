@@ -3,14 +3,8 @@ import { randomUUID } from "crypto";
 import type { UserReportRecord } from "../interfaces";
 import { fromIso, fromIsoNullable, getSqliteDb, toIso } from "./connection";
 
-/**
- * Reports about a person, as opposed to `reports.ts`, which is about messages.
- *
- * Filtering happens in SQL here rather than by pulling every pending row and
- * scanning it in JavaScript, which is what the message queue next door does.
- * Both are correct at the sizes either sees; this one is simply new enough to
- * have been written the other way.
- */
+/** About a person, where `reports.ts` is about messages. Filtered in SQL rather
+    than by scanning every pending row, as the message queue does. */
 
 function rowToUserReport(r: Record<string, unknown>): UserReportRecord {
   return {
@@ -58,13 +52,8 @@ export async function insertUserReport(record: {
   };
 }
 
-/**
- * Whether this reporter already has an open report about this person.
- *
- * Pending only, deliberately. Somebody whose first report was dismissed and who
- * is being harassed again has something new to say, and refusing them would
- * mean a dismissal silences the reporter permanently.
- */
+/** Pending only: somebody harassed again after a dismissal has something new to
+    say, and refusing them lets one dismissal silence them for good. */
 export async function hasUserReportedUser(
   reportedServerUserId: string,
   reporterServerUserId: string,
@@ -93,13 +82,8 @@ export interface AggregatedUserReport {
   report_ids: string[];
 }
 
-/**
- * The pending queue, one row per person reported.
- *
- * Ordered by how many distinct people reported them, then by how long the
- * oldest has been waiting — the same ordering the message queue uses, so a
- * moderator reading both lists reads them the same way.
- */
+/** By how many distinct people reported them, then how long the oldest waited —
+    the same ordering the message queue uses. */
 export async function getAggregatedPendingUserReports(): Promise<AggregatedUserReport[]> {
   const db = getSqliteDb();
   const rows = db
@@ -123,9 +107,8 @@ export async function getAggregatedPendingUserReports(): Promise<AggregatedUserR
       };
       byUser.set(r.reported_server_user_id, entry);
     }
-    /* The newest nickname wins. Rows arrive oldest first, so a person who has
-     * renamed themselves since the first report is listed under the name a
-     * moderator will actually find in the member list. */
+    /* The newest nickname wins, so somebody who renamed since the first report
+       is listed under the name a moderator will find. */
     if (r.reported_nickname) entry.reported_nickname = r.reported_nickname;
     entry.reporterSet.add(r.reporter_server_user_id);
     entry.report_ids.push(r.report_id);
@@ -151,14 +134,8 @@ export async function getAggregatedPendingUserReports(): Promise<AggregatedUserR
     );
 }
 
-/**
- * Close every open report about one person in a single write.
- *
- * There is no per-report resolution on purpose. The queue shows one card per
- * person, so acting on that card has to close everything behind it — leaving
- * some open would put the same person straight back in the queue with a
- * smaller count.
- */
+/** No per-report resolution: the queue shows one card per person, so leaving
+    some open puts them straight back with a smaller count. */
 export async function resolveUserReportsFor(
   reportedServerUserId: string,
   resolution: "dismissed" | "actioned",

@@ -1,17 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
 
 /**
- * Turn the two rank columns into permission scopes, once. The translation is
- * exact: a gate at 60 denies the permission to every role below 60 and says
- * nothing about the rest, and roles at or above get no row, so they inherit.
- *
- * **The columns are deliberately not dropped.** A server rolled back to a build
- * that reads `post_min_rank` would find it NULL and quietly reopen a channel
- * meant to be locked. Nothing on this side reads them after this runs.
- *
- * **The marker is the safety property.** A second pass would see the same rank
- * values and rebuild scopes over permissions somebody has since edited by hand,
- * so `schema_meta` is checked and written inside the same transaction.
+ * A gate at 60 denies every role below it and leaves the rest inheriting. The
+ * columns are not dropped, or a rollback finds NULL and reopens the channel, and
+ * the marker is written in the same transaction so a second pass cannot run.
  */
 
 export const RANK_GATE_MIGRATION_KEY = "channel_rank_gates_migrated";
@@ -28,13 +20,8 @@ interface ChannelRow {
   permission_scope_id: string | null;
 }
 
-/**
- * The rules one channel's gates become.
- *
- * Exported for the test, which checks the translation on its own rather than
- * through a database — the arithmetic is the part worth pinning, and it reads
- * as a table of cases when it is not wrapped in schema.
- */
+/** Exported for the test, which checks the translation without a database: the
+    arithmetic is the part worth pinning. */
 export function rulesForRankGates(
   roles: RoleRow[],
   postMinRank: number | null,
@@ -43,10 +30,8 @@ export function rulesForRankGates(
   const rules: { roleId: string; permission: string; effect: "deny" }[] = [];
 
   for (const role of roles) {
-    // Reading first: a role that cannot see the channel has no use for the
-    // right to post in it, but both rows are written anyway. The gates were
-    // independent, and folding them together here would mean a later edit that
-    // restores reading silently restores posting with it.
+    // Both rows are written even though one implies the other: the gates were
+    // independent, and folding them makes restoring reading restore posting.
     if (viewMinRank != null && role.rank < viewMinRank) {
       rules.push({ roleId: role.role_id, permission: "read_messages", effect: "deny" });
     }
@@ -88,10 +73,8 @@ export function migrateRankGatesToScopes(d: DatabaseSync): number {
       const rules = rulesForRankGates(roles, channel.post_min_rank, channel.view_min_rank);
       if (rules.length === 0) continue;
 
-      // A private scope, not a template. Two channels that happened to share a
-      // rank did not share a setting — they had the same number — and turning
-      // that into one template would link them, so editing one would silently
-      // change the other. Somebody who wants them linked can make a template.
+      // Private, not a template: two channels sharing a rank had the same number
+      // rather than the same setting, and a template would link them.
       const scopeId = `scope_migrated_${channel.channel_id}`.slice(0, 64);
       d.prepare(
         `INSERT OR REPLACE INTO channel_permission_scopes
@@ -111,9 +94,8 @@ export function migrateRankGatesToScopes(d: DatabaseSync): number {
       converted += 1;
     }
 
-    // Inside the transaction. Written outside it, a crash between the two would
-    // leave the marker set against work that rolled back, and the gates would
-    // be gone with nothing to replace them.
+    // Inside the transaction: outside it, a crash leaves the marker set against
+    // work that rolled back and the gates gone.
     d.prepare(
       `INSERT INTO schema_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?`,
     ).run(RANK_GATE_MIGRATION_KEY, now, now);

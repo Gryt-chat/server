@@ -53,16 +53,8 @@ export async function listMessages(conversationId: string, limit = 50, before?: 
 }
 
 /**
- * The replies inside a thread, oldest first, newest page first. The root
- * message is a normal channel message and is fetched separately by the caller.
- * GRYT-981.
- *
- * **Was ascending with a limit, which took the oldest N.** A thread that passed
- * 200 replies stopped showing the new ones — the recent end was the part that
- * disappeared, and there was no cursor to fetch it with either. Same shape as
- * `listMessages` above now: newest-first window, reversed on the way out, so
- * the default page is the end of the thread and `before` walks backwards from
- * there. GRYT-1010.
+ * Newest-first window, reversed on the way out, like `listMessages`: ascending
+ * with a limit took the oldest N, so a thread past 200 replies hid the new ones.
  */
 export async function listThreadMessages(
   threadId: string,
@@ -237,15 +229,8 @@ export async function removeReactionFromMessage(conversationId: string, messageI
   return { ...msg, reactions: newReactions.length > 0 ? newReactions : null };
 }
 
-/**
- * Removes every trace of a user from the message history. The other half of
- * deleting their messages is the reactions they left on everybody else's, which
- * live as JSON on each message and have to be rewritten row by row.
- *
- * Returns what changed, so callers can tell connected clients — and the files
- * those messages carried, so they can leave storage without waiting for the
- * sweep (GRYT-139).
- */
+/** The other half is the reactions they left on other people's messages, which
+    live as JSON and are rewritten row by row. Returns what changed. */
 export async function purgeUserContent(senderServerUserId: string): Promise<{
   deletedMessages: Array<{ conversation_id: string; message_id: string }>;
   updatedReactions: Array<{ conversation_id: string; message_id: string; reactions: Reaction[] | null }>;
@@ -276,9 +261,8 @@ export async function purgeUserContent(senderServerUserId: string): Promise<{
 
   db.prepare(`DELETE FROM messages WHERE sender_server_id = ?`).run(senderServerUserId);
 
-  // Only rows that mention them at all. The LIKE is a cheap prefilter over a
-  // JSON blob — the authoritative check is the parse below, because a
-  // substring match can hit an id that merely contains this one.
+  // The LIKE is a cheap prefilter over a JSON blob; the parse below is
+  // authoritative, since a substring can hit an id containing this one.
   const candidates = db
     .prepare(`SELECT conversation_id, message_id, reactions FROM messages WHERE reactions IS NOT NULL AND reactions LIKE ?`)
     .all(`%${senderServerUserId}%`) as Array<{ conversation_id: string; message_id: string; reactions: string }>;
@@ -316,9 +300,8 @@ export async function purgeUserContent(senderServerUserId: string): Promise<{
     });
   }
 
-  // Only the ones nothing else points at any more. A file can be attached to
-  // more than one message, and the messages left behind belong to people who
-  // are not being banned.
+  // A file can be attached to more than one message, and the ones left behind
+  // belong to people who are not being banned.
   const stillReferenced = await getAllReferencedAttachmentIds();
   const orphanedAttachmentIds = [...attachmentIds].filter((id) => !stillReferenced.has(id));
 

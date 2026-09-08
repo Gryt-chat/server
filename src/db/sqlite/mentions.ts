@@ -4,25 +4,13 @@ export interface MentionRecord {
   conversation_id: string;
   message_id: string;
   created_at: string;
-  /**
-   * The thread the naming happened in, or null for one in the channel itself.
-   *
-   * Read off the message rather than stored here. The mentions table has one
-   * row per person per message and a foreign key to messages, so the thread is
-   * already known — a column of its own would be a second copy that a moved
-   * message could disagree with.
-   */
+  /** Read off the message rather than stored: the foreign key means the thread
+      is already known, and a column here is a second copy that can disagree. */
   thread_id: string | null;
 }
 
-/**
- * Record that a message named these people. `INSERT OR IGNORE`, so an edit that
- * re-parses the same message does not double up or reset a mention somebody has
- * already read.
- *
- * The sender is dropped here rather than by the caller: a path that forgot
- * would notify somebody about their own sentence.
- */
+/** `INSERT OR IGNORE`, so a re-parse does not double up or reset a mention
+    already read. The sender is dropped here, or a path forgetting notifies them. */
 export async function recordMentions(args: {
   conversationId: string;
   messageId: string;
@@ -52,13 +40,7 @@ export async function recordMentions(args: {
   return targets;
 }
 
-/**
- * What somebody has been named in and not yet read.
- *
- * Ordered oldest first: a list of things waiting for you reads in the order
- * they arrived, and the oldest unanswered question is the one most worth
- * seeing.
- */
+/** Oldest first: a list of things waiting reads in the order they arrived. */
 export async function listUnseenMentions(
   serverUserId: string,
   limit = 100,
@@ -66,9 +48,8 @@ export async function listUnseenMentions(
   const db = getSqliteDb();
   return db
     .prepare(
-      /* Joined rather than left-joined: the foreign key means a mention whose
-         message is gone has already been deleted with it, so an inner join
-         cannot lose a row that should still be counted. */
+      /* Joined, not left-joined: the foreign key means a mention whose message is
+         gone went with it, so this cannot lose a row worth counting. */
       `SELECT m.conversation_id, m.message_id, m.created_at, msg.thread_id
          FROM mentions m
          JOIN messages msg
@@ -98,30 +79,9 @@ export async function countUnseenMentions(
 }
 
 /**
- * Mark what they have read.
- *
- * Three things decide how much, so they arrive named rather than as a run of
- * positional arguments that are easy to pass in the wrong order:
- *
- * | Given | Cleared |
- * |---|---|
- * | nothing | everything on this server |
- * | a conversation | the mentions in its timeline |
- * | a conversation and a thread | that thread's |
- * | a conversation and `includeThreads` | the conversation, threads and all |
- *
- * A conversation on its own clears what was on screen. A thread reply is not
- * in the channel timeline — the client filters replies out and shows the root
- * — so opening the channel is not reading it, and clearing it there would take
- * the count off the topic row before anybody could see which topic it pointed
- * at (GRYT-1014).
- *
- * `includeThreads` is for the other case: somebody saying they are done with a
- * channel rather than glancing at it (GRYT-1030). Nothing infers it — it is
- * always a thing the person asked for.
- *
- * Already-seen rows are left alone either way, so the time recorded stays the
- * first time they saw it.
+ * Nothing clears the server, a conversation its timeline, a thread that thread,
+ * and `includeThreads` both. A reply is not in the channel timeline, so opening
+ * the channel is not reading it, and nothing infers `includeThreads`.
  */
 export async function markMentionsSeen(args: {
   serverUserId: string;
@@ -134,9 +94,8 @@ export async function markMentionsSeen(args: {
   const db = getSqliteDb();
   const seen_at = toIso(new Date());
 
-  /* Which thread a mention is in lives on the message, not on the row being
-     updated, so the thread-scoped statements go through a subquery against
-     `messages` on the pair the foreign key is built from. */
+  /* The thread lives on the message, not the row being updated, so these go
+     through a subquery on the pair the foreign key is built from. */
   let result;
   if (conversationId && threadId) {
     result = db
