@@ -20,13 +20,8 @@ import { upsertUser } from "../db/sqlite/users";
 import { joinableChannelIds, mayInChannel, mayViewChannel, postableChannelIds, resetChannelPermissionCache, scopedChannelIds, visibleChannelIds } from "./channelPermissions";
 
 /**
- * Resolving a permission where the server-wide answer meets the channel's.
- *
- * Three states, and the interesting cases are all about the third: inherit is
- * the absence of a rule, so most of these check that *not* saying something
- * leaves the server-wide answer exactly as it was. A model that quietly turned
- * "no rule" into "denied" would lock every channel on the server the first time
- * anybody set one cell.
+ * Mostly about inherit, which is the absence of a rule: a model turning "no
+ * rule" into "denied" locks every channel the first time anybody sets a cell.
  */
 
 let dir: string;
@@ -101,9 +96,8 @@ describe("deny", () => {
   });
 
   it("leaves everything it does not mention alone", async () => {
-    // The scope denies read_messages for `low` and says nothing about
-    // send_messages. Inheriting has to mean inheriting — a model that read one
-    // rule as "this scope now decides everything" would deny posting too.
+    // The scope denies read_messages and says nothing about send_messages. One
+    // reading a rule as "this scope decides everything" would deny posting.
     assert.equal(await mayInChannel(LOCKED, lowUser, "send_messages"), true);
   });
 
@@ -202,10 +196,8 @@ describe("deleting a template", () => {
     await deletePermissionTemplate(doomed);
     resetChannelPermissionCache();
 
-    // Visible again, and — the part that matters — through a null scope rather
-    // than through a scope id that no longer resolves. Both answer "visible",
-    // but only one of them leaves the editor with a dropdown pointing at
-    // nothing.
+    // Through a null scope rather than an id that no longer resolves: both
+    // answer visible, and only one leaves the editor pointing at nothing.
     assert.equal(await mayViewChannel(OPEN, lowUser), true);
     assert.ok(!(await scopedChannelIds()).has(OPEN));
   });
@@ -215,9 +207,8 @@ describe("the rank gate migration, against a real database", () => {
   it("runs once and refuses to run again", async () => {
     const db = getSqliteDb();
 
-    // initSqlite already ran it, so the marker is set and a second call is a
-    // no-op. That is the safety property: a second pass would rebuild scopes
-    // from rank columns for channels somebody has since edited by hand.
+    // The marker is set, so a second call is a no-op: a second pass would
+    // rebuild scopes for channels somebody has since edited by hand.
     const marker = db
       .prepare(`SELECT value FROM schema_meta WHERE key = ?`)
       .get(RANK_GATE_MIGRATION_KEY) as { value: string } | undefined;
@@ -250,11 +241,8 @@ describe("the rank gate migration, against a real database", () => {
 });
 
 describe("where somebody may post", () => {
-  /*
-   * Its own channel and its own scope, because the fixtures above are unhooked
-   * by tests further up the file — `GRANTING` has had its scope removed by the
-   * time this runs, and a test that leans on it passes for the wrong reason.
-   */
+  /* Its own channel and scope: the fixtures above are unhooked by tests further
+     up, so leaning on one passes for the wrong reason. */
   const PODIUM = "podium-chan";
 
   before(async () => {
@@ -268,9 +256,8 @@ describe("where somebody may post", () => {
   });
 
   it("agrees with mayInChannel, channel by channel", async () => {
-    // The property that matters: the list the client draws from and the gate
-    // the send goes through cannot disagree, or a composer appears exactly
-    // where the message will be refused.
+    // The list the client draws from and the gate the send goes through cannot
+    // disagree, or a composer appears where the message is refused.
     const postable = await postableChannelIds(highUser);
     for (const channel of [OPEN, LOCKED, PODIUM]) {
       assert.equal(
@@ -294,9 +281,8 @@ describe("where somebody may post", () => {
   });
 
   it("says nothing about who may see the channel", async () => {
-    // Answering only about send_messages is the point: the payload intersects
-    // this with visibleChannelIds, and folding visibility in here would be the
-    // same rule written twice.
+    // Only about send_messages: the payload intersects this with
+    // visibleChannelIds, so folding visibility in is the rule written twice.
     assert.ok((await postableChannelIds(lowUser)).has(PODIUM));
   });
 
@@ -307,12 +293,8 @@ describe("where somebody may post", () => {
 });
 
 describe("which voice rooms somebody may enter", () => {
-  /*
-   * A room the low role may see and may not enter. That state has always been
-   * expressible — visibility is `read_messages` and entry is `join_voice` —
-   * and until now nothing told a client about it, so the row looked open and
-   * the refusal came out of the media stack.
-   */
+  /* Visible and not enterable has always been expressible, and nothing told a
+     client, so the row looked open and the refusal came from the media stack. */
   const GREENROOM = "greenroom";
 
   before(async () => {

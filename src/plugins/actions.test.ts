@@ -29,31 +29,14 @@ import {
 import { clearPluginRefs, setPluginRefs } from "./refs";
 
 /**
- * What a plugin can do to somebody, and everything it cannot (GRYT-935).
- *
- * The kick itself is `evictUser`, which the socket handlers already use and
- * which is tested where it lives. What is new — and what is here — is the
- * three checks around it, because a plugin carries none of what a moderator's
- * request carries: no rank to compare, no ceiling, and no name to write in the
- * audit row.
- *
- * The failure worth designing out is not a hostile plugin. A hostile plugin has
- * the Node runtime and does not need this API. It is a plugin with a bug that
- * bans everybody who speaks, at three in the morning.
+ * The kick is `evictUser`, tested where it lives. Here are the three checks
+ * around it: no rank to compare, no ceiling, and no name for the audit row.
  */
 
 let dir: string;
 
-/*
- * The broadcasts want a socket server. Nobody is connected in here, so an empty
- * socket map is the whole of it — what is being tested is the decision, not the
- * delivery.
- *
- * `to` and `emit` are stubbed rather than left off because the member-list
- * broadcast is debounced: it fires a couple of hundred milliseconds later, by
- * which time the test that triggered it has finished, and an unhandled
- * rejection at that point fails the file with the wrong test's name on it.
- */
+/* An empty socket map, since the decision is what is tested. `to` and `emit`
+   are stubbed because the debounced broadcast fires after the case ends. */
 const io = {
   sockets: { sockets: new Map() },
   to: () => ({ emit: () => {} }),
@@ -185,12 +168,8 @@ describe("banning", () => {
   }
 });
 
-/*
- * A plugin is not a member, and the two records that answer "who did this" must
- * not say one was. The ban list joins `banned_by_server_user_id` against
- * `users` for a name, so this leaves that name empty rather than borrowing
- * somebody's.
- */
+/* The ban list joins `banned_by_server_user_id` against `users` for a name, so
+   a plugin leaves it empty rather than borrowing somebody's. */
 describe("who it says did it", () => {
   it("writes the plugin, not a person, on the ban", async () => {
     const target = await member();
@@ -234,11 +213,8 @@ describe("who it says did it", () => {
   });
 });
 
-/*
- * The check that replaces the rank comparison every human path uses. `reach.ts`
- * holds the rule and is tested on its own; these are the two that matter
- * reaching it through a real database.
- */
+/* `reach.ts` holds the rule and is tested on its own; these two reach it
+   through a real database. */
 describe("who it cannot touch", () => {
   it("refuses the owner", async () => {
     const owner = await upsertUser("account-owner", "Owner");
@@ -296,11 +272,8 @@ describe("a target that is not there", () => {
   });
 });
 
-/*
- * The ceiling. Not against a hostile plugin — that one has the Node runtime and
- * does not need this API — but against a loop, which is the failure that
- * actually happens.
- */
+/* Against a loop rather than a hostile plugin, which has the Node runtime and
+   does not need this API. */
 describe("a plugin that will not stop", () => {
   it("is cut off at the limit", async () => {
     const actions = createModerationActions("runaway");
@@ -334,11 +307,8 @@ describe("a plugin that will not stop", () => {
   });
 });
 
-/*
- * Plugins load before the first connection, so the API object exists before the
- * socket refs do. A plugin acting from an import-time timer would otherwise
- * reach a null `io`.
- */
+/* Plugins load before the first connection, so one acting from an import-time
+   timer would otherwise reach a null `io`. */
 describe("before the socket layer is up", () => {
   it("refuses rather than throwing", async () => {
     clearPluginRefs();
@@ -351,13 +321,8 @@ describe("before the socket layer is up", () => {
   });
 });
 
-/*
- * Taking the post down rather than the person, which is the more common thing
- * an automod wants. GRYT-936 pulled the delete out of chat.ts so this and
- * `chat:delete` are the same delete — the attachment cleanup and the cache drop
- * included, which is the half that would have gone quietly missing in a second
- * copy.
- */
+/* The same delete `chat:delete` does, attachment cleanup and cache drop
+   included — the half a second copy would have gone quietly missing. */
 describe("deleting a message", () => {
   it("takes it out of the database", async () => {
     const c = await channel();
@@ -370,9 +335,8 @@ describe("deleting a message", () => {
     assert.equal(await getMessageById(c, msg.message_id), null);
   });
 
-  /* The half a second copy of this would have forgotten. A delete that updates
-     the row and not the cache leaves the message on the next person's first
-     page, which reads as a delete that did not work. */
+  /* A delete that updates the row and not the cache leaves the message on the
+     next person's first page. */
   it("takes it out of the cache as well", async () => {
     const c = await channel();
     const author = await member();
@@ -415,12 +379,8 @@ describe("deleting a message", () => {
     assert.match(result.ok === false ? result.reason : "", /no message/);
   });
 
-  /*
-   * A direct message is between two people and a plugin the operator installed
-   * has no business in it — the same rule that keeps DMs out of
-   * `message:created`. Checked by asking whether the id is a channel rather
-   * than whether it is a DM, so an id that is neither is refused too.
-   */
+  /* The same rule that keeps DMs out of `message:created`. Asks whether the id
+     is a channel, so one that is neither is refused too. */
   it("refuses anything that is not a channel", async () => {
     const author = await member();
     const msg = await post("conversation-not-a-channel", author.server_user_id, "private");
@@ -458,13 +418,8 @@ describe("deleting a message", () => {
     assert.deepEqual(result, { ok: true }, "a spammer leaving should not strand their spam");
   });
 
-  /*
-   * Refused up front, and the reason says which argument was wrong. Everything
-   * below would refuse these anyway — an empty channel id is not a channel, an
-   * empty message id is not a message — so what this actually holds is the
-   * message. "no channel with that id" for somebody who passed an empty string
-   * sends them looking for a channel that was never the problem.
-   */
+  /* Everything below would refuse these anyway; what this holds is the message.
+     "no channel with that id" for an empty string sends somebody hunting. */
   for (const [channelId, messageId] of [["", "m"], ["c", ""], ["  ", "m"], ["c", "  "]]) {
     it(`refuses ${JSON.stringify([channelId, messageId])}, saying which`, async () => {
       const result = await createModerationActions("automod").deleteMessage(channelId, messageId);
