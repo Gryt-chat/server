@@ -24,13 +24,8 @@ import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 import { requireAuth } from "../middleware/auth";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
-/**
- * Opening and listing direct messages. Sending, editing and history are not
- * here — once a DM exists it goes through the same `chat:*` events, gated by
- * `socket/utils/conversationAccess.ts`.
- *
- * These conversations are local to this server. See `db/sqlite/conversations.ts`.
- */
+/** Opening and listing only. Once a DM exists it goes through the same `chat:*`
+    events, gated by `socket/utils/conversationAccess.ts`. */
 
 const RL_OPEN: RateLimitRule = { limit: 10, windowMs: 60_000, scorePerAction: 1, maxScore: 10, scoreDecayMs: 3000 };
 const RL_LIST: RateLimitRule = { limit: 20, windowMs: 60_000, scorePerAction: 0.3, maxScore: 8, scoreDecayMs: 2000 };
@@ -53,17 +48,13 @@ export interface DirectConversationView {
   last_message_at: string | null;
   /** Everybody but you, in the order the server holds them. */
   members: ConversationParticipant[];
-  /**
-   * The first of `members`. Redundant and kept on purpose — a client written
-   * before groups reads it, and dropping it crashes on `other.nickname`.
-   */
+  /** The first of `members`. Redundant, but a client written before groups
+      reads it and crashes on `other.nickname` without it. */
   other: ConversationParticipant;
 }
 
-/**
- * One member's direct messages, as the client sees them. Outside the handler
- * closure because the chat path needs it too, to un-hide a conversation.
- */
+/** Outside the handler closure because the chat path needs it too, to un-hide
+    a conversation. */
 export async function directConversationViews(serverUserId: string): Promise<DirectConversationView[]> {
   const conversations = await listConversationsForUser(serverUserId);
   const otherIds = [...new Set(conversations.flatMap((c) => c.other_server_user_ids))];
@@ -81,9 +72,8 @@ export async function directConversationViews(serverUserId: string): Promise<Dir
 
   return conversations.flatMap((c) => {
     const members = c.other_server_user_ids.map(participant);
-    // A conversation with nobody else in it is one everybody else has left.
-    // There is nothing to draw and no name to give it, so it is left out
-    // rather than listed as a row naming "Unknown".
+    // Everybody else has left, so there is no name to give it. Left out rather
+    // than drawn as a row naming "Unknown".
     if (members.length === 0) return [];
     return [{
       conversation_id: c.conversation_id,
@@ -129,11 +119,8 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
   const viewsFor = directConversationViews;
 
   return {
-    /**
-     * Open the DM with another member, or return the existing one. The caller's
-     * own side comes from the verified token, never the payload — naming both
-     * ends would open a conversation between two other people and join it.
-     */
+    /** The caller's own side comes from the verified token: naming both ends
+        would open a conversation between two other people and join it. */
     'dm:open': async (payload: { accessToken: string; targetServerUserId: string }) => {
       try {
         const ip = getClientIp();
@@ -165,10 +152,8 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
           return;
         }
 
-        // A member of this server, and still one. Without this the id is
-        // whatever the client typed, and a conversation could be filed against
-        // somebody who was never here — which nobody could read, but which
-        // would sit in the table and in the other person's list forever.
+        // Still a member: otherwise the id is whatever the client typed, and the
+        // conversation sits in the table and in a list forever.
         const targetUser = await getUserByServerId(target);
         if (!targetUser || !targetUser.is_active) {
           socket.emit("dm:error", { error: "unknown_member", message: "That person is not a member of this server" });
@@ -180,9 +165,8 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
           return;
         }
 
-        /* Either direction, or the blocked person opens the conversation the
-         * block exists to prevent. The refusal is `unknown_member` on purpose:
-         * a code meaning "they blocked you" is one a client would render. */
+        /* Either direction, or the blocked person opens the conversation anyway.
+           `unknown_member` on purpose: a client would render the real reason. */
         if (await eitherHasBlocked(auth.tokenPayload.grytUserId, targetUser.gryt_user_id)) {
           socket.emit("dm:error", { error: "unknown_member", message: "That person is not a member of this server" });
           return;
@@ -190,14 +174,12 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
 
         const conversation = await openDirectConversation(self, target);
 
-        // Asking for a conversation you had hidden is asking for it back. Only
-        // the caller's row: the other party hiding it is their answer, and it
-        // is the message that follows which brings theirs back, not this.
+        // Asking for a hidden conversation is asking for it back. The caller's
+        // row only; a message is what brings the other party's back.
         await setConversationHidden(conversation.conversation_id, self, false);
 
-        // Both ends are told, and each is told about the other rather than
-        // about themselves, so neither has to work out which member of the
-        // conversation it is looking at.
+        // Each end is told about the other, so neither has to work out which
+        // member of the conversation it is looking at.
         for (const serverUserId of [self, target]) {
           const views = await viewsFor(serverUserId);
           const view = views.find((v) => v.conversation_id === conversation.conversation_id);
@@ -212,11 +194,8 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
       }
     },
 
-    /**
-     * Take a conversation out of your own sidebar, or put it back. `hidden_at`
-     * is on the caller's own row, and a new message brings it back — so this is
-     * not a way to stop somebody talking to you.
-     */
+    /** `hidden_at` is on the caller's own row and a new message brings it back,
+        so this is not a way to stop somebody talking to you. */
     'dm:setHidden': async (payload: { accessToken: string; conversationId: string; hidden: boolean }) => {
       try {
         const ip = getClientIp();
@@ -236,10 +215,8 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
 
         const self = auth.tokenPayload.serverUserId;
 
-        // A conversation, and one of theirs. Without the membership check this
-        // would write a row for somebody else's conversation — harmless today,
-        // since the row would not exist, but it is the check that keeps it
-        // harmless if the table ever gains a different key.
+        // The membership check is what stops a row being written for somebody
+        // else's conversation if the table ever gains a different key.
         const conversation = await getConversation(payload.conversationId);
         if (!conversation || !(await isConversationMember(payload.conversationId, self))) {
           socket.emit("dm:error", { error: "not_found", message: "No such conversation" });
@@ -262,10 +239,8 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
       }
     },
 
-    /**
-     * Start a group conversation. Adding somebody to a one-to-one does not
-     * happen: this makes a new id, and the pair conversation stays as it was.
-     */
+    /** Adding somebody to a one-to-one does not happen: this makes a new id and
+        the pair conversation stays as it was. */
     'dm:group:create': async (payload: { accessToken: string; memberIds: string[]; name?: string; iconFileId?: string }) => {
       try {
         const ip = getClientIp();
@@ -319,11 +294,8 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
         if (typeof payload.name === "string" && payload.name.trim()) {
           await setConversationName(conversation.conversation_id, payload.name);
         }
-        // Taken here rather than left to a follow-up `dm:group:update`. The
-        // client uploads the picture before the group exists, so without this
-        // it would have to wait for `dm:opened` to learn the id and then send
-        // a second event — and a group would exist, briefly, wearing the drawn
-        // icon it was not meant to have.
+        // Here rather than a follow-up `dm:group:update`, or the group exists
+        // briefly wearing the drawn icon it was not meant to have.
         if (typeof payload.iconFileId === "string" && payload.iconFileId) {
           await setConversationIcon(conversation.conversation_id, payload.iconFileId);
         }
@@ -376,10 +348,8 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
       }
     },
 
-    /**
-     * Leave a group for good. Not hiding — this drops the membership, so
-     * nothing arrives afterwards and the history stops being yours to read.
-     */
+    /** Not hiding: this drops the membership, so nothing arrives afterwards and
+        the history stops being yours to read. */
     'dm:group:leave': async (payload: { accessToken: string; conversationId: string }) => {
       try {
         if (!payload || typeof payload.accessToken !== "string" || typeof payload.conversationId !== "string") {
@@ -403,10 +373,8 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
 
         await leaveConversation(payload.conversationId, self);
 
-        // The last person out takes the room with them. Without this a group
-        // everybody left would sit in the table for good, holding messages
-        // nobody can reach — the same sweep `server:leave` already does, run
-        // at the other moment a conversation can empty out.
+        // The last person out takes the room with them, or it sits in the table
+        // holding messages nobody can reach.
         const remaining = await listConversationMemberIds(payload.conversationId);
         if (remaining.length === 0) {
           await purgeOrphanedConversations().catch((e) =>
@@ -424,10 +392,7 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
       }
     },
 
-    /**
-     * Change what a group is called and what it looks like, in one event. Both
-     * are nullable and both mean "back to the drawn one".
-     */
+    /** Both are nullable, and both mean back to the drawn one. */
     'dm:group:update': async (payload: { accessToken: string; conversationId: string; name?: string | null; iconFileId?: string | null }) => {
       try {
         if (!payload || typeof payload.accessToken !== "string" || typeof payload.conversationId !== "string") {
