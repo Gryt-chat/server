@@ -12,34 +12,12 @@ import { requireAuth } from "../middleware/auth";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
 /**
- * A message from a client plugin to the server plugin with the same id
- * (GRYT-939).
- *
- * **Everything arriving here was written by a member's client**, which makes
- * this and `packages/reports` the only two places on the server where a
- * stranger's bytes are parsed. They joined, so they are not anonymous, and that
- * is worth much less than it sounds — an invite is not a character reference.
- *
- * So this refuses four things before a plugin sees anything:
- *
- * - a member who is not authenticated
- * - a plugin id this server does not run, or runs and is not listening on
- * - a topic that is not a short plain routing key
- * - a payload over the cap, or one that cannot be JSON at all
- *
- * Past that the bytes are the plugin's problem, and the docs say so. There is
- * no schema here on purpose: what a plugin pair says to itself is its own
- * protocol, and a transport with opinions about the payload is a transport
- * plugin authors work around.
+ * Everything arriving here was written by a member's client. Checks the sender,
+ * the plugin id, the topic and the payload size, and nothing about the shape.
  */
 
-/*
- * Per member, per plugin. Presence updates are the expected traffic and they
- * are occasional — somebody launching a game, somebody putting it down. This is
- * loose enough that a plugin polling every few seconds is fine and tight enough
- * that a client cannot use a plugin channel as an unmetered pipe into the
- * server.
- */
+/* Per member, per plugin. Loose enough for a plugin polling every few seconds,
+   tight enough that a plugin channel is not an unmetered pipe. */
 const RL_PLUGIN_MESSAGE: RateLimitRule = {
   limit: 30,
   windowMs: 10_000,
@@ -61,24 +39,16 @@ export function registerPluginHandlers(ctx: HandlerContext): EventHandlerMap {
   return {
     [PLUGIN_MESSAGE_EVENT]: async (payload: PluginMessagePayload) => {
       try {
-        /*
-         * Authenticated first, before anything is parsed. A plugin channel is
-         * not a way to reach the server without joining, and the member id is
-         * what the receiving plugin is told — a message that could not say who
-         * sent it would be useless to every plugin that has a reason to care.
-         */
+        /* Before anything is parsed: a plugin channel is not a way to reach the
+           server without joining, and the plugin is told who sent it. */
         const auth = await requireAuth(socket, payload);
         if (!auth) return;
 
         const pluginId = typeof payload?.pluginId === "string" ? payload.pluginId.trim() : "";
         if (!pluginId) return;
 
-        /*
-         * Refused before the rate limit is charged and before the payload is
-         * measured. A client with a plugin the server does not run will send on
-         * every change forever, and that is not the member misbehaving — it is
-         * two halves of a pair that were never introduced.
-         */
+        /* Before the rate limit is charged: a client with a plugin the server
+           does not run sends forever, and that is not the member misbehaving. */
         const bus = pluginMessages();
         if (!bus.isListening(pluginId)) return;
 
@@ -115,12 +85,8 @@ export function registerPluginHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        /*
-         * The plugin id is stamped from what was validated above, and the
-         * member from the connection — never from the payload. Otherwise one
-         * plugin's client half could address another plugin's server half, or
-         * claim to be somebody else, and the pairing would be a suggestion.
-         */
+        /* Both stamped by the caller, never read from the payload, or one
+           plugin's client half could address another's server half. */
         bus.deliver(pluginId, {
           topic: topic.topic,
           data: payload?.data,

@@ -17,16 +17,8 @@ import {
 import type { EventHandlerMap, HandlerContext } from "./types";
 
 /**
- * Ringing somebody in a direct message or a group.
- *
- * The call itself is not here — it is an SFU room whose id is the conversation
- * id, joined through the ordinary `voice:room:request`. So there is no
- * `call:accept`: answering is joining, and the join stops the ring rather than
- * a separate message that could disagree with it.
- *
- * Every ring goes to **all** of a person's sockets and every ending is
- * withdrawn from all of them, or answering on the laptop leaves the phone
- * ringing in a pocket.
+ * The ring only. There is no `call:accept`: answering is joining the SFU room,
+ * and a ring reaches all of somebody's sockets so the phone stops too.
  */
 
 const RL_RING: RateLimitRule = { limit: 6, windowMs: 60_000, scorePerAction: 2, maxScore: 8, scoreDecayMs: 5000 };
@@ -55,10 +47,8 @@ export function registerCallHandlers(ctx: HandlerContext): EventHandlerMap {
     }
   }
 
-  /**
-   * Tell everybody the ring reached that it stopped, and why. The caller too —
-   * they are not being rung, and would otherwise sit on "ringing…".
-   */
+  /** The caller too: they are not being rung, and would otherwise sit on
+      "ringing…". */
   function withdraw(ring: CallRing, reason: RingEnd, endedBy?: string): void {
     const payload = { conversation_id: ring.conversationId, reason, ended_by: endedBy ?? null };
     for (const id of ring.toServerUserIds) emitTo(id, "call:withdrawn", payload);
@@ -66,13 +56,8 @@ export function registerCallHandlers(ctx: HandlerContext): EventHandlerMap {
   }
 
   return {
-    /**
-     * Ring everybody else in a conversation. Three permissions, because this is
-     * three things at once: `send_direct_messages`, so the call button is not a
-     * way back into DMs a role lost; `join_voice`, or the call can only be
-     * answered into an empty room; and `start_calls` (GRYT-712), which says who
-     * may place one without saying anything about who may take one.
-     */
+    /** Three permissions: `send_direct_messages` so this is not a way back into
+        DMs, `join_voice` so the room is joinable, and `start_calls`. */
     'call:ring': async (payload: { accessToken: string; conversationId: string }) => {
       try {
         if (!payload || typeof payload.accessToken !== "string" || typeof payload.conversationId !== "string") {
@@ -121,9 +106,8 @@ export function registerCallHandlers(ctx: HandlerContext): EventHandlerMap {
         );
 
         if (!ring) {
-          // Somebody else is already ringing this conversation. Two people
-          // pressing call at once is one call, and restarting the clock on
-          // theirs would make a ring that never times out.
+          // Two people pressing call at once is one call, and restarting their
+          // clock makes a ring that never times out.
           socket.emit("call:error", { error: "already_ringing", message: "This conversation is already ringing" });
           return;
         }
@@ -146,10 +130,8 @@ export function registerCallHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    /**
-     * Say no. Ends the ring for everybody: otherwise a group keeps ringing at
-     * the people who have not answered while the caller has been told no.
-     */
+    /** Ends the ring for everybody, or a group keeps ringing after the caller
+        has been told no. */
     'call:decline': async (payload: { accessToken: string; conversationId: string }) => {
       try {
         if (!payload || typeof payload.accessToken !== "string" || typeof payload.conversationId !== "string") {
@@ -179,10 +161,7 @@ export function registerCallHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    /**
-     * Give up before anybody answers. Only the person who started it —
-     * anybody else saying "stop ringing" is a decline.
-     */
+    /** Only the person who started it: anybody else saying stop is a decline. */
     'call:cancel': async (payload: { accessToken: string; conversationId: string }) => {
       try {
         if (!payload || typeof payload.accessToken !== "string" || typeof payload.conversationId !== "string") {
@@ -209,11 +188,8 @@ export function registerCallHandlers(ctx: HandlerContext): EventHandlerMap {
   };
 }
 
-/**
- * Stop the rings a person started. Called when they join the call they were
- * ringing about, and when their last socket goes away. A plain function
- * because both callers live elsewhere.
- */
+/** Called when they join the call they were ringing about, and when their last
+    socket goes away. */
 export function endRingsFor(
   io: HandlerContext["io"],
   clientsInfo: HandlerContext["clientsInfo"],
@@ -238,9 +214,8 @@ export function endRingsFor(
     return;
   }
 
-  // A caller who has gone. Only their rings — the people they were ringing can
-  // decline, which is a different thing to say, and nobody else can end a ring
-  // they did not start.
+  // Only their rings: the people they were ringing decline instead, and nobody
+  // ends a ring they did not start.
   for (const ring of ringsFrom(options.callerGone)) {
     const ended = endRing(ring.conversationId);
     if (ended) tell(ended, "cancelled", null);

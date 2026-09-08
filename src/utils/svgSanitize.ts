@@ -1,20 +1,6 @@
 /**
- * Accepting SVG without handing it to a browser as a document, or to a decoder.
- *
- * An SVG is a document rather than a picture, so three things carry the safety
- * and all three have to stay true. Drawn through `<img>`, a browser runs no
- * script and fetches no external references. Fetched directly, the response
- * carries `Content-Security-Policy: default-src 'none'; sandbox` — **that
- * header is load-bearing and has to be on every file response.** Downloaded and
- * opened from disk, no header applies, and what helps is that the copy on disk
- * is the sanitised one.
- *
- * So sanitising is not what makes the common paths safe. It covers the uncommon
- * ones, and a future component that inlines an icon.
- *
- * Nothing here rasterises. sharp renders SVG through librsvg, and pointing a
- * memory-unsafe parser at stranger-supplied bytes is the risk that made the
- * image worker a review-required path.
+ * The `<img>` draw and the file response's CSP are what carry the safety; this
+ * covers a copy opened from disk. Nothing here rasterises.
  */
 
 import createDOMPurify from "dompurify";
@@ -24,22 +10,16 @@ import { JSDOM } from "jsdom";
 // DOMPurify only needs somewhere to parse.
 const purify = createDOMPurify(new JSDOM("").window);
 
-/**
- * An SVG has no business being large. A vector that needs more than this is
- * either an embedded raster, a generated monstrosity, or something trying to be
- * expensive to parse — and none of those is an avatar.
- */
+/** A vector needing more than this is an embedded raster or something built to
+    be expensive to parse. Neither is an avatar. */
 export const MAX_SVG_BYTES = 512 * 1024;
 
 export type SvgValidationResult =
   | { valid: true; svg: string; width: number; height: number }
   | { valid: false; reason: string };
 
-/**
- * Dimensions for an SVG, which does not have to state any. viewBox first, since
- * it defines the coordinate space; width/height may carry units, so anything
- * non-numeric is ignored rather than guessed at.
- */
+/** viewBox first, since it defines the coordinate space. width/height may carry
+    units, so anything non-numeric is ignored rather than guessed at. */
 function readDimensions(el: Element): { width: number; height: number } | null {
   const viewBox = el.getAttribute("viewBox");
   if (viewBox) {
@@ -59,10 +39,7 @@ function readDimensions(el: Element): { width: number; height: number } | null {
   return null;
 }
 
-/**
- * Sanitise an uploaded SVG and report its dimensions. The original bytes are
- * deliberately not kept.
- */
+/** The original bytes are deliberately not kept. */
 export function sanitizeSvg(buffer: Buffer): SvgValidationResult {
   if (buffer.length > MAX_SVG_BYTES) {
     return {
@@ -83,9 +60,8 @@ export function sanitizeSvg(buffer: Buffer): SvgValidationResult {
   try {
     clean = purify.sanitize(source, {
       USE_PROFILES: { svg: true, svgFilters: true },
-      // foreignObject is how HTML gets back into an SVG, which is the whole
-      // door being closed here. The rest are external-reference vectors: they
-      // do not render through <img>, but they would phone home anywhere else.
+      // foreignObject is how HTML gets back into an SVG. The rest are external
+      // references: inert through <img>, and phoning home anywhere else.
       FORBID_TAGS: ["foreignObject", "script", "a", "use", "image"],
       FORBID_ATTR: ["href", "xlink:href", "formaction", "ping"],
     });
@@ -93,11 +69,8 @@ export function sanitizeSvg(buffer: Buffer): SvgValidationResult {
     return { valid: false, reason: "That SVG could not be read." };
   }
 
-  // Refuse rather than quietly repair: storing a modified file means an avatar
-  // the uploader did not choose, and an SVG carrying <script> is not an
-  // innocent file that needs fixing.
-  //
-  // BODY is jsdom's wrapper and is removed from every parse, clean or not.
+  // Refused rather than repaired: an SVG carrying <script> is not an innocent
+  // file. BODY is jsdom's wrapper, removed from every parse, clean or not.
   const removed = purify.removed
     .map((r) => {
       const el = (r as { element?: Node }).element;

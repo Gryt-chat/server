@@ -4,32 +4,19 @@ import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 import { broadcastMemberList } from "../utils/clients";
 
 /**
- * Where a member leaves their DM public key (GRYT-720). It goes in a column and
- * comes back out in the member list, and **nothing on this side reads it** —
- * a server that verified the binding would be vouching for the thing every
- * member has to check itself, and would invite somebody to rely on it.
- *
- * The length cap and JWT shape check are about this server's storage, not
- * anybody's security: without them a member could park a megabyte in a column
- * that goes out on every member-list broadcast.
+ * A column in, the member list out, and nothing on this side reads it: verifying
+ * would vouch for what every member has to check itself.
  */
 
-/**
- * Generous next to a real binding, which is a header with a P-256 JWK in it, a
- * payload with a scope and 32 base64url bytes, and a signature — comfortably
- * under 1 kB. Room for a longer scope and a future field, and nowhere near
- * enough to be worth using as storage.
- */
+/** A real binding is comfortably under 1 kB. Room for a longer scope, and
+    nowhere near enough to be worth using as storage. */
 const MAX_BINDING_BYTES = 4096;
 
 /** Three non-empty base64url segments. Not a verification, a shape. */
 const COMPACT_JWT = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 
-/**
- * Rare on purpose. A binding is derived from a seed and a scope, so a member
- * sends one when they arrive and then never again unless their identity
- * changed. Anything faster is a client with a loop in it.
- */
+/** A binding is derived from a seed and a scope, so it is sent on arrival and
+    then never again. Anything faster is a client with a loop in it. */
 const RL_DM_KEY: RateLimitRule = {
   limit: 5,
   windowMs: 60_000,
@@ -54,8 +41,7 @@ export function registerDmKeyHandlers(ctx: HandlerContext): EventHandlerMap {
 
       const binding = payload?.binding ?? null;
 
-      // Null is a real thing to send: a client that no longer has an identity to
-      // sign one with says so, rather than leaving a key nobody holds behind for
+      // Null is a real thing to send, rather than leaving a key nobody holds for
       // people to keep encrypting to.
       if (binding !== null) {
         if (typeof binding !== "string") return;
@@ -67,9 +53,8 @@ export function registerDmKeyHandlers(ctx: HandlerContext): EventHandlerMap {
 
       await setUserDmKeyBinding(serverUserId, binding);
 
-      // So the other members see it without waiting for something else to move.
-      // The list is deduped on its own contents, and the binding is part of that
-      // hash, so a publish that changed nothing sends nothing.
+      // The list is deduped on its contents and the binding is in that hash, so
+      // a publish that changed nothing sends nothing.
       broadcastMemberList(io, clientsInfo, serverId);
     },
   };
