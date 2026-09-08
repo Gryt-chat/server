@@ -28,11 +28,8 @@ const iconMaxMb = Number.isFinite(Number(iconMaxMbRaw))
   : 25;
 const iconMaxBytes = Math.floor(iconMaxMb * 1024 * 1024);
 
-/**
- * How many frames an animated server icon may carry. Eight seconds at 60fps,
- * generous on purpose — the point is to stop a runaway. Worst case at 256x256
- * is roughly 0.5-0.7 MB, against 1.3 kB for a still icon.
- */
+/** Eight seconds at 60fps: roughly 0.5-0.7 MB at 256x256, against 1.3 kB for a
+    still icon. Generous, because the point is to stop a runaway. */
 export const MAX_ICON_FRAMES = 480;
 
 const allowedIconMimes = new Set<string>([
@@ -59,10 +56,8 @@ const upload = multer({
   },
 });
 
-/**
- * Drop the object an icon used to live in. Best effort — the config is already
- * updated, so a failure leaves a few kilobytes rather than failing the request.
- */
+/** Best effort: the config is already updated, so a failure leaves a few
+    kilobytes rather than failing the request. */
 function deletePreviousIcon(bucket: string, key: string | null | undefined): void {
   if (!key) return;
   deleteObject({ bucket, key }).catch((e) =>
@@ -88,9 +83,8 @@ function sanitizeStoragePathSegment(value: string): string {
 
 serverRouter.post(
   "/icon",
-  // Before multer, not after: multer uses memoryStorage, so the handler's own
-  // check read 20 MB from an anonymous request into the heap and *then*
-  // answered 401. This also gains the ban gate the inline check lacks.
+  // Before multer, which uses memoryStorage: the handler's own check read 20 MB
+  // of an anonymous request into the heap and then answered 401.
   requireBearerToken,
   upload.single("file"),
   async (req: Request, res: Response, next: NextFunction) => {
@@ -168,10 +162,8 @@ serverRouter.post(
 
       const iconMime = (file.mimetype || "").toLowerCase();
 
-      // SVG is stored as the vector it is rather than rendered to a raster.
-      // An icon is drawn at a handful of sizes and a vector is correct at all
-      // of them, in one file of a couple of kilobytes. It never reaches sharp,
-      // so librsvg never parses a stranger's bytes — see utils/svgSanitize.ts.
+      // Stored as the vector, which is correct at every size an icon is drawn
+      // at. It never reaches sharp, so librsvg never parses a stranger's bytes.
       if (iconMime === "image/svg+xml") {
         const svg = sanitizeSvg(file.buffer);
         if (!svg.valid) {
@@ -226,10 +218,8 @@ serverRouter.post(
         return;
       }
 
-      // An icon is drawn at 38 pixels on every server somebody has joined, so
-      // an uncapped GIF is several hundred kilobytes every client fetches
-      // (GRYT-515). Refused rather than truncated: keeping the first N frames
-      // cuts a loop mid-cycle and ships something other than what was sent.
+      // Drawn at 38 pixels on every server somebody joined, so an uncapped GIF
+      // is hundreds of kilobytes each. Refused, not truncated.
       const frames = validation.pages ?? 1;
       if (isAnimated && frames > MAX_ICON_FRAMES) {
         res.status(400).json({
@@ -242,10 +232,8 @@ serverRouter.post(
         return;
       }
 
-      // AVIF cannot hold more than one frame, and sharp stacks an animation
-      // into one tall strip — so a 95-frame GIF encoded to AVIF became a
-      // 256x9728 still showing every frame at once. WebP holds animation.
-      // Same branch emojiProcessing.ts makes.
+      // AVIF holds one frame and sharp stacks an animation into a tall strip, so
+      // a 95-frame GIF became a 256x9728 still. Same branch as emojiProcessing.
       const outMime = isAnimated ? "image/webp" : "image/avif";
       const outExt = isAnimated ? "webp" : "avif";
 
@@ -254,12 +242,8 @@ serverRouter.post(
         const pipeline = sharp(file.buffer, {
           animated: isAnimated,
           failOn: "error",
-          // validateImage above pixel-checks a single page, because that is
-          // what it decodes. This call decodes every frame — sharp stacks an
-          // animation into one tall strip — so the budget has to be carried
-          // here too, and it is animated input where it matters most: a
-          // modest frame is under the ceiling on its own and two hundred of
-          // them are not.
+          // validateImage pixel-checks one page; this decodes every frame, and a
+          // modest frame is under the ceiling where two hundred are not.
           limitInputPixels: MAX_INPUT_PIXELS,
         }).resize(256, 256, { fit: "cover" });
 
