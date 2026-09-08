@@ -1,11 +1,6 @@
 /**
- * What a plugin is handed when it starts (GRYT-933).
- *
- * The whole surface, deliberately: an id, a logger, and `on`. A plugin can
- * reach far more than this — it has the Node runtime — and the point of keeping
- * the API small is not that it stops anything. It is that the honest path is
- * obvious and narrow, so a plugin doing something outside it is visible in its
- * own source rather than buried in what looks like ordinary use.
+ * The whole surface a plugin is handed. Small so that a plugin reaching outside
+ * it is visible in its own source, not because it stops anything.
  */
 
 import { createModerationActions, type PluginModeration } from "./actions";
@@ -13,13 +8,8 @@ import { createMessaging, type PluginMessageBus, type PluginMessaging } from "./
 import type { PluginBus, PluginEventHandler, PluginEventName } from "./bus";
 import type { PluginCapability, PluginManifest } from "./manifest";
 
-/**
- * Which capability an event is behind.
- *
- * A total map rather than a lookup with a default, so adding an event to
- * `PluginEvents` and forgetting to say what it costs is a type error here
- * rather than an event that quietly needs nothing.
- */
+/** Total rather than a lookup with a default, so a new event with no capability
+    is a type error rather than one that quietly needs nothing. */
 export const EVENT_CAPABILITY: Record<PluginEventName, PluginCapability> = {
   "message:created": "messages:read",
   "member:joined": "members:read",
@@ -37,36 +27,14 @@ export interface GrytServerApi {
   readonly id: string;
   /** What the manifest declared, normalised. Readable so a plugin can degrade. */
   readonly capabilities: readonly PluginCapability[];
-  /**
-   * Subscribe to an event. Throws if the manifest did not ask for the
-   * capability behind it.
-   *
-   * Throwing rather than returning false, and throwing at subscribe rather than
-   * failing silently at delivery: a plugin that never receives an event it
-   * thought it had asked for is a bad afternoon, and the stack trace at startup
-   * names the line.
-   */
+  /** Throws at subscribe rather than failing silently at delivery, so the stack
+      trace at startup names the line. */
   on<E extends PluginEventName>(event: E, handler: PluginEventHandler<E>): void;
-  /**
-   * Kick and ban. Throws on access if the manifest did not declare
-   * `moderation`, rather than handing back an object whose every call refuses
-   * — a plugin should find out it has not been given this when it reaches for
-   * it, not on the first member it tries to act on.
-   *
-   * The calls themselves return an outcome rather than throwing. A refusal
-   * there is an ordinary answer — the member is a moderator, or already gone —
-   * and a plugin should be able to log it and carry on.
-   */
+  /** Throws on access without the `moderation` capability, so a plugin finds
+      out when it reaches for this, not on the first member it acts on. */
   readonly moderation: PluginModeration;
-  /**
-   * The pipe to the client half of this plugin. Throws on access if the
-   * manifest did not declare `messaging`.
-   *
-   * **What arrives on it was written by a member's client.** Check it. The
-   * transport caps the size and the rate and nothing else — the shape is the
-   * plugin's to establish, and assuming its own client half is on the other end
-   * is the mistake this note exists for.
-   */
+  /** What arrives here was written by a member's client, and the transport caps
+      only size and rate. Do not assume your own client half sent it. */
   readonly messaging: PluginMessaging;
   /** Goes to the server log, prefixed with the plugin id. */
   readonly log: PluginLogger;
@@ -105,11 +73,8 @@ export function createPluginApi(
 
     on(event, handler) {
       const needed = EVENT_CAPABILITY[event];
-      /*
-       * An event this build does not know about has no entry, and defaulting to
-       * "allowed" would make a typo in an event name into a free subscription.
-       * It never fires either way, so refusing is the answer that says why.
-       */
+      /* No entry means an event this build does not know, and defaulting to
+         allowed makes a typo a free subscription. */
       if (!needed) {
         throw new CapabilityError(manifest.id, event, "an event this server does not have");
       }
@@ -124,9 +89,8 @@ export function createPluginApi(
         throw new CapabilityError(manifest.id, "messaging", "messaging");
       }
       if (!messageBus) {
-        /* Only reachable from a test that built an API without one. A plugin
-           that declared the capability and got silence would be the worse
-           failure, so this says which. */
+        /* Only reachable from a test that built an API without one. Silence
+           after declaring the capability would be the worse failure. */
         throw new Error(`plugin ${manifest.id} asked for messaging on a server with no message bus`);
       }
       return createMessaging(manifest.id, messageBus, prefixed);
