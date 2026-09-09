@@ -116,6 +116,32 @@ export class SFUClient {
           this.scheduleReconnect();
         });
 
+        // ws stops aborting the handshake itself the moment this event has a listener,
+        // so tearing the socket down and deciding what happens next is ours from here.
+        this.ws.on('unexpected-response', (_req, res) => {
+          clearTimeout(connectionTimeout);
+          res.resume();
+
+          const refused = this.ws;
+          this.ws = null;
+          refused?.removeAllListeners();
+          refused?.on('error', () => {});
+          refused?.terminate();
+
+          if (res.statusCode === 403 && this.adoptControlPort(res.headers['x-gryt-control-port'])) {
+            this.connect().then(resolve, reject);
+            return;
+          }
+
+          const error = new Error(`SFU refused the connection with HTTP ${res.statusCode}`);
+          consola.error('[SFU-Client] Connection error:', error);
+          this.connectionHealth.isHealthy = false;
+          if (this.reconnectAttempts === 0) {
+            reject(error);
+          }
+          this.scheduleReconnect();
+        });
+
         this.ws.on('error', (error) => {
           clearTimeout(connectionTimeout);
           consola.error('[SFU-Client] Connection error:', error);
@@ -150,6 +176,35 @@ export class SFUClient {
     }
     
     return url;
+  }
+
+  // An SFU that has moved registration to its own port says so when it refuses one on
+  // the published port. Follow it, so upgrading an SFU needs no change on this side.
+  private adoptControlPort(hinted: string | string[] | undefined): boolean {
+    const value = Array.isArray(hinted) ? hinted[0] : hinted;
+    const port = Number(value);
+
+    if (!value || !Number.isInteger(port) || port < 1 || port > 65535) {
+      return false;
+    }
+
+    // Only the port moves. Keeping the host means this can never send registration,
+    // and the server password with it, somewhere the operator did not already point us.
+    const url = new URL(this.buildWebSocketUrl());
+    if (url.port === String(port)) {
+      return false;
+    }
+
+    const previous = url.port || 'the default port';
+    url.port = String(port);
+    this.sfuHost = url.toString();
+
+    consola.warn(
+      `[SFU-Client] This SFU takes registration on port ${port}, not ${previous}. ` +
+      `Using ${this.sfuHost} instead. Set SFU_WS_HOST to that so it does not have to be ` +
+      `worked out again on every boot.`
+    );
+    return true;
   }
 
   private stopHealthCheck(): void {
