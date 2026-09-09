@@ -1,0 +1,24 @@
+name: API reference
+
+# The plugin reference page in `docs` is generated from the doc comments in
+# src/plugins, and server-api.mdx is checked against every socket event in src.
+
+# Runs the superproject's check here, on the pull request that causes it, rather
+# than leaving it to the nightly sweep over there. GRYT-1100.
+
+on:
+  pull_request:
+    paths:
+      - src/**
+      - .github/workflows/api-reference.yml
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reference:
+    uses: Gryt-chat/.github/.github/workflows/api-reference.yml@main
+    with:
+      component: server
