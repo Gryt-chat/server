@@ -573,13 +573,9 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           }
         }
 
-        if (!cfg) {
-          const created = await createServerConfigIfNotExists({
-            displayName: process.env.SERVER_NAME || undefined,
-            description: process.env.SERVER_DESCRIPTION || undefined,
-          });
-          cfg = created.config;
-        }
+        /* Startup makes this row. This is for a database emptied under a
+           running server, and seeds nothing. */
+        if (!cfg) cfg = (await createServerConfigIfNotExists()).config;
 
         const user = await upsertUser(grytUserId, nickname.trim(), {
           inviteCode: usedInviteCode,

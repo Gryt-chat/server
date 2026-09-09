@@ -128,9 +128,11 @@ logServerIdentity();
 initSqlite()
   .then(async () => {
     consola.success("SQLite initialized");
-    // SERVER_DISCOVERABLE seeds the row on first run only. After that the
-    // config owns the setting and this is ignored.
+    // First run only; after that the config owns them. The name has to land
+    // here because this is the call that creates the row.
     await createServerConfigIfNotExists({
+      displayName: process.env.SERVER_NAME || undefined,
+      description: process.env.SERVER_DESCRIPTION || undefined,
       discoverable: (process.env.SERVER_DISCOVERABLE || "").toLowerCase() !== "false",
     });
     // Now that the config is readable, advertise if `discoverable` allows it.
