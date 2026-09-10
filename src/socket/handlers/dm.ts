@@ -11,6 +11,7 @@ import {
   leaveConversation,
   listConversationMemberIds,
   listConversationsForUser,
+  type ConversationSummary,
   MAX_CONVERSATION_MEMBERS,
   purgeOrphanedConversations,
   openDirectConversation,
@@ -56,7 +57,30 @@ export interface DirectConversationView {
 /** Outside the handler closure because the chat path needs it too, to un-hide
     a conversation. */
 export async function directConversationViews(serverUserId: string): Promise<DirectConversationView[]> {
-  const conversations = await listConversationsForUser(serverUserId);
+  return buildViews(await listConversationsForUser(serverUserId));
+}
+
+/* One conversation, whether or not it is in that person's list. An empty one is in
+   nobody's but its opener's, and asking for it is its own answer. */
+export async function conversationViewFor(
+  serverUserId: string,
+  conversationId: string,
+): Promise<DirectConversationView | undefined> {
+  const conversation = await getConversation(conversationId);
+  if (!conversation) return undefined;
+
+  const memberIds = await listConversationMemberIds(conversationId);
+  if (!memberIds.includes(serverUserId)) return undefined;
+
+  const views = await buildViews([
+    { ...conversation, other_server_user_ids: memberIds.filter((id) => id !== serverUserId) },
+  ]);
+  return views[0];
+}
+
+async function buildViews(
+  conversations: ConversationSummary[],
+): Promise<DirectConversationView[]> {
   const otherIds = [...new Set(conversations.flatMap((c) => c.other_server_user_ids))];
   const users = otherIds.length > 0 ? await getUsersByServerIds(otherIds) : new Map();
 
@@ -178,11 +202,14 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
         // row only; a message is what brings the other party's back.
         await setConversationHidden(conversation.conversation_id, self, false);
 
+        /* The other end only once there is something to tell them about. An empty
+           conversation is in nobody's list but its opener's. */
+        const audience = conversation.last_message_at ? [self, target] : [self];
+
         // Each end is told about the other, so neither has to work out which
         // member of the conversation it is looking at.
-        for (const serverUserId of [self, target]) {
-          const views = await viewsFor(serverUserId);
-          const view = views.find((v) => v.conversation_id === conversation.conversation_id);
+        for (const serverUserId of audience) {
+          const view = await conversationViewFor(serverUserId, conversation.conversation_id);
           if (!view) continue;
           for (const cid of socketIdsFor(serverUserId)) {
             io.sockets.sockets.get(cid)?.emit("dm:opened", view);
