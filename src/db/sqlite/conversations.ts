@@ -77,18 +77,23 @@ export interface ConversationSummary extends ConversationRecord {
   other_server_user_ids: string[];
 }
 
-/** `created_at` is the fallback, so a DM opened and never used still appears.
-    Hidden rows are filtered here, so one place decides what a list holds. */
+/* Hidden rows and empty ones are filtered here, so one place decides what a list
+   holds. `created_at` is the fallback sort, for a conversation opened and unused. */
 export async function listConversationsForUser(serverUserId: string): Promise<ConversationSummary[]> {
   const db = getSqliteDb();
   const rows = db
     .prepare(
+      /* An empty one-to-one belongs only to whoever opened it, or clicking through
+         a member list fills everybody else's. Groups are exempt. */
       `SELECT c.* FROM conversations c
        JOIN conversation_members m ON m.conversation_id = c.conversation_id
        WHERE m.server_user_id = ? AND m.hidden_at IS NULL
+         AND (c.kind != 'dm'
+              OR c.last_message_at IS NOT NULL
+              OR c.created_by_server_user_id = ?)
        ORDER BY COALESCE(c.last_message_at, c.created_at) DESC`,
     )
-    .all(serverUserId) as Record<string, unknown>[];
+    .all(serverUserId, serverUserId) as Record<string, unknown>[];
 
   return rows.map((r) => {
     const conversation = rowToConversation(r);

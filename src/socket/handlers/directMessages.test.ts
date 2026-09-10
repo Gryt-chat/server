@@ -194,15 +194,57 @@ async function openDm(from: Participant, to: Participant): Promise<string> {
 }
 
 describe("opening a direct message", () => {
-  it("tells both ends, and tells each of them about the other", async () => {
-    const conversationId = await openDm(alice, bob);
+  it("tells the opener, and tells them who the other person is", async () => {
+    await openDm(alice, bob);
 
     const toAlice = alice.received("dm:opened")[0] as { other: { nickname: string } };
-    const toBob = bob.received("dm:opened")[0] as { conversation_id: string; other: { nickname: string } };
-
     assert.equal(toAlice.other.nickname, "Bob");
-    assert.equal(toBob.other.nickname, "Alice", "Bob is told who Alice is, not who he is");
-    assert.equal(toBob.conversation_id, conversationId, "both ends agree on the id");
+  });
+
+  /* Clicking somebody in the member list opens one, so telling them straight away
+     fills their list with conversations nobody has written in. */
+  it("says nothing to the other person until there is a message", async () => {
+    const conversationId = await openDm(alice, bob);
+
+    assert.deepEqual(bob.received("dm:opened"), [], "Bob was told about an empty conversation");
+
+    clearAll();
+    await bob.handlers["dm:list"]({ accessToken: bob.accessToken });
+    const before = bob.received("dm:list")[0] as { items: { conversation_id: string }[] };
+    assert.deepEqual(
+      before.items.filter((c) => c.conversation_id === conversationId),
+      [],
+      "an empty conversation is in Bob's list",
+    );
+
+    clearAll();
+    await alice.handlers["chat:send"]({
+      accessToken: alice.accessToken,
+      conversationId,
+      text: "hei",
+    });
+
+    const announced = bob.received("dm:opened")[0] as { conversation_id: string; other: { nickname: string } } | undefined;
+    assert.ok(announced, `the first message did not reach Bob's list: ${JSON.stringify(bob.emitted)}`);
+    assert.equal(announced.conversation_id, conversationId, "both ends agree on the id");
+    assert.equal(announced.other.nickname, "Alice", "Bob is told who Alice is, not who he is");
+
+    clearAll();
+    await bob.handlers["dm:list"]({ accessToken: bob.accessToken });
+    const after = bob.received("dm:list")[0] as { items: { conversation_id: string }[] };
+    assert.equal(
+      after.items.filter((c) => c.conversation_id === conversationId).length,
+      1,
+      "the conversation is still missing from Bob's list after a message",
+    );
+  });
+
+  /* The list rule is about whose list it sits in, not about who may open it. Asking
+     for one somebody else opened has to answer, or the second person cannot reply. */
+  it("answers the other person when they open it themselves", async () => {
+    const first = await openDm(alice, bob);
+    const second = await openDm(bob, alice);
+    assert.equal(second, first, "Bob was given a different conversation");
   });
 
   it("does not make a second one, from either side", async () => {

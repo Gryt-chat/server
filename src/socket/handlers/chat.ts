@@ -22,6 +22,7 @@ import {
   getServerConfig,
   getWebhooksByIds,
   clearConversationHidden,
+  getConversation,
   touchConversation,
   DEFAULT_UPLOAD_MAX_BYTES,
   DEFAULT_MAX_ATTACHMENTS_PER_MESSAGE as MAX_ATTACHMENTS_PER_MESSAGE,
@@ -502,6 +503,10 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         }
 
         if (access.kind === "dm") {
+          /* Read before touching. A conversation with no messages is in nobody's
+             list but its opener's, so the first one has to announce it. */
+          const wasEmpty = !(await getConversation(created.conversation_id))?.last_message_at;
+
           await touchConversation(created.conversation_id, created.created_at).catch((err) =>
             consola.warn("touchConversation failed", created.conversation_id, err),
           );
@@ -510,7 +515,10 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           // my sidebar". After the send, and swallowed: it cannot block one.
           try {
             const restored = await clearConversationHidden(created.conversation_id);
-            for (const serverUserId of restored) {
+            const announce = wasEmpty
+              ? [...new Set([...restored, ...access.memberIds])]
+              : restored;
+            for (const serverUserId of announce) {
               const views = await directConversationViews(serverUserId);
               const view = views.find((v) => v.conversation_id === created.conversation_id);
               if (!view) continue;
