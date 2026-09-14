@@ -13,7 +13,8 @@ import { deleteObject, putObject, getObject } from "../storage";
 import { insertFile, insertImageJob, getFile, updateFileRecord, updateUserAvatar, setUserAvatar, getServerConfig, getUserByServerId, DEFAULT_AVATAR_MAX_BYTES, DEFAULT_UPLOAD_MAX_BYTES } from "../db";
 import { isSealedUpload, storageForUpload } from "./uploadStorage";
 import { requireBearerToken } from "../middleware/requireBearerToken";
-import { verifyFileToken } from "../utils/jwt";
+import { verifyFileToken, type FileTokenPayload } from "../utils/jwt";
+import { fileReadVerdict } from "../services/fileAccess";
 import { RangeNotSatisfiableError } from "../utils/byteRange";
 import { ensurePermission } from "../middleware/requirePermission";
 import { AVATAR_MAX_PX, AVATAR_THUMB_PX } from "../constants/media";
@@ -192,6 +193,7 @@ uploadsRouter.post(
             // Through the decision rather than off the request, so there is
             // one place the client's filename can reach a row.
             original_name: storage.originalName,
+            uploaded_by_server_user_id: req.tokenPayload?.serverUserId ?? null,
             created_at: new Date(),
           });
 
@@ -249,6 +251,7 @@ uploadsRouter.post(
           height,
           thumbnail_key: thumbKey,
           original_name: storage.originalName,
+          uploaded_by_server_user_id: req.tokenPayload?.serverUserId ?? null,
           created_at: new Date(),
         });
 
@@ -349,6 +352,7 @@ uploadsRouter.post(
             height: svg.height,
             thumbnail_key: null,
             original_name: file.originalname || null,
+            uploaded_by_server_user_id: serverUserId,
           });
 
           await setUserAvatar(serverUserId, fileId);
@@ -471,6 +475,7 @@ uploadsRouter.post(
           thumbnail_px: thumbKey ? AVATAR_THUMB_PX : null,
           original_name: file.originalname || null,
           dominant_color: dominantColor,
+          uploaded_by_server_user_id: serverUserId,
           created_at: new Date(),
         });
 
@@ -546,36 +551,36 @@ uploadsRouter.delete(
   }
 );
 
-/** In the query string because these URLs end up in `<img src>`. No per-file
-    check: a file token is only minted for a member, so holding one is the test. */
-async function mayReadFiles(req: Request): Promise<boolean> {
+/** In the query string because these URLs end up in `<img src>`. Says who is
+    asking; whether they may read this file is `fileReadVerdict`. */
+async function fileReader(req: Request): Promise<FileTokenPayload | null> {
   const raw = req.query.t;
   const token = typeof raw === "string" ? raw : null;
-  if (!token) return false;
+  if (!token) return null;
 
   const payload = verifyFileToken(token);
-  if (!payload) return false;
+  if (!payload) return null;
 
   const host = req.headers.host || "unknown";
-  if (payload.serverHost !== host) return false;
+  if (payload.serverHost !== host) return null;
 
   try {
     const cfg = await getServerConfig();
     const currentVersion = cfg?.token_version ?? 0;
-    if ((payload.tokenVersion ?? 0) !== currentVersion) return false;
+    if ((payload.tokenVersion ?? 0) !== currentVersion) return null;
 
     // A file token lives twelve hours against an access token's fifteen
     // minutes, so an ended session would keep reading uploads all day.
     const member = await getUserByServerId(payload.serverUserId);
-    if (!member) return false;
-    if ((payload.userTokenVersion ?? 0) !== (member.token_version ?? 0)) return false;
+    if (!member) return null;
+    if ((payload.userTokenVersion ?? 0) !== (member.token_version ?? 0)) return null;
   } catch {
     // The config is unreadable, so the version cannot be checked. Refuse rather
     // than serve: this is the path that had no check at all until GRYT-740.
-    return false;
+    return null;
   }
 
-  return true;
+  return payload;
 }
 
 uploadsRouter.get(
@@ -594,12 +599,19 @@ uploadsRouter.get(
       .then(async () => {
         // Before the lookup, so an unauthenticated caller cannot use the 404 to
         // learn which file ids exist.
-        if (!(await mayReadFiles(req))) {
+        const reader = await fileReader(req);
+        if (!reader) {
           res.status(401).json({ error: "auth_required", message: "A file token is required to read uploads." });
           return;
         }
 
-        const fileMeta = await getFile(fileId);
+        // Somebody else's file answers exactly like no file, so ids are not confirmed.
+        const verdict = await fileReadVerdict(fileId, reader.serverUserId, reader.grytUserId);
+        if (verdict === "undetermined") {
+          res.status(503).json({ error: "unavailable", message: "Could not check that just now. Try again in a moment." });
+          return;
+        }
+        const fileMeta = verdict === "allowed" ? await getFile(fileId) : null;
         if (!fileMeta) { res.status(404).json({ error: "File not found" }); return; }
 
         const useThumb = req.query.thumb === "1" && fileMeta.thumbnail_key;

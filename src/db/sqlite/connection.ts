@@ -785,6 +785,8 @@ function runMigrations(d: DatabaseSync): void {
     d.exec("ALTER TABLE threads ADD COLUMN tags TEXT");
   }
 
+  migrateFileOwnership(d);
+
   d.prepare("UPDATE server_config SET avatar_thumb_px = ?").run(AVATAR_THUMB_PX);
 
   // Before the built-in roles are seeded, because seeding writes rows through
@@ -828,6 +830,48 @@ function migrateRolesToMultiple(d: DatabaseSync): void {
       DROP TABLE roles;
       ALTER TABLE roles_multi RENAME TO roles;
       CREATE INDEX IF NOT EXISTS idx_roles_role ON roles(role);
+    `);
+    d.exec("COMMIT");
+  } catch (err) {
+    d.exec("ROLLBACK");
+    throw err;
+  }
+}
+
+/** What a file read is checked against (GRYT-921). Backfilled once, in the same
+    transaction that creates the table, so no attachment is ever unowned. */
+function migrateFileOwnership(d: DatabaseSync): void {
+  if (!hasColumn(d, "files", "uploaded_by_server_user_id")) {
+    d.exec("ALTER TABLE files ADD COLUMN uploaded_by_server_user_id TEXT");
+  }
+
+  d.exec("CREATE INDEX IF NOT EXISTS idx_users_avatar_file ON users(avatar_file_id)");
+  d.exec("CREATE INDEX IF NOT EXISTS idx_conversations_icon_file ON conversations(icon_file_id)");
+  d.exec("CREATE INDEX IF NOT EXISTS idx_webhooks_avatar_file ON webhooks(avatar_file_id)");
+
+  const exists = d
+    .prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'message_attachments'`)
+    .get();
+  if (exists) return;
+
+  d.exec("BEGIN");
+  try {
+    d.exec(`
+      CREATE TABLE message_attachments (
+        file_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        PRIMARY KEY (file_id, conversation_id, message_id),
+        FOREIGN KEY (conversation_id, message_id)
+          REFERENCES messages(conversation_id, message_id) ON DELETE CASCADE
+      );
+      CREATE INDEX idx_message_attachments_message
+        ON message_attachments(conversation_id, message_id);
+      INSERT OR IGNORE INTO message_attachments (file_id, conversation_id, message_id)
+        SELECT j.value, m.conversation_id, m.message_id
+        FROM messages m,
+          json_each(CASE WHEN json_valid(m.attachments) THEN m.attachments ELSE '[]' END) j
+        WHERE j.type = 'text';
     `);
     d.exec("COMMIT");
   } catch (err) {
