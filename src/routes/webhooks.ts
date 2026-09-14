@@ -13,6 +13,7 @@ import {
 import { requireBearerToken } from "../middleware/requireBearerToken";
 import { ensurePermission } from "../middleware/requirePermission";
 import { visibleChannelIds } from "../services/channelPermissions";
+import { fileReadVerdict } from "../services/fileAccess";
 import { broadcastChatNew } from "../socket";
 import { checkRateLimit, type RateLimitRule } from "../utils/rateLimiter";
 import { MESSAGE_MAX_LENGTH, MESSAGE_TOO_LONG } from "../utils/messageLimits";
@@ -100,6 +101,14 @@ webhooksRouter.post(
 
 // ── Protected: webhook management ────────────────────────────────
 
+/** An avatar is readable by every member, so it has to be a file the admin could
+    already read. Otherwise naming an id here would publish it. */
+async function mayUseAvatar(req: Request, fileId: string | null): Promise<boolean> {
+  if (!fileId) return true;
+  const verdict = await fileReadVerdict(fileId, req.tokenPayload?.serverUserId, req.tokenPayload?.grytUserId);
+  return verdict === "allowed";
+}
+
 function requireAdmin(req: Request, res: Response): Promise<boolean> {
   return ensurePermission(req, res, "manage_webhooks");
 }
@@ -143,6 +152,7 @@ webhooksRouter.post(
           ? body.display_name.trim().slice(0, 64)
           : "Webhook";
         const avatarFileId = typeof body?.avatar_file_id === "string" ? body.avatar_file_id : null;
+        if (!(await mayUseAvatar(req, avatarFileId))) { res.status(404).json({ error: "file_not_found" }); return; }
 
         const serverUserId = req.tokenPayload!.serverUserId;
         const webhook = await createWebhook(channelId, displayName, serverUserId, avatarFileId);
@@ -197,6 +207,7 @@ webhooksRouter.patch(
         if (typeof body?.channel_id === "string") updates.channel_id = body.channel_id;
         if (body?.avatar_file_id === null) updates.avatar_file_id = null;
         else if (typeof body?.avatar_file_id === "string") updates.avatar_file_id = body.avatar_file_id;
+        if (!(await mayUseAvatar(req, updates.avatar_file_id ?? null))) { res.status(404).json({ error: "file_not_found" }); return; }
 
         const updated = await updateWebhook(webhookId, updates);
         if (!updated) { res.status(404).json({ error: "not_found" }); return; }

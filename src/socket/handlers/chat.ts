@@ -47,6 +47,7 @@ import { MESSAGE_MAX_LENGTH, MESSAGE_TOO_LONG, SEALED_MAX_LENGTH } from "../../u
 import { applyAutoRoles } from "../../services/autoRoles";
 import { findMentions, type MentionableMember } from "../../services/mentions";
 import { mayInChannel } from "../../services/channelPermissions";
+import { fileReadVerdict } from "../../services/fileAccess";
 import { pluginEvents } from "../../plugins";
 import { deleteMessageEverywhere } from "../../moderation/deleteMessage";
 import { broadcastServerUiUpdate } from "../utils/server";
@@ -413,7 +414,9 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           const maxBytes = typeof cfg?.upload_max_bytes === "number" ? cfg.upload_max_bytes : DEFAULT_UPLOAD_MAX_BYTES;
           for (const id of attachments) {
             const f = fileMap.get(id);
-            if (!f) {
+            // Attaching a file publishes it to this conversation, so it has to
+            // be one the sender could already read.
+            if (!f || (await fileReadVerdict(id, auth.tokenPayload.serverUserId, auth.tokenPayload.grytUserId)) !== "allowed") {
               socket.emit("chat:error", `Attachment not found: ${id}`);
               return;
             }

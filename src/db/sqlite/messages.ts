@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 
-import type { FileRecord, MessageRecord, Reaction } from "../interfaces";
+import type { FileOwnership, FileRecord, MessageRecord, Reaction } from "../interfaces";
 import { fromIso, fromIsoNullable, getSqliteDb, toIso, type SQLInputValue } from "./connection";
 
 function rowToMessage(r: Record<string, unknown>): MessageRecord {
@@ -38,6 +38,13 @@ export async function insertMessage(record: Omit<MessageRecord, "message_id" | "
     record.thread_id ?? null,
     toIso(created_at),
   );
+
+  if (record.attachments && record.attachments.length > 0) {
+    const ref = db.prepare(
+      `INSERT OR IGNORE INTO message_attachments (file_id, conversation_id, message_id) VALUES (?, ?, ?)`,
+    );
+    for (const fileId of record.attachments) ref.run(fileId, record.conversation_id, message_id);
+  }
 
   return { ...record, created_at, message_id } as MessageRecord;
 }
@@ -102,8 +109,8 @@ export async function insertFile(
   const db = getSqliteDb();
   const created_at = record.created_at ?? new Date();
   db.prepare(
-    `INSERT INTO files (file_id, s3_key, mime, size, width, height, thumbnail_key, thumbnail_px, original_name, dominant_color, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(record.file_id, record.s3_key, record.mime ?? null, record.size ?? null, record.width ?? null, record.height ?? null, record.thumbnail_key ?? null, record.thumbnail_px ?? null, record.original_name ?? null, record.dominant_color ?? null, toIso(created_at));
+    `INSERT INTO files (file_id, s3_key, mime, size, width, height, thumbnail_key, thumbnail_px, original_name, dominant_color, uploaded_by_server_user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(record.file_id, record.s3_key, record.mime ?? null, record.size ?? null, record.width ?? null, record.height ?? null, record.thumbnail_key ?? null, record.thumbnail_px ?? null, record.original_name ?? null, record.dominant_color ?? null, record.uploaded_by_server_user_id ?? null, toIso(created_at));
   return { dominant_color: null, thumbnail_px: null, ...record, created_at };
 }
 
@@ -179,6 +186,29 @@ export async function getAllReferencedAttachmentIds(): Promise<Set<string>> {
     for (const id of attachments) ids.add(id);
   }
   return ids;
+}
+
+/** Everything that can make a file readable, in one indexed read. Null when
+    there is no such file. */
+export async function getFileOwnership(fileId: string): Promise<FileOwnership | null> {
+  const db = getSqliteDb();
+  const row = db.prepare(
+    `SELECT
+       f.uploaded_by_server_user_id AS uploader,
+       EXISTS (SELECT 1 FROM users u WHERE u.avatar_file_id = f.file_id) AS user_avatar,
+       EXISTS (SELECT 1 FROM webhooks w WHERE w.avatar_file_id = f.file_id) AS webhook_avatar,
+       (SELECT json_group_array(DISTINCT a.conversation_id) FROM message_attachments a WHERE a.file_id = f.file_id) AS attached_to,
+       (SELECT json_group_array(c.conversation_id) FROM conversations c WHERE c.icon_file_id = f.file_id) AS icon_of
+     FROM files f WHERE f.file_id = ?`,
+  ).get(fileId) as Record<string, unknown> | undefined;
+  if (!row) return null;
+
+  return {
+    uploadedBy: (row.uploader as string) ?? null,
+    isAvatar: Boolean(row.user_avatar) || Boolean(row.webhook_avatar),
+    attachedTo: JSON.parse((row.attached_to as string) || "[]") as string[],
+    groupIconOf: JSON.parse((row.icon_of as string) || "[]") as string[],
+  };
 }
 
 export async function deleteFileRecord(fileId: string): Promise<void> {

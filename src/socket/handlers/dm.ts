@@ -23,6 +23,7 @@ import {
 import { isBotIdentity } from "../../auth/identity";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 import { requireAuth } from "../middleware/auth";
+import { fileReadVerdict } from "../../services/fileAccess";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
 /** Opening and listing only. Once a DM exists it goes through the same `chat:*`
@@ -317,6 +318,12 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
           }
         }
 
+        if (typeof payload.iconFileId === "string" && payload.iconFileId
+          && (await fileReadVerdict(payload.iconFileId, self, auth.tokenPayload.grytUserId)) !== "allowed") {
+          socket.emit("dm:error", { error: "unknown_file", message: "That picture is not available" });
+          return;
+        }
+
         const conversation = await createGroupConversation(self, targets);
         if (typeof payload.name === "string" && payload.name.trim()) {
           await setConversationName(conversation.conversation_id, payload.name);
@@ -434,6 +441,13 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
         const conversation = await getConversation(payload.conversationId);
         if (!conversation || conversation.kind !== "group" || !(await isConversationMember(payload.conversationId, self))) {
           socket.emit("dm:error", { error: "not_found", message: "No such conversation" });
+          return;
+        }
+
+        // A group picture is shown to every member, so it has to be readable first.
+        if (typeof payload.iconFileId === "string" && payload.iconFileId
+          && (await fileReadVerdict(payload.iconFileId, self, auth.tokenPayload.grytUserId)) !== "allowed") {
+          socket.emit("dm:error", { error: "unknown_file", message: "That picture is not available" });
           return;
         }
 

@@ -62,6 +62,19 @@ export async function getReportCountForMessage(messageId: string): Promise<numbe
   return new Set(reports.filter((r) => r.message_id === messageId).map((r) => r.reporter_server_user_id)).size;
 }
 
+/** Conversations with a pending report quoting this file. Unindexed, but the
+    file route asks only after every cheaper answer was no. */
+export async function listPendingReportConversationsForFile(fileId: string): Promise<string[]> {
+  const db = getSqliteDb();
+  const rows = db.prepare(
+    `SELECT DISTINCT r.conversation_id AS conversation_id
+     FROM reports r,
+       json_each(CASE WHEN json_valid(r.message_attachments) THEN r.message_attachments ELSE '[]' END) j
+     WHERE r.status = 'pending' AND j.value = ?`,
+  ).all(fileId) as { conversation_id: string }[];
+  return rows.map((r) => r.conversation_id);
+}
+
 export async function getAggregatedPendingReports(): Promise<
   Array<{ message_id: string; conversation_id: string; message_text: string | null; message_attachments: string[] | null;
     message_sender_server_id: string; message_sender_nickname: string | null; report_count: number; reporters: string[]; first_reported_at: Date; report_ids: string[]; }>

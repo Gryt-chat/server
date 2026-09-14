@@ -7,6 +7,7 @@ import { after, before, describe, it } from "node:test";
 import { BOT_SUB_PREFIX } from "../../auth/identity";
 import { initSqlite } from "../../db/sqlite/connection";
 import { BUILT_IN_ROLES } from "../../constants/permissions";
+import { insertFile } from "../../db/sqlite/messages";
 import { createRoleDefinition } from "../../db/sqlite/roleDefinitions";
 import { createServerConfigIfNotExists, setServerRole, updateServerConfig } from "../../db/sqlite/servers";
 import { upsertUser } from "../../db/sqlite/users";
@@ -690,18 +691,28 @@ describe("group conversations", () => {
     assert.equal((await listFor(outsider)).some((c) => c.conversation_id === conversationId), false);
   });
 
+  async function uploadedBy(who: Participant): Promise<string> {
+    const fileId = `file_${Math.random().toString(36).slice(2)}`;
+    await insertFile({
+      file_id: fileId, s3_key: `avatars/${fileId}.avif`, mime: "image/avif", size: 1, width: 1, height: 1,
+      thumbnail_key: null, original_name: null, uploaded_by_server_user_id: who.serverUserId,
+    });
+    return fileId;
+  }
+
   it("can be given a picture, and clearing it goes back to the drawn one", async () => {
     const conversationId = await makeGroup();
+    const picture = await uploadedBy(alice);
 
     await alice.handlers["dm:group:update"]({
       accessToken: alice.accessToken,
       conversationId,
-      iconFileId: "file_abc123",
+      iconFileId: picture,
     });
     let view = (await listFor(bob)).find((c) => c.conversation_id === conversationId) as
       | { icon_file_id?: string | null }
       | undefined;
-    assert.equal(view?.icon_file_id, "file_abc123", "the upload did not reach the other members");
+    assert.equal(view?.icon_file_id, picture, "the upload did not reach the other members");
 
     await alice.handlers["dm:group:update"]({
       accessToken: alice.accessToken,
@@ -714,6 +725,24 @@ describe("group conversations", () => {
     // Null is "draw it from the name", not "no picture" — the clients render
     // the generated one, so nothing needs storing for it.
     assert.equal(view?.icon_file_id, null);
+  });
+
+  it("refuses a picture the member could not read, which would publish it (GRYT-921)", async () => {
+    const conversationId = await makeGroup();
+    const somebodyElses = await uploadedBy(await connectMember("Stranger"));
+
+    clearAll();
+    await alice.handlers["dm:group:update"]({ accessToken: alice.accessToken, conversationId, iconFileId: somebodyElses });
+    assert.deepEqual(alice.received("dm:error").at(-1), { error: "unknown_file", message: "That picture is not available" });
+
+    await alice.handlers["dm:group:create"]({
+      accessToken: alice.accessToken,
+      memberIds: [bob.serverUserId, mallory.serverUserId],
+      iconFileId: somebodyElses,
+    });
+    assert.equal(alice.received("dm:opened").length, 0, "the group was made anyway");
+    const view = (await listFor(bob)).find((c) => c.conversation_id === conversationId);
+    assert.equal(view?.icon_file_id ?? null, null);
   });
 
   it("can be named, and the name reaches everybody", async () => {

@@ -165,7 +165,20 @@ export interface FileRecord {
   original_name: string | null;
   /** Dominant colour of the image as #rrggbb, or null if never computed. */
   dominant_color: string | null;
+  /** Null for anything uploaded before GRYT-921, which recorded no uploader. */
+  uploaded_by_server_user_id?: string | null;
   created_at: Date;
+}
+
+/** What {@link FileRecord} is owned by, for deciding who may read it. */
+export interface FileOwnership {
+  uploadedBy: string | null;
+  /** A member's or a webhook's avatar, which every member sees. */
+  isAvatar: boolean;
+  /** Conversations with a message carrying it: channel ids and DM ids alike. */
+  attachedTo: string[];
+  /** Group conversations using it as their picture. */
+  groupIconOf: string[];
 }
 
 // ── Server config types ──────────────────────────────────────────
