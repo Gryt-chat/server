@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { beforeEach, describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it, mock } from "node:test";
 
 import { resetRateLimits } from "../utils/rateLimiter";
 import { httpRateLimit, requestIp, RL_HTTP_API, RL_HTTP_EMOJI_WRITE, RL_HTTP_FILE, RL_HTTP_OUTBOUND, RL_HTTP_UPLOAD } from "./rateLimitHttp";
@@ -92,6 +92,50 @@ describe("httpRateLimit", () => {
       RL_HTTP_EMOJI_WRITE.limit > RL_HTTP_UPLOAD.limit,
       "a pack import is a legitimate burst and needs more room than a file upload",
     );
+  });
+
+  describe("while banned", () => {
+    beforeEach(() => mock.timers.enable({ apis: ["Date"], now: 1_000_000 }));
+    afterEach(() => mock.timers.reset());
+
+    const retry = (r: FakeRes) => ({
+      header: Number(r.headers["retry-after"]),
+      ms: (r.body as { retryAfterMs: number }).retryAfterMs,
+    });
+
+    it("tells the caller the whole ban on the request that starts it", () => {
+      const mw = httpRateLimit("t:ban:start", { limit: 2, windowMs: 10_000, banMs: 60_000 });
+      const { last } = hammer(mw, 3);
+
+      assert.equal(last.statusCode, 429);
+      assert.deepEqual(retry(last), { header: 60, ms: 60_000 });
+    });
+
+    it("counts down the rest of the ban on later refusals", () => {
+      const mw = httpRateLimit("t:ban:later", { limit: 2, windowMs: 10_000, banMs: 60_000 });
+      hammer(mw, 3);
+
+      mock.timers.tick(20_500);
+      const { passed, last } = hammer(mw, 1);
+
+      assert.equal(passed, 0);
+      assert.deepEqual(retry(last), { header: 40, ms: 39_500 });
+    });
+
+    it("gives the ban rather than the score decay when a score rule bans", () => {
+      const rule = { limit: 100, windowMs: 60_000, banMs: 30_000, scorePerAction: 1, maxScore: 2, scoreDecayMs: 1000 };
+      const { last } = hammer(httpRateLimit("t:ban:score", rule), 3);
+
+      assert.deepEqual(retry(last), { header: 30, ms: 30_000 });
+    });
+
+    it("lets the caller back in once the ban it was told about has passed", () => {
+      const mw = httpRateLimit("t:ban:over", { limit: 2, windowMs: 10_000, banMs: 60_000 });
+      const { last } = hammer(mw, 3);
+
+      mock.timers.tick(retry(last).ms);
+      assert.equal(hammer(mw, 1).passed, 1);
+    });
   });
 
   it("reads the caller address from the socket when no proxy is trusted", () => {

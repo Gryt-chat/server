@@ -6,6 +6,7 @@ import {
   isOriginAllowed,
   originIsHost,
   readAllowedOrigins,
+  setCorsHeaders,
 } from "./cors";
 
 const LIST = ["http://127.0.0.1:15738", "https://app.gryt.chat"];
@@ -90,5 +91,16 @@ describe("isOriginAllowed", () => {
 
   it("still refuses an unlisted origin with no host", () => {
     assert.equal(isOriginAllowed("https://evil.example", LIST), false);
+  });
+});
+
+describe("setCorsHeaders", () => {
+  it("exposes Retry-After, so a browser on another origin can read how long to wait", () => {
+    const headers: Record<string, string> = {};
+    setCorsHeaders({ setHeader: (k, v) => { headers[k.toLowerCase()] = v; } }, "https://app.gryt.chat");
+
+    assert.equal(headers["access-control-allow-origin"], "https://app.gryt.chat");
+    const exposed = (headers["access-control-expose-headers"] ?? "").split(",").map((h) => h.trim().toLowerCase());
+    assert.ok(exposed.includes("retry-after"));
   });
 });

@@ -1,5 +1,5 @@
 import { config } from "dotenv";
-import { isOriginAllowed, readAllowedOrigins } from "./config/cors";
+import { isOriginAllowed, readAllowedOrigins, setCorsHeaders } from "./config/cors";
 import { RL_HTTP_API, RL_HTTP_EMOJI_WRITE, RL_HTTP_FILE, RL_HTTP_OUTBOUND, RL_HTTP_PUBLIC, RL_HTTP_UPLOAD, httpRateLimit } from "./middleware/rateLimitHttp";
 config({ path: "config.env", override: false });
 config({ override: false });
@@ -61,17 +61,7 @@ function isAllowedOrigin(origin: string, requestHost?: string): boolean {
 app.use((req, res, next) => {
   const origin = req.headers.origin as string | undefined;
   if (origin && isAllowedOrigin(origin, req.headers.host)) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-    res.setHeader("Vary", "Origin");
-    res.setHeader(
-      "Access-Control-Allow-Methods",
-      "GET,POST,PUT,PATCH,DELETE,OPTIONS"
-    );
-    res.setHeader(
-      "Access-Control-Allow-Headers",
-      "Authorization,Content-Type,Accept,Origin,X-Requested-With"
-    );
-    res.setHeader("Access-Control-Max-Age", "600");
+    setCorsHeaders(res, origin);
   }
   if (req.method === "OPTIONS") {
     res.status(204).end();
