@@ -14,6 +14,7 @@ import { insertFile, insertImageJob, getFile, updateFileRecord, updateUserAvatar
 import { isSealedUpload, storageForUpload } from "./uploadStorage";
 import { requireBearerToken } from "../middleware/requireBearerToken";
 import { verifyFileToken } from "../utils/jwt";
+import { RangeNotSatisfiableError } from "../utils/byteRange";
 import { ensurePermission } from "../middleware/requirePermission";
 import { AVATAR_MAX_PX, AVATAR_THUMB_PX } from "../constants/media";
 import { findDominantColor, validateImage, MAX_INPUT_PIXELS } from "../utils/imageValidation";
@@ -609,7 +610,16 @@ uploadsRouter.get(
 
         // IMPORTANT: do not redirect to S3/MinIO endpoints. In dev those are often localhost,
         // and browsers cannot reach the server's localhost. Stream through the API instead.
-        const obj = await getObject({ bucket, key: s3Key, range: rangeHeader || undefined });
+        let obj: Awaited<ReturnType<typeof getObject>>;
+        try {
+          obj = await getObject({ bucket, key: s3Key, range: rangeHeader || undefined });
+        } catch (err) {
+          if (!(err instanceof RangeNotSatisfiableError)) throw err;
+          res.status(416).setHeader("Content-Range", `bytes */${err.size}`);
+          res.setHeader("Content-Length", "0");
+          res.end();
+          return;
+        }
         const body = obj.Body;
         if (!body) {
           res.status(502).json({ error: "s3_error", message: "Empty S3 response body" });
