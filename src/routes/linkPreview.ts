@@ -3,6 +3,7 @@ import consola from "consola";
 
 import { requireBearerToken } from "../middleware/requireBearerToken";
 import { ensurePermission } from "../middleware/requirePermission";
+import { httpRateLimit, RL_HTTP_OUTBOUND } from "../middleware/rateLimitHttp";
 import { fetchRemoteImageMetadata } from "../utils/remoteImageMetadata";
 import {
   charsetFromContentType,
@@ -11,7 +12,7 @@ import {
 } from "../utils/pageMetadata";
 import { checkPreviewUrl } from "../utils/previewUrlSafety";
 import { fetchFollowingSafely } from "../utils/safePreviewFetch";
-import { resolverFor } from "../utils/linkResolvers";
+import { resolverFor, type LinkResolver, type ResolvedMetadata } from "../utils/linkResolvers";
 
 export interface LinkPreviewData {
   url: string;
@@ -37,15 +38,19 @@ export interface LinkPreviewData {
   status: number | null;
 }
 
-const cache = new Map<string, { data: LinkPreviewData; fetchedAt: number }>();
-const CACHE_TTL_MS = 60 * 60 * 1000;
-const MAX_CACHE_SIZE = 500;
+const FRESH_MS = 60 * 60 * 1000;
+/** Past fresh, an entry is only an answer for when the refresh fails. */
+const MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const MAX_CACHE_SIZE = 2000;
 
 /** Measured: MDN closes its head at 5.9 KB, YouTube's `og:title` sits at byte
     699,799. The read stops at `</head>`, so this bounds a page that has none. */
 const MAX_BYTES = 1_048_576;
 
 const FETCH_TIMEOUT_MS = 8000;
+/** Shorter than the page fetch and separate from it, so a hung resolver leaves
+    the fallback its whole budget. */
+const RESOLVER_TIMEOUT_MS = 5000;
 
 /** Read a response body until the head closes, the cap, or the end. */
 async function readHead(res: Response, charset: string): Promise<string> {
@@ -77,9 +82,9 @@ const MAX_JSON_BYTES = 512 * 1024;
 
 /** Handed in rather than imported, so a resolver cannot reach the network
     another way. Same host check, abort signal, size cap and JSON refusal. */
-function jsonFetcher(signal: AbortSignal) {
+function jsonFetcher(signal: AbortSignal, fetchPage: FetchPreviewDeps["fetchPage"]) {
   return async (target: string): Promise<unknown> => {
-    const fetched = await fetchFollowingSafely(target, signal, "application/json");
+    const fetched = await fetchPage(target, signal, "application/json");
     if ("blocked" in fetched) return null;
 
     const { res } = fetched;
@@ -121,39 +126,79 @@ async function measureIfUnsized(
   return { imageWidth: measured.width, imageHeight: measured.height };
 }
 
-async function fetchPreview(url: string): Promise<LinkPreviewData> {
-  const empty: LinkPreviewData = { url, ...EMPTY_PAGE_METADATA, status: null };
+export interface FetchPreviewDeps {
+  resolverFor: typeof resolverFor;
+  fetchPage: (url: string, signal: AbortSignal, accept: string) => ReturnType<typeof fetchFollowingSafely>;
+  resolverTimeoutMs: number;
+  pageTimeoutMs: number;
+}
 
+const realDeps: FetchPreviewDeps = {
+  resolverFor,
+  fetchPage: fetchFollowingSafely,
+  resolverTimeoutMs: RESOLVER_TIMEOUT_MS,
+  pageTimeoutMs: FETCH_TIMEOUT_MS,
+};
+
+/** Raced against the timer too, so a resolver awaiting something that ignores the
+    signal still gives up on time. */
+async function resolveWithin(
+  resolver: LinkResolver,
+  url: URL,
+  fetchPage: FetchPreviewDeps["fetchPage"],
+  ms: number,
+): Promise<ResolvedMetadata | null> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  let timeout: NodeJS.Timeout | undefined;
+  const expired = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort();
+      reject(new Error(`resolver timed out after ${ms}ms`));
+    }, ms);
+  });
 
   try {
-    /* A resolver returning null falls through to the ordinary fetch below.
-       `status: 200` because the card came from somewhere that answered. */
-    const resolver = resolverFor(new URL(url));
-    if (resolver) {
-      try {
-        const resolved = await resolver.resolve(new URL(url), jsonFetcher(controller.signal));
-        if (resolved) {
-          const card = { ...empty, ...resolved, url, status: 200 };
-          // A resolver builds its own image URL, so there is never an
-          // `og:image:width` to take the size from.
-          return { ...card, ...(await measureIfUnsized(card)) };
-        }
-      } catch (err) {
-        consola.warn(`[link-preview] resolver ${resolver.id} failed for ${url}`, err);
-      }
-    }
+    return await Promise.race([
+      resolver.resolve(url, jsonFetcher(controller.signal, fetchPage)),
+      expired,
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
-    const fetched = await fetchFollowingSafely(
-      url,
-      controller.signal,
-      "text/html,application/xhtml+xml",
-    );
+export async function fetchPreview(
+  url: string,
+  deps: FetchPreviewDeps = realDeps,
+): Promise<LinkPreviewData> {
+  const empty: LinkPreviewData = { url, ...EMPTY_PAGE_METADATA, status: null };
+
+  // A resolver returning null falls through to the ordinary fetch below.
+  // `status: 200` because the card came from somewhere that answered.
+  const resolver = deps.resolverFor(new URL(url));
+  if (resolver) {
+    try {
+      const resolved = await resolveWithin(resolver, new URL(url), deps.fetchPage, deps.resolverTimeoutMs);
+      if (resolved) {
+        const card = { ...empty, ...resolved, url, status: 200 };
+        // A resolver builds its own image URL, so there is never an
+        // `og:image:width` to take the size from.
+        return { ...card, ...(await measureIfUnsized(card)) };
+      }
+    } catch (err) {
+      consola.warn(`[link-preview] resolver ${resolver.id} failed for ${url}`, err);
+    }
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), deps.pageTimeoutMs);
+
+  let page: { html: string; finalUrl: string; status: number };
+  try {
+    const fetched = await deps.fetchPage(url, controller.signal, "text/html,application/xhtml+xml");
     if ("blocked" in fetched) return empty;
 
     const { res, finalUrl } = fetched;
-
     if (!res.ok) {
       await res.body?.cancel().catch(() => {});
       // The status is the whole answer here. An error page's metadata belongs
@@ -168,15 +213,84 @@ async function fetchPreview(url: string): Promise<LinkPreviewData> {
     }
 
     const html = await readHead(res, charsetFromContentType(contentType));
-    const meta = parsePageMetadata(html, finalUrl);
-
-    const measured = await measureIfUnsized(meta);
-
-    return { url, ...meta, ...measured, status: res.status };
+    page = { html, finalUrl, status: res.status };
   } finally {
     clearTimeout(timeout);
   }
+
+  const meta = parsePageMetadata(page.html, page.finalUrl);
+  // Outside the page budget: the image fetch carries its own timeout.
+  const measured = await measureIfUnsized(meta);
+
+  return { url, ...meta, ...measured, status: page.status };
 }
+
+type Entry = { data: LinkPreviewData; fetchedAt: number };
+
+export type PreviewLookup =
+  | { data: LinkPreviewData; stale: boolean }
+  | { refused: true }
+  | { failed: unknown };
+
+/**
+ * `charge` runs only when this request starts an upstream fetch, so a cache hit
+ * or joining a fetch already in flight costs nothing against the limit.
+ */
+export function createPreviewCache(
+  fetchOne: (url: string) => Promise<LinkPreviewData> = fetchPreview,
+  now: () => number = Date.now,
+) {
+  const entries = new Map<string, Entry>();
+  const inFlight = new Map<string, Promise<LinkPreviewData>>();
+
+  function store(url: string, data: LinkPreviewData) {
+    entries.delete(url);
+    if (entries.size >= MAX_CACHE_SIZE) {
+      const oldest = entries.keys().next().value;
+      if (oldest !== undefined) entries.delete(oldest);
+    }
+    entries.set(url, { data, fetchedAt: now() });
+  }
+
+  async function lookup(url: string, charge: () => boolean): Promise<PreviewLookup> {
+    const entry = entries.get(url);
+    if (entry && now() - entry.fetchedAt < FRESH_MS) return { data: entry.data, stale: false };
+
+    let pending = inFlight.get(url);
+    if (!pending) {
+      if (!charge()) return { refused: true };
+      pending = fetchOne(url)
+        .then((data) => {
+          store(url, data);
+          return data;
+        })
+        .finally(() => inFlight.delete(url));
+      inFlight.set(url, pending);
+    }
+
+    try {
+      return { data: await pending, stale: false };
+    } catch (err) {
+      const previous = entries.get(url);
+      if (previous && now() - previous.fetchedAt < MAX_AGE_MS) {
+        return { data: previous.data, stale: true };
+      }
+      return { failed: err };
+    }
+  }
+
+  function sweep() {
+    const cutoff = now() - MAX_AGE_MS;
+    for (const [key, entry] of entries) {
+      if (entry.fetchedAt < cutoff) entries.delete(key);
+    }
+  }
+
+  return { lookup, sweep, size: () => entries.size };
+}
+
+const previews = createPreviewCache();
+const limitOutbound = httpRateLimit("http:outbound", RL_HTTP_OUTBOUND);
 
 const router = Router();
 
@@ -197,35 +311,27 @@ router.get("/", requireBearerToken, async (req, res) => {
     return;
   }
 
-  const cached = cache.get(url);
-  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
-    res.json(cached.data);
+  // The limiter answers the 429 itself when it refuses.
+  const found = await previews.lookup(url, () => {
+    let allowed = false;
+    limitOutbound(req, res, () => {
+      allowed = true;
+    });
+    return allowed;
+  });
+
+  if ("refused" in found) return;
+  if ("failed" in found) {
+    consola.error("Link preview fetch failed:", url, found.failed);
+    res.status(502).json({ error: "fetch_failed", message: "Failed to fetch link preview" });
     return;
   }
-
-  try {
-    const data = await fetchPreview(url);
-
-    if (cache.size >= MAX_CACHE_SIZE) {
-      const oldest = cache.keys().next().value;
-      if (oldest) cache.delete(oldest);
-    }
-    cache.set(url, { data, fetchedAt: Date.now() });
-
-    res.json(data);
-  } catch (err) {
-    consola.error("Link preview fetch failed:", url, err);
-    res.status(502).json({ error: "fetch_failed", message: "Failed to fetch link preview" });
-  }
+  if (found.stale) consola.warn("[link-preview] refresh failed, serving the previous card", url);
+  res.json(found.data);
 });
 
 // Unref'd, so importing this module does not hold the process open for a
 // preview cache sweep. Same as the nonce sweeper in auth/identity.
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, entry] of cache) {
-    if (now - entry.fetchedAt > CACHE_TTL_MS * 2) cache.delete(key);
-  }
-}, 5 * 60 * 1000).unref();
+setInterval(() => previews.sweep(), 5 * 60 * 1000).unref();
 
 export const linkPreviewRouter = router;

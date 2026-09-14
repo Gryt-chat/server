@@ -342,7 +342,8 @@ app.use(
     (req.method === "GET" ? limitEmojiReads : limitEmojiWrites)(req, res, next),
   emojisRouter,
 );
-app.use("/api/link-preview", httpRateLimit("http:outbound", RL_HTTP_OUTBOUND), linkPreviewRouter);
+// Limited inside the router, where it can tell a cache hit from an outbound fetch.
+app.use("/api/link-preview", linkPreviewRouter);
 app.use("/api/oembed", httpRateLimit("http:outbound", RL_HTTP_OUTBOUND), oEmbedRouter);
 app.use("/api/media/metadata", httpRateLimit("http:outbound", RL_HTTP_OUTBOUND), mediaMetadataRouter);
 app.use("/api/webhooks", webhooksRouter);
