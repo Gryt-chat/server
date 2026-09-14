@@ -25,6 +25,16 @@ interface ScoreData {
 	lastUpdate: number;
 }
 
+/** Whole decay steps before the next action scores at or under maxScore, tested
+    with the same arithmetic check() uses so float rounding can't disagree. */
+function decayStepsUntilAllowed(score: number, scorePerAction: number, maxScore: number): number {
+	const passes = (steps: number) => Math.max(0, score - steps) + scorePerAction <= maxScore;
+	if (scorePerAction > maxScore) return Math.ceil(score);
+	let steps = Math.max(0, Math.floor(score + scorePerAction - maxScore));
+	while (!passes(steps)) steps++;
+	return steps;
+}
+
 class SlidingWindowLimiter {
 	private buckets: Map<string, TimestampQueue> = new Map();
 	private bans: Map<string, number> = new Map();
@@ -116,9 +126,10 @@ class SlidingWindowLimiter {
 					consola.warn("🚫 Rate limit ban applied (score-based)", { ...this.banSubject(parts), score: currentScore, maxScore, banMs: effective.banMs });
 				}
 				const banUntil = this.bans.get(k);
+				const steps = decayStepsUntilAllowed(currentScore, scorePerAction, maxScore);
 				return {
 					allowed: false,
-					retryAfterMs: Math.max(0, currentScore * scoreDecayMs, (banUntil ?? now) - now),
+					retryAfterMs: Math.max(0, steps * scoreDecayMs, (banUntil ?? now) - now),
 					bannedUntil: banUntil,
 					currentScore,
 					maxScore
