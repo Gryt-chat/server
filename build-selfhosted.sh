@@ -102,6 +102,8 @@ chmod +x "$OUTDIR/gryt_server.sh" 2>/dev/null || true
 # ── 3. Bundle image-worker ────────────────────────────────────────────
 echo "[3/5] Bundling image-worker..."
 if [ -d "$IMAGE_WORKER_DIR/dist" ]; then
+  IMAGE_WORKER_VERSION=$(bash "$SCRIPT_DIR/scripts/describe-version.sh" "$IMAGE_WORKER_DIR")
+  echo "    image-worker version: $IMAGE_WORKER_VERSION"
   mkdir -p "$OUTDIR/image-worker"
   cp -r "$IMAGE_WORKER_DIR/dist/" "$OUTDIR/image-worker/"
 
@@ -110,7 +112,7 @@ if [ -d "$IMAGE_WORKER_DIR/dist" ]; then
     const pkg = JSON.parse(require('fs').readFileSync('$IMAGE_WORKER_DIR/package.json', 'utf8'));
     delete pkg.devDependencies;
     delete pkg.dependencies['@aws-sdk/client-s3'];
-    pkg.version = '$VERSION';
+    pkg.version = '$IMAGE_WORKER_VERSION';
     require('fs').writeFileSync('$OUTDIR/image-worker/package.json', JSON.stringify(pkg, null, 2) + '\n');
   "
 
@@ -146,12 +148,15 @@ else
   echo "[4/5] Cross-compiling SFU..."
   SFU_DIR="$SCRIPT_DIR/../sfu"
   if [ -d "$SFU_DIR" ]; then
+    SFU_VERSION=$(bash "$SCRIPT_DIR/scripts/describe-version.sh" "$SFU_DIR")
+    SFU_LDFLAGS="-X main.Version=$SFU_VERSION"
+    echo "    SFU version: $SFU_VERSION"
     case "$TARGET" in
       windows-x64)
-        GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -C "$SFU_DIR" -o "$OUTDIR/gryt_sfu.exe" ./cmd/sfu/
+        GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -C "$SFU_DIR" -ldflags "$SFU_LDFLAGS" -o "$OUTDIR/gryt_sfu.exe" ./cmd/sfu/
         ;;
       linux-x64)
-        GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -C "$SFU_DIR" -o "$OUTDIR/gryt_sfu" ./cmd/sfu/
+        GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -C "$SFU_DIR" -ldflags "$SFU_LDFLAGS" -o "$OUTDIR/gryt_sfu" ./cmd/sfu/
         ;;
       *)
         echo "  Warning: Unknown target '$TARGET', skipping SFU build"
