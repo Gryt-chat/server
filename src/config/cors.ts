@@ -19,6 +19,22 @@ export function readAllowedOrigins(
     .concat(isProduction ? [] : DEV_CORS_ORIGINS);
 }
 
+type HeaderSink = { setHeader(name: string, value: string): unknown };
+
+/** For a request whose origin already passed `isOriginAllowed`. A browser hides
+    any response header not listed in Expose-Headers from cross-origin scripts. */
+export function setCorsHeaders(res: HeaderSink, origin: string): void {
+  res.setHeader("Access-Control-Allow-Origin", origin);
+  res.setHeader("Vary", "Origin");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Authorization,Content-Type,Accept,Origin,X-Requested-With",
+  );
+  res.setHeader("Access-Control-Expose-Headers", "Retry-After");
+  res.setHeader("Access-Control-Max-Age", "600");
+}
+
 /** Whether `origin` is http(s) at exactly `host`, port included. */
 export function originIsHost(origin: string, host: string): boolean {
   if (!host) return false;

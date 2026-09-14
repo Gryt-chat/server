@@ -83,7 +83,7 @@ class SlidingWindowLimiter {
 
 		const bannedUntil = this.bans.get(k);
 		if (bannedUntil && bannedUntil > now) {
-			return { allowed: false, bannedUntil };
+			return { allowed: false, retryAfterMs: bannedUntil - now, bannedUntil };
 		} else if (bannedUntil && bannedUntil <= now) {
 			this.bans.delete(k);
 		}
@@ -111,15 +111,15 @@ class SlidingWindowLimiter {
 
 			// Check if score exceeds limit
 			if (currentScore > maxScore) {
-				const retryAfterMs = Math.max(0, currentScore * scoreDecayMs);
 				if (effective.banMs && !this.bans.has(k)) {
 					this.bans.set(k, now + effective.banMs);
 					consola.warn("🚫 Rate limit ban applied (score-based)", { ...this.banSubject(parts), score: currentScore, maxScore, banMs: effective.banMs });
 				}
-				return { 
-					allowed: false, 
-					retryAfterMs, 
-					bannedUntil: this.bans.get(k),
+				const banUntil = this.bans.get(k);
+				return {
+					allowed: false,
+					retryAfterMs: Math.max(0, currentScore * scoreDecayMs, (banUntil ?? now) - now),
+					bannedUntil: banUntil,
 					currentScore,
 					maxScore
 				};
@@ -140,12 +140,13 @@ class SlidingWindowLimiter {
 		while (q.length > 0 && q[0] < windowStart) q.shift();
 
 		if (q.length >= effective.limit) {
-			const retryAfterMs = Math.max(0, (q[0] + effective.windowMs) - now);
 			if (effective.banMs && !this.bans.has(k)) {
 				this.bans.set(k, now + effective.banMs);
 				consola.warn("🚫 Rate limit ban applied (window-based)", { ...this.banSubject(parts), banMs: effective.banMs });
 			}
-			return { allowed: false, retryAfterMs, bannedUntil: this.bans.get(k) };
+			const banUntil = this.bans.get(k);
+			const retryAfterMs = Math.max(0, (q[0] + effective.windowMs) - now, (banUntil ?? now) - now);
+			return { allowed: false, retryAfterMs, bannedUntil: banUntil };
 		}
 
 		q.push(now);
