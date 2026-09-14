@@ -211,8 +211,25 @@ describe("unknown and unowned files", () => {
     assert.equal(await fileReadVerdict(randomUUID(), alice), "denied");
   });
 
-  it("refuses a file nothing points at and nobody is recorded as uploading", async () => {
-    assert.equal(await fileReadVerdict(await newFile(null), alice), "denied");
+  it("lets any member read an older file nothing points at and nobody is recorded as uploading", async () => {
+    const file = await newFile(null);
+    assert.equal(await fileReadVerdict(file, alice), "allowed");
+    assert.equal(await fileReadVerdict(file, mallory), "allowed");
+    assert.equal(await fileReadVerdict(file, null), "denied", "still not without signing in");
+  });
+
+  it("gates an older file by where it was sent once it is attached", async () => {
+    const file = await newFile(null);
+    await send(PRIVATE, staff, file);
+    resetFileAccessCache();
+    assert.equal(await fileReadVerdict(file, staff), "allowed");
+    assert.equal(await fileReadVerdict(file, mallory), "denied");
+  });
+
+  it("keeps a new upload to its uploader until it is sent", async () => {
+    const file = await newFile(alice);
+    assert.equal(await fileReadVerdict(file, alice), "allowed");
+    assert.equal(await fileReadVerdict(file, mallory), "denied");
   });
 
   it("refuses somebody who is not signed in", async () => {
