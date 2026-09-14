@@ -41,6 +41,8 @@ export interface LinkPreviewData {
 const FRESH_MS = 60 * 60 * 1000;
 /** Past fresh, an entry is only an answer for when the refresh fails. */
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
+/** A refusal or an error page is often gone in minutes, so it is not kept for the hour. */
+const FAILED_FRESH_MS = 5 * 60 * 1000;
 const MAX_CACHE_SIZE = 2000;
 
 /** Measured: MDN closes its head at 5.9 KB, YouTube's `og:title` sits at byte
@@ -80,12 +82,44 @@ async function readHead(res: Response, charset: string): Promise<string> {
     bound on a response from somebody else's server. */
 const MAX_JSON_BYTES = 512 * 1024;
 
+/** Cloudflare's "Just a moment..." page, as opposed to a site's own 403. */
+function isChallenge(res: Response): boolean {
+  return res.status === 403 && res.headers.get("cf-mitigated") === "challenge";
+}
+
+const MAX_DRAIN_BYTES = 64 * 1024;
+
+async function drain(res: Response): Promise<void> {
+  const reader = res.body?.getReader();
+  if (!reader) return;
+  try {
+    let bytesRead = 0;
+    while (bytesRead < MAX_DRAIN_BYTES) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      bytesRead += value.length;
+    }
+  } catch {
+    // An abort or a reset mid-body; the retry opens its own connection.
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+}
+
 /** Handed in rather than imported, so a resolver cannot reach the network
     another way. Same host check, abort signal, size cap and JSON refusal. */
 function jsonFetcher(signal: AbortSignal, fetchPage: FetchPreviewDeps["fetchPage"]) {
   return async (target: string): Promise<unknown> => {
-    const fetched = await fetchPage(target, signal, "application/json");
+    let fetched = await fetchPage(target, signal, "application/json");
     if ("blocked" in fetched) return null;
+
+    // From a datacenter address MakerWorld challenges the first API call and
+    // answers the one straight after it. Drained so the retry can reuse the socket.
+    if (isChallenge(fetched.res)) {
+      await drain(fetched.res);
+      fetched = await fetchPage(target, signal, "application/json");
+      if ("blocked" in fetched) return null;
+    }
 
     const { res } = fetched;
     if (!res.ok || !(res.headers.get("content-type") || "").includes("json")) {
@@ -227,6 +261,14 @@ export async function fetchPreview(
 
 type Entry = { data: LinkPreviewData; fetchedAt: number };
 
+function answered(data: LinkPreviewData): boolean {
+  return data.status !== null && data.status >= 200 && data.status < 300;
+}
+
+function freshFor(data: LinkPreviewData): number {
+  return answered(data) ? FRESH_MS : FAILED_FRESH_MS;
+}
+
 export type PreviewLookup =
   | { data: LinkPreviewData; stale: boolean }
   | { refused: true }
@@ -254,7 +296,7 @@ export function createPreviewCache(
 
   async function lookup(url: string, charge: () => boolean): Promise<PreviewLookup> {
     const entry = entries.get(url);
-    if (entry && now() - entry.fetchedAt < FRESH_MS) return { data: entry.data, stale: false };
+    if (entry && now() - entry.fetchedAt < freshFor(entry.data)) return { data: entry.data, stale: false };
 
     let pending = inFlight.get(url);
     if (!pending) {
@@ -272,7 +314,7 @@ export function createPreviewCache(
       return { data: await pending, stale: false };
     } catch (err) {
       const previous = entries.get(url);
-      if (previous && now() - previous.fetchedAt < MAX_AGE_MS) {
+      if (previous && answered(previous.data) && now() - previous.fetchedAt < MAX_AGE_MS) {
         return { data: previous.data, stale: true };
       }
       return { failed: err };
@@ -280,9 +322,9 @@ export function createPreviewCache(
   }
 
   function sweep() {
-    const cutoff = now() - MAX_AGE_MS;
     for (const [key, entry] of entries) {
-      if (entry.fetchedAt < cutoff) entries.delete(key);
+      const keptFor = answered(entry.data) ? MAX_AGE_MS : FAILED_FRESH_MS;
+      if (now() - entry.fetchedAt > keptFor) entries.delete(key);
     }
   }
 
