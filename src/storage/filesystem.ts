@@ -3,6 +3,8 @@ import { copyFile, mkdir, readFile, stat, unlink, writeFile } from "fs/promises"
 import { dirname, join } from "path";
 import { Readable } from "stream";
 
+import { RangeNotSatisfiableError, resolveByteRange } from "../utils/byteRange";
+
 let dataDir: string | null = null;
 
 export function initFilesystem(): void {
@@ -93,19 +95,17 @@ export async function getObject(params: {
   const stats = await stat(filePath);
   const totalSize = stats.size;
 
-  if (params.range) {
-    const match = /^bytes=(\d*)-(\d*)$/.exec(params.range);
-    if (match) {
-      const start = match[1] ? parseInt(match[1], 10) : 0;
-      const end = match[2] ? parseInt(match[2], 10) : totalSize - 1;
-      const stream = createReadStream(filePath, { start, end });
-      return {
-        Body: stream,
-        ContentType: contentType,
-        ContentLength: end - start + 1,
-        ContentRange: `bytes ${start}-${end}/${totalSize}`,
-      };
-    }
+  const range = resolveByteRange(params.range, totalSize);
+  if (range.kind === "unsatisfiable") throw new RangeNotSatisfiableError(totalSize);
+  if (range.kind === "partial") {
+    const { start, end } = range;
+    const stream = createReadStream(filePath, { start, end });
+    return {
+      Body: stream,
+      ContentType: contentType,
+      ContentLength: end - start + 1,
+      ContentRange: `bytes ${start}-${end}/${totalSize}`,
+    };
   }
 
   const stream = createReadStream(filePath);

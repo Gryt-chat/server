@@ -1,4 +1,4 @@
-import { S3Client, S3ServiceException, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, HeadBucketCommand, CreateBucketCommand } from "@aws-sdk/client-s3";
+import { S3Client, S3ServiceException, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, HeadBucketCommand, HeadObjectCommand, CreateBucketCommand } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
 import { NodeHttpHandler } from "@smithy/node-http-handler";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
@@ -6,6 +6,8 @@ import { createReadStream } from "fs";
 import { stat } from "fs/promises";
 import { Agent as HttpAgent } from "http";
 import { Agent as HttpsAgent } from "https";
+
+import { RangeNotSatisfiableError, isSingleByteRange } from "../utils/byteRange";
 
 let s3: S3Client | null = null;
 
@@ -134,10 +136,19 @@ export async function getObjectSignedUrl(params: { bucket: string; key: string; 
   return getSignedUrl(client, cmd, { expiresIn: params.expiresInSeconds ?? 900 });
 } 
 
+/** S3 and MinIO clamp the end themselves, but refuse `bytes=9-3` that the
+    filesystem backend ignores, so only a range both agree on is sent. */
 export async function getObject(params: { bucket: string; key: string; range?: string }) {
   const client = getS3();
-  const cmd = new GetObjectCommand({ Bucket: params.bucket, Key: params.key, Range: params.range });
-  return client.send(cmd);
+  const range = isSingleByteRange(params.range) ? params.range : undefined;
+  try {
+    return await client.send(new GetObjectCommand({ Bucket: params.bucket, Key: params.key, Range: range }));
+  } catch (err) {
+    if (!(err instanceof Error) || err.name !== "InvalidRange") throw err;
+    // MinIO leaves ActualObjectSize off some of these, so ask for the size.
+    const head = await client.send(new HeadObjectCommand({ Bucket: params.bucket, Key: params.key }));
+    throw new RangeNotSatisfiableError(head.ContentLength ?? 0);
+  }
 }
 
 export async function deleteObject(params: { bucket: string; key: string }): Promise<void> {
