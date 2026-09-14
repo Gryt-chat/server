@@ -1,5 +1,6 @@
 import consola from "consola";
 import type { HandlerContext, EventHandlerMap } from "./types";
+import type { Clients } from "../../types";
 import { pluginEvents } from "../../plugins";
 import { syncAllClients, broadcastMemberList, verifyClient } from "../utils/clients";
 import { sendServerDetails } from "../utils/server";
@@ -119,6 +120,27 @@ export function clearInviteIpCooldown(ip: string): void {
 
 export function applyInviteIpFailure(ip: string, now = Date.now()): { locked: boolean; retryAfterMs: number } {
   return applyFailure(perIpCooldowns, ip, IP_INVITE_MAX_RETRIES, now);
+}
+
+// ── Token refresh ────────────────────────────────────────────────────
+
+type MemberFields = Pick<Clients[string], "grytUserId" | "serverUserId" | "nickname" | "isServerMuted" | "isServerDeafened">;
+
+function memberFields(client: Clients[string] | undefined): MemberFields | undefined {
+  if (!client) return undefined;
+  const { grytUserId, serverUserId, nickname, isServerMuted, isServerDeafened } = client;
+  return { grytUserId, serverUserId, nickname, isServerMuted, isServerDeafened };
+}
+
+/** A rotation is not a membership change. Broadcast only for a socket the refresh
+    admits, or a record it actually changed. */
+export function refreshNeedsBroadcast(
+  alreadyVerified: boolean,
+  before: MemberFields | undefined,
+  after: MemberFields | undefined,
+): boolean {
+  if (!alreadyVerified || !before || !after) return true;
+  return (Object.keys(before) as (keyof MemberFields)[]).some((k) => before[k] !== after[k]);
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────
@@ -249,6 +271,7 @@ export function registerJoinHelpers(ctx: HandlerContext): EventHandlerMap {
           // that keeps refreshing never has its pictures stop loading.
           const newFileToken = generateFileToken(refreshedPayload);
 
+          const before = memberFields(clientsInfo[clientId]);
           if (clientsInfo[clientId]) {
             clientsInfo[clientId].accessToken = newAccessToken;
             clientsInfo[clientId].grytUserId = record.gryt_user_id;
@@ -258,9 +281,11 @@ export function registerJoinHelpers(ctx: HandlerContext): EventHandlerMap {
             clientsInfo[clientId].isServerMuted = moderation.isServerMuted;
             clientsInfo[clientId].isServerDeafened = moderation.isServerDeafened;
           }
-          await verifyClient(socket, clientsInfo);
-          syncAllClients(io, clientsInfo);
-          broadcastMemberList(io, clientsInfo, serverId);
+          if (refreshNeedsBroadcast(socket.rooms.has("verifiedClients"), before, memberFields(clientsInfo[clientId]))) {
+            await verifyClient(socket, clientsInfo);
+            syncAllClients(io, clientsInfo);
+            broadcastMemberList(io, clientsInfo, serverId);
+          }
           socket.emit("token:refreshed", { accessToken: newAccessToken, fileToken: newFileToken });
         } else if (payload?.accessToken) {
           const decoded = verifyAccessToken(payload.accessToken);
@@ -310,15 +335,18 @@ export function registerJoinHelpers(ctx: HandlerContext): EventHandlerMap {
           };
           const newToken = generateAccessToken(renewed);
           const newFileToken = generateFileToken(renewed);
+          const before = memberFields(clientsInfo[clientId]);
           if (clientsInfo[clientId]) {
             clientsInfo[clientId].accessToken = newToken;
             clientsInfo[clientId].grytUserId = grytUserId;
             clientsInfo[clientId].serverUserId = serverUserId;
             clientsInfo[clientId].nickname = nickname;
           }
-          await verifyClient(socket, clientsInfo);
-          syncAllClients(io, clientsInfo);
-          broadcastMemberList(io, clientsInfo, serverId);
+          if (refreshNeedsBroadcast(socket.rooms.has("verifiedClients"), before, memberFields(clientsInfo[clientId]))) {
+            await verifyClient(socket, clientsInfo);
+            syncAllClients(io, clientsInfo);
+            broadcastMemberList(io, clientsInfo, serverId);
+          }
           socket.emit("token:refreshed", { accessToken: newToken, fileToken: newFileToken });
         } else {
           socket.emit("token:error", "Invalid refresh payload");
