@@ -1,6 +1,8 @@
 import consola from "consola";
+import { fetch, type Dispatcher } from "undici";
 
 import { checkPreviewUrl, type UrlRejection } from "./previewUrlSafety";
+import { isBlockedAddressError, publicOnlyAgent } from "./publicOnlyAgent";
 
 /**
  * Every redirect hop is checked, not just the first: `redirect: "follow"` will
@@ -14,31 +16,47 @@ export type SafeFetchResult =
   | { res: Response; finalUrl: string }
   | { blocked: true };
 
-/** Injected so the redirect re-check tests without a public host to redirect
-    from. Production always uses the real `checkPreviewUrl`. */
 type UrlCheck = (raw: string) => Promise<{ ok: true } | { ok: false; reason: UrlRejection }>;
+
+/** Injected so tests can use a local server and a resolver that lies. Production always
+    uses the real `checkPreviewUrl` and `publicOnlyAgent`. */
+export interface FetchGuard {
+  check: UrlCheck;
+  dispatcher: Dispatcher;
+}
+
+const realGuard: FetchGuard = { check: checkPreviewUrl, dispatcher: publicOnlyAgent };
 
 export async function fetchFollowingSafely(
   startUrl: string,
   signal: AbortSignal,
   accept: string,
-  check: UrlCheck = checkPreviewUrl,
+  guard: FetchGuard = realGuard,
 ): Promise<SafeFetchResult> {
   let current = startUrl;
 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    const checked = await check(current);
+    const checked = await guard.check(current);
     if (!checked.ok) return { blocked: true };
 
-    const res = await fetch(current, {
-      signal,
-      redirect: "manual",
-      headers: {
-        "User-Agent": USER_AGENT,
-        Accept: accept,
-        "Accept-Language": "en;q=0.9,*;q=0.5",
-      },
-    });
+    let res: Response;
+    try {
+      // undici types the body as ReadableStream<any>. The chunks are Uint8Array, as the DOM type says.
+      res = (await fetch(current, {
+        signal,
+        redirect: "manual",
+        dispatcher: guard.dispatcher,
+        headers: {
+          "User-Agent": USER_AGENT,
+          Accept: accept,
+          "Accept-Language": "en;q=0.9,*;q=0.5",
+        },
+      })) as unknown as Response;
+    } catch (err) {
+      // A name that passed the check can answer differently when the connection asks.
+      if (isBlockedAddressError(err)) return { blocked: true };
+      throw err;
+    }
 
     const location = res.headers.get("location");
     if (res.status >= 300 && res.status < 400 && location) {

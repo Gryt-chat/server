@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+import { after, before, describe, it } from "node:test";
 
 import sharp from "sharp";
 
 import { webhookMessageSchema } from "../routes/webhookSchemas";
-import { fallbackText, resolveWebhookMedia, sniffImageFormat, type FetchOutcome, type MediaDeps } from "./webhookMedia";
+import { fallbackText, realMediaDeps, resolveWebhookMedia, sniffImageFormat, type FetchOutcome, type MediaDeps } from "./webhookMedia";
 
 const png = () => sharp({ create: { width: 8, height: 8, channels: 3, background: { r: 40, g: 120, b: 90 } } }).png().toBuffer();
 
@@ -112,6 +114,34 @@ describe("resolveWebhookMedia", () => {
     assert.ok(Date.now() - started < 2000);
     assert.deepEqual(out.warnings.map((w) => w.code), ["timeout"]);
     assert.equal(out.cards[0].title, "t");
+  });
+});
+
+describe("realMediaDeps.fetchBytes", () => {
+  let server: Server;
+  let port: number;
+  let hits = 0;
+
+  before(async () => {
+    const bytes = await png();
+    server = createServer((_req, res) => {
+      hits++;
+      res.writeHead(200, { "Content-Type": "image/png" });
+      res.end(bytes);
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+    port = (server.address() as AddressInfo).port;
+  });
+
+  after(() => server.close());
+
+  it("refuses a loopback picture in the v4-mapped spelling and never connects", async () => {
+    // Before GRYT-1196 this one was fetched and stored: new URL() writes it as [::ffff:7f00:1].
+    for (const host of ["[::ffff:127.0.0.1]", "127.0.0.1"]) {
+      const outcome = await realMediaDeps.fetchBytes(`http://${host}:${port}/a.png`, AbortSignal.timeout(5000), 1024 * 1024);
+      assert.deepEqual(outcome, { ok: false, code: "blocked" }, host);
+    }
+    assert.equal(hits, 0);
   });
 });
 

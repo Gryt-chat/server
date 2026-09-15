@@ -1,10 +1,11 @@
-import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 
-import { isPrivateIp } from "./isPrivateIp";
+import { isPublicAddress } from "./publicAddress";
+import { systemResolve, type Resolve } from "./publicOnlyAgent";
 
 /**
- * A literal private address is caught by the string pass, a hostname resolving
- * to one only by the DNS pass, and neither closes the gap before the request.
+ * An early refusal the routes can give a reason for. The fetch looks the name up again,
+ * so the part that holds is `publicOnlyAgent`, which checks the address it connects to.
  */
 
 const BLOCKED_HOSTNAMES = new Set([
@@ -22,7 +23,7 @@ const BLOCKED_HOSTNAMES = new Set([
 export type UrlRejection = "invalid_url" | "blocked_host";
 
 function stripBrackets(hostname: string): string {
-  /* WHATWG URL keeps the brackets on an IPv6 host; isPrivateIp wants the
+  /* WHATWG URL keeps the brackets on an IPv6 host; isIP wants the
      address on its own. */
   return hostname.startsWith("[") && hostname.endsWith("]")
     ? hostname.slice(1, -1)
@@ -36,13 +37,15 @@ export function isBlockedPreviewHost(hostname: string): boolean {
   /* `.localhost` is reserved and resolves to the loopback by convention;
      `.internal` is what the cloud providers hand out inside a VPC. */
   if (host.endsWith(".localhost") || host.endsWith(".internal")) return true;
-  return isPrivateIp(stripBrackets(host));
+  const bare = stripBrackets(host);
+  return isIP(bare) !== 0 && !isPublicAddress(bare);
 }
 
 /** DNS failure is a refusal: a name that will not resolve was never going to
     produce a preview, so failing closed costs nothing. */
 export async function checkPreviewUrl(
   raw: string,
+  resolve: Resolve = systemResolve,
 ): Promise<{ ok: true; url: URL } | { ok: false; reason: UrlRejection }> {
   let parsed: URL;
   try {
@@ -60,23 +63,17 @@ export async function checkPreviewUrl(
 
   /* A literal address has already been checked above and has nothing to look
      up, so asking DNS about it would only be a way to fail. */
-  const bare = stripBrackets(parsed.hostname);
-  if (isLiteralAddress(bare)) return { ok: true, url: parsed };
+  if (isIP(stripBrackets(parsed.hostname)) !== 0) return { ok: true, url: parsed };
 
   try {
-    const addresses = await lookup(parsed.hostname, { all: true });
+    const addresses = await resolve(parsed.hostname, {});
     if (addresses.length === 0) return { ok: false, reason: "blocked_host" };
     for (const { address } of addresses) {
-      if (isPrivateIp(address)) return { ok: false, reason: "blocked_host" };
+      if (!isPublicAddress(address)) return { ok: false, reason: "blocked_host" };
     }
   } catch {
     return { ok: false, reason: "blocked_host" };
   }
 
   return { ok: true, url: parsed };
-}
-
-function isLiteralAddress(host: string): boolean {
-  if (host.includes(":")) return true;
-  return /^\d{1,3}(\.\d{1,3}){3}$/.test(host);
 }
