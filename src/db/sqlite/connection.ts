@@ -785,6 +785,28 @@ function runMigrations(d: DatabaseSync): void {
     d.exec("ALTER TABLE threads ADD COLUMN tags TEXT");
   }
 
+  // Webhook cards, and the name and picture a webhook posted under. Both used to live
+  // only in the live broadcast, so a reload showed the webhook's current ones. GRYT-1186.
+  if (!hasColumn(d, "messages", "cards")) {
+    d.exec("ALTER TABLE messages ADD COLUMN cards TEXT");
+  }
+  if (!hasColumn(d, "messages", "text_fallback")) {
+    d.exec("ALTER TABLE messages ADD COLUMN text_fallback INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!hasColumn(d, "messages", "sender_display_name")) {
+    d.exec("ALTER TABLE messages ADD COLUMN sender_display_name TEXT");
+  }
+  if (!hasColumn(d, "messages", "sender_avatar_file_id")) {
+    d.exec("ALTER TABLE messages ADD COLUMN sender_avatar_file_id TEXT");
+  }
+  // One stored file per picture a webhook sends, however often it sends it.
+  d.exec(`CREATE TABLE IF NOT EXISTS webhook_media (
+    webhook_id TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    file_id TEXT NOT NULL,
+    PRIMARY KEY (webhook_id, sha256)
+  )`);
+
   migrateFileOwnership(d);
 
   d.prepare("UPDATE server_config SET avatar_thumb_px = ?").run(AVATAR_THUMB_PX);

@@ -14,9 +14,20 @@ import { requireBearerToken } from "../middleware/requireBearerToken";
 import { ensurePermission } from "../middleware/requirePermission";
 import { visibleChannelIds } from "../services/channelPermissions";
 import { fileReadVerdict } from "../services/fileAccess";
+import { resolveWebhookMedia, fallbackText, realMediaDeps, type MediaDeps } from "../services/webhookMedia";
 import { broadcastChatNew } from "../socket";
+import { appendCachedMessage } from "../socket/utils/messageCache";
+import { MESSAGE_TOO_LONG } from "../utils/messageLimits";
 import { checkRateLimit, type RateLimitRule } from "../utils/rateLimiter";
-import { MESSAGE_MAX_LENGTH, MESSAGE_TOO_LONG } from "../utils/messageLimits";
+import {
+  WEBHOOK_LIMITS,
+  problemsFrom,
+  unknownKeys,
+  webhookCreateSchema,
+  webhookMessageSchema,
+  webhookUpdateSchema,
+} from "./webhookSchemas";
+import type { z } from "zod";
 
 const RL_WEBHOOK_SEND: RateLimitRule = {
   limit: 30,
@@ -29,11 +40,40 @@ const RL_WEBHOOK_SEND: RateLimitRule = {
 
 export const webhooksRouter = express.Router();
 
+/** Swapped in tests, which can't reach a public host. */
+let mediaDeps: MediaDeps = realMediaDeps;
+export function setWebhookMediaDepsForTests(deps: MediaDeps | null): void {
+  mediaDeps = deps ?? realMediaDeps;
+}
+
+function invalidPayload(res: Response, error: z.ZodError): void {
+  const problems = problemsFrom(error);
+  // The two refusals a text-only payload could get before cards keep their old shape.
+  if (problems.length === 1 && problems[0].code === "empty_message") {
+    res.status(400).json({ error: "empty_message", message: "Send text, cards or both." });
+    return;
+  }
+  if (problems.length === 1 && problems[0].path === "text" && problems[0].code === "too_long") {
+    res.status(400).json(MESSAGE_TOO_LONG);
+    return;
+  }
+  res.status(400).json({
+    error: "invalid_payload",
+    message: problems.length === 1 ? "The payload has 1 problem." : `The payload has ${problems.length} problems.`,
+    problems,
+  });
+}
+
+function displayNameFrom(raw: string | undefined): string | undefined {
+  const trimmed = raw?.trim();
+  return trimmed ? trimmed.slice(0, WEBHOOK_LIMITS.displayName) : undefined;
+}
+
 // ── Public: incoming webhook message ─────────────────────────────
 // POST /api/webhooks/:webhookId/:token
 webhooksRouter.post(
   "/:webhookId/:token",
-  express.json(),
+  express.json({ limit: "256kb" }),
   (req: Request, res: Response, next: NextFunction): void => {
     const { webhookId, token } = req.params as { webhookId: string; token: string };
     Promise.resolve()
@@ -55,44 +95,47 @@ webhooksRouter.post(
           return;
         }
 
-        const body = req.body as Record<string, unknown> | undefined;
-        const text = typeof body?.text === "string" ? body.text.trim() : "";
-        if (!text) {
-          res.status(400).json({ error: "empty_message", message: "Message text is required." });
+        // Everything is checked before anything is fetched.
+        const parsed = webhookMessageSchema.safeParse(req.body ?? {}, { reportInput: true });
+        if (!parsed.success) {
+          invalidPayload(res, parsed.error);
           return;
         }
-        if (text.length > MESSAGE_MAX_LENGTH) {
-          res.status(400).json(MESSAGE_TOO_LONG);
-          return;
-        }
+        const body = parsed.data;
 
-        const displayName = typeof body?.display_name === "string" && body.display_name.trim()
-          ? body.display_name.trim().slice(0, 64)
-          : webhook.display_name;
-
-        const senderServerId = `webhook:${webhook.webhook_id}`;
+        const media = await resolveWebhookMedia(webhook.webhook_id, body, mediaDeps);
+        const text = body.text ?? "";
+        const cards = media.cards;
+        const usesFallback = !text && cards.length > 0;
+        const displayName = displayNameFrom(body.display_name);
 
         const created = await insertMessage({
           conversation_id: webhook.channel_id,
-          sender_server_id: senderServerId,
-          text,
+          sender_server_id: `webhook:${webhook.webhook_id}`,
+          text: usesFallback ? fallbackText(cards) : text,
           attachments: null,
           reactions: null,
           reply_to_message_id: null,
+          cards: cards.length > 0 ? cards : null,
+          text_fallback: usesFallback,
+          sender_display_name: displayName ?? null,
+          sender_avatar_file_id: media.avatarFileId,
+          media_file_ids: media.mediaFileIds,
         });
 
-        const enriched = {
+        // The same record history reads back, so a reload shows what the live message showed.
+        const stored = {
           ...created,
-          created_at: created.created_at.toISOString(),
-          sender_nickname: displayName,
-          sender_avatar_file_id: webhook.avatar_file_id ?? undefined,
+          sender_nickname: displayName ?? webhook.display_name,
+          sender_avatar_file_id: media.avatarFileId ?? webhook.avatar_file_id ?? undefined,
         };
-
-        broadcastChatNew(enriched);
+        appendCachedMessage(created.conversation_id, stored);
+        broadcastChatNew({ ...stored, created_at: created.created_at.toISOString() });
 
         res.status(200).json({
           message_id: created.message_id,
           conversation_id: created.conversation_id,
+          warnings: [...unknownKeys(req.body), ...media.warnings],
         });
       })
       .catch(next);
@@ -146,12 +189,11 @@ webhooksRouter.post(
     Promise.resolve()
       .then(async () => {
         if (!await requireAdmin(req, res)) return;
-        const body = req.body as Record<string, unknown> | undefined;
-        const channelId = typeof body?.channel_id === "string" ? body.channel_id.trim() : "";
-        const displayName = typeof body?.display_name === "string" && body.display_name.trim()
-          ? body.display_name.trim().slice(0, 64)
-          : "Webhook";
-        const avatarFileId = typeof body?.avatar_file_id === "string" ? body.avatar_file_id : null;
+        const parsed = webhookCreateSchema.safeParse(req.body ?? {}, { reportInput: true });
+        if (!parsed.success) { invalidPayload(res, parsed.error); return; }
+        const channelId = parsed.data.channel_id;
+        const displayName = displayNameFrom(parsed.data.display_name) ?? "Webhook";
+        const avatarFileId = parsed.data.avatar_file_id ?? null;
         if (!(await mayUseAvatar(req, avatarFileId))) { res.status(404).json({ error: "file_not_found" }); return; }
 
         const serverUserId = req.tokenPayload!.serverUserId;
@@ -201,12 +243,12 @@ webhooksRouter.patch(
     Promise.resolve()
       .then(async () => {
         if (!await requireAdmin(req, res)) return;
-        const body = req.body as Record<string, unknown> | undefined;
+        const parsed = webhookUpdateSchema.safeParse(req.body ?? {}, { reportInput: true });
+        if (!parsed.success) { invalidPayload(res, parsed.error); return; }
         const updates: { display_name?: string; channel_id?: string; avatar_file_id?: string | null } = {};
-        if (typeof body?.display_name === "string") updates.display_name = body.display_name.trim().slice(0, 64);
-        if (typeof body?.channel_id === "string") updates.channel_id = body.channel_id;
-        if (body?.avatar_file_id === null) updates.avatar_file_id = null;
-        else if (typeof body?.avatar_file_id === "string") updates.avatar_file_id = body.avatar_file_id;
+        if (parsed.data.display_name !== undefined) updates.display_name = parsed.data.display_name.trim().slice(0, WEBHOOK_LIMITS.displayName);
+        if (parsed.data.channel_id !== undefined) updates.channel_id = parsed.data.channel_id;
+        if (parsed.data.avatar_file_id !== undefined) updates.avatar_file_id = parsed.data.avatar_file_id;
         if (!(await mayUseAvatar(req, updates.avatar_file_id ?? null))) { res.status(404).json({ error: "file_not_found" }); return; }
 
         const updated = await updateWebhook(webhookId, updates);

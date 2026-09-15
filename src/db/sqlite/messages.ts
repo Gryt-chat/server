@@ -16,16 +16,23 @@ function rowToMessage(r: Record<string, unknown>): MessageRecord {
     reactions: r.reactions ? JSON.parse(r.reactions as string) : null,
     reply_to_message_id: (r.reply_to_message_id as string) ?? null,
     thread_id: (r.thread_id as string) ?? null,
+    // Only set when there is something, so a normal message's shape is unchanged.
+    ...(r.cards ? { cards: JSON.parse(r.cards as string) } : {}),
+    ...(r.text_fallback ? { text_fallback: true } : {}),
+    ...(r.sender_display_name ? { sender_display_name: r.sender_display_name as string } : {}),
+    ...(r.sender_avatar_file_id ? { sender_avatar_file_id: r.sender_avatar_file_id as string } : {}),
   };
 }
 
-export async function insertMessage(record: Omit<MessageRecord, "message_id" | "created_at"> & { created_at?: Date; message_id?: string }): Promise<MessageRecord> {
+/** `media_file_ids` are files the message shows without listing them as attachments, like a
+    card's pictures. They get the same reference, so reads and the sweep treat them the same. */
+export async function insertMessage(record: Omit<MessageRecord, "message_id" | "created_at"> & { created_at?: Date; message_id?: string; media_file_ids?: string[] }): Promise<MessageRecord> {
   const db = getSqliteDb();
   const created_at = record.created_at ?? new Date();
   const message_id = record.message_id ?? randomUUID();
 
   db.prepare(
-    `INSERT INTO messages (conversation_id, message_id, sender_server_id, text, sealed, attachments, reactions, reply_to_message_id, thread_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO messages (conversation_id, message_id, sender_server_id, text, sealed, attachments, reactions, reply_to_message_id, thread_id, cards, text_fallback, sender_display_name, sender_avatar_file_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     record.conversation_id,
     message_id,
@@ -36,17 +43,24 @@ export async function insertMessage(record: Omit<MessageRecord, "message_id" | "
     record.reactions ? JSON.stringify(record.reactions) : null,
     record.reply_to_message_id ?? null,
     record.thread_id ?? null,
+    record.cards && record.cards.length > 0 ? JSON.stringify(record.cards) : null,
+    record.text_fallback ? 1 : 0,
+    record.sender_display_name ?? null,
+    record.sender_avatar_file_id ?? null,
     toIso(created_at),
   );
 
-  if (record.attachments && record.attachments.length > 0) {
+  const referenced = [...(record.attachments ?? []), ...(record.media_file_ids ?? [])];
+  if (referenced.length > 0) {
     const ref = db.prepare(
       `INSERT OR IGNORE INTO message_attachments (file_id, conversation_id, message_id) VALUES (?, ?, ?)`,
     );
-    for (const fileId of record.attachments) ref.run(fileId, record.conversation_id, message_id);
+    for (const fileId of referenced) ref.run(fileId, record.conversation_id, message_id);
   }
 
-  return { ...record, created_at, message_id } as MessageRecord;
+  const stored: typeof record = { ...record };
+  delete stored.media_file_ids;
+  return { ...stored, created_at, message_id } as MessageRecord;
 }
 
 export async function listMessages(conversationId: string, limit = 50, before?: Date): Promise<MessageRecord[]> {
@@ -185,7 +199,16 @@ export async function getAllReferencedAttachmentIds(): Promise<Set<string>> {
     const attachments: string[] = JSON.parse(row.attachments);
     for (const id of attachments) ids.add(id);
   }
+  // A card's pictures and a webhook's per-message avatar are only in the reference table.
+  const refs = db.prepare(`SELECT DISTINCT file_id FROM message_attachments`).all() as { file_id: string }[];
+  for (const row of refs) ids.add(row.file_id);
   return ids;
+}
+
+/** Whether any message still points at a file, as an attachment or as something it shows. */
+export async function isFileReferencedByMessage(fileId: string): Promise<boolean> {
+  const db = getSqliteDb();
+  return Boolean(db.prepare(`SELECT 1 FROM message_attachments WHERE file_id = ? LIMIT 1`).get(fileId));
 }
 
 /** Everything that can make a file readable, in one indexed read. Null when

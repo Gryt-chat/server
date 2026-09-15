@@ -98,6 +98,24 @@ export async function updateWebhook(
   return getWebhookById(webhookId);
 }
 
+/** A picture this webhook already sent, by the SHA-256 of its bytes. The file may have been
+    swept since, so the caller checks it still exists. */
+export async function getWebhookMediaFileId(webhookId: string, sha256: string): Promise<string | null> {
+  const db = getSqliteDb();
+  const row = db.prepare(
+    `SELECT file_id FROM webhook_media WHERE webhook_id = ? AND sha256 = ?`,
+  ).get(webhookId, sha256) as { file_id: string } | undefined;
+  return row?.file_id ?? null;
+}
+
+export async function setWebhookMediaFileId(webhookId: string, sha256: string, fileId: string): Promise<void> {
+  const db = getSqliteDb();
+  db.prepare(
+    `INSERT INTO webhook_media (webhook_id, sha256, file_id) VALUES (?, ?, ?)
+     ON CONFLICT (webhook_id, sha256) DO UPDATE SET file_id = excluded.file_id`,
+  ).run(webhookId, sha256, fileId);
+}
+
 /** For the media sweep, which would otherwise delete a webhook's avatar. */
 export async function getAllWebhookAvatarFileIds(): Promise<Set<string>> {
   const db = getSqliteDb();
@@ -110,5 +128,6 @@ export async function getAllWebhookAvatarFileIds(): Promise<Set<string>> {
 export async function deleteWebhook(webhookId: string): Promise<boolean> {
   const db = getSqliteDb();
   const result = db.prepare(`DELETE FROM webhooks WHERE webhook_id = ?`).run(webhookId);
+  db.prepare(`DELETE FROM webhook_media WHERE webhook_id = ?`).run(webhookId);
   return result.changes > 0;
 }
