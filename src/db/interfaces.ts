@@ -140,6 +140,27 @@ export interface MessageRecord {
   sender_is_bot?: boolean;
   profanity_matches?: { startIndex: number; endIndex: number }[];
   enriched_attachments?: EnrichedAttachment[];
+  /** Only a webhook posts these. Their pictures are files on this server, never remote URLs. */
+  cards?: StoredWebhookCard[] | null;
+  /** `text` is a summary the server wrote for clients that can't draw cards. */
+  text_fallback?: boolean;
+  /** What a webhook posted under. Enrichment turns it into sender_nickname. */
+  sender_display_name?: string | null;
+}
+
+export interface StoredWebhookCard {
+  title?: string;
+  url?: string;
+  description?: string;
+  /** `#rrggbb`. */
+  color?: string;
+  author?: { name: string; url?: string; icon_file_id?: string };
+  fields?: { name: string; value: string; inline: boolean }[];
+  image_file_id?: string;
+  thumbnail_file_id?: string;
+  footer?: { text: string; icon_file_id?: string };
+  /** ISO 8601. */
+  timestamp?: string;
 }
 
 export interface EnrichedAttachment {

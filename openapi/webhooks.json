@@ -1,0 +1,775 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Gryt webhooks",
+    "version": "1",
+    "description": "Post messages into a Gryt channel from anywhere that can send an HTTP request, and manage the webhooks that do it. Every path is relative to your Gryt server.",
+    "license": {
+      "name": "AGPL-3.0-or-later",
+      "identifier": "AGPL-3.0-or-later"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://{server}",
+      "variables": {
+        "server": {
+          "default": "gryt.example.com",
+          "description": "Your Gryt server's address."
+        }
+      }
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "A member's access token. Needs the manage_webhooks permission."
+      }
+    },
+    "schemas": {
+      "WebhookMessage": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "description": "Markdown. Required unless there are cards. The only part of a message whose mentions notify.",
+            "type": "string",
+            "maxLength": 4000
+          },
+          "display_name": {
+            "description": "Posts under this name instead of the webhook's. Cut to 64 characters.",
+            "type": "string"
+          },
+          "avatar_url": {
+            "description": "Posts with this picture instead of the webhook's. Fetched once and stored, same as card images.",
+            "type": "string",
+            "maxLength": 2048,
+            "format": "uri"
+          },
+          "cards": {
+            "maxItems": 10,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "description": "Plain text.",
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "url": {
+                  "description": "Makes the title a link.",
+                  "type": "string",
+                  "maxLength": 2048,
+                  "format": "uri"
+                },
+                "description": {
+                  "description": "Markdown. Mentions don't notify anyone.",
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4000
+                },
+                "color": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^#[0-9a-fA-F]{6}$"
+                    },
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 16777215
+                    }
+                  ],
+                  "description": "The card's colour, as `#rrggbb` or an integer from 0 to 16777215."
+                },
+                "author": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256,
+                      "description": "Plain text."
+                    },
+                    "url": {
+                      "type": "string",
+                      "maxLength": 2048,
+                      "format": "uri",
+                      "description": "An http or https URL."
+                    },
+                    "icon_url": {
+                      "type": "string",
+                      "maxLength": 2048,
+                      "format": "uri",
+                      "description": "An http or https URL to a PNG, JPEG, WebP or GIF. The server fetches it once, when the message is posted, and stores a copy. Private and local addresses are refused."
+                    }
+                  },
+                  "required": [
+                    "name"
+                  ]
+                },
+                "fields": {
+                  "maxItems": 25,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 256,
+                        "description": "Plain text."
+                      },
+                      "value": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1024,
+                        "description": "Markdown."
+                      },
+                      "inline": {
+                        "default": false,
+                        "description": "Inline fields share a row.",
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "value"
+                    ]
+                  }
+                },
+                "image_url": {
+                  "type": "string",
+                  "maxLength": 2048,
+                  "format": "uri",
+                  "description": "An http or https URL to a PNG, JPEG, WebP or GIF. The server fetches it once, when the message is posted, and stores a copy. Private and local addresses are refused."
+                },
+                "thumbnail_url": {
+                  "type": "string",
+                  "maxLength": 2048,
+                  "format": "uri",
+                  "description": "An http or https URL to a PNG, JPEG, WebP or GIF. The server fetches it once, when the message is posted, and stores a copy. Private and local addresses are refused."
+                },
+                "footer": {
+                  "type": "object",
+                  "properties": {
+                    "text": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2048,
+                      "description": "Plain text."
+                    },
+                    "icon_url": {
+                      "type": "string",
+                      "maxLength": 2048,
+                      "format": "uri",
+                      "description": "An http or https URL to a PNG, JPEG, WebP or GIF. The server fetches it once, when the message is posted, and stores a copy. Private and local addresses are refused."
+                    }
+                  },
+                  "required": [
+                    "text"
+                  ]
+                },
+                "timestamp": {
+                  "description": "ISO 8601, with a time zone.",
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                }
+              }
+            }
+          }
+        }
+      },
+      "WebhookCreate": {
+        "type": "object",
+        "properties": {
+          "channel_id": {
+            "default": "",
+            "description": "The channel the webhook posts to.",
+            "type": "string"
+          },
+          "display_name": {
+            "description": "Cut to 64 characters. Defaults to \"Webhook\".",
+            "type": "string"
+          },
+          "avatar_file_id": {
+            "description": "An uploaded file you can read.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "WebhookUpdate": {
+        "type": "object",
+        "properties": {
+          "channel_id": {
+            "type": "string"
+          },
+          "display_name": {
+            "description": "Cut to 64 characters.",
+            "type": "string"
+          },
+          "avatar_file_id": {
+            "description": "An uploaded file you can read, or null to remove it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "WebhookMessageSent": {
+        "type": "object",
+        "properties": {
+          "message_id": {
+            "type": "string"
+          },
+          "conversation_id": {
+            "type": "string"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "code": {
+                  "type": "string",
+                  "enum": [
+                    "unknown_key",
+                    "blocked",
+                    "fetch_failed",
+                    "too_large",
+                    "timeout",
+                    "unsupported_type",
+                    "invalid_image",
+                    "media_budget",
+                    "store_failed"
+                  ],
+                  "description": "`unknown_key` is a key that was ignored. Every other code is a picture that was left out."
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "code",
+                "message"
+              ]
+            }
+          }
+        },
+        "required": [
+          "message_id",
+          "conversation_id",
+          "warnings"
+        ]
+      },
+      "InvalidPayload": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "const": "invalid_payload"
+          },
+          "message": {
+            "type": "string"
+          },
+          "problems": {
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "description": "Where in the payload, like `cards[0].fields[3].value`."
+                },
+                "code": {
+                  "type": "string",
+                  "enum": [
+                    "required",
+                    "wrong_type",
+                    "too_long",
+                    "too_many",
+                    "invalid_url",
+                    "invalid_color",
+                    "invalid_timestamp",
+                    "empty_card",
+                    "total_too_long",
+                    "invalid_format",
+                    "invalid"
+                  ]
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "code",
+                "message"
+              ]
+            }
+          }
+        },
+        "required": [
+          "error",
+          "message",
+          "problems"
+        ]
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "Webhook": {
+        "type": "object",
+        "properties": {
+          "webhook_id": {
+            "type": "string"
+          },
+          "channel_id": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "avatar_file_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "token": {
+            "type": "string"
+          },
+          "created_by_server_user_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "webhook_id",
+          "channel_id",
+          "display_name",
+          "avatar_file_id",
+          "token",
+          "created_by_server_user_id",
+          "created_at",
+          "updated_at"
+        ]
+      }
+    }
+  },
+  "paths": {
+    "/api/webhooks/{webhookId}/{token}": {
+      "post": {
+        "operationId": "executeWebhook",
+        "summary": "Post a message",
+        "security": [],
+        "description": "Posts text, cards or both into the webhook's channel. Pictures are downloaded by the server before it answers, so the call can take a few seconds. A picture that fails is left out and listed under `warnings`, and the message still posts. Limited to 30 messages a minute per webhook.",
+        "parameters": [
+          {
+            "name": "webhookId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookMessage"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Posted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookMessageSent"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The payload was refused, or the webhook has no channel. Nothing was posted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/InvalidPayload"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No webhook with that id and token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The body is over 256 KB.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many messages. Try again after `retry_after_ms`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "const": "rate_limited"
+                    },
+                    "retry_after_ms": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/webhooks": {
+      "get": {
+        "operationId": "listWebhooks",
+        "summary": "List webhooks",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The webhooks in channels you can see.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Webhook"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No manage_webhooks permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createWebhook",
+        "summary": "Create a webhook",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created. `url` is what to post to.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Webhook"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "url": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body was refused.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidPayload"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No manage_webhooks permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The avatar file doesn't exist or you can't read it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/webhooks/{webhookId}": {
+      "get": {
+        "operationId": "getWebhook",
+        "summary": "Get a webhook",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "webhookId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The webhook.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Webhook"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "url": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such webhook.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateWebhook",
+        "summary": "Update a webhook",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "webhookId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Webhook"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body was refused.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidPayload"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such webhook, or an avatar file you can't read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteWebhook",
+        "summary": "Delete a webhook",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "webhookId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such webhook.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

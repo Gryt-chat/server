@@ -40,12 +40,9 @@ test("every way to put text in a message checks the cap", () => {
   );
 });
 
-test("the webhook route uses the shared constant rather than its own copy", () => {
-  const webhooks = src("routes/webhooks.ts");
-  assert.match(webhooks, /text\.length > MESSAGE_MAX_LENGTH/);
-  assert.doesNotMatch(
-    webhooks,
-    /text\.length > 4000/,
-    "the inline 4000 should be gone — two copies is how they drift",
-  );
+test("the webhook schema uses the shared constant rather than its own copy", () => {
+  const schema = src("routes/webhookSchemas.ts");
+  assert.match(schema, /text: z\s*\.string\(\)\s*\.trim\(\)\s*\.max\(MESSAGE_MAX_LENGTH\)/);
+  assert.doesNotMatch(schema, /max\(4000\)/, "an inline 4000 is how the two drift");
+  assert.match(src("routes/webhooks.ts"), /res\.status\(400\)\.json\(MESSAGE_TOO_LONG\)/);
 });

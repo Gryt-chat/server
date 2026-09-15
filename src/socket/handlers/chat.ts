@@ -142,7 +142,7 @@ async function enrichMessages(messages: MessageRecord[]): Promise<MessageRecord[
       const wh = webhookMap.get(whId);
       return {
         ...m,
-        sender_nickname: m.sender_nickname ?? wh?.display_name ?? "Webhook",
+        sender_nickname: m.sender_display_name ?? m.sender_nickname ?? wh?.display_name ?? "Webhook",
         sender_avatar_file_id: m.sender_avatar_file_id ?? wh?.avatar_file_id ?? undefined,
       };
     }
