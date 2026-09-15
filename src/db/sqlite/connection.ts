@@ -4,6 +4,7 @@ import { dirname, join } from "path";
 
 import { AVATAR_THUMB_PX } from "../../constants/media";
 import { migrateRankGatesToScopes } from "./rankGateMigration";
+import { reissueAccessTokensAfterLeak } from "./tokenReissueMigration";
 import {
   backfillFor,
   BUILT_IN_ROLES,
@@ -821,6 +822,10 @@ function runMigrations(d: DatabaseSync): void {
   // After the roles, whose ranks it reads, and before anything serves a request,
   // or a gated channel is open to everybody in between.
   migrateRankGatesToScopes(d);
+
+  // Last, and only on an existing server: retires access tokens minted before
+  // the GRYT-1239 fix, since one that leaked cannot be recalled.
+  reissueAccessTokensAfterLeak(d);
 }
 
 /**
