@@ -438,7 +438,7 @@
             }
           },
           "400": {
-            "description": "The payload was refused, or the webhook has no channel. Nothing was posted.",
+            "description": "The body isn't valid JSON (`invalid_json`), the payload was refused, or the webhook has no channel. Nothing was posted.",
             "content": {
               "application/json": {
                 "schema": {
@@ -465,7 +465,7 @@
             }
           },
           "413": {
-            "description": "The body is over 256 KB.",
+            "description": "The body is over 256 KB (`body_too_large`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -577,11 +577,18 @@
             }
           },
           "400": {
-            "description": "The body was refused.",
+            "description": "The body was refused, or isn't valid JSON (`invalid_json`).",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/InvalidPayload"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/InvalidPayload"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    }
+                  ]
                 }
               }
             }
@@ -703,11 +710,18 @@
             }
           },
           "400": {
-            "description": "The body was refused.",
+            "description": "The body was refused, or isn't valid JSON (`invalid_json`).",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/InvalidPayload"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/InvalidPayload"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    }
+                  ]
                 }
               }
             }
