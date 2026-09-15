@@ -98,6 +98,15 @@ export async function updateWebhook(
   return getWebhookById(webhookId);
 }
 
+/** For the media sweep, which would otherwise delete a webhook's avatar. */
+export async function getAllWebhookAvatarFileIds(): Promise<Set<string>> {
+  const db = getSqliteDb();
+  const rows = db.prepare(
+    `SELECT avatar_file_id FROM webhooks WHERE avatar_file_id IS NOT NULL`,
+  ).all() as { avatar_file_id: string }[];
+  return new Set(rows.map((r) => r.avatar_file_id));
+}
+
 export async function deleteWebhook(webhookId: string): Promise<boolean> {
   const db = getSqliteDb();
   const result = db.prepare(`DELETE FROM webhooks WHERE webhook_id = ?`).run(webhookId);
