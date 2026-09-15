@@ -1,7 +1,9 @@
 import consola from "consola";
 import type { HandlerContext, EventHandlerMap } from "./types";
 import { applyInviteRole } from "../../services/inviteRoles";
-import { syncAllClients, broadcastMemberList, countOtherSessions, verifyClient } from "../utils/clients";
+import { syncAllClients, broadcastMemberList, countOtherSessions, unverifyClient, verifyClient } from "../utils/clients";
+import { resetMessageCache } from "../utils/messageCache";
+import { broadcastConversation } from "./dm";
 import { sendServerDetails } from "../utils/server";
 import { remindOutdatedWindowsClient } from "../utils/outdatedClient";
 import { postSystemMessage, formatJoinMessage } from "../utils/systemMessages";
@@ -19,6 +21,9 @@ import {
   claimServerOwner,
   getUserByGrytId,
   carryIdentityForward,
+  type CarryIdentityResult,
+  type GuestMerge,
+  listConversationMemberIds,
   upsertUser,
   consumeServerInvite,
   listMemberRoles,
@@ -178,6 +183,45 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
   const { io, socket, clientId, serverId, clientsInfo, getClientIp, clientAddressIsOwn } = ctx;
 
   const helpers = registerJoinHelpers(ctx);
+
+  /** Back to an unidentified connection, which receives no member broadcasts. */
+  function forgetIdentity(sid: string): void {
+    const ci = clientsInfo[sid];
+    if (!ci) return;
+    ci.serverUserId = `temp_${sid}`;
+    ci.grytUserId = undefined;
+    ci.accessToken = undefined;
+    ci.permissions = undefined;
+    const s = io.sockets.sockets.get(sid);
+    if (s) unverifyClient(s);
+  }
+
+  /** Another tab still connected as the guest. No message, so it refreshes or
+      rejoins quietly as whoever this device is now. */
+  function forgetGuestSockets(guestServerUserId: string): void {
+    for (const [sid, ci] of Object.entries(clientsInfo)) {
+      if (sid === clientId || ci.serverUserId !== guestServerUserId) continue;
+      forgetIdentity(sid);
+      io.sockets.sockets.get(sid)?.emit("token:revoked", { reason: "identity_merged" });
+    }
+  }
+
+  /** Clients hold the guest's id on messages, reactions and conversation rows, so
+      they are told the id changed rather than sent all of it again. */
+  async function announceMerge(merge: GuestMerge): Promise<void> {
+    io.to("verifiedClients").emit("chat:merge_user", {
+      from_server_user_id: merge.guestServerUserId,
+      to_server_user_id: merge.accountServerUserId,
+    });
+    for (const conversationId of merge.conversationIds) {
+      try {
+        const memberIds = await listConversationMemberIds(conversationId);
+        await broadcastConversation(io, clientsInfo, conversationId, memberIds);
+      } catch (e) {
+        consola.warn(`Sending ${conversationId} after a merge failed:`, e);
+      }
+    }
+  }
 
   return {
     ...helpers,
@@ -348,6 +392,11 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
+        // A socket proving somebody else stops being who it was, even if the new
+        // identity is refused below. Otherwise it goes on receiving as the old one.
+        const previous = clientsInfo[clientId]?.grytUserId;
+        if (previous && previous !== grytUserId) forgetIdentity(clientId);
+
         // Says exactly what is wrong, since the accepted tiers are already in
         // `server:info`. Bots come from the registry, not GRYT_IDENTITY_TIERS.
         let botRegistration: Awaited<ReturnType<typeof getBotById>> = null;
@@ -425,24 +474,30 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
 
         // Before anything reads it, so the join continues as the member they
         // already were, with their roles and what they owned.
+        let identityClaim: CarryIdentityResult["status"] | "failed" | undefined;
+        let merge: GuestMerge | undefined;
         if (priorSub) {
           try {
             const carry = await carryIdentityForward(priorSub, grytUserId);
+            identityClaim = carry.status;
             if (carry.status === "carried") {
               consola.info(`Linked ${priorSub} to ${grytUserId} on join`);
-              // `cfg` was read before the carry-over, which can change who owns
-              // the server. Stale, it sends `isOwner: false` to the owner.
-              cfg = await getServerConfig().catch(() => cfg);
-            } else if (carry.status === "account_already_member") {
-              // Both identities are already members, so nothing moves. This
-              // line is what answers "where did my roles go" afterwards.
+            } else if (carry.status === "merged") {
+              merge = carry.merge;
               consola.info(
-                `Not linking ${priorSub} to ${grytUserId}: both are members here, so the guest membership was left as it is`,
+                `Merged ${priorSub} into ${grytUserId}: ${merge.guestServerUserId} is now ${merge.accountServerUserId}` +
+                  (merge.ownerMoved ? ", and ownership moved with it" : ""),
               );
+              resetMessageCache();
+              forgetGuestSockets(merge.guestServerUserId);
             }
+            // `cfg` was read before the carry-over, which can change who owns
+            // the server. Stale, it sends `isOwner: false` to the owner.
+            if (carry.status !== "no_prior_membership") cfg = await getServerConfig().catch(() => cfg);
           } catch (e) {
             // Not fatal. The join is still legitimate on its own terms, and a
             // failed carry-over leaves them a new member rather than shut out.
+            identityClaim = "failed";
             consola.warn("Identity carry-over failed:", e);
           }
         }
@@ -675,6 +730,8 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           avatarWorn: user.avatar_worn ?? null,
           isOwner,
           setupRequired,
+          // Only when a link was presented, so a client knows what its yes did.
+          ...(identityClaim ? { identityClaim } : {}),
         });
 
         if (setupRequired) {
@@ -696,6 +753,7 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
         }
         syncAllClients(io, clientsInfo);
         broadcastMemberList(io, clientsInfo, serverId);
+        if (merge) await announceMerge(merge);
         if (!isActiveMember) {
           postSystemMessage(io, clientsInfo, formatJoinMessage(user.nickname, user.server_user_id));
         }

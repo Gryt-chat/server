@@ -65,29 +65,31 @@ describe("carrying an identity forward", () => {
     });
   });
 
-  it("refuses to merge when the account is already a member", async () => {
-    // Two rows would have to become one, and there is no right way to
-    // reconcile two sets of roles and two histories. Both are left alone.
+  it("merges into the account when the account is already a member", async () => {
     const local = await upsertUser("key:bbb", "Local");
     const account = await upsertUser("account-3", "Account");
 
-    assert.deepEqual(await carryIdentityForward("key:bbb", "account-3"), {
-      status: "account_already_member",
-    });
+    const result = await carryIdentityForward("key:bbb", "account-3");
 
-    assert.equal((await getUserByGrytId("key:bbb"))?.server_user_id, local.server_user_id);
-    assert.equal((await getUserByGrytId("account-3"))?.server_user_id, account.server_user_id);
+    assert.equal(result.status, "merged");
+    assert.equal(await getUserByGrytId("key:bbb"), null, "the guest is gone");
+    const now = await getUserByGrytId("account-3");
+    assert.equal(now?.server_user_id, account.server_user_id, "the account keeps its own row");
+    assert.equal(now?.nickname, "Account");
+    if (result.status === "merged") {
+      assert.equal(result.merge.guestServerUserId, local.server_user_id);
+      assert.equal(result.merge.accountServerUserId, account.server_user_id);
+    }
   });
 
-  it("tells the two refusals apart", async () => {
-    // Both used to be `false`, so a caller could not tell "nothing to carry" from
-    // "one of your two memberships stayed behind".
+  it("finds nothing to carry the second time", async () => {
     await upsertUser("key:ccc", "Local");
     await upsertUser("account-4", "Account");
 
-    const collision = await carryIdentityForward("key:ccc", "account-4");
-    const nothing = await carryIdentityForward("key:absent", "account-5");
-
-    assert.notEqual(collision.status, nothing.status);
+    assert.equal((await carryIdentityForward("key:ccc", "account-4")).status, "merged");
+    assert.deepEqual(await carryIdentityForward("key:ccc", "account-4"), {
+      status: "no_prior_membership",
+    });
+    assert.equal((await getUserByGrytId("account-4"))?.nickname, "Account");
   });
 });

@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 
 import type { UserRecord } from "../interfaces";
 import { fromIso, getSqliteDb, intToBool, toIso, type SQLInputValue } from "./connection";
+import { mergeGuestIntoAccount, type GuestMerge } from "./mergeGuest";
 import { getServerConfig, setServerOwner } from "./servers";
 import { revokeUserRefreshTokens } from "./tokens";
 
@@ -238,15 +239,15 @@ export async function setUserInactive(serverUserId: string): Promise<void> {
   db.prepare(`UPDATE users SET is_active = 0 WHERE server_user_id = ?`).run(serverUserId);
 }
 
-/** `no_prior_membership` is ordinary; `account_already_member` is the collision,
-    where the guest membership stays put and something is left behind. */
+/** `carried` hands the guest's row to the account; `merged` folds it into the row
+    the account already had, and the guest's row is gone either way. */
 export type CarryIdentityResult =
   | { status: "carried" }
-  | { status: "no_prior_membership" }
-  | { status: "account_already_member" };
+  | { status: "merged"; merge: GuestMerge }
+  | { status: "no_prior_membership" };
 
-/** Reuses `replaceUserIdentity`, which carries ownership and revokes the old
-    refresh tokens. Never merges: a collision is reported, not resolved. */
+/** Both paths carry ownership and revoke the guest's refresh tokens. A second
+    claim finds no guest row, which is `no_prior_membership`. */
 export async function carryIdentityForward(
   priorGrytUserId: string,
   newGrytUserId: string,
@@ -255,7 +256,10 @@ export async function carryIdentityForward(
   if (!prior) return { status: "no_prior_membership" };
 
   const alreadyMember = await getUserByGrytId(newGrytUserId);
-  if (alreadyMember) return { status: "account_already_member" };
+  if (alreadyMember) {
+    const merge = mergeGuestIntoAccount(priorGrytUserId, newGrytUserId);
+    return merge ? { status: "merged", merge } : { status: "no_prior_membership" };
+  }
 
   await replaceUserIdentity(prior.server_user_id, newGrytUserId);
   return { status: "carried" };
