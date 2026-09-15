@@ -11,6 +11,7 @@ import { getThread } from "../../db/sqlite/threads";
 import { upsertUser } from "../../db/sqlite/users";
 import type { Clients } from "../../types";
 import { generateAccessToken } from "../../utils/jwt";
+import { refreshClientPermissions } from "../utils/standing";
 import { registerChatHandlers } from "./chat";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
@@ -29,13 +30,15 @@ const sockets = new Map<string, { emit: (e: string, p?: unknown) => boolean }>()
 const clientsInfo: Clients = {};
 let alice: Party; let bob: Party; let carol: Party;
 
-function makeParty(seq: number, grytUserId: string, nickname: string, serverUserId: string): Party {
+async function makeParty(seq: number, grytUserId: string, nickname: string, serverUserId: string): Promise<Party> {
   const clientId = `socket-${seq}`;
   const emitted: { event: string; payload?: unknown }[] = [];
   const record = { emit(event: string, payload?: unknown) { emitted.push({ event, payload }); return true; } };
   sockets.set(clientId, record);
   const socket = { id: clientId, handshake: { headers: { host: HOST }, address: "127.0.0.1" }, emit: record.emit, join() {}, leave() {}, to: () => ({ emit() {} }) };
   clientsInfo[clientId] = { serverUserId, grytUserId, nickname } as Clients[string];
+  // The cache every admitted socket carries: verifyClient sets it on join.
+  await refreshClientPermissions(clientsInfo, clientId);
   const ctx = { io: { sockets: { sockets } }, socket, clientId, serverId: "status-test", clientsInfo, sfuClient: null, getClientIp: () => `10.0.0.${seq}`, clientAddressIsOwn: () => true } as unknown as HandlerContext;
   return {
     serverUserId,
@@ -59,9 +62,9 @@ before(async () => {
   await setServerRole(a.server_user_id, "owner");
   await setServerRole(b.server_user_id, "owner");
   await setServerRole(c.server_user_id, "member");
-  alice = makeParty(1, "account-alice", "Alice", a.server_user_id);
-  bob = makeParty(2, "account-bob", "Bob", b.server_user_id);
-  carol = makeParty(3, "account-carol", "Carol", c.server_user_id);
+  alice = await makeParty(1, "account-alice", "Alice", a.server_user_id);
+  bob = await makeParty(2, "account-bob", "Bob", b.server_user_id);
+  carol = await makeParty(3, "account-carol", "Carol", c.server_user_id);
 
   await alice.handlers["forum:topic:create"]({ conversationId: FORUM, title: "Voice drops after sleep", text: "It stops after waking.", accessToken: alice.accessToken });
   const created = alice.received("forum:topic:created").at(-1) as { thread_id: string };

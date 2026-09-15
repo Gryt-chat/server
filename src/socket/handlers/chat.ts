@@ -212,7 +212,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
     senderServerUserId: string,
   ): Promise<string[]> {
     const blockers = await blockersOfSender(senderServerUserId);
-    const all = recipientClientIds(conversationId, access);
+    const all = await recipientClientIds(conversationId, access);
     if (blockers.size === 0) return all;
 
     /* The sender keeps their own copy: a message that vanished as it was sent
@@ -226,7 +226,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
 
   /* The shared answer, with this connection's two refs already filled in, so
      every call site below reads the way it did before it moved. */
-  function recipientClientIds(conversationId: string, access: AllowedConversationAccess): string[] {
+  function recipientClientIds(conversationId: string, access: AllowedConversationAccess): Promise<string[]> {
     return recipientsOf(conversationId, access, clientsInfo, sfuClient);
   }
 
@@ -639,7 +639,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           ).catch(() => null);
 
           const fallbackRecipients = fallbackAccess?.allowed
-            ? recipientClientIds(fallback.conversation_id, fallbackAccess)
+            ? await recipientClientIds(fallback.conversation_id, fallbackAccess)
             : [clientId];
 
           fallbackRecipients.forEach((cid) => {
@@ -893,7 +893,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           last_message_at: updated.last_message_at.toISOString(),
           status: updated.status,
         };
-        recipientClientIds(payload.conversationId, access).forEach((cid) =>
+        (await recipientClientIds(payload.conversationId, access)).forEach((cid) =>
           io.sockets.sockets.get(cid)?.emit("thread:updated", upd),
         );
       } catch (err) {
@@ -945,7 +945,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           status: updated.status,
           tags: updated.tags,
         };
-        recipientClientIds(payload.conversationId, access).forEach((cid) =>
+        (await recipientClientIds(payload.conversationId, access)).forEach((cid) =>
           io.sockets.sockets.get(cid)?.emit("thread:updated", upd),
         );
       } catch (err) {
@@ -1117,7 +1117,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
 
         let [enrichedReaction] = await enrichMessages([updatedMessage]);
         [enrichedReaction] = await enrichAttachments([enrichedReaction]);
-        recipientClientIds(updatedMessage.conversation_id, access).forEach((cid) => {
+        (await recipientClientIds(updatedMessage.conversation_id, access)).forEach((cid) => {
           io.sockets.sockets.get(cid)?.emit("chat:reaction", enrichedReaction);
         });
       } catch (err) {
@@ -1257,7 +1257,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
 
         replaceCachedMessage(payload.conversationId, updated);
 
-        const connectedClients = recipientClientIds(payload.conversationId, access);
+        const connectedClients = await recipientClientIds(payload.conversationId, access);
 
         connectedClients.forEach((cid) => {
           io.sockets.sockets.get(cid)?.emit("chat:edited", enriched);

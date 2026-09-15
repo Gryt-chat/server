@@ -3,6 +3,7 @@ import { Server } from "socket.io";
 
 import { getServerConfig, insertMessage, listServerChannels } from "../../db";
 import type { Clients } from "../../types";
+import { recipientClientIds } from "./recipients";
 
 const SYSTEM_SENDER_ID = "system";
 
@@ -61,7 +62,10 @@ export async function postSystemMessage(
       sender_avatar_file_id: undefined,
     };
 
-    for (const [cid] of Object.entries(clientsInfo)) {
+    // The same audience the channel's own messages reach, or the join line
+    // lands in front of a socket that never joined or cannot see the channel.
+    const recipients = await recipientClientIds(channelId, { allowed: true, kind: "channel" }, clientsInfo, null);
+    for (const cid of recipients) {
       io.sockets.sockets.get(cid)?.emit("chat:new", enriched);
     }
   } catch (e) {

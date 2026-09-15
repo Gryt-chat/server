@@ -59,7 +59,7 @@ export async function deleteMessageEverywhere({
 
   dropCachedMessage(conversationId, messageId);
 
-  const recipients = recipientClientIds(conversationId, access, clientsInfo, sfuClient);
+  const recipients = await recipientClientIds(conversationId, access, clientsInfo, sfuClient);
   recipients.forEach((cid) => {
     io.sockets.sockets
       .get(cid)

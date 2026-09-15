@@ -9,7 +9,8 @@ import { getAcceptedIdentityTiers } from "../../auth/identity";
 import { announcedPlugins } from "../../plugins";
 import { getVoiceSeatLimit } from "../../utils/voiceSeats";
 import { syncAllClients, broadcastMemberList } from "./clients";
-import { clientMayReceive, refreshAllClientPermissions } from "./standing";
+import { refreshAllClientPermissions } from "./standing";
+import { recipientClientIds } from "./recipients";
 import {
   DEFAULT_AVATAR_MAX_BYTES,
   DEFAULT_UPLOAD_MAX_BYTES,
@@ -54,13 +55,16 @@ export function broadcastServerUiUpdate(reason: "settings" | "icon" | "other" = 
 
 export function broadcastChatNew(message: Record<string, unknown>): void {
   if (!_io || !_clientsInfo) return;
-  for (const [sid, s] of _io.sockets.sockets) {
-    // The live stream as well as the history fetch, or the gate only holds
-    // until somebody says something.
-    if (clientMayReceive(_clientsInfo, sid, "read_messages")) {
-      s.emit("chat:new", message);
-    }
-  }
+  const io = _io;
+  const clientsInfo = _clientsInfo;
+  const conversationId = typeof message.conversation_id === "string" ? message.conversation_id : "";
+  // read_messages and, for a scoped channel, visibility — the same choke point
+  // as a member's own message, so a webhook post does not outrun the gate.
+  void recipientClientIds(conversationId, { allowed: true, kind: "channel" }, clientsInfo, null)
+    .then((recipients) => {
+      for (const cid of recipients) io.sockets.sockets.get(cid)?.emit("chat:new", message);
+    })
+    .catch((e) => consola.warn("broadcastChatNew failed", e));
 }
 
 export function broadcastCustomEmojisUpdate(): void {

@@ -9,6 +9,7 @@ import { createServerConfigIfNotExists, setServerRole } from "../../db/sqlite/se
 import { upsertUser } from "../../db/sqlite/users";
 import type { Clients } from "../../types";
 import { generateAccessToken } from "../../utils/jwt";
+import { refreshClientPermissions } from "../utils/standing";
 import { resetChannelIdCache } from "../utils/conversationAccess";
 import { registerChatHandlers } from "./chat";
 import { registerDirectMessageHandlers } from "./dm";
@@ -119,6 +120,9 @@ async function connectMember(
     isServerMuted: false,
     isServerDeafened: false,
   } as Clients[string];
+  // The cache every admitted socket carries: verifyClient sets it on join, and
+  // the recipient gate reads it.
+  await refreshClientPermissions(world.clientsInfo, clientId);
 
   const ctx = {
     io: world.io,

@@ -10,6 +10,7 @@ import { createServerConfigIfNotExists, setServerRole } from "../../db/sqlite/se
 import { upsertUser } from "../../db/sqlite/users";
 import type { Clients } from "../../types";
 import { generateAccessToken } from "../../utils/jwt";
+import { refreshClientPermissions } from "../utils/standing";
 import { registerChatHandlers } from "./chat";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
@@ -35,7 +36,7 @@ const clientsInfo: Clients = {};
 let alice: Party;
 let bob: Party;
 
-function makeParty(seq: number, grytUserId: string, nickname: string, serverUserId: string): Party {
+async function makeParty(seq: number, grytUserId: string, nickname: string, serverUserId: string): Promise<Party> {
   const clientId = `socket-${seq}`;
   const emitted: { event: string; payload?: unknown }[] = [];
 
@@ -57,6 +58,9 @@ function makeParty(seq: number, grytUserId: string, nickname: string, serverUser
   };
 
   clientsInfo[clientId] = { serverUserId, grytUserId, nickname } as Clients[string];
+  // The cache every admitted socket carries: verifyClient sets it on join, and
+  // the recipient gate reads it.
+  await refreshClientPermissions(clientsInfo, clientId);
 
   const ctx = {
     io: { sockets: { sockets } },
@@ -99,8 +103,8 @@ before(async () => {
   await setServerRole(a.server_user_id, "owner");
   await setServerRole(b.server_user_id, "owner");
 
-  alice = makeParty(1, "account-alice", "Alice", a.server_user_id);
-  bob = makeParty(2, "account-bob", "Bob", b.server_user_id);
+  alice = await makeParty(1, "account-alice", "Alice", a.server_user_id);
+  bob = await makeParty(2, "account-bob", "Bob", b.server_user_id);
 });
 
 after(() => {
