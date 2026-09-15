@@ -131,6 +131,7 @@ export function buildWebhookOpenApi(): Json {
             "400": json({ anyOf: [ref("InvalidPayload"), ref("Error")] }, "The body was refused, or isn't valid JSON (`invalid_json`)."),
             "403": json(ref("Error"), "No manage_webhooks permission."),
             "404": json(ref("Error"), "The avatar file doesn't exist or you can't read it."),
+            "413": json(ref("Error"), "The body is over 100 KB (`body_too_large`)."),
           },
         },
       },
@@ -155,6 +156,7 @@ export function buildWebhookOpenApi(): Json {
             "200": json(ref("Webhook"), "Updated."),
             "400": json({ anyOf: [ref("InvalidPayload"), ref("Error")] }, "The body was refused, or isn't valid JSON (`invalid_json`)."),
             "404": json(ref("Error"), "No such webhook, or an avatar file you can't read."),
+            "413": json(ref("Error"), "The body is over 100 KB (`body_too_large`)."),
           },
         },
         delete: {
