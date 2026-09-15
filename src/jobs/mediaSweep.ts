@@ -3,6 +3,7 @@ import {
   deleteFileRecord,
   getAllAvatarFileIds,
   getAllFileRecords,
+  getAllGroupIconFileIds,
   getAllReferencedAttachmentIds,
 } from "../db";
 import { deleteObject } from "../storage";
@@ -23,13 +24,7 @@ export async function runMediaSweep(): Promise<{ deleted: number; errors: number
   let deleted = 0;
   let errors = 0;
 
-  const [allFiles, referencedByMessages, referencedByAvatars] = await Promise.all([
-    getAllFileRecords(),
-    getAllReferencedAttachmentIds(),
-    getAllAvatarFileIds(),
-  ]);
-
-  const referencedIds = new Set<string>([...referencedByMessages, ...referencedByAvatars]);
+  const [allFiles, referencedIds] = await Promise.all([getAllFileRecords(), referencedFileIds()]);
 
   const orphaned = allFiles.filter((f) => {
     if (referencedIds.has(f.file_id)) return false;
@@ -62,16 +57,22 @@ export async function runMediaSweep(): Promise<{ deleted: number; errors: number
   return { deleted, errors };
 }
 
-/** Which of `fileIds` nothing points at any more. Reads the same two sources as
+/** One list for both deleters, so neither can remove what the other keeps. */
+async function referencedFileIds(): Promise<Set<string>> {
+  const sources = await Promise.all([
+    getAllReferencedAttachmentIds(),
+    getAllAvatarFileIds(),
+    getAllGroupIconFileIds(),
+  ]);
+  return new Set<string>(sources.flatMap((ids) => [...ids]));
+}
+
+/** Which of `fileIds` nothing points at any more. Reads the same sources as
     the periodic sweep, so it cannot select something the sweep would keep. */
 export async function unreferencedAmong(fileIds: string[]): Promise<string[]> {
   if (fileIds.length === 0) return [];
 
-  const [referencedByMessages, referencedByAvatars] = await Promise.all([
-    getAllReferencedAttachmentIds(),
-    getAllAvatarFileIds(),
-  ]);
-  const referenced = new Set<string>([...referencedByMessages, ...referencedByAvatars]);
+  const referenced = await referencedFileIds();
 
   return fileIds.filter((id) => !referenced.has(id));
 }

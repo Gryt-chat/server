@@ -119,7 +119,8 @@ describe("the route uses it", () => {
   /** The attachment route only. The avatar route's own `insertFile` calls are
       unreachable with a sealed upload and would fail this for no reason. */
   const routeStart = file.indexOf("uploadsRouter.post(");
-  const routeEnd = file.indexOf("uploadsRouter.post(", routeStart + 1);
+  // The route's own closing line: the avatar pipeline now sits between routes.
+  const routeEnd = file.indexOf("\n);\n", routeStart);
   const source = file.slice(routeStart, routeEnd);
 
   it("asks for the decision rather than working it out again", () => {
