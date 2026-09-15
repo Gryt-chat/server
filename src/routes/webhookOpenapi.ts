@@ -102,11 +102,11 @@ export function buildWebhookOpenApi(): Json {
           responses: {
             "200": json(ref("WebhookMessageSent"), "Posted."),
             "400": {
-              description: "The payload was refused, or the webhook has no channel. Nothing was posted.",
+              description: "The body isn't valid JSON (`invalid_json`), the payload was refused, or the webhook has no channel. Nothing was posted.",
               content: { "application/json": { schema: { anyOf: [ref("InvalidPayload"), ref("Error")] } } },
             },
             "404": json(ref("Error"), "No webhook with that id and token."),
-            "413": json(ref("Error"), "The body is over 256 KB."),
+            "413": json(ref("Error"), "The body is over 256 KB (`body_too_large`)."),
             "429": json({ type: "object", properties: { error: { const: "rate_limited" }, retry_after_ms: { type: "integer" } } }, "Too many messages. Try again after `retry_after_ms`."),
           },
         },
@@ -128,7 +128,7 @@ export function buildWebhookOpenApi(): Json {
           requestBody: { required: true, content: { "application/json": { schema: ref("WebhookCreate") } } },
           responses: {
             "201": json({ allOf: [ref("Webhook"), { type: "object", properties: { url: { type: "string" } } }] }, "Created. `url` is what to post to."),
-            "400": json(ref("InvalidPayload"), "The body was refused."),
+            "400": json({ anyOf: [ref("InvalidPayload"), ref("Error")] }, "The body was refused, or isn't valid JSON (`invalid_json`)."),
             "403": json(ref("Error"), "No manage_webhooks permission."),
             "404": json(ref("Error"), "The avatar file doesn't exist or you can't read it."),
           },
@@ -153,7 +153,7 @@ export function buildWebhookOpenApi(): Json {
           requestBody: { required: true, content: { "application/json": { schema: ref("WebhookUpdate") } } },
           responses: {
             "200": json(ref("Webhook"), "Updated."),
-            "400": json(ref("InvalidPayload"), "The body was refused."),
+            "400": json({ anyOf: [ref("InvalidPayload"), ref("Error")] }, "The body was refused, or isn't valid JSON (`invalid_json`)."),
             "404": json(ref("Error"), "No such webhook, or an avatar file you can't read."),
           },
         },

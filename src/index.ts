@@ -34,7 +34,8 @@ import { emojisRouter } from "./routes/emojis";
 import { linkPreviewRouter } from "./routes/linkPreview";
 import { oEmbedRouter } from "./routes/oembed";
 import { mediaMetadataRouter } from "./routes/mediaMetadata";
-import { webhooksRouter } from "./routes/webhooks";
+import { isWebhookSend, webhooksRouter } from "./routes/webhooks";
+import { apiErrorHandler, jsonBodyExcept } from "./utils/httpErrors";
 import { startMediaSweep } from "./jobs/mediaSweep";
 import { startEmojiQueueWorker } from "./jobs/emojiQueueWorker";
 import { initPlugins } from "./plugins";
@@ -71,7 +72,7 @@ app.use((req, res, next) => {
 });
 
 // Parse JSON bodies
-app.use(express.json({ limit: "2mb" }));
+app.use(jsonBodyExcept(isWebhookSend, { limit: "2mb" }));
 
 // Records the metrics. Serving them is further down, on a port of their own.
 app.use(metricsMiddleware);
@@ -338,46 +339,7 @@ app.use("/api/oembed", httpRateLimit("http:outbound", RL_HTTP_OUTBOUND), oEmbedR
 app.use("/api/media/metadata", httpRateLimit("http:outbound", RL_HTTP_OUTBOUND), mediaMetadataRouter);
 app.use("/api/webhooks", webhooksRouter);
 
-// Basic error handler
-app.use(
-  (
-    err: unknown,
-    _req: express.Request,
-    res: express.Response,
-    _next: express.NextFunction
-  ) => {
-    const e =
-      typeof err === "object" && err !== null
-        ? (err as Record<string, unknown>)
-        : {};
-    if (e.code === "LIMIT_FILE_SIZE") {
-      res.status(413).json({
-        error: "file_too_large",
-        message: "File too large.",
-      });
-      return;
-    }
-    if (
-      typeof e.message === "string" &&
-      e.message.toLowerCase().includes("unsupported")
-    ) {
-      res.status(400).json({ error: "invalid_file", message: e.message });
-      return;
-    }
-    consola.error(err);
-    const message =
-      typeof e.message === "string" && e.message.trim().length > 0
-        ? e.message
-        : "Internal Server Error";
-    const errorCode =
-      typeof e.error === "string" && e.error.trim().length > 0
-        ? e.error
-        : typeof e.code === "string" && e.code.trim().length > 0
-        ? e.code
-        : "internal_error";
-    res.status(500).json({ error: errorCode, message });
-  }
-);
+app.use(apiErrorHandler);
 
 const httpServer = createServer(app); // Pass the Express app to createServer
 
