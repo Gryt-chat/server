@@ -71,7 +71,8 @@ export function dropCachedMessage(conversationId: string, messageId: string): vo
   });
 }
 
-/** For tests, which must not inherit a previous case's conversations. */
+/** For tests, which must not inherit a previous case's conversations, and for a
+    guest merge, which rewrites senders across every conversation at once. */
 export function resetMessageCache(): void {
   cache.clear();
 }

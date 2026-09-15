@@ -114,7 +114,7 @@ async function buildViews(
 }
 
 /** Tell everybody in a conversation what it looks like to each of them. */
-async function broadcastConversation(
+export async function broadcastConversation(
   io: HandlerContext["io"],
   clientsInfo: HandlerContext["clientsInfo"],
   conversationId: string,
