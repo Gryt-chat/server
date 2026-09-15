@@ -1,6 +1,7 @@
 import consola from "consola";
 import { Server, Socket } from "socket.io";
 import { Clients } from "../../types";
+import { publicClientList } from "./clients";
 import type { JoinPolicy, RoleDefinitionRecord } from "../../db/interfaces";
 import { FALLBACK_ROLE_ID, PERMISSIONS } from "../../constants/permissions";
 import { getEffectiveStanding } from "../../services/permissions";
@@ -220,6 +221,8 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
   // We still emit `channels` for backward compatibility (derived from sidebar items).
   let sidebar_items: { id: string; kind: string; position: number; channelId?: string; spacerHeight?: number; label?: string; parentItemId?: string }[] = [];
   let channels: { id: string; name: string; type: string; description?: string; requirePushToTalk?: boolean; disableRnnoise?: boolean; maxBitrate?: number; eSportsMode?: boolean; textInVoice?: boolean; layout?: "chat" | "forum"; automated?: boolean; forumTags?: { id: string; name: string; emoji?: string | null; color?: string | null }[]; permissionScopeId?: string | null; canSend?: boolean; canJoin?: boolean }[] = [];
+  // Empty until read, so a failed read names nobody's voice channel.
+  let visibleToThem: ReadonlySet<string> = new Set();
   try {
     // Seeding creates the first channels here, and a cache holding the empty
     // list from a moment ago filters every one of them out of the first join.
@@ -241,6 +244,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
       postableChannelIds(client.serverUserId, client.grytUserId),
       joinableChannelIds(client.serverUserId, client.grytUserId),
     ]);
+    visibleToThem = visible;
     const items = allItems.filter((it) => it.kind !== "channel" || !it.channel_id || visible.has(it.channel_id));
 
     /* Without `parentItemId` the client has folders it cannot fill. A folder is
@@ -321,16 +325,6 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
     }));
   }
 
-  // Filter to only include registered users (those with real serverUserId, not temp IDs)
-  const registeredClients: Clients = {};
-  Object.entries(clientsInfo).forEach(([clientId, client]) => {
-    // Only include clients who have been properly registered in the database
-    // (i.e., have a real serverUserId that doesn't start with "temp_")
-    if (client.serverUserId && !client.serverUserId.startsWith('temp_')) {
-      registeredClients[clientId] = client;
-    }
-  });
-
   let cfgName = process.env.SERVER_NAME || "Unknown Server";
   let cfgDesc = process.env.SERVER_DESCRIPTION || "A Gryt server";
   let cfgIconUrl: string | null = null;
@@ -369,7 +363,8 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
     sfu_hosts: sfuHosts,
     stun_hosts: stunHosts,
     voice_capacity_max: voiceSeatLimit,
-    clients: registeredClients, // Only send registered users, not temporary connections
+    // The same builder as `server:clients`, so this cannot carry anybody's token.
+    clients: publicClientList(clientsInfo, visibleToThem),
     sidebar_items,
     channels,
     server_info: {
