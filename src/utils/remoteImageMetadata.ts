@@ -2,6 +2,7 @@ import consola from "consola";
 import sharp from "sharp";
 
 import { MAX_INPUT_PIXELS } from "./imageValidation";
+import { fetchFollowingSafely, type FetchGuard } from "./safePreviewFetch";
 
 export type RemoteImageMetadata = {
   url: string;
@@ -9,19 +10,6 @@ export type RemoteImageMetadata = {
   width: number | null;
   height: number | null;
 };
-
-const BLOCKED_HOSTNAMES = new Set([
-  "localhost",
-  "0.0.0.0",
-  "[::1]",
-]);
-
-export function isBlockedHost(hostname: string): boolean {
-  if (BLOCKED_HOSTNAMES.has(hostname)) return true;
-  if (/^(127|10|192\.168)\.\d/.test(hostname)) return true;
-  if (hostname.startsWith("172.") && /^172\.(1[6-9]|2\d|3[01])\./.test(hostname)) return true;
-  return false;
-}
 
 type CacheEntry = { data: RemoteImageMetadata; fetchedAt: number };
 const cache = new Map<string, CacheEntry>();
@@ -58,35 +46,24 @@ async function readUpToBytes(res: Response, maxBytes: number): Promise<Buffer | 
   return Buffer.concat(chunks.map((c) => Buffer.from(c)));
 }
 
-export async function fetchRemoteImageMetadata(url: string): Promise<RemoteImageMetadata> {
+/** `guard` is for tests; see `fetchFollowingSafely`. */
+export async function fetchRemoteImageMetadata(url: string, guard?: FetchGuard): Promise<RemoteImageMetadata> {
   const cached = cache.get(url);
   if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) return cached.data;
 
   const empty: RemoteImageMetadata = { url, mime: null, width: null, height: null };
 
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return empty;
-  }
-  if (!["http:", "https:"].includes(parsed.protocol)) return empty;
-  if (isBlockedHost(parsed.hostname)) return empty;
-
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 6000);
   try {
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        Accept: "image/*",
-        "User-Agent": "Mozilla/5.0 (compatible; GrytBot/1.0; +https://gryt.chat)",
-      },
-      redirect: "follow",
-    });
-    if (!res.ok) return empty;
+    const fetched = await fetchFollowingSafely(url, controller.signal, "image/*", guard);
+    if ("blocked" in fetched) return empty;
+    const { res } = fetched;
     const contentType = (res.headers.get("content-type") || "").toLowerCase();
-    if (!contentType.startsWith("image/")) return empty;
+    if (!res.ok || !contentType.startsWith("image/")) {
+      await res.body?.cancel().catch(() => {});
+      return empty;
+    }
 
     const buf = await readUpToBytes(res, 450_000);
     if (buf === null) return empty;

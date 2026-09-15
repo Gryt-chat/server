@@ -60,3 +60,37 @@ test("refuses a name that will not resolve", async () => {
   assert.equal(result.ok, false);
   if (!result.ok) assert.equal(result.reason, "blocked_host");
 });
+
+test("refuses a v4-mapped literal, which the URL parser rewrites into hex", async () => {
+  // new URL() turns [::ffff:127.0.0.1] into [::ffff:7f00:1], and isPrivateIp only read the dotted form.
+  for (const url of ["http://[::ffff:127.0.0.1]:5003/", "http://[::ffff:a9fe:a9fe]/latest/meta-data/", "http://[::ffff:10.0.0.1]/"]) {
+    const result = await checkPreviewUrl(url);
+    assert.deepEqual(result, { ok: false, reason: "blocked_host" }, url);
+  }
+  assert.equal(isBlockedPreviewHost("[::ffff:7f00:1]"), true);
+});
+
+test("refuses CGNAT, 0.0.0.0/8 and site-local IPv6, which the old ranges left out", async () => {
+  for (const url of ["http://100.100.100.200/latest/meta-data/", "http://0.0.0.1/", "http://[fec0::1]/"]) {
+    const result = await checkPreviewUrl(url);
+    assert.deepEqual(result, { ok: false, reason: "blocked_host" }, url);
+  }
+});
+
+test("refuses a name when any of its answers is not public", async () => {
+  const resolve = async () => [
+    { address: "93.184.215.14", family: 4 },
+    { address: "::ffff:127.0.0.1", family: 6 },
+  ];
+  assert.deepEqual(await checkPreviewUrl("https://two-faced.test/", resolve), { ok: false, reason: "blocked_host" });
+  assert.deepEqual(await checkPreviewUrl("https://no-answer.test/", async () => []), { ok: false, reason: "blocked_host" });
+});
+
+test("lets a name through when every answer is public", async () => {
+  const resolve = async () => [
+    { address: "93.184.215.14", family: 4 },
+    { address: "2606:2800:21f:cb07:6820:80da:af6b:8b2c", family: 6 },
+  ];
+  const result = await checkPreviewUrl("https://example.test/page", resolve);
+  assert.equal(result.ok, true);
+});

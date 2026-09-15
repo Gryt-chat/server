@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { beforeEach, describe, it } from "node:test";
 
 import { httpRateLimit } from "../middleware/rateLimitHttp";
@@ -132,6 +134,27 @@ describe("fetchPreview", () => {
 
       assert.equal(calls.json, 1);
     });
+  });
+});
+
+describe("fetchPreview with the real fetch", () => {
+  it("returns an empty card for a v4-mapped loopback address without connecting", async () => {
+    let hits = 0;
+    const server = createServer((_req, res) => {
+      hits++;
+      res.writeHead(200, { "Content-Type": "text/html" });
+      res.end("<html><head><title>internal</title></head></html>");
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+    const url = `http://[::ffff:7f00:1]:${(server.address() as AddressInfo).port}/`;
+    try {
+      const data = await fetchPreview(url);
+      assert.equal(data.title, null);
+      assert.equal(data.status, null);
+      assert.equal(hits, 0);
+    } finally {
+      server.close();
+    }
   });
 });
 
