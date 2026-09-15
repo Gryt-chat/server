@@ -33,10 +33,50 @@ function publicVoiceRoom(voiceChannelId: string | undefined): string {
 
 /** The same blanking for a channel this recipient may not see, so unlike
     `publicVoiceRoom` it takes the recipient. */
-function voiceRoomFor(visible: Set<string>, voiceChannelId: string | undefined): string {
+function voiceRoomFor(visible: ReadonlySet<string>, voiceChannelId: string | undefined): string {
   const id = publicVoiceRoom(voiceChannelId);
   if (!id) return "";
   return visible.has(id) ? id : "";
+}
+
+/** Everything another member may read off a connection, named one field at a
+    time. The record also holds the access token, which must never be copied. */
+export function publicClientRecord(client: Clients[string], voiceChannelId: string) {
+  return {
+    serverUserId: client.serverUserId,
+    nickname: client.nickname,
+    isMuted: client.isMuted,
+    isDeafened: client.isDeafened,
+    isServerMuted: client.isServerMuted,
+    isServerDeafened: client.isServerDeafened,
+    isAFK: client.isAFK,
+    streamID: client.streamID,
+    hasJoinedChannel: client.hasJoinedChannel,
+    voiceChannelId,
+    isConnectedToVoice: client.isConnectedToVoice,
+    cameraEnabled: client.cameraEnabled,
+    cameraStreamID: client.cameraStreamID,
+    screenShareEnabled: client.screenShareEnabled,
+    screenShareVideoStreamID: client.screenShareVideoStreamID,
+    screenShareAudioStreamID: client.screenShareAudioStreamID,
+  };
+}
+
+export type PublicClient = ReturnType<typeof publicClientRecord>;
+
+/** `server:clients` and `server:details.clients`, keyed by socket id. `visible`
+    also blanks the channels this recipient cannot see. */
+export function publicClientList(
+  clientsInfo: Clients,
+  visible?: ReadonlySet<string>,
+): Record<string, PublicClient> {
+  const list: Record<string, PublicClient> = {};
+  for (const [clientId, client] of Object.entries(clientsInfo)) {
+    if (!client.serverUserId || client.serverUserId.startsWith("temp_")) continue;
+    const room = visible ? voiceRoomFor(visible, client.voiceChannelId) : publicVoiceRoom(client.voiceChannelId);
+    list[clientId] = publicClientRecord(client, room);
+  }
+  return list;
 }
 
 /** A gate is not part of the hashed state, so hiding a channel changes what
@@ -56,37 +96,26 @@ async function emitClientsNow(io: Server, clientsInfo: Clients, stateHash: strin
   lastEmitAtByIO.set(io, Date.now());
   lastClientsStateByIO.set(io, stateHash);
 
-  const registeredClients: Clients = {};
-  Object.entries(clientsInfo).forEach(([clientId, client]) => {
-    if (client.serverUserId && !client.serverUserId.startsWith('temp_')) {
-      // Copied, not passed through: this is the live record, and blanking the
-      // field on it would take the person out of their own call.
-      registeredClients[clientId] = { ...client, voiceChannelId: publicVoiceRoom(client.voiceChannelId) };
-    }
-  });
+  const everyone = publicClientList(clientsInfo);
 
   // One payload to the room while nothing is gated. The per-socket branch below
   // costs a standing lookup each and only earns it once.
   const scoped = await scopedChannelIds();
   if (scoped.size === 0) {
-    io.to("verifiedClients").emit("server:clients", registeredClients);
+    io.to("verifiedClients").emit("server:clients", everyone);
     return;
   }
 
-  const anyScopedInUse = Object.values(registeredClients).some((c) => scoped.has(c.voiceChannelId || ""));
+  const anyScopedInUse = Object.values(everyone).some((c) => scoped.has(c.voiceChannelId));
   if (!anyScopedInUse) {
-    io.to("verifiedClients").emit("server:clients", registeredClients);
+    io.to("verifiedClients").emit("server:clients", everyone);
     return;
   }
 
   for (const [sid, sock] of io.sockets.sockets) {
     if (!sock.rooms.has("verifiedClients")) continue;
     const visible = await visibleChannelIds(clientsInfo[sid]?.serverUserId, clientsInfo[sid]?.grytUserId);
-    const forThem: Clients = {};
-    for (const [cid, client] of Object.entries(registeredClients)) {
-      forThem[cid] = { ...client, voiceChannelId: voiceRoomFor(visible, client.voiceChannelId) };
-    }
-    sock.emit("server:clients", forThem);
+    sock.emit("server:clients", publicClientList(clientsInfo, visible));
   }
 }
 
