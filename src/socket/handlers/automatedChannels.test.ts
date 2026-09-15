@@ -11,6 +11,7 @@ import { claimBotRegistration, createBotRegistration } from "../../db/sqlite/bot
 import { upsertUser } from "../../db/sqlite/users";
 import type { Clients } from "../../types";
 import { generateAccessToken } from "../../utils/jwt";
+import { refreshClientPermissions } from "../utils/standing";
 import { registerChatHandlers } from "./chat";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
@@ -36,7 +37,7 @@ const clientsInfo: Clients = {};
 let human: Party;
 let bot: Party;
 
-function makeParty(seq: number, grytUserId: string, nickname: string, serverUserId: string): Party {
+async function makeParty(seq: number, grytUserId: string, nickname: string, serverUserId: string): Promise<Party> {
   const clientId = `socket-${seq}`;
   const emitted: { event: string; payload?: unknown }[] = [];
   const record = {
@@ -57,6 +58,9 @@ function makeParty(seq: number, grytUserId: string, nickname: string, serverUser
   };
 
   clientsInfo[clientId] = { serverUserId, grytUserId, nickname } as Clients[string];
+  // The cache every admitted socket carries: verifyClient sets it on join, and
+  // the recipient gate reads it.
+  await refreshClientPermissions(clientsInfo, clientId);
 
   const ctx = {
     io: { sockets: { sockets } },
@@ -99,8 +103,8 @@ before(async () => {
   });
   await claimBotRegistration(reg.claim_token as string, "BOT_deadbeef");
 
-  human = makeParty(1, "account-human", "Human", h.server_user_id);
-  bot = makeParty(2, "BOT_deadbeef", "Release Bot", b.server_user_id);
+  human = await makeParty(1, "account-human", "Human", h.server_user_id);
+  bot = await makeParty(2, "BOT_deadbeef", "Release Bot", b.server_user_id);
 });
 
 after(() => {
