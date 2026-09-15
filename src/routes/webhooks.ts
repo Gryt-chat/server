@@ -69,13 +69,6 @@ function displayNameFrom(raw: string | undefined): string | undefined {
   return trimmed ? trimmed.slice(0, WEBHOOK_LIMITS.displayName) : undefined;
 }
 
-const SEND_PATH = /^\/api\/webhooks\/[^/]+\/[^/]+\/?$/i;
-
-/** True for the public send route, so the app-wide 2 MB parser leaves its 256 KB limit alone. */
-export function isWebhookSend(req: Request): boolean {
-  return req.method === "POST" && SEND_PATH.test(req.path);
-}
-
 // ── Public: incoming webhook message ─────────────────────────────
 // POST /api/webhooks/:webhookId/:token
 webhooksRouter.post(
@@ -191,7 +184,7 @@ webhooksRouter.get(
 webhooksRouter.post(
   "/",
   requireBearerToken,
-  express.json(),
+  express.json({ limit: "100kb" }),
   (req: Request, res: Response, next: NextFunction): void => {
     Promise.resolve()
       .then(async () => {
@@ -244,7 +237,7 @@ webhooksRouter.get(
 webhooksRouter.patch(
   "/:webhookId",
   requireBearerToken,
-  express.json(),
+  express.json({ limit: "100kb" }),
   (req: Request, res: Response, next: NextFunction): void => {
     const { webhookId } = req.params as { webhookId: string };
     Promise.resolve()

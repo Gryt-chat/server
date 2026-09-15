@@ -34,7 +34,8 @@ import { emojisRouter } from "./routes/emojis";
 import { linkPreviewRouter } from "./routes/linkPreview";
 import { oEmbedRouter } from "./routes/oembed";
 import { mediaMetadataRouter } from "./routes/mediaMetadata";
-import { isWebhookSend, webhooksRouter } from "./routes/webhooks";
+import { webhooksRouter } from "./routes/webhooks";
+import { parsesOwnJson } from "./routes/ownJsonParsers";
 import { apiErrorHandler, jsonBodyExcept } from "./utils/httpErrors";
 import { startMediaSweep } from "./jobs/mediaSweep";
 import { startEmojiQueueWorker } from "./jobs/emojiQueueWorker";
@@ -72,7 +73,7 @@ app.use((req, res, next) => {
 });
 
 // Parse JSON bodies
-app.use(jsonBodyExcept(isWebhookSend, { limit: "2mb" }));
+app.use(jsonBodyExcept(parsesOwnJson, { limit: "2mb" }));
 
 // Records the metrics. Serving them is further down, on a port of their own.
 app.use(metricsMiddleware);

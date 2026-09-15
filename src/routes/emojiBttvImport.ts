@@ -170,7 +170,7 @@ export function registerBttvRoutes(router: Router): void {
   router.post(
     "/bttv/import",
     requireBearerToken,
-    express.json(),
+    express.json({ limit: "100kb" }),
     (req: Request, res: Response, next: NextFunction): void => {
       const serverUserId = req.tokenPayload?.serverUserId;
       if (!serverUserId) { res.status(401).json({ error: "auth_required" }); return; }

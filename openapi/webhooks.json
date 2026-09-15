@@ -612,6 +612,16 @@
                 }
               }
             }
+          },
+          "413": {
+            "description": "The body is over 100 KB (`body_too_large`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -728,6 +738,16 @@
           },
           "404": {
             "description": "No such webhook, or an avatar file you can't read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The body is over 100 KB (`body_too_large`).",
             "content": {
               "application/json": {
                 "schema": {

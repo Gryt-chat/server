@@ -254,7 +254,7 @@ emojisRouter.get(
 emojisRouter.patch(
   "/:name",
   requireBearerToken,
-  express.json(),
+  express.json({ limit: "100kb" }),
   (req: Request, res: Response, next: NextFunction): void => {
     const oldName = String(req.params.name);
     const newName = typeof req.body?.name === "string" ? req.body.name.trim() : "";

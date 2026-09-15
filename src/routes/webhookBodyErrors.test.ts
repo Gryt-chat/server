@@ -11,7 +11,8 @@ import express from "express";
 import { initSqlite } from "../db/sqlite/connection";
 import { apiErrorHandler, bodyParserRefusal, jsonBodyExcept } from "../utils/httpErrors";
 import { messagesRouter } from "./messages";
-import { isWebhookSend, webhooksRouter } from "./webhooks";
+import { parsesOwnJson } from "./ownJsonParsers";
+import { webhooksRouter } from "./webhooks";
 
 /** GRYT-1198: a body the parser refuses is a 400 or a 413, never a 500. Wired the way index.ts wires it. */
 
@@ -32,7 +33,7 @@ before(async () => {
   await initSqlite();
 
   const app = express();
-  app.use(jsonBodyExcept(isWebhookSend, { limit: "2mb" }));
+  app.use(jsonBodyExcept(parsesOwnJson, { limit: "2mb" }));
   app.use("/api/messages", messagesRouter);
   app.use("/api/webhooks", webhooksRouter);
   app.use(apiErrorHandler);
@@ -66,11 +67,6 @@ describe("body parser refusals", () => {
     const res = await post("/api/webhooks/wh1/tok", padded(200 * 1024));
     assert.equal(res.status, 404);
     assert.equal(res.body.error, "not_found");
-  });
-
-  it("keeps the 2 MB limit for managing webhooks", async () => {
-    const res = await post("/api/webhooks", padded(300 * 1024));
-    assert.equal(res.status, 401);
   });
 
   it("answers malformed JSON elsewhere with 400 invalid_json", async () => {
