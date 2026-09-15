@@ -42,7 +42,7 @@
             "type": "string"
           },
           "avatar_url": {
-            "description": "Posts with this picture instead of the webhook's. Fetched once and stored, same as card images.",
+            "description": "Posts with this picture instead of the webhook's. Downloaded once and resized to 256 px, like any other avatar.",
             "type": "string",
             "maxLength": 2048,
             "format": "uri"

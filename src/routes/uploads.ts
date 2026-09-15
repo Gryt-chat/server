@@ -274,15 +274,15 @@ uploadsRouter.post(
   },
 );
 
-/** One pipeline for both pictures. Only an avatar is put on the uploader's own
-    row; a group picture doing that was GRYT-1182. */
-const storeAvatarImage = (purpose: "avatar" | "group") =>
+/** One pipeline for all three pictures. Only an avatar is put on the uploader's
+    own row; a group picture doing that was GRYT-1182. */
+const storeAvatarImage = (purpose: "avatar" | "group" | "webhook") =>
   (req: Request, res: Response, next: NextFunction): void => {
     const file = req.file;
     if (!file) { res.status(400).json({ error: "file_required", message: "file is required" }); return; }
     if (!(file.mimetype || "").startsWith("image/")) { res.status(400).json({ error: "invalid_file", message: "Only image files are allowed" }); return; }
 
-    const what = purpose === "avatar" ? "Avatar" : "Group picture";
+    const what = purpose === "avatar" ? "Avatar" : purpose === "group" ? "Group picture" : "Webhook avatar";
     const disableS3 = (process.env.DISABLE_S3 || "").toLowerCase() === "true";
     if (disableS3) { res.status(503).json({ error: "s3_disabled", message: `S3 is disabled (DISABLE_S3=true). ${what} upload is unavailable.` }); return; }
 
@@ -388,6 +388,19 @@ uploadsRouter.post(
   },
   uploadAvatarToMemory("file"),
   storeAvatarImage("group"),
+);
+
+uploadsRouter.post(
+  "/webhook-avatar",
+  requireBearerToken,
+  // The permission every webhook route asks for, since only they use this file.
+  (req: Request, res: Response, next: NextFunction): void => {
+    ensurePermission(req, res, "manage_webhooks")
+      .then((ok) => { if (ok) next(); })
+      .catch(next);
+  },
+  uploadAvatarToMemory("file"),
+  storeAvatarImage("webhook"),
 );
 
 uploadsRouter.delete(
