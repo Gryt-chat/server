@@ -96,7 +96,7 @@ export const webhookMessageSchema = z
       .optional()
       .describe(`Posts under this name instead of the webhook's. Cut to ${L.displayName} characters.`),
     avatar_url: imageUrl.optional().describe(
-      "Posts with this picture instead of the webhook's. Fetched once and stored, same as card images.",
+      "Posts with this picture instead of the webhook's. Downloaded once and resized to 256 px, like any other avatar.",
     ),
     cards: z.array(webhookCardSchema).max(L.cards).optional(),
   })

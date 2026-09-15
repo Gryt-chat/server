@@ -12,12 +12,13 @@ const png = () => sharp({ create: { width: 8, height: 8, channels: 3, background
 
 function fakeDeps(respond: (url: string, max: number, signal: AbortSignal) => Promise<FetchOutcome>) {
   const fetched: string[] = [];
-  let stored = 0;
+  const stored: ("picture" | "avatar")[] = [];
   const deps: MediaDeps = {
     fetchBytes: async (url, signal, max) => { fetched.push(url); return respond(url, max, signal); },
-    storeImage: async () => `file-${++stored}`,
+    storeImage: async () => { stored.push("picture"); return `file-${stored.length}`; },
+    storeAvatar: async () => { stored.push("avatar"); return `avatar-${stored.length}`; },
   };
-  return { deps, fetched };
+  return { deps, fetched, stored };
 }
 
 describe("sniffImageFormat", () => {
@@ -91,6 +92,36 @@ describe("resolveWebhookMedia", () => {
     assert.ok(out.cards[0].thumbnail_file_id);
     assert.equal(out.cards[0].image_file_id, undefined);
     assert.equal(out.cards[1].title, "b");
+  });
+
+  it("stores the avatar as an avatar, and an icon from the same URL as sent, from one download", async () => {
+    const bytes = await png();
+    const { deps, fetched, stored } = fakeDeps(async () => ({ ok: true, bytes }));
+    const body = webhookMessageSchema.parse({
+      avatar_url: "https://a.example/logo.png",
+      cards: [{ title: "t", author: { name: "a", icon_url: "https://a.example/logo.png" } }],
+    });
+    const out = await resolveWebhookMedia("hook", body, deps);
+    assert.deepEqual(out.warnings, []);
+    assert.deepEqual(fetched, ["https://a.example/logo.png"]);
+    assert.deepEqual([...stored].sort(), ["avatar", "picture"]);
+    assert.match(out.avatarFileId ?? "", /^avatar-/, "the avatar went through the card picture store");
+    assert.match(out.cards[0].author?.icon_file_id ?? "", /^file-/, "the icon went through the avatar store");
+    assert.equal(out.mediaFileIds.length, 2);
+  });
+
+  it("leaves out an avatar that fails to store, and keeps the icon it shares a URL with", async () => {
+    const bytes = await png();
+    const { deps } = fakeDeps(async () => ({ ok: true, bytes }));
+    deps.storeAvatar = async () => { throw new Error("storage is down"); };
+    const body = webhookMessageSchema.parse({
+      avatar_url: "https://a.example/logo.png",
+      cards: [{ title: "t", author: { name: "a", icon_url: "https://a.example/logo.png" } }],
+    });
+    const out = await resolveWebhookMedia("hook", body, deps);
+    assert.deepEqual(out.warnings.map((w) => [w.path, w.code]), [["avatar_url", "store_failed"]]);
+    assert.equal(out.avatarFileId, undefined);
+    assert.ok(out.cards[0].author?.icon_file_id);
   });
 
   it("gives an icon the icon limit even when the same URL is also an image", async () => {

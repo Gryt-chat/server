@@ -18,6 +18,7 @@ import { storageForUpload } from "../routes/uploadStorage";
 import { putObject } from "../storage";
 import { validateImage } from "../utils/imageValidation";
 import { fetchFollowingSafely } from "../utils/safePreviewFetch";
+import { storeAvatarPicture } from "./avatarImage";
 
 /** The whole request's picture fetching, so a slow host can't hold a webhook call open. */
 export const MEDIA_DEADLINE_MS = 12_000;
@@ -43,6 +44,7 @@ export type FetchOutcome =
 export interface MediaDeps {
   fetchBytes(url: string, signal: AbortSignal, maxBytes: number): Promise<FetchOutcome>;
   storeImage(webhookId: string, bytes: Buffer, format: ImageFormat, width: number, height: number): Promise<string>;
+  storeAvatar(webhookId: string, bytes: Buffer, format: ImageFormat): Promise<string>;
 }
 
 /** Which picture it is, where it sits in the payload, and how big it may be. */
@@ -50,6 +52,19 @@ interface MediaSlot {
   path: string;
   url: string;
   maxBytes: number;
+  /** Resized like any avatar, where card pictures are stored as sent. */
+  avatar?: boolean;
+}
+
+/** One download, shared by every slot with the same URL and limit. */
+interface MediaEntry {
+  url: string;
+  maxBytes: number;
+  asPicture?: boolean;
+  asAvatar?: boolean;
+  fileId?: string;
+  avatarFileId?: string;
+  code?: string;
 }
 
 /** From the bytes, never the Content-Type header. SVG and everything else is refused. */
@@ -130,7 +145,28 @@ async function storeWebhookImage(webhookId: string, bytes: Buffer, format: Image
   return fileId;
 }
 
-export const realMediaDeps: MediaDeps = { fetchBytes: fetchBytesSafely, storeImage: storeWebhookImage };
+/** Through the same pipeline as a member's avatar. Its own key in `webhook_media`, since the
+    same bytes sent as a card picture are stored as sent. */
+async function storeWebhookAvatar(webhookId: string, bytes: Buffer, format: ImageFormat): Promise<string> {
+  const mediaKey = `avatar:${createHash("sha256").update(bytes).digest("hex")}`;
+  const known = await getWebhookMediaFileId(webhookId, mediaKey);
+  if (known && (await getFile(known)) && (await isFileReferencedByMessage(known))) return known;
+
+  const stored = await storeAvatarPicture({
+    bucket: process.env.S3_BUCKET as string,
+    bytes,
+    mime: MIME[format],
+    originalName: `webhook.${format}`,
+    uploadedBy: `webhook:${webhookId}`,
+    maxBytes: ICON_MAX_BYTES,
+    what: "Webhook avatar",
+  });
+  if (!stored.ok) throw new Error(stored.message);
+  await setWebhookMediaFileId(webhookId, mediaKey, stored.fileId);
+  return stored.fileId;
+}
+
+export const realMediaDeps: MediaDeps = { fetchBytes: fetchBytesSafely, storeImage: storeWebhookImage, storeAvatar: storeWebhookAvatar };
 
 const WARNING_TEXT: Record<string, string> = {
   blocked: "That address isn't allowed, so the picture was left out.",
@@ -145,7 +181,7 @@ const WARNING_TEXT: Record<string, string> = {
 
 function slotsFor(body: WebhookMessageInput): MediaSlot[] {
   const slots: MediaSlot[] = [];
-  if (body.avatar_url) slots.push({ path: "avatar_url", url: body.avatar_url, maxBytes: ICON_MAX_BYTES });
+  if (body.avatar_url) slots.push({ path: "avatar_url", url: body.avatar_url, maxBytes: ICON_MAX_BYTES, avatar: true });
   (body.cards ?? []).forEach((card, i) => {
     if (card.author?.icon_url) slots.push({ path: `cards[${i}].author.icon_url`, url: card.author.icon_url, maxBytes: ICON_MAX_BYTES });
     if (card.thumbnail_url) slots.push({ path: `cards[${i}].thumbnail_url`, url: card.thumbnail_url, maxBytes: IMAGE_MAX_BYTES });
@@ -183,8 +219,13 @@ export async function resolveWebhookMedia(
   const warnings: PayloadWarning[] = [];
   // Keyed with the limit too, so a URL used as both an icon and an image is held to each limit.
   const keyOf = (slot: MediaSlot) => `${slot.maxBytes}\u0000${slot.url}`;
-  const byUrl = new Map<string, { url: string; maxBytes: number; fileId?: string; code?: string }>();
-  for (const slot of slots) byUrl.set(keyOf(slot), { url: slot.url, maxBytes: slot.maxBytes });
+  const byUrl = new Map<string, MediaEntry>();
+  for (const slot of slots) {
+    const entry = byUrl.get(keyOf(slot)) ?? { url: slot.url, maxBytes: slot.maxBytes };
+    if (slot.avatar) entry.asAvatar = true;
+    else entry.asPicture = true;
+    byUrl.set(keyOf(slot), entry);
+  }
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), deadlineMs);
@@ -201,12 +242,18 @@ export async function resolveWebhookMedia(
       budget -= fetched.bytes.length;
       const checked = await validateImage(fetched.bytes, { animated: true });
       if (!checked.valid) { entry.code = "invalid_image"; return; }
-      try {
-        entry.fileId = await deps.storeImage(webhookId, fetched.bytes, format, checked.width, checked.height);
-      } catch (err) {
-        consola.warn("webhook media store failed", err);
-        entry.code = "store_failed";
-      }
+      const store = async (save: () => Promise<string>): Promise<string | undefined> => {
+        try {
+          return await save();
+        } catch (err) {
+          consola.warn("webhook media store failed", err);
+          entry.code = "store_failed";
+          return undefined;
+        }
+      };
+      // Downloaded once, but the avatar and a card picture from the same URL are two files.
+      if (entry.asPicture) entry.fileId = await store(() => deps.storeImage(webhookId, fetched.bytes, format, checked.width, checked.height));
+      if (entry.asAvatar) entry.avatarFileId = await store(() => deps.storeAvatar(webhookId, fetched.bytes, format));
     });
   } finally {
     clearTimeout(timer);
@@ -216,12 +263,13 @@ export async function resolveWebhookMedia(
     if (!url) return undefined;
     const slot = slots.find((s) => s.path === path)!;
     const entry = byUrl.get(keyOf(slot))!;
-    if (!entry.fileId) {
+    const fileId = slot.avatar ? entry.avatarFileId : entry.fileId;
+    if (!fileId) {
       const code = entry.code ?? "fetch_failed";
       warnings.push({ path, code, message: WARNING_TEXT[code] ?? WARNING_TEXT.fetch_failed });
       return undefined;
     }
-    return entry.fileId;
+    return fileId;
   };
 
   const avatarFileId = fileFor("avatar_url", body.avatar_url);

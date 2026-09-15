@@ -4,21 +4,20 @@ import type { Request, Response, NextFunction } from "express";
 import multer from "multer";
 import { v4 as uuidv4 } from "uuid";
 import mime from "mime-types";
-import sharp from "sharp";
 import { execFile } from "child_process";
 import { unlink, readFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
-import { deleteObject, putObject, getObject } from "../storage";
-import { insertFile, insertImageJob, getFile, updateFileRecord, updateUserAvatar, setUserAvatar, getServerConfig, getUserByServerId, DEFAULT_AVATAR_MAX_BYTES, DEFAULT_UPLOAD_MAX_BYTES } from "../db";
+import { putObject, getObject } from "../storage";
+import { insertFile, insertImageJob, getFile, updateUserAvatar, setUserAvatar, getServerConfig, getUserByServerId, DEFAULT_AVATAR_MAX_BYTES, DEFAULT_UPLOAD_MAX_BYTES } from "../db";
 import { isSealedUpload, storageForUpload } from "./uploadStorage";
 import { requireBearerToken } from "../middleware/requireBearerToken";
 import { verifyFileToken, type FileTokenPayload } from "../utils/jwt";
+import { storeAvatarPicture } from "../services/avatarImage";
 import { fileReadVerdict } from "../services/fileAccess";
 import { RangeNotSatisfiableError } from "../utils/byteRange";
 import { ensurePermission } from "../middleware/requirePermission";
-import { AVATAR_MAX_PX, AVATAR_THUMB_PX } from "../constants/media";
-import { findDominantColor, validateImage, MAX_INPUT_PIXELS } from "../utils/imageValidation";
+import { validateImage } from "../utils/imageValidation";
 import { sanitizeSvg } from "../utils/svgSanitize";
 
 /** Takes multer's path, so a video never has to fit in memory. */
@@ -275,15 +274,15 @@ uploadsRouter.post(
   },
 );
 
-/** One pipeline for both pictures. Only an avatar is put on the uploader's own
-    row; a group picture doing that was GRYT-1182. */
-const storeAvatarImage = (purpose: "avatar" | "group") =>
+/** One pipeline for all three pictures. Only an avatar is put on the uploader's
+    own row; a group picture doing that was GRYT-1182. */
+const storeAvatarImage = (purpose: "avatar" | "group" | "webhook") =>
   (req: Request, res: Response, next: NextFunction): void => {
     const file = req.file;
     if (!file) { res.status(400).json({ error: "file_required", message: "file is required" }); return; }
     if (!(file.mimetype || "").startsWith("image/")) { res.status(400).json({ error: "invalid_file", message: "Only image files are allowed" }); return; }
 
-    const what = purpose === "avatar" ? "Avatar" : "Group picture";
+    const what = purpose === "avatar" ? "Avatar" : purpose === "group" ? "Group picture" : "Webhook avatar";
     const disableS3 = (process.env.DISABLE_S3 || "").toLowerCase() === "true";
     if (disableS3) { res.status(503).json({ error: "s3_disabled", message: `S3 is disabled (DISABLE_S3=true). ${what} upload is unavailable.` }); return; }
 
@@ -291,11 +290,6 @@ const storeAvatarImage = (purpose: "avatar" | "group") =>
     if (!bucket) { res.status(500).json({ error: "s3_not_configured", message: "S3_BUCKET not configured" }); return; }
     const serverUserId = req.tokenPayload?.serverUserId;
     if (!serverUserId) { res.status(401).json({ error: "auth_required" }); return; }
-
-    const fileId = uuidv4();
-    const inputMime = (file.mimetype || "").toLowerCase();
-    const isAnimated = inputMime === "image/gif" || inputMime === "image/webp";
-    const animExt = inputMime === "image/gif" ? "gif" : "webp";
 
     Promise.resolve()
       .then(async () => {
@@ -312,15 +306,6 @@ const storeAvatarImage = (purpose: "avatar" | "group") =>
           return;
         }
 
-        let key: string;
-        let storedBody: Buffer;
-        let storedMime: string;
-        let storedSize: number;
-        let width: number | null = null;
-        let height: number | null = null;
-        let thumbKey: string | null = null;
-        let processing = false;
-
         // SVG never reaches sharp. Stored as the sanitised vector; see
         // svgSanitize.ts for why that is enough.
         if ((file.mimetype || "").toLowerCase() === "image/svg+xml") {
@@ -330,8 +315,9 @@ const storeAvatarImage = (purpose: "avatar" | "group") =>
             return;
           }
 
+          const fileId = uuidv4();
           const body = Buffer.from(svg.svg, "utf8");
-          key = `avatars/${fileId}.svg`;
+          const key = `avatars/${fileId}.svg`;
           await putObject({ bucket, key, body, contentType: "image/svg+xml" });
 
           // No thumbnail: a vector is already the small one, and anything
@@ -353,173 +339,25 @@ const storeAvatarImage = (purpose: "avatar" | "group") =>
           return;
         }
 
-        const validation = await validateImage(file.buffer, { animated: isAnimated });
-        if (!validation.valid) {
-          res.status(400).json({ error: "invalid_file", message: validation.reason });
-          return;
-        }
-        width = validation.width;
-        height = validation.height;
-
-        // Dimensions, not bytes: what is left is the modestly-sized animated
-        // avatar with large dimensions.
-        const withinBounds =
-          file.size <= maxBytes &&
-          (width ?? 0) <= AVATAR_MAX_PX &&
-          (height ?? 0) <= AVATAR_MAX_PX;
-
-        if (isAnimated && withinBounds) {
-          key = `avatars/${fileId}.${animExt}`;
-          storedBody = file.buffer;
-          storedMime = inputMime;
-          storedSize = file.size;
-
-          const thumb = await sharp(file.buffer, { pages: 1, failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
-            .resize({ width: AVATAR_THUMB_PX, height: AVATAR_THUMB_PX, fit: "cover" })
-            .avif({ quality: 50 })
-            .toBuffer()
-            .catch(() => null);
-
-          if (thumb) {
-            thumbKey = `avatars/thumb_${fileId}.avif`;
-            await putObject({ bucket, key: thumbKey, body: thumb, contentType: "image/avif" }).catch((e) => {
-              console.error("avatar_thumb_s3_error", { bucket, key: thumbKey, message: (e instanceof Error ? e.message : "S3 upload failed.") });
-              thumbKey = null;
-            });
-          }
-        } else if (isAnimated) {
-          key = `avatars/${fileId}.avif`;
-          processing = true;
-          try {
-            storedBody = await sharp(file.buffer, { pages: 1, failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
-              .resize({ width: AVATAR_MAX_PX, height: AVATAR_MAX_PX, fit: "cover" })
-              .avif()
-              .toBuffer();
-          } catch {
-            res.status(400).json({ error: "invalid_file", message: "Could not process image." });
-            return;
-          }
-          storedMime = "image/avif";
-          storedSize = storedBody.length;
-          // What was stored, not what was uploaded: `cover` crops to exactly
-          // this box, so the original describes a file that is gone.
-          width = AVATAR_MAX_PX;
-          height = AVATAR_MAX_PX;
-        } else {
-          key = `avatars/${fileId}.avif`;
-          try {
-            storedBody = await sharp(file.buffer, { failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
-              .resize({ width: AVATAR_MAX_PX, height: AVATAR_MAX_PX, fit: "cover" })
-              .avif()
-              .toBuffer();
-          } catch {
-            res.status(400).json({ error: "invalid_file", message: "Could not process image. Please upload a valid image under the size limit." });
-            return;
-          }
-          storedMime = "image/avif";
-          storedSize = storedBody.length;
-          width = AVATAR_MAX_PX;
-          height = AVATAR_MAX_PX;
-
-          const thumb = await sharp(file.buffer, { failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
-            .resize({ width: AVATAR_THUMB_PX, height: AVATAR_THUMB_PX, fit: "cover" })
-            .avif({ quality: 50 })
-            .toBuffer()
-            .catch(() => null);
-
-          if (thumb) {
-            thumbKey = `avatars/thumb_${fileId}.avif`;
-            await putObject({ bucket, key: thumbKey, body: thumb, contentType: "image/avif" }).catch((e) => {
-              console.error("avatar_thumb_s3_error", { bucket, key: thumbKey, message: (e instanceof Error ? e.message : "S3 upload failed.") });
-              thumbKey = null;
-            });
-          }
-        }
-
-        try {
-          await putObject({ bucket, key, body: storedBody, contentType: storedMime });
-        } catch (e) {
-          const raw = (e instanceof Error && e.message.trim().length > 0) ? e.message : "";
-          console.error("avatar_upload_s3_error", { bucket, key, message: raw });
-          const friendly =
-            /InvalidBucketName|NoSuchBucket|bucket/i.test(raw)
-              ? "File storage is misconfigured on this server. Please contact the server administrator."
-              : /AccessDenied|Forbidden/i.test(raw)
-                ? "File storage access denied. Please contact the server administrator."
-                : raw.length > 0
-                  ? `${what} upload failed: ${raw}`
-                  : `${what} upload failed due to a storage error.`;
-          res.status(502).json({ error: "s3_error", message: friendly });
-          return;
-        }
-
-        // From the original upload, not `storedBody`, which for an oversized
-        // animated avatar is a placeholder replaced further down.
-        const dominantColor = await findDominantColor(file.buffer, { animated: isAnimated });
-
-        await insertFile({
-          file_id: fileId,
-          s3_key: key,
-          mime: storedMime,
-          size: storedSize,
-          width,
-          height,
-          thumbnail_key: thumbKey,
-          thumbnail_px: thumbKey ? AVATAR_THUMB_PX : null,
-          original_name: file.originalname || null,
-          dominant_color: dominantColor,
-          uploaded_by_server_user_id: serverUserId,
-          created_at: new Date(),
+        const stored = await storeAvatarPicture({
+          bucket,
+          bytes: file.buffer,
+          mime: file.mimetype || "",
+          originalName: file.originalname || null,
+          uploadedBy: serverUserId,
+          maxBytes,
+          what,
         });
+        if (!stored.ok) {
+          res.status(stored.status).json({ error: stored.error, message: stored.message });
+          return;
+        }
 
         if (purpose === "avatar") {
-          await updateUserAvatar(serverUserId, fileId);
-          res.status(201).json({ avatarFileId: fileId, processing });
+          await updateUserAvatar(serverUserId, stored.fileId);
+          res.status(201).json({ avatarFileId: stored.fileId, processing: stored.processing });
         } else {
-          res.status(201).json({ fileId, processing });
-        }
-
-        // Background: resize oversized animated file and replace the placeholder
-        if (processing) {
-          const animBuf = file.buffer;
-          setImmediate(() => {
-            (async () => {
-              try {
-                const outputFormat = inputMime === "image/gif" ? "gif" : "webp";
-                const outputMime = `image/${outputFormat}`;
-                // Every frame is decoded here, unlike the single-page check
-                // that let this buffer through, so the ceiling comes with it.
-                const pipeline = sharp(animBuf, { animated: true, failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
-                  .resize({ width: AVATAR_MAX_PX, height: AVATAR_MAX_PX, fit: "cover" });
-                const resized = outputFormat === "gif"
-                  ? await pipeline.gif().toBuffer()
-                  : await pipeline.webp().toBuffer();
-
-                const animKey = `avatars/${fileId}.${outputFormat}`;
-                await putObject({ bucket, key: animKey, body: resized, contentType: outputMime });
-
-                const thumbBuf = await sharp(resized, { pages: 1, failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
-                  .resize({ width: AVATAR_THUMB_PX, height: AVATAR_THUMB_PX, fit: "cover" })
-                  .avif({ quality: 50 })
-                  .toBuffer()
-                  .catch(() => null);
-                const newThumbKey = thumbBuf ? `avatars/thumb_${fileId}.avif` : null;
-                if (thumbBuf && newThumbKey) {
-                  await putObject({ bucket, key: newThumbKey, body: thumbBuf, contentType: "image/avif" }).catch(() => {});
-                }
-
-                await updateFileRecord(fileId, { s3_key: animKey, mime: outputMime, size: resized.length, thumbnail_key: newThumbKey, thumbnail_px: newThumbKey ? AVATAR_THUMB_PX : null });
-
-                if (animKey !== key) {
-                  await deleteObject({ bucket, key }).catch(() => {});
-                }
-
-                consola.info(`Background avatar processing done for ${fileId} (${(resized.length / 1024).toFixed(0)}KB ${outputFormat})`);
-              } catch (err) {
-                consola.error(`Background avatar processing failed for ${fileId}`, err);
-              }
-            })();
-          });
+          res.status(201).json({ fileId: stored.fileId, processing: stored.processing });
         }
       })
       .catch(next);
@@ -550,6 +388,19 @@ uploadsRouter.post(
   },
   uploadAvatarToMemory("file"),
   storeAvatarImage("group"),
+);
+
+uploadsRouter.post(
+  "/webhook-avatar",
+  requireBearerToken,
+  // The permission every webhook route asks for, since only they use this file.
+  (req: Request, res: Response, next: NextFunction): void => {
+    ensurePermission(req, res, "manage_webhooks")
+      .then((ok) => { if (ok) next(); })
+      .catch(next);
+  },
+  uploadAvatarToMemory("file"),
+  storeAvatarImage("webhook"),
 );
 
 uploadsRouter.delete(

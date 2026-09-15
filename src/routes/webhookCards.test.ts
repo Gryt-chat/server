@@ -70,7 +70,7 @@ before(async () => {
   const host = `127.0.0.1:${(server.address() as AddressInfo).port}`;
   base = `http://${host}`;
   token = generateAccessToken({ serverUserId: user.server_user_id, grytUserId: "acct-owner", nickname: "owner", serverHost: host, tokenVersion: 0 });
-  setWebhookMediaDepsForTests({ fetchBytes: respond, storeImage: realMediaDeps.storeImage });
+  setWebhookMediaDepsForTests({ fetchBytes: respond, storeImage: realMediaDeps.storeImage, storeAvatar: realMediaDeps.storeAvatar });
 });
 
 beforeEach(() => { fetches = []; });
