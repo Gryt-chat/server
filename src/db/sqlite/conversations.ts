@@ -182,6 +182,15 @@ export async function setConversationIcon(
   ).run(fileId, conversationId);
 }
 
+/** For the media sweep, which would otherwise delete a group's picture. */
+export async function getAllGroupIconFileIds(): Promise<Set<string>> {
+  const db = getSqliteDb();
+  const rows = db.prepare(
+    `SELECT icon_file_id FROM conversations WHERE kind = 'group' AND icon_file_id IS NOT NULL`,
+  ).all() as { icon_file_id: string }[];
+  return new Set(rows.map((r) => r.icon_file_id));
+}
+
 /** Name a group, or clear the name so it goes back to reading off its members. */
 export async function setConversationName(
   conversationId: string,

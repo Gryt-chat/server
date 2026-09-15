@@ -49,7 +49,7 @@ describe("multer never runs before authentication", () => {
 
     assert.deepEqual(
       buffering,
-      ["POST /api/server/icon", "POST /api/uploads/", "POST /api/uploads/avatar"],
+      ["POST /api/server/icon", "POST /api/uploads/", "POST /api/uploads/avatar", "POST /api/uploads/group-icon"],
       "the set of body-buffering routes changed; if that is deliberate, update this list",
     );
   });

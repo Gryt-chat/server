@@ -275,24 +275,17 @@ uploadsRouter.post(
   },
 );
 
-uploadsRouter.post(
-  "/avatar",
-  requireBearerToken,
-  /* `upload_avatar_image`, not `change_avatar`: this endpoint only ever gets a
-     picture, so there is no flag for a modified client to lie about. */
-  (req: Request, res: Response, next: NextFunction): void => {
-    ensurePermission(req, res, "upload_avatar_image")
-      .then((ok) => { if (ok) next(); })
-      .catch(next);
-  },
-  uploadAvatarToMemory("file"),
+/** One pipeline for both pictures. Only an avatar is put on the uploader's own
+    row; a group picture doing that was GRYT-1182. */
+const storeAvatarImage = (purpose: "avatar" | "group") =>
   (req: Request, res: Response, next: NextFunction): void => {
     const file = req.file;
     if (!file) { res.status(400).json({ error: "file_required", message: "file is required" }); return; }
     if (!(file.mimetype || "").startsWith("image/")) { res.status(400).json({ error: "invalid_file", message: "Only image files are allowed" }); return; }
 
+    const what = purpose === "avatar" ? "Avatar" : "Group picture";
     const disableS3 = (process.env.DISABLE_S3 || "").toLowerCase() === "true";
-    if (disableS3) { res.status(503).json({ error: "s3_disabled", message: "S3 is disabled (DISABLE_S3=true). Avatar upload is unavailable." }); return; }
+    if (disableS3) { res.status(503).json({ error: "s3_disabled", message: `S3 is disabled (DISABLE_S3=true). ${what} upload is unavailable.` }); return; }
 
     const bucket = process.env.S3_BUCKET as string;
     if (!bucket) { res.status(500).json({ error: "s3_not_configured", message: "S3_BUCKET not configured" }); return; }
@@ -314,7 +307,7 @@ uploadsRouter.post(
         if (typeof maxBytes === "number" && maxBytes > 0 && file.size > maxBytes) {
           res.status(413).json({
             error: "file_too_large",
-            message: `Avatar too large. Max ${(maxBytes / (1024 * 1024)).toFixed(1)}MB.`,
+            message: `${what} too large. Max ${(maxBytes / (1024 * 1024)).toFixed(1)}MB.`,
           });
           return;
         }
@@ -355,7 +348,7 @@ uploadsRouter.post(
             uploaded_by_server_user_id: serverUserId,
           });
 
-          await setUserAvatar(serverUserId, fileId);
+          if (purpose === "avatar") await setUserAvatar(serverUserId, fileId);
           res.json({ fileId, processing: false });
           return;
         }
@@ -454,8 +447,8 @@ uploadsRouter.post(
               : /AccessDenied|Forbidden/i.test(raw)
                 ? "File storage access denied. Please contact the server administrator."
                 : raw.length > 0
-                  ? `Avatar upload failed: ${raw}`
-                  : "Avatar upload failed due to a storage error.";
+                  ? `${what} upload failed: ${raw}`
+                  : `${what} upload failed due to a storage error.`;
           res.status(502).json({ error: "s3_error", message: friendly });
           return;
         }
@@ -479,8 +472,12 @@ uploadsRouter.post(
           created_at: new Date(),
         });
 
-        await updateUserAvatar(serverUserId, fileId);
-        res.status(201).json({ avatarFileId: fileId, processing });
+        if (purpose === "avatar") {
+          await updateUserAvatar(serverUserId, fileId);
+          res.status(201).json({ avatarFileId: fileId, processing });
+        } else {
+          res.status(201).json({ fileId, processing });
+        }
 
         // Background: resize oversized animated file and replace the placeholder
         if (processing) {
@@ -526,7 +523,33 @@ uploadsRouter.post(
         }
       })
       .catch(next);
+  };
+
+uploadsRouter.post(
+  "/avatar",
+  requireBearerToken,
+  /* `upload_avatar_image`, not `change_avatar`: this endpoint only ever gets a
+     picture, so there is no flag for a modified client to lie about. */
+  (req: Request, res: Response, next: NextFunction): void => {
+    ensurePermission(req, res, "upload_avatar_image")
+      .then((ok) => { if (ok) next(); })
+      .catch(next);
   },
+  uploadAvatarToMemory("file"),
+  storeAvatarImage("avatar"),
+);
+
+uploadsRouter.post(
+  "/group-icon",
+  requireBearerToken,
+  // The permission the group handlers ask for, since only they use this file.
+  (req: Request, res: Response, next: NextFunction): void => {
+    ensurePermission(req, res, "send_direct_messages")
+      .then((ok) => { if (ok) next(); })
+      .catch(next);
+  },
+  uploadAvatarToMemory("file"),
+  storeAvatarImage("group"),
 );
 
 uploadsRouter.delete(
