@@ -5,6 +5,7 @@ import {
   getAllFileRecords,
   getAllGroupIconFileIds,
   getAllReferencedAttachmentIds,
+  getAllWebhookAvatarFileIds,
 } from "../db";
 import { deleteObject } from "../storage";
 
@@ -63,6 +64,7 @@ async function referencedFileIds(): Promise<Set<string>> {
     getAllReferencedAttachmentIds(),
     getAllAvatarFileIds(),
     getAllGroupIconFileIds(),
+    getAllWebhookAvatarFileIds(),
   ]);
   return new Set<string>(sources.flatMap((ids) => [...ids]));
 }
