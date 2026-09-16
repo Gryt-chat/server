@@ -50,7 +50,7 @@ if (dials !== "127.0.0.1") {
 }
 
 if (problems.length > 0) {
-  console.error(`${file} would open the SFU to the network:\n`);
+  console.error(`${file} isn't safe to ship in a self-hosted bundle:\n`);
   for (const problem of problems) console.error(`  ${problem}`);
   process.exit(1);
 }
