@@ -10,6 +10,8 @@ import {
   listAllWebhooks,
   updateWebhook,
 } from "../db";
+import { trustedProxyHops } from "../config/clientAddress";
+import { resolveScheme } from "../config/requestScheme";
 import { requireBearerToken } from "../middleware/requireBearerToken";
 import { ensurePermission } from "../middleware/requirePermission";
 import { visibleChannelIds } from "../services/channelPermissions";
@@ -62,6 +64,14 @@ function invalidPayload(res: Response, error: z.ZodError): void {
     message: problems.length === 1 ? "The payload has 1 problem." : `The payload has ${problems.length} problems.`,
     problems,
   });
+}
+
+/** What to copy and paste: the host and scheme the admin's client reached. Behind a
+    tunnel the socket is plain http, so the scheme comes from a trusted proxy's header. */
+function webhookUrl(req: Request, webhookId: string, token: string): string {
+  const host = req.headers.host || "localhost";
+  const scheme = resolveScheme(req.protocol === "https", req.headers["x-forwarded-proto"], trustedProxyHops());
+  return `${scheme}://${host}/api/webhooks/${webhookId}/${token}`;
 }
 
 function displayNameFrom(raw: string | undefined): string | undefined {
@@ -198,9 +208,7 @@ webhooksRouter.post(
 
         const serverUserId = req.tokenPayload!.serverUserId;
         const webhook = await createWebhook(channelId, displayName, serverUserId, avatarFileId);
-        const host = req.headers.host || "localhost";
-        const proto = req.protocol || "http";
-        const url = `${proto}://${host}/api/webhooks/${webhook.webhook_id}/${webhook.token}`;
+        const url = webhookUrl(req, webhook.webhook_id, webhook.token);
 
         res.status(201).json({
           ...webhook,
@@ -224,9 +232,7 @@ webhooksRouter.get(
         if (!await requireAdmin(req, res)) return;
         const webhook = await getWebhookById(webhookId);
         if (!webhook) { res.status(404).json({ error: "not_found" }); return; }
-        const host = req.headers.host || "localhost";
-        const proto = req.protocol || "http";
-        const url = `${proto}://${host}/api/webhooks/${webhook.webhook_id}/${webhook.token}`;
+        const url = webhookUrl(req, webhook.webhook_id, webhook.token);
         res.json({ ...webhook, created_at: webhook.created_at.toISOString(), updated_at: webhook.updated_at.toISOString(), url });
       })
       .catch(next);
