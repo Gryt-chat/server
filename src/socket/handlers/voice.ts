@@ -7,7 +7,7 @@ import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 import { getVoiceSeatLimit } from "../../utils/voiceSeats";
 import { insertServerAudit } from "../../db";
 import { socketIsIdentified, socketMay as socketMayFor } from "../utils/standing";
-import { forgetStashedVoiceState } from "../utils/voiceStash";
+import { beginVoiceRecoveryGrace, forgetStashedVoiceState } from "../utils/voiceStash";
 import { DENIAL_RESPONSES, resolveConversationAccess } from "../utils/conversationAccess";
 import { isConversationId } from "../../db";
 import { endRingsFor } from "./calls";
@@ -415,6 +415,11 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
         if (roomName) socket.leave(roomName);
       }
 
+      if (newJoinedState) {
+        // SFU sync may lag this announcement by a poll or two; do not treat the
+        // just-joined socket as stale while its peer is still appearing.
+        beginVoiceRecoveryGrace(clientsInfo[clientId].serverUserId);
+      }
       clientsInfo[clientId].hasJoinedChannel = newJoinedState;
       if (!newJoinedState) {
         // Drop what is held, or the SFU sync puts them back: the media
