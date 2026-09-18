@@ -11,7 +11,7 @@ import { verifyAccessToken } from "../utils/jwt";
 import { getServerConfig, effectiveModerationState } from "../db";
 import { checkSessionAllowed } from "../moderation/sessionGate";
 import { syncAllClients, verifyClient, broadcastMemberList, countOtherSessions } from "./utils/clients";
-import { stashedVoiceState, type StashedVoiceState, voiceStateOf } from "./utils/voiceStash";
+import { beginVoiceRecoveryGrace, clearVoiceRecoveryGrace, isVoiceRecoveryGraceActive, stashedVoiceState, type StashedVoiceState, voiceStateOf } from "./utils/voiceStash";
 import { setPluginRefs } from "../plugins/refs";
 import { sendInfo, sendServerDetails, setSocketRefs, broadcastChatNew, broadcastCustomEmojisUpdate, broadcastEmojiQueueUpdate, broadcastServerUiUpdate } from "./utils/server";
 import { getServerIdFromEnv } from "../utils/serverId";
@@ -83,6 +83,7 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
 
   sfuClient.setCallbacks({
     onPeerJoined(ev: SFUPeerEvent) {
+      clearVoiceRecoveryGrace(ev.userId);
       sfuClient.trackUserConnection(ev.roomId, ev.userId);
     },
 
@@ -147,6 +148,7 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
         for (const uid of room.user_ids) {
           sfuUsers.add(uid);
           userToChannelId.set(uid, channelId);
+          clearVoiceRecoveryGrace(uid);
           // Only if not already known: re-stamping `connectedAt` keeps it
           // inside `onPeerLeft`'s window, so every leave reads as stale.
           if (!sfuClient.getTrackedUser(uid)) {
@@ -207,7 +209,7 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
       // Gone for good, so drop what is held or a later reconnect puts them back
       // into a call that ended while they were away.
       for (const [uid, stashed] of [...stashedVoiceState.entries()]) {
-        if (sfuUsers.has(uid)) continue;
+        if (sfuUsers.has(uid) || isVoiceRecoveryGraceActive(uid)) continue;
 
         consola.info(`[SFU-Sync] Dropping held voice state for ${uid} — SFU no longer has them`);
         stashedVoiceState.delete(uid);
@@ -228,7 +230,11 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
 
       // Disconnect any server-side users that the SFU no longer knows about
       for (const [sid, ci] of Object.entries(clientsInfo)) {
-        if (ci.hasJoinedChannel && !sfuUsers.has(ci.serverUserId)) {
+        if (
+          ci.hasJoinedChannel &&
+          !sfuUsers.has(ci.serverUserId) &&
+          !isVoiceRecoveryGraceActive(ci.serverUserId)
+        ) {
           consola.info(`[SFU-Sync] Stale voice user ${ci.serverUserId}, forcing disconnect`);
           changed = true;
           const nickname = ci.nickname;
@@ -424,6 +430,7 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
     if (hadVoice && wasRegistered) {
       consola.info(`[Voice:Stash] Holding voice state for ${serverUserId} (socket gone: ${reason})`);
       stashedVoiceState.set(serverUserId, voiceStateOf(clientInfo));
+      beginVoiceRecoveryGrace(serverUserId);
 
       delete clientsInfo[clientId];
       syncAllClients(io, clientsInfo);
@@ -515,6 +522,7 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
           const stashed = stashedVoiceState.get(tokenPayload.serverUserId);
           if (stashed) {
             stashedVoiceState.delete(tokenPayload.serverUserId);
+            beginVoiceRecoveryGrace(tokenPayload.serverUserId);
             consola.info(`[Voice:Stash] Restored voice state for ${tokenPayload.nickname} (${tokenPayload.serverUserId})`);
             applyVoiceState(socket, clientId, stashed, stashed.voiceChannelId, serverId);
           }
