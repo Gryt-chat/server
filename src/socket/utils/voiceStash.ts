@@ -19,6 +19,38 @@ export interface StashedVoiceState {
 
 export const stashedVoiceState = new Map<string, StashedVoiceState>();
 
+/**
+ * A signalling reconnect can restore the socket before the SFU peer has rejoined.
+ * Sync runs every two seconds, so without a grace window it can tear the restored
+ * socket back out while WebRTC is still doing exactly the recovery we asked for.
+ */
+export const VOICE_RECOVERY_GRACE_MS = 45_000;
+const voiceRecoveryGraceUntil = new Map<string, number>();
+
+export function beginVoiceRecoveryGrace(
+  serverUserId: string,
+  now = Date.now(),
+): void {
+  voiceRecoveryGraceUntil.set(serverUserId, now + VOICE_RECOVERY_GRACE_MS);
+}
+
+export function clearVoiceRecoveryGrace(serverUserId: string): void {
+  voiceRecoveryGraceUntil.delete(serverUserId);
+}
+
+export function isVoiceRecoveryGraceActive(
+  serverUserId: string,
+  now = Date.now(),
+): boolean {
+  const until = voiceRecoveryGraceUntil.get(serverUserId);
+  if (until === undefined) return false;
+  if (until <= now) {
+    voiceRecoveryGraceUntil.delete(serverUserId);
+    return false;
+  }
+  return true;
+}
+
 /** Everything this socket had in voice, as a stash entry. */
 export function voiceStateOf(ci: Clients[string]): StashedVoiceState {
   return {
@@ -39,4 +71,5 @@ export function voiceStateOf(ci: Clients[string]): StashedVoiceState {
     media connection is still closing. */
 export function forgetStashedVoiceState(serverUserId: string): void {
   stashedVoiceState.delete(serverUserId);
+  clearVoiceRecoveryGrace(serverUserId);
 }
