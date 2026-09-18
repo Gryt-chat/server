@@ -19,11 +19,8 @@ export interface StashedVoiceState {
 
 export const stashedVoiceState = new Map<string, StashedVoiceState>();
 
-/**
- * A signalling reconnect can restore the socket before the SFU peer has rejoined.
- * Sync runs every two seconds, so without a grace window it can tear the restored
- * socket back out while WebRTC is still doing exactly the recovery we asked for.
- */
+/** Keep socket-restored voice out of the 2s stale sync long enough for WebRTC/SFU
+    recovery to finish after a shared transport drop. */
 export const VOICE_RECOVERY_GRACE_MS = 45_000;
 const voiceRecoveryGraceUntil = new Map<string, number>();
 
