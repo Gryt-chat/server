@@ -91,10 +91,8 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
 
   sfuClient.setCallbacks({
     onPeerJoined(ev: SFUPeerEvent) {
-      // This is the authoritative point where the replacement SFU peer exists.
-      // Refresh the tracker even if the server missed the old peer_left while its
-      // control socket was down, then move from the explicit signaling-recovery
-      // window to the short peer_left replay window.
+      // The SFU now has the replacement peer. Refresh any stale tracker and move
+      // from explicit signaling recovery to the short peer_left replay window.
       clearVoiceRecoveryGrace(ev.userId);
       sfuClient.untrackUserConnection(ev.userId);
       sfuClient.trackUserConnection(ev.roomId, ev.userId);
@@ -164,10 +162,8 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
           userToChannelId.set(uid, channelId);
           clearVoiceRecoveryGrace(uid);
 
-          // A missed peer_joined can leave the tracker carrying the provisional
-          // stream id from voice:stream:set. Refresh only when it is absent or
-          // points at a different room; doing this every 2s would keep every
-          // genuine peer_left inside the short reconnect window forever.
+          // Refresh a missing/wrong-room tracker, but not every sync: re-stamping
+          // every 2s would keep genuine peer_left events inside reconnect grace.
           const tracked = sfuClient.getTrackedUser(uid);
           if (!tracked || tracked.roomId !== room.room_id) {
             if (tracked) sfuClient.untrackUserConnection(uid);
