@@ -90,7 +90,7 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
     onPeerLeft(ev: SFUPeerEvent) {
       const tracked = sfuClient.getTrackedUser(ev.userId);
 
-      if (withinSfuReconnectGrace(tracked?.connectedAt)) {
+      if (tracked && withinSfuReconnectGrace(tracked.connectedAt)) {
         consola.info(
           `[SFU-Sync] Ignoring stale peer_left for ${ev.userId} — ` +
           `reconnected ${Date.now() - tracked.connectedAt}ms ago`,
