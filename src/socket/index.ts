@@ -12,6 +12,7 @@ import { getServerConfig, effectiveModerationState } from "../db";
 import { checkSessionAllowed } from "../moderation/sessionGate";
 import { syncAllClients, verifyClient, broadcastMemberList, countOtherSessions } from "./utils/clients";
 import { stashedVoiceState, type StashedVoiceState, voiceStateOf } from "./utils/voiceStash";
+import { withinSfuReconnectGrace } from "./utils/sfuReconnectGrace";
 import { setPluginRefs } from "../plugins/refs";
 import { sendInfo, sendServerDetails, setSocketRefs, broadcastChatNew, broadcastCustomEmojisUpdate, broadcastEmojiQueueUpdate, broadcastServerUiUpdate } from "./utils/server";
 import { getServerIdFromEnv } from "../utils/serverId";
@@ -87,10 +88,9 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
     },
 
     onPeerLeft(ev: SFUPeerEvent) {
-      const RECONNECT_GRACE_MS = 10_000;
       const tracked = sfuClient.getTrackedUser(ev.userId);
 
-      if (tracked && (Date.now() - tracked.connectedAt) < RECONNECT_GRACE_MS) {
+      if (withinSfuReconnectGrace(tracked?.connectedAt)) {
         consola.info(
           `[SFU-Sync] Ignoring stale peer_left for ${ev.userId} — ` +
           `reconnected ${Date.now() - tracked.connectedAt}ms ago`,
@@ -229,6 +229,14 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
       // Disconnect any server-side users that the SFU no longer knows about
       for (const [sid, ci] of Object.entries(clientsInfo)) {
         if (ci.hasJoinedChannel && !sfuUsers.has(ci.serverUserId)) {
+          const tracked = sfuClient.getTrackedUser(ci.serverUserId);
+          if (withinSfuReconnectGrace(tracked?.connectedAt)) {
+            consola.info(
+              `[SFU-Sync] Waiting for reconnecting voice user ${ci.serverUserId} to appear in sync`,
+            );
+            continue;
+          }
+
           consola.info(`[SFU-Sync] Stale voice user ${ci.serverUserId}, forcing disconnect`);
           changed = true;
           const nickname = ci.nickname;
