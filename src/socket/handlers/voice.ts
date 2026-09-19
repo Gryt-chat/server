@@ -7,7 +7,10 @@ import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 import { getVoiceSeatLimit } from "../../utils/voiceSeats";
 import { insertServerAudit } from "../../db";
 import { socketIsIdentified, socketMay as socketMayFor } from "../utils/standing";
-import { forgetStashedVoiceState } from "../utils/voiceStash";
+import {
+  beginVoiceRecoveryGrace,
+  forgetStashedVoiceState,
+} from "../utils/voiceStash";
 import { DENIAL_RESPONSES, resolveConversationAccess } from "../utils/conversationAccess";
 import { isConversationId } from "../../db";
 import { endRingsFor } from "./calls";
@@ -415,6 +418,10 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
         if (roomName) socket.leave(roomName);
       }
 
+      if (newJoinedState && clientsInfo[clientId].serverUserId) {
+        beginVoiceRecoveryGrace(clientsInfo[clientId].serverUserId);
+      }
+
       clientsInfo[clientId].hasJoinedChannel = newJoinedState;
       if (!newJoinedState) {
         // Drop what is held, or the SFU sync puts them back: the media
@@ -503,6 +510,10 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
         const targetSocket = io.sockets.sockets.get(targetSocketId);
 
         consola.info(`[Voice:kick] actor=${auth.tokenPayload.serverUserId} target=${targetUserId} channel=${targetClient.streamID}`);
+
+        // A moderation leave is deliberate. Clear any reconnect protection before
+        // the SFU closes the peer, or a just-recovered user could ignore the kick.
+        forgetStashedVoiceState(targetUserId);
 
         // Tell the SFU to force-close the user's WebRTC connection
         if (sfuClient && targetClient.streamID) {
