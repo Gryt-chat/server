@@ -11,7 +11,14 @@ import { verifyAccessToken } from "../utils/jwt";
 import { getServerConfig, effectiveModerationState } from "../db";
 import { checkSessionAllowed } from "../moderation/sessionGate";
 import { syncAllClients, verifyClient, broadcastMemberList, countOtherSessions } from "./utils/clients";
-import { stashedVoiceState, type StashedVoiceState, voiceStateOf } from "./utils/voiceStash";
+import {
+  beginVoiceRecoveryGrace,
+  clearVoiceRecoveryGrace,
+  isVoiceRecoveryGraceActive,
+  stashedVoiceState,
+  type StashedVoiceState,
+  voiceStateOf,
+} from "./utils/voiceStash";
 import { withinSfuReconnectGrace } from "./utils/sfuReconnectGrace";
 import { setPluginRefs } from "../plugins/refs";
 import { sendInfo, sendServerDetails, setSocketRefs, broadcastChatNew, broadcastCustomEmojisUpdate, broadcastEmojiQueueUpdate, broadcastServerUiUpdate } from "./utils/server";
@@ -84,16 +91,24 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
 
   sfuClient.setCallbacks({
     onPeerJoined(ev: SFUPeerEvent) {
+      // This is the authoritative point where the replacement SFU peer exists.
+      // Refresh the tracker even if the server missed the old peer_left while its
+      // control socket was down, then move from the explicit signaling-recovery
+      // window to the short peer_left replay window.
+      clearVoiceRecoveryGrace(ev.userId);
+      sfuClient.untrackUserConnection(ev.userId);
       sfuClient.trackUserConnection(ev.roomId, ev.userId);
     },
 
     onPeerLeft(ev: SFUPeerEvent) {
       const tracked = sfuClient.getTrackedUser(ev.userId);
 
-      if (tracked && withinSfuReconnectGrace(tracked.connectedAt)) {
+      if (
+        isVoiceRecoveryGraceActive(ev.userId) ||
+        (tracked && withinSfuReconnectGrace(tracked.connectedAt))
+      ) {
         consola.info(
-          `[SFU-Sync] Ignoring stale peer_left for ${ev.userId} — ` +
-          `reconnected ${Date.now() - tracked.connectedAt}ms ago`,
+          `[SFU-Sync] Ignoring peer_left for recovering voice user ${ev.userId}`,
         );
         return;
       }
@@ -147,9 +162,15 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
         for (const uid of room.user_ids) {
           sfuUsers.add(uid);
           userToChannelId.set(uid, channelId);
-          // Only if not already known: re-stamping `connectedAt` keeps it
-          // inside `onPeerLeft`'s window, so every leave reads as stale.
-          if (!sfuClient.getTrackedUser(uid)) {
+          clearVoiceRecoveryGrace(uid);
+
+          // A missed peer_joined can leave the tracker carrying the provisional
+          // stream id from voice:stream:set. Refresh only when it is absent or
+          // points at a different room; doing this every 2s would keep every
+          // genuine peer_left inside the short reconnect window forever.
+          const tracked = sfuClient.getTrackedUser(uid);
+          if (!tracked || tracked.roomId !== room.room_id) {
+            if (tracked) sfuClient.untrackUserConnection(uid);
             sfuClient.trackUserConnection(room.room_id, uid);
           }
         }
@@ -208,6 +229,12 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
       // into a call that ended while they were away.
       for (const [uid, stashed] of [...stashedVoiceState.entries()]) {
         if (sfuUsers.has(uid)) continue;
+        if (isVoiceRecoveryGraceActive(uid)) {
+          consola.info(
+            `[SFU-Sync] Holding voice state for recovering user ${uid} while SFU catches up`,
+          );
+          continue;
+        }
 
         consola.info(`[SFU-Sync] Dropping held voice state for ${uid} — SFU no longer has them`);
         stashedVoiceState.delete(uid);
@@ -229,10 +256,9 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
       // Disconnect any server-side users that the SFU no longer knows about
       for (const [sid, ci] of Object.entries(clientsInfo)) {
         if (ci.hasJoinedChannel && !sfuUsers.has(ci.serverUserId)) {
-          const tracked = sfuClient.getTrackedUser(ci.serverUserId);
-          if (withinSfuReconnectGrace(tracked?.connectedAt)) {
+          if (isVoiceRecoveryGraceActive(ci.serverUserId)) {
             consola.info(
-              `[SFU-Sync] Waiting for reconnecting voice user ${ci.serverUserId} to appear in sync`,
+              `[SFU-Sync] Waiting for recovering voice user ${ci.serverUserId} to appear in sync`,
             );
             continue;
           }
@@ -432,6 +458,7 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
     if (hadVoice && wasRegistered) {
       consola.info(`[Voice:Stash] Holding voice state for ${serverUserId} (socket gone: ${reason})`);
       stashedVoiceState.set(serverUserId, voiceStateOf(clientInfo));
+      beginVoiceRecoveryGrace(serverUserId);
 
       delete clientsInfo[clientId];
       syncAllClients(io, clientsInfo);
@@ -523,6 +550,7 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
           const stashed = stashedVoiceState.get(tokenPayload.serverUserId);
           if (stashed) {
             stashedVoiceState.delete(tokenPayload.serverUserId);
+            beginVoiceRecoveryGrace(tokenPayload.serverUserId);
             consola.info(`[Voice:Stash] Restored voice state for ${tokenPayload.nickname} (${tokenPayload.serverUserId})`);
             applyVoiceState(socket, clientId, stashed, stashed.voiceChannelId, serverId);
           }
