@@ -19,6 +19,47 @@ export interface StashedVoiceState {
 
 export const stashedVoiceState = new Map<string, StashedVoiceState>();
 
+/**
+ * The signaling socket can restore voice before the replacement SFU peer shows up in the
+ * server's next sync. Keep that gap explicit instead of inferring it from the SFU tracker's
+ * connectedAt, which describes a different transport and can be minutes old.
+ *
+ * No timer is scheduled: callers ask whether the deadline is still live, and expired entries
+ * clean themselves up on that read.
+ */
+export const VOICE_RECOVERY_GRACE_MS = 45_000;
+const voiceRecoveryGraceUntil = new Map<string, number>();
+
+export function beginVoiceRecoveryGrace(
+  serverUserId: string,
+  now = Date.now(),
+): void {
+  if (!serverUserId) return;
+  voiceRecoveryGraceUntil.set(serverUserId, now + VOICE_RECOVERY_GRACE_MS);
+}
+
+export function clearVoiceRecoveryGrace(serverUserId: string): void {
+  if (!serverUserId) return;
+  voiceRecoveryGraceUntil.delete(serverUserId);
+}
+
+export function isVoiceRecoveryGraceActive(
+  serverUserId: string,
+  now = Date.now(),
+): boolean {
+  if (!serverUserId) return false;
+
+  const until = voiceRecoveryGraceUntil.get(serverUserId);
+  if (until === undefined) return false;
+
+  if (until <= now) {
+    voiceRecoveryGraceUntil.delete(serverUserId);
+    return false;
+  }
+
+  return true;
+}
+
 /** Everything this socket had in voice, as a stash entry. */
 export function voiceStateOf(ci: Clients[string]): StashedVoiceState {
   return {
@@ -39,4 +80,5 @@ export function voiceStateOf(ci: Clients[string]): StashedVoiceState {
     media connection is still closing. */
 export function forgetStashedVoiceState(serverUserId: string): void {
   stashedVoiceState.delete(serverUserId);
+  clearVoiceRecoveryGrace(serverUserId);
 }
