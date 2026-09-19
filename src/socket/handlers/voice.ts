@@ -7,7 +7,10 @@ import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 import { getVoiceSeatLimit } from "../../utils/voiceSeats";
 import { insertServerAudit } from "../../db";
 import { socketIsIdentified, socketMay as socketMayFor } from "../utils/standing";
-import { forgetStashedVoiceState } from "../utils/voiceStash";
+import {
+  beginVoiceRecoveryGrace,
+  forgetStashedVoiceState,
+} from "../utils/voiceStash";
 import { DENIAL_RESPONSES, resolveConversationAccess } from "../utils/conversationAccess";
 import { isConversationId } from "../../db";
 import { endRingsFor } from "./calls";
@@ -146,6 +149,13 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
       const newJoinedState = streamID.length > 0;
       const serverUserId = clientsInfo[clientId].serverUserId;
       consola.info(`[Voice:stream:set] client=${clientId} user=${serverUserId} streamID="${streamID}" wasInChannel=${wasInChannel}`);
+
+      // stream:set is sent only after the client has joined the SFU. The server's
+      // control-socket view can still lag that event by a sync or two, so mark
+      // the signaling side as recovering before reconciliation sees it.
+      if (newJoinedState && serverUserId) {
+        beginVoiceRecoveryGrace(serverUserId);
+      }
 
       // Duplicate connection detection
       if (newJoinedState && serverUserId) {
@@ -415,6 +425,10 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
         if (roomName) socket.leave(roomName);
       }
 
+      if (newJoinedState && clientsInfo[clientId].serverUserId) {
+        beginVoiceRecoveryGrace(clientsInfo[clientId].serverUserId);
+      }
+
       clientsInfo[clientId].hasJoinedChannel = newJoinedState;
       if (!newJoinedState) {
         // Drop what is held, or the SFU sync puts them back: the media
@@ -503,6 +517,10 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
         const targetSocket = io.sockets.sockets.get(targetSocketId);
 
         consola.info(`[Voice:kick] actor=${auth.tokenPayload.serverUserId} target=${targetUserId} channel=${targetClient.streamID}`);
+
+        // A moderation leave is deliberate. Clear any reconnect protection before
+        // the SFU closes the peer, or a just-recovered user could ignore the kick.
+        forgetStashedVoiceState(targetUserId);
 
         // Tell the SFU to force-close the user's WebRTC connection
         if (sfuClient && targetClient.streamID) {
