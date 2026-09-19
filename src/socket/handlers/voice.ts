@@ -150,13 +150,6 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
       const serverUserId = clientsInfo[clientId].serverUserId;
       consola.info(`[Voice:stream:set] client=${clientId} user=${serverUserId} streamID="${streamID}" wasInChannel=${wasInChannel}`);
 
-      // stream:set is sent only after the client has joined the SFU. The server's
-      // control-socket view can still lag that event by a sync or two, so mark
-      // the signaling side as recovering before reconciliation sees it.
-      if (newJoinedState && serverUserId) {
-        beginVoiceRecoveryGrace(serverUserId);
-      }
-
       // Duplicate connection detection
       if (newJoinedState && serverUserId) {
         const existingConnection = Object.entries(clientsInfo).find(
