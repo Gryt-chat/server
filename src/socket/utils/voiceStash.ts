@@ -19,14 +19,7 @@ export interface StashedVoiceState {
 
 export const stashedVoiceState = new Map<string, StashedVoiceState>();
 
-/**
- * The signaling socket can restore voice before the replacement SFU peer shows up in the
- * server's next sync. Keep that gap explicit instead of inferring it from the SFU tracker's
- * connectedAt, which describes a different transport and can be minutes old.
- *
- * No timer is scheduled: callers ask whether the deadline is still live, and expired entries
- * clean themselves up on that read.
- */
+/** Keep signaling recovery explicit; the SFU tracker's connectedAt can be unrelated and old. */
 export const VOICE_RECOVERY_GRACE_MS = 45_000;
 const voiceRecoveryGraceUntil = new Map<string, number>();
 
