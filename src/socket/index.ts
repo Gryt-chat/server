@@ -238,6 +238,9 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
 
         consola.info(`[SFU-Sync] Dropping held voice state for ${uid} — SFU no longer has them`);
         stashedVoiceState.delete(uid);
+        // The control socket may have missed peer_left during the same outage.
+        // Once sync is authoritative that the user is gone, the seat/tracker must go too.
+        sfuClient.untrackUserConnection(uid);
 
         // Where somebody actually leaves. On socket disconnect, a two second
         // blip played the leave chime and then the join chime.
