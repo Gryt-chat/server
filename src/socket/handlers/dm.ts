@@ -481,7 +481,8 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
       }
     },
 
-    /** Every direct message this member is party to, most recent first. */
+    /** Every direct message this member is party to, most recent first. Says
+        whether the server takes new ones, which a client cannot otherwise know. */
     'dm:list': async (payload: { accessToken: string }) => {
       try {
         const ip = getClientIp();
@@ -499,7 +500,11 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
         const auth = await requireAuth(socket, payload);
         if (!auth) return;
 
-        socket.emit("dm:list", { items: await viewsFor(auth.tokenPayload.serverUserId) });
+        const cfg = await getServerConfig().catch(() => null);
+        socket.emit("dm:list", {
+          items: await viewsFor(auth.tokenPayload.serverUserId),
+          allow_dms: cfg?.allow_dms !== false,
+        });
       } catch (err) {
         consola.error("dm:list failed", err);
         socket.emit("dm:error", { error: "failed", message: "Could not list conversations" });

@@ -396,6 +396,19 @@ describe("a server with direct messages turned off", () => {
 
     await updateServerConfig({ allowDms: true });
   });
+
+  it("says so with the list, so an app can stop offering new ones", async () => {
+    const allowed = async () => {
+      clearAll();
+      await alice.handlers["dm:list"]({ accessToken: alice.accessToken });
+      return (alice.received("dm:list")[0] as { allow_dms?: boolean } | undefined)?.allow_dms;
+    };
+    assert.equal(await allowed(), true);
+
+    await updateServerConfig({ allowDms: false });
+    assert.equal(await allowed(), false, "the list did not say direct messages are off");
+    await updateServerConfig({ allowDms: true });
+  });
 });
 
 describe("channels are untouched by any of this", () => {
