@@ -9,6 +9,9 @@ export const PERMISSIONS = [
   /** Start or post in a DM. `server_config.allow_dms` overrides this, and
       reading an existing conversation is not gated on it. */
   "send_direct_messages",
+  /** Start a group, or add somebody to one. Talking in a group you are in is
+      `send_direct_messages`. */
+  "create_groups",
   /** Edit a message you sent. Somebody else's is `manage_messages`. */
   "edit_own_messages",
   /** Delete a message you sent. Somebody else's is `manage_messages`. */
@@ -166,6 +169,7 @@ const MEMBER_PERMISSIONS = [
   ...OPEN_TO_EVERYONE,
   "send_messages",
   "send_direct_messages",
+  "create_groups",
   "edit_own_messages",
   "delete_own_messages",
   "attach_files",
@@ -259,7 +263,7 @@ export interface PermissionBackfill {
 }
 
 /** Bump this when adding a batch, and give the new entries the new number. */
-export const PERMISSION_SCHEMA_VERSION = 7;
+export const PERMISSION_SCHEMA_VERSION = 8;
 
 export const PERMISSION_BACKFILLS: readonly PermissionBackfill[] = [
   // Had no gate before: anybody admitted to the server could do all four.
@@ -293,6 +297,9 @@ export const PERMISSION_BACKFILLS: readonly PermissionBackfill[] = [
   /* Carved out of `change_nickname`, so a role that had nicknames taken away
      does not get this handed to it by an upgrade. */
   { version: 7, permission: "set_activity", grantedWith: "change_nickname" },
+
+  // GRYT-1342. Groups needed only `send_direct_messages` before.
+  { version: 8, permission: "create_groups", grantedWith: "send_direct_messages" },
 ];
 
 /** Pure: getting this wrong is a silent privilege change in either direction. */

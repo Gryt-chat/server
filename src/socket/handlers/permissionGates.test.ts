@@ -153,6 +153,8 @@ const TOKEN_GATES: {
 }[] = [
   { event: "chat:send", permission: "send_messages", payload: { conversationId: "general", text: "hi" } },
   { event: "dm:open", permission: "send_direct_messages", payload: { targetServerUserId: "user_x" } },
+  { event: "dm:group:create", permission: "create_groups", payload: { memberIds: ["user_x", "user_y"] } },
+  { event: "dm:group:add", permission: "create_groups", payload: { conversationId: "dm_gnope", targetServerUserId: "user_x" } },
   { event: "chat:react", permission: "add_reactions", payload: { conversationId: "general", messageId: "m1", reactionSrc: "👍" } },
   { event: "chat:report", permission: "report_messages", payload: { conversationId: "general", messageId: "m1" } },
   { event: "user:report", permission: "report_messages", payload: { serverUserId: "user_x", reason: "following me between channels" } },

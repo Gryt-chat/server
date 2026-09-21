@@ -22,7 +22,7 @@ import {
 } from "../../db";
 import { isBotIdentity } from "../../auth/identity";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
-import { requireAuth } from "../middleware/auth";
+import { requireAuth, requirePermission } from "../middleware/auth";
 import { fileReadVerdict } from "../../services/fileAccess";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
@@ -285,6 +285,7 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
 
         const auth = await requireAuth(socket, payload, { permission: "send_direct_messages" });
         if (!auth) return;
+        if (!requirePermission(socket, auth, "create_groups")) return;
 
         const cfg = await getServerConfig().catch(() => null);
         if (cfg && cfg.allow_dms === false) {
@@ -316,6 +317,11 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
             socket.emit("dm:error", { error: "invalid_target", message: "You cannot add a bot to a group" });
             return;
           }
+          // The same rule as `dm:open`, or a group is the way around a block.
+          if (await eitherHasBlocked(auth.tokenPayload.grytUserId, user.gryt_user_id)) {
+            socket.emit("dm:error", { error: "unknown_member", message: "Somebody in that list is not a member of this server" });
+            return;
+          }
         }
 
         if (typeof payload.iconFileId === "string" && payload.iconFileId
@@ -341,7 +347,8 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
       }
     },
 
-    /** Add somebody to a group you are in. Anybody in it may; there is no owner. */
+    /** Add somebody to a group you are in. Anybody in it may; there is no owner.
+        `create_groups` too, or a group made before it was taken away still grows. */
     'dm:group:add': async (payload: { accessToken: string; conversationId: string; targetServerUserId: string }) => {
       try {
         if (!payload || typeof payload.accessToken !== "string" || typeof payload.conversationId !== "string" || typeof payload.targetServerUserId !== "string") {
@@ -351,6 +358,7 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
 
         const auth = await requireAuth(socket, payload, { permission: "send_direct_messages" });
         if (!auth) return;
+        if (!requirePermission(socket, auth, "create_groups")) return;
 
         const self = auth.tokenPayload.serverUserId;
         const conversation = await getConversation(payload.conversationId);
@@ -364,7 +372,8 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
         }
 
         const target = await getUserByServerId(payload.targetServerUserId);
-        if (!target || !target.is_active || isBotIdentity(target.gryt_user_id)) {
+        if (!target || !target.is_active || isBotIdentity(target.gryt_user_id)
+          || (await eitherHasBlocked(auth.tokenPayload.grytUserId, target.gryt_user_id))) {
           socket.emit("dm:error", { error: "unknown_member", message: "That person is not a member of this server" });
           return;
         }
@@ -472,7 +481,8 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
       }
     },
 
-    /** Every direct message this member is party to, most recent first. */
+    /** Every direct message this member is party to, most recent first. Says
+        whether the server takes new ones, which a client cannot otherwise know. */
     'dm:list': async (payload: { accessToken: string }) => {
       try {
         const ip = getClientIp();
@@ -490,7 +500,11 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
         const auth = await requireAuth(socket, payload);
         if (!auth) return;
 
-        socket.emit("dm:list", { items: await viewsFor(auth.tokenPayload.serverUserId) });
+        const cfg = await getServerConfig().catch(() => null);
+        socket.emit("dm:list", {
+          items: await viewsFor(auth.tokenPayload.serverUserId),
+          allow_dms: cfg?.allow_dms !== false,
+        });
       } catch (err) {
         consola.error("dm:list failed", err);
         socket.emit("dm:error", { error: "failed", message: "Could not list conversations" });
