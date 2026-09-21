@@ -8,8 +8,10 @@ import { getVoiceSeatLimit } from "../../utils/voiceSeats";
 import { insertServerAudit } from "../../db";
 import { socketIsIdentified, socketMay as socketMayFor } from "../utils/standing";
 import {
+  applyVoiceState,
   beginVoiceRecoveryGrace,
   forgetStashedVoiceState,
+  stashedVoiceState,
 } from "../utils/voiceStash";
 import { DENIAL_RESPONSES, resolveConversationAccess } from "../utils/conversationAccess";
 import { isConversationId } from "../../db";
@@ -45,6 +47,32 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
     });
 
     return true;
+  }
+
+  /** Asking for the channel again after a drop is the one sure sign the app is
+      still in that call. A reload never asks, so it is never put back. */
+  function resumeHeldVoice(channelId: string): void {
+    const ci = clientsInfo[clientId];
+    const held = ci ? stashedVoiceState.get(ci.serverUserId) : undefined;
+    if (!ci || !held) return;
+    stashedVoiceState.delete(ci.serverUserId);
+
+    if (held.voiceChannelId !== channelId) {
+      // Gone somewhere else, so the channel they dropped out of hears it now.
+      io.to(voiceRoomName(serverId, held.voiceChannelId)).emit("voice:peer:left", {
+        clientId: "",
+        nickname: held.nickname,
+        channelId: held.voiceChannelId,
+      });
+      return;
+    }
+    if (ci.hasJoinedChannel) return;
+
+    beginVoiceRecoveryGrace(ci.serverUserId);
+    consola.info(`[Voice:Stash] Restored voice state for ${ci.nickname} (${ci.serverUserId})`);
+    applyVoiceState(socket, ci, held, channelId, serverId);
+    syncAllClients(io, clientsInfo);
+    broadcastMemberList(io, clientsInfo, serverId);
   }
 
   return {
@@ -334,7 +362,9 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
         consola.info(`[Voice:Step 2] SFU client connected, checking seats…`);
         const seatLimit = getVoiceSeatLimit();
         if (seatLimit && seatLimit > 0) {
-          const used = sfuClient.getActiveUsers().size;
+          // Their own seat is not another one. A switch or a re-announce keeps it.
+          const active = sfuClient.getActiveUsers();
+          const used = active.size - (userId && active.has(userId) ? 1 : 0);
           consola.info(`[Voice:Step 2] Seat check: ${used}/${seatLimit}`);
           if (used >= seatLimit) {
             consola.warn(`[Voice:Step 2] Server full: ${used}/${seatLimit}`);
@@ -344,6 +374,11 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
         }
 
         if (clientsInfo[clientId]) {
+          // A switch. The SFU drops the old peer before it has the new one, and
+          // the sync must not read that gap as leaving.
+          if (clientsInfo[clientId].hasJoinedChannel) {
+            beginVoiceRecoveryGrace(clientsInfo[clientId].serverUserId);
+          }
           clientsInfo[clientId].voiceChannelId = roomId;
         }
 
@@ -363,6 +398,9 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
         const sfuPublicRaw = process.env.SFU_PUBLIC_HOST || process.env.SFU_WS_HOST || "";
         const sfuPublicUrls = sfuPublicRaw.split(",").map(h => h.trim()).filter(Boolean);
         const sfuPublicUrl = sfuPublicUrls[0];
+
+        // Before the grant, whose reply re-sends camera and screen over the held ones.
+        resumeHeldVoice(roomId);
 
         consola.success(`[Voice:Step 5] Granting room access: client=${clientId} room=${uniqueRoomId} sfu_urls=${sfuPublicUrls.join(", ")}`);
         socket.emit("voice:room:granted", { room_id: uniqueRoomId, join_token: joinToken, sfu_url: sfuPublicUrl, sfu_urls: sfuPublicUrls, timestamp: Date.now() });
