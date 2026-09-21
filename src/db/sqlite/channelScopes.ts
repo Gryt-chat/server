@@ -1,8 +1,113 @@
 import { randomUUID } from "crypto";
 
 import { CHANNEL_PERMISSIONS, isChannelPermission, type ChannelPermission } from "../../constants/permissions";
-import type { ChannelPermissionRuleRecord, ChannelPermissionScopeRecord, RuleEffect } from "../interfaces";
+import type {
+  ChannelPermissionRuleRecord,
+  ChannelPermissionScopeRecord,
+  RuleEffect,
+  ServerChannelRecord,
+  ServerSidebarItemRecord,
+} from "../interfaces";
 import { fromIso, getSqliteDb, intToBool, toIso } from "./connection";
+
+export interface ResolvedChannelScope {
+  /** What decides this channel. Null is every role's server-wide answer. */
+  scopeId: string | null;
+  /** The folder it sits in, or null at the top level. */
+  folderId: string | null;
+  followsFolder: boolean;
+}
+
+/**
+ * The one place a channel's scope is worked out: its folder's while it follows
+ * one, otherwise its own. `items` in listing order, since a channel's first row wins.
+ */
+export function resolveChannelScopes(
+  channels: readonly Pick<ServerChannelRecord, "channel_id" | "permission_scope_id" | "follows_folder">[],
+  items: readonly Pick<ServerSidebarItemRecord, "item_id" | "kind" | "channel_id" | "parent_item_id" | "permission_scope_id">[],
+): Map<string, ResolvedChannelScope> {
+  const folderScopes = new Map<string, string | null>();
+  for (const it of items) if (it.kind === "folder") folderScopes.set(it.item_id, it.permission_scope_id ?? null);
+
+  const folderOf = new Map<string, string | null>();
+  for (const it of items) {
+    if (it.kind !== "channel" || !it.channel_id || folderOf.has(it.channel_id)) continue;
+    const parent = it.parent_item_id ?? null;
+    folderOf.set(it.channel_id, parent && folderScopes.has(parent) ? parent : null);
+  }
+
+  const resolved = new Map<string, ResolvedChannelScope>();
+  for (const c of channels) {
+    const folderId = folderOf.get(c.channel_id) ?? null;
+    // A scope of its own wins, so an older build writing one is never overridden.
+    const followsFolder = folderId !== null && !c.permission_scope_id && c.follows_folder;
+    resolved.set(c.channel_id, {
+      scopeId: followsFolder ? folderScopes.get(folderId as string) ?? null : c.permission_scope_id ?? null,
+      folderId,
+      followsFolder,
+    });
+  }
+  return resolved;
+}
+
+/** A private scope belongs to one channel or one folder, so it goes when the
+    last thing using it does. A template stays. */
+export function dropPermissionScopeIfUnused(scopeId: string): void {
+  const db = getSqliteDb();
+  const scope = db
+    .prepare(`SELECT is_template FROM channel_permission_scopes WHERE scope_id = ?`)
+    .get(scopeId) as { is_template: number } | undefined;
+  if (!scope || scope.is_template) return;
+
+  const used = db
+    .prepare(
+      `SELECT (SELECT COUNT(*) FROM channels WHERE permission_scope_id = ?)
+            + (SELECT COUNT(*) FROM sidebar_items WHERE permission_scope_id = ?) AS n`,
+    )
+    .get(scopeId, scopeId) as { n: number };
+  if (used.n > 0) return;
+
+  db.prepare(`DELETE FROM channel_permission_rules WHERE scope_id = ?`).run(scopeId);
+  db.prepare(`DELETE FROM channel_permission_scopes WHERE scope_id = ?`).run(scopeId);
+}
+
+/**
+ * Leaving a folder never opens a channel: one that followed a folder's scope and
+ * sits in none now keeps it as its own. Runs inside the caller's transaction.
+ */
+export function keepScopesOfChannelsLeavingFolders(
+  before: Map<string, ResolvedChannelScope>,
+  after: Map<string, ResolvedChannelScope>,
+): void {
+  const db = getSqliteDb();
+  const now = toIso(new Date());
+
+  for (const [channelId, was] of before) {
+    const is = after.get(channelId);
+    if (!was.followsFolder || !was.scopeId || !is || is.folderId) continue;
+
+    const scope = db
+      .prepare(`SELECT is_template FROM channel_permission_scopes WHERE scope_id = ?`)
+      .get(was.scopeId) as { is_template: number } | undefined;
+    if (!scope) continue;
+
+    // A folder's private scope is copied, not shared: it dies with the folder.
+    let own = was.scopeId;
+    if (!scope.is_template) {
+      own = `scope_${randomUUID().slice(0, 12)}`;
+      db.prepare(
+        `INSERT INTO channel_permission_scopes (scope_id, name, is_template, is_system, created_at, updated_at)
+         VALUES (?, NULL, 0, 0, ?, ?)`,
+      ).run(own, now, now);
+      db.prepare(
+        `INSERT INTO channel_permission_rules (scope_id, role_id, permission, effect, created_at)
+         SELECT ?, role_id, permission, effect, ? FROM channel_permission_rules WHERE scope_id = ?`,
+      ).run(own, now, was.scopeId);
+    }
+    db.prepare(`UPDATE channels SET permission_scope_id = ?, follows_folder = 0, updated_at = ? WHERE channel_id = ?`)
+      .run(own, now, channelId);
+  }
+}
 
 function rowToScope(r: Record<string, unknown>): ChannelPermissionScopeRecord {
   return {
@@ -128,9 +233,13 @@ export async function replacePermissionRules(
   }
 }
 
-/** Deleting the private scope it owned is part of this, since that belongs to
-    one channel and would be left unreachable. A template is left alone. */
-export async function setChannelPermissionScope(channelId: string, scopeId: string | null): Promise<void> {
+/** Any choice made here is the channel's own, Everyone included, unless
+    `followFolder` hands it back to its folder. The private scope it owned goes. */
+export async function setChannelPermissionScope(
+  channelId: string,
+  scopeId: string | null,
+  { followFolder = false }: { followFolder?: boolean } = {},
+): Promise<void> {
   const db = getSqliteDb();
   const now = toIso(new Date());
 
@@ -140,22 +249,11 @@ export async function setChannelPermissionScope(channelId: string, scopeId: stri
       .prepare(`SELECT permission_scope_id FROM channels WHERE channel_id = ?`)
       .get(channelId) as { permission_scope_id: string | null } | undefined;
 
-    db.prepare(`UPDATE channels SET permission_scope_id = ?, updated_at = ? WHERE channel_id = ?`)
-      .run(scopeId, now, channelId);
+    db.prepare(`UPDATE channels SET permission_scope_id = ?, follows_folder = ?, updated_at = ? WHERE channel_id = ?`)
+      .run(scopeId, followFolder && !scopeId ? 1 : 0, now, channelId);
 
     const old = previous?.permission_scope_id;
-    if (old && old !== scopeId) {
-      const stillUsed = db
-        .prepare(`SELECT COUNT(*) AS n FROM channels WHERE permission_scope_id = ?`)
-        .get(old) as { n: number };
-      const scope = db
-        .prepare(`SELECT is_template FROM channel_permission_scopes WHERE scope_id = ?`)
-        .get(old) as { is_template: number } | undefined;
-      if (scope && !scope.is_template && stillUsed.n === 0) {
-        db.prepare(`DELETE FROM channel_permission_rules WHERE scope_id = ?`).run(old);
-        db.prepare(`DELETE FROM channel_permission_scopes WHERE scope_id = ?`).run(old);
-      }
-    }
+    if (old && old !== scopeId) dropPermissionScopeIfUnused(old);
     db.exec("COMMIT");
   } catch (err) {
     db.exec("ROLLBACK");
@@ -163,14 +261,40 @@ export async function setChannelPermissionScope(channelId: string, scopeId: stri
   }
 }
 
-/** Not left dangling: a channel pointing at a gone scope resolves to inheriting
-    only by accident, and the settings dropdown shows nothing selected. */
+/** The folder's half of `setChannelPermissionScope`. Its channels read it
+    through `resolveChannelScopes`, so nothing is written to them. */
+export async function setFolderPermissionScope(folderItemId: string, scopeId: string | null): Promise<void> {
+  const db = getSqliteDb();
+  const now = toIso(new Date());
+
+  db.exec("BEGIN");
+  try {
+    const previous = db
+      .prepare(`SELECT permission_scope_id FROM sidebar_items WHERE item_id = ? AND kind = 'folder'`)
+      .get(folderItemId) as { permission_scope_id: string | null } | undefined;
+
+    db.prepare(`UPDATE sidebar_items SET permission_scope_id = ?, updated_at = ? WHERE item_id = ? AND kind = 'folder'`)
+      .run(scopeId, now, folderItemId);
+
+    const old = previous?.permission_scope_id;
+    if (old && old !== scopeId) dropPermissionScopeIfUnused(old);
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+}
+
+/** Channels and folders on it go to Everyone rather than point at nothing, so
+    what the dropdown shows is what applies. */
 export async function deletePermissionTemplate(scopeId: string): Promise<void> {
   const db = getSqliteDb();
   const now = toIso(new Date());
   db.exec("BEGIN");
   try {
-    db.prepare(`UPDATE channels SET permission_scope_id = NULL, updated_at = ? WHERE permission_scope_id = ?`)
+    db.prepare(`UPDATE channels SET permission_scope_id = NULL, follows_folder = 0, updated_at = ? WHERE permission_scope_id = ?`)
+      .run(now, scopeId);
+    db.prepare(`UPDATE sidebar_items SET permission_scope_id = NULL, updated_at = ? WHERE permission_scope_id = ?`)
       .run(now, scopeId);
     db.prepare(`DELETE FROM channel_permission_rules WHERE scope_id = ?`).run(scopeId);
     db.prepare(`DELETE FROM channel_permission_scopes WHERE scope_id = ? AND is_system = 0`).run(scopeId);

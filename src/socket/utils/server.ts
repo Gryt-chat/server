@@ -5,7 +5,14 @@ import { publicClientList } from "./clients";
 import type { ChannelNotificationLevel, JoinPolicy, RoleDefinitionRecord } from "../../db/interfaces";
 import { FALLBACK_ROLE_ID, PERMISSIONS } from "../../constants/permissions";
 import { getEffectiveStanding } from "../../services/permissions";
-import { joinableChannelIds, postableChannelIds, resetChannelPermissionCache, visibleChannelIds } from "../../services/channelPermissions";
+import {
+  joinableChannelIds,
+  keepsEmptyFolders,
+  postableChannelIds,
+  resetChannelPermissionCache,
+  visibleChannelIds,
+  visibleSidebarItems,
+} from "../../services/channelPermissions";
 import { getAcceptedIdentityTiers } from "../../auth/identity";
 import { announcedPlugins } from "../../plugins";
 import { getVoiceSeatLimit } from "../../utils/voiceSeats";
@@ -23,6 +30,7 @@ import {
   listRoleDefinitions,
   listServerChannels,
   listServerSidebarItems,
+  resolveChannelScopes,
 } from "../../db";
 
 // Module-level references set by socketHandler so REST routes can trigger broadcasts
@@ -235,21 +243,23 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
     ]);
 
     const channelById = new Map(allChannels.map((c) => [c.channel_id, c]));
+    const scopes = resolveChannelScopes(allChannels, allItems);
 
     // Both arrays below derive from `items`. Filtering `channels` alone leaves
     // the id, position and label in `sidebar_items`, which the client draws.
-    const [visible, postable, joinable] = await Promise.all([
+    const [visible, postable, joinable, keepEmpty] = await Promise.all([
       visibleChannelIds(client.serverUserId, client.grytUserId),
       // What the client draws a composer and an unlocked voice room for.
       // `chat:send` and the voice grant still decide.
       postableChannelIds(client.serverUserId, client.grytUserId),
       joinableChannelIds(client.serverUserId, client.grytUserId),
+      keepsEmptyFolders(client.serverUserId, client.grytUserId),
     ]);
     visibleToThem = visible;
-    const items = allItems.filter((it) => it.kind !== "channel" || !it.channel_id || visible.has(it.channel_id));
+    // A folder goes with its last visible channel, so its name goes with it too.
+    const items = visibleSidebarItems(allItems, visible, keepEmpty);
 
-    /* Without `parentItemId` the client has folders it cannot fill. A folder is
-       never filtered above, so an all-hidden one arrives empty, not broken. */
+    // Without `parentItemId` the client has folders it cannot fill.
     sidebar_items = items.map((it) => ({
       id: it.item_id,
       kind: it.kind,
@@ -279,7 +289,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
           automated: c.automated || false,
           defaultNotificationLevel: channelNotificationLevel(c),
           forumTags: c.forum_tags,
-          permissionScopeId: c.permission_scope_id ?? null,
+          permissionScopeId: scopes.get(c.channel_id)?.scopeId ?? null,
           canSend: postable.has(c.channel_id),
           canJoin: joinable.has(c.channel_id),
         }];
@@ -302,7 +312,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
         automated: c.automated || false,
         defaultNotificationLevel: channelNotificationLevel(c),
         forumTags: c.forum_tags,
-        permissionScopeId: c.permission_scope_id ?? null,
+        permissionScopeId: scopes.get(c.channel_id)?.scopeId ?? null,
         canSend: postable.has(c.channel_id),
         canJoin: joinable.has(c.channel_id),
       }));
@@ -397,6 +407,9 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
       /** What code sits between a member and the people they talk to, so it is
           not configurable. No version: that names which known problem applies. */
       plugins: announcedPlugins(),
+      /** A constant: folders carry permissions here. Absent on an older server,
+          which ignores the folder scope events. */
+      folder_permissions: true,
     },
   };
 

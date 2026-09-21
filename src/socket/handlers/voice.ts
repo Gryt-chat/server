@@ -347,6 +347,17 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
           });
           return;
         }
+        // A room can be visible and shut: the scope's `join_voice`, which the
+        // client already draws as `canJoin`.
+        if (access.kind === "channel" && !(await mayInChannel(roomId, userId, "join_voice", clientsInfo[clientId]?.grytUserId))) {
+          consola.warn(`[Voice:Step 1] REFUSED client=${clientId} user=${userId} room=${roomId} reason=join_voice`);
+          socket.emit("voice:room:error", {
+            error: "forbidden",
+            message: "You do not have permission to join this voice channel.",
+            permission: "join_voice",
+          });
+          return;
+        }
 
         if (!sfuClient) {
           consola.error(`[Voice:Step 2] SFU client not initialized`);
