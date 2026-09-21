@@ -2,7 +2,7 @@ import consola from "consola";
 import { Server, Socket } from "socket.io";
 import { Clients } from "../../types";
 import { publicClientList } from "./clients";
-import type { JoinPolicy, RoleDefinitionRecord } from "../../db/interfaces";
+import type { ChannelNotificationLevel, JoinPolicy, RoleDefinitionRecord } from "../../db/interfaces";
 import { FALLBACK_ROLE_ID, PERMISSIONS } from "../../constants/permissions";
 import { getEffectiveStanding } from "../../services/permissions";
 import { joinableChannelIds, postableChannelIds, resetChannelPermissionCache, visibleChannelIds } from "../../services/channelPermissions";
@@ -13,6 +13,7 @@ import { syncAllClients, broadcastMemberList } from "./clients";
 import { refreshAllClientPermissions } from "./standing";
 import { recipientClientIds } from "./recipients";
 import {
+  channelNotificationLevel,
   DEFAULT_AVATAR_MAX_BYTES,
   DEFAULT_UPLOAD_MAX_BYTES,
   ensureDefaultChannels,
@@ -220,7 +221,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
   // Sidebar items are persisted in DB; bootstrap defaults if missing.
   // We still emit `channels` for backward compatibility (derived from sidebar items).
   let sidebar_items: { id: string; kind: string; position: number; channelId?: string; spacerHeight?: number; label?: string; parentItemId?: string }[] = [];
-  let channels: { id: string; name: string; type: string; description?: string; requirePushToTalk?: boolean; disableRnnoise?: boolean; maxBitrate?: number; eSportsMode?: boolean; textInVoice?: boolean; layout?: "chat" | "forum"; automated?: boolean; forumTags?: { id: string; name: string; emoji?: string | null; color?: string | null }[]; permissionScopeId?: string | null; canSend?: boolean; canJoin?: boolean }[] = [];
+  let channels: { id: string; name: string; type: string; description?: string; requirePushToTalk?: boolean; disableRnnoise?: boolean; maxBitrate?: number; eSportsMode?: boolean; textInVoice?: boolean; layout?: "chat" | "forum"; automated?: boolean; defaultNotificationLevel?: ChannelNotificationLevel; forumTags?: { id: string; name: string; emoji?: string | null; color?: string | null }[]; permissionScopeId?: string | null; canSend?: boolean; canJoin?: boolean }[] = [];
   // Empty until read, so a failed read names nobody's voice channel.
   let visibleToThem: ReadonlySet<string> = new Set();
   try {
@@ -276,6 +277,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
           textInVoice: c.text_in_voice || false,
           layout: c.layout,
           automated: c.automated || false,
+          defaultNotificationLevel: channelNotificationLevel(c),
           forumTags: c.forum_tags,
           permissionScopeId: c.permission_scope_id ?? null,
           canSend: postable.has(c.channel_id),
@@ -298,6 +300,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
         textInVoice: c.text_in_voice || false,
         layout: c.layout,
         automated: c.automated || false,
+        defaultNotificationLevel: channelNotificationLevel(c),
         forumTags: c.forum_tags,
         permissionScopeId: c.permission_scope_id ?? null,
         canSend: postable.has(c.channel_id),

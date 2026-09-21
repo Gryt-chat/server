@@ -4,10 +4,11 @@ import consola from "consola";
 import { randomUUID } from "crypto";
 import type { HandlerContext, EventHandlerMap } from "./types";
 import { requireAuth } from "../middleware/auth";
-import type { ForumTag } from "../../db/interfaces";
+import type { ChannelNotificationLevel, ForumTag } from "../../db/interfaces";
 import { syncAllClients, broadcastMemberList, invalidateBroadcastDedupe } from "../utils/clients";
 import { sendServerDetails } from "../utils/server";
 import {
+  channelNotificationLevel,
   listServerChannels,
   upsertServerChannel,
   deleteServerChannel,
@@ -123,6 +124,7 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
             textInVoice: c.text_in_voice || false,
             layout: c.layout,
             automated: c.automated || false,
+            defaultNotificationLevel: channelNotificationLevel(c),
             forumTags: c.forum_tags,
             permissionScopeId: c.permission_scope_id ?? null,
           })),
@@ -139,6 +141,7 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
       requirePushToTalk?: boolean; disableRnnoise?: boolean; maxBitrate?: number | null;
       eSportsMode?: boolean; textInVoice?: boolean;
       layout?: "chat" | "forum"; automated?: boolean; forumTags?: ForumTag[];
+      defaultNotificationLevel?: ChannelNotificationLevel | null;
     }) => {
       try {
         const rl = rlCheck("server:channels:upsert", ctx, RL_SETTINGS);
@@ -175,6 +178,7 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
           layout: payload.layout,
           automated: payload.automated,
           forumTags: payload.forumTags,
+          defaultNotificationLevel: payload.defaultNotificationLevel,
         });
         if (isNewChannel) {
           try {
@@ -519,6 +523,7 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
             requirePushToTalk: ch.require_push_to_talk, disableRnnoise: ch.disable_rnnoise,
             maxBitrate: ch.max_bitrate, eSportsMode: ch.esports_mode, textInVoice: ch.text_in_voice,
             layout: ch.layout, automated: ch.automated, forumTags: ch.forum_tags,
+            defaultNotificationLevel: ch.default_notification,
           });
           pos += 10;
         }
