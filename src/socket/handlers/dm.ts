@@ -22,7 +22,7 @@ import {
 } from "../../db";
 import { isBotIdentity } from "../../auth/identity";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
-import { requireAuth } from "../middleware/auth";
+import { requireAuth, requirePermission } from "../middleware/auth";
 import { fileReadVerdict } from "../../services/fileAccess";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
@@ -285,6 +285,7 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
 
         const auth = await requireAuth(socket, payload, { permission: "send_direct_messages" });
         if (!auth) return;
+        if (!requirePermission(socket, auth, "create_groups")) return;
 
         const cfg = await getServerConfig().catch(() => null);
         if (cfg && cfg.allow_dms === false) {
@@ -341,7 +342,8 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
       }
     },
 
-    /** Add somebody to a group you are in. Anybody in it may; there is no owner. */
+    /** Add somebody to a group you are in. Anybody in it may; there is no owner.
+        `create_groups` too, or a group made before it was taken away still grows. */
     'dm:group:add': async (payload: { accessToken: string; conversationId: string; targetServerUserId: string }) => {
       try {
         if (!payload || typeof payload.accessToken !== "string" || typeof payload.conversationId !== "string" || typeof payload.targetServerUserId !== "string") {
@@ -351,6 +353,7 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
 
         const auth = await requireAuth(socket, payload, { permission: "send_direct_messages" });
         if (!auth) return;
+        if (!requirePermission(socket, auth, "create_groups")) return;
 
         const self = auth.tokenPayload.serverUserId;
         const conversation = await getConversation(payload.conversationId);

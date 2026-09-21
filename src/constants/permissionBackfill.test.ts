@@ -182,4 +182,13 @@ describe("what the backfill will and will not do", () => {
     const withoutAvatar = backfillFor(["read_messages", "view_members"], 5, 6);
     assert.deepEqual(withoutAvatar, []);
   });
+
+  /** Groups needed `send_direct_messages` alone before GRYT-1342, so a server
+      upgraded past it lets the same people make them. */
+  it("hands group creation to whoever could already send direct messages", () => {
+    assert.deepEqual(backfillFor(["send_direct_messages"], 7, 8), ["create_groups"]);
+
+    // A role kept out of DMs stays out of groups.
+    assert.deepEqual(backfillFor(["send_messages", "read_messages"], 7, 8), []);
+  });
 });

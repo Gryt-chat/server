@@ -474,6 +474,80 @@ describe("a role that may talk in channels but not in private", () => {
   });
 });
 
+describe("a role that may message people but not start groups", () => {
+  /** The refusal `requirePermission` sends, naming the permission. */
+  function refusedFor(who: Participant, permission: string): boolean {
+    return who
+      .received("server:error")
+      .some((e) => (e as { error?: string; permission?: string }).error === "forbidden"
+        && (e as { permission?: string }).permission === permission);
+  }
+
+  it("is what a member has by default", () => {
+    const member = BUILT_IN_ROLES.find((r) => r.id === "member");
+    assert.ok(member?.permissions.includes("create_groups"), "a new server's members cannot make groups");
+    const guest = BUILT_IN_ROLES.find((r) => r.id === "guest");
+    assert.equal(guest?.permissions.includes("create_groups"), false, "a guest can make groups");
+  });
+
+  it("can open a direct message, cannot start a group, and can still talk in one", async () => {
+    await createRoleDefinition("no-groups", {
+      name: "No groups",
+      rank: 30,
+      permissions: (BUILT_IN_ROLES.find((r) => r.id === "member")?.permissions ?? []).filter(
+        (p) => p !== "create_groups",
+      ),
+    });
+    const gina = await connectMember("Gina", undefined, "no-groups");
+
+    clearAll();
+    gina.clear();
+    await gina.handlers["dm:open"]({ accessToken: gina.accessToken, targetServerUserId: alice.serverUserId });
+    assert.equal(gina.received("dm:opened").length, 1, "the split took direct messages away too");
+
+    gina.clear();
+    await gina.handlers["dm:group:create"]({
+      accessToken: gina.accessToken,
+      memberIds: [alice.serverUserId, bob.serverUserId],
+    });
+    assert.equal(gina.received("dm:opened").length, 0, "made a group without the permission");
+    assert.ok(refusedFor(gina, "create_groups"), `the refusal did not name create_groups: ${JSON.stringify(gina.emitted)}`);
+
+    // Somebody who may put her in one, which is not hers to refuse.
+    clearAll();
+    gina.clear();
+    await alice.handlers["dm:group:create"]({
+      accessToken: alice.accessToken,
+      memberIds: [bob.serverUserId, gina.serverUserId],
+    });
+    const group = gina.received("dm:opened").at(-1) as { conversation_id: string; kind: string } | undefined;
+    assert.ok(group?.kind === "group", "she was not told about the group she was put in");
+    const conversationId = group.conversation_id;
+
+    gina.clear();
+    await gina.handlers["chat:send"]({ conversationId, accessToken: gina.accessToken, text: "hello from gina" });
+    assert.equal(
+      alice.received("chat:new").filter((m) => (m as { text?: string }).text === "hello from gina").length,
+      1,
+      "talking in a group she is in needed create_groups",
+    );
+
+    // Adding is how a group grows, so it asks for the same thing starting one does.
+    const hank = await connectMember("Hank");
+    gina.clear();
+    await gina.handlers["dm:group:add"]({
+      accessToken: gina.accessToken,
+      conversationId,
+      targetServerUserId: hank.serverUserId,
+    });
+    assert.ok(refusedFor(gina, "create_groups"), "added somebody without the permission");
+    hank.clear();
+    await hank.handlers["dm:list"]({ accessToken: hank.accessToken });
+    const hanks = hank.received("dm:list")[0] as { items: { conversation_id: string }[] };
+    assert.equal(hanks.items.some((c) => c.conversation_id === conversationId), false, "Hank ended up in the group");
+  });
+});
+
 describe("hiding a conversation", () => {
   /** What this member's sidebar would show right now. */
   async function listFor(who: Participant): Promise<string[]> {
