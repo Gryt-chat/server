@@ -12,14 +12,15 @@ import { getServerConfig, effectiveModerationState } from "../db";
 import { checkSessionAllowed } from "../moderation/sessionGate";
 import { syncAllClients, verifyClient, broadcastMemberList, countOtherSessions } from "./utils/clients";
 import {
+  applyVoiceState,
   beginVoiceRecoveryGrace,
   clearVoiceRecoveryGrace,
   isVoiceRecoveryGraceActive,
+  recoveringSocketId,
   stashedVoiceState,
-  type StashedVoiceState,
   voiceStateOf,
 } from "./utils/voiceStash";
-import { withinSfuReconnectGrace } from "./utils/sfuReconnectGrace";
+import { SFU_RECONNECT_GRACE_MS } from "./utils/sfuReconnectGrace";
 import { setPluginRefs } from "../plugins/refs";
 import { sendInfo, sendServerDetails, setSocketRefs, broadcastChatNew, broadcastCustomEmojisUpdate, broadcastEmojiQueueUpdate, broadcastServerUiUpdate } from "./utils/server";
 import { getServerIdFromEnv } from "../utils/serverId";
@@ -52,101 +53,37 @@ const clientsInfo: Clients = {};
 // under our own signature. A real client sends 32 bytes of base64url.
 const MAX_CLIENT_NONCE_LENGTH = 256;
 
-/** `channelId` is separate because the two callers disagree: the sync reads it
-    from the SFU's room list, where the media actually is. */
-function applyVoiceState(
-  socket: Socket,
-  clientId: string,
-  state: StashedVoiceState,
-  channelId: string,
-  serverId: string,
-): void {
-  const ci = clientsInfo[clientId];
-  if (!ci) return;
-
-  ci.hasJoinedChannel = true;
-  ci.voiceChannelId = channelId;
-  ci.streamID = state.streamID;
-  ci.isConnectedToVoice = true;
-  ci.screenShareEnabled = state.screenShareEnabled;
-  ci.screenShareVideoStreamID = state.screenShareVideoStreamID;
-  ci.screenShareAudioStreamID = state.screenShareAudioStreamID;
-  ci.cameraEnabled = state.cameraEnabled;
-  ci.cameraStreamID = state.cameraStreamID;
-  ci.isMuted = state.isMuted;
-  ci.isDeafened = state.isDeafened;
-
-  const roomName = channelId ? voiceRoomName(serverId, channelId) : "";
-  if (roomName) socket.join(roomName);
-
-  socket.emit("voice:state:restored", {
-    channelId,
-    streamID: state.streamID,
-  });
-}
-
 /** Wire the SFU callbacks. Call once, after `io` and `sfuClient` exist. */
 export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
   const serverId = getServerIdFromEnv();
 
   sfuClient.setCallbacks({
     onPeerJoined(ev: SFUPeerEvent) {
-      // The SFU now has the replacement peer. Refresh any stale tracker and move
-      // from explicit signaling recovery to the short peer_left replay window.
+      // The SFU has the peer, so any recovery is over and the seat follows it here.
       clearVoiceRecoveryGrace(ev.userId);
       sfuClient.untrackUserConnection(ev.userId);
       sfuClient.trackUserConnection(ev.roomId, ev.userId);
     },
 
     onPeerLeft(ev: SFUPeerEvent) {
-      const tracked = sfuClient.getTrackedUser(ev.userId);
-
-      if (
-        isVoiceRecoveryGraceActive(ev.userId) ||
-        (tracked && withinSfuReconnectGrace(tracked.connectedAt))
-      ) {
-        consola.info(
-          `[SFU-Sync] Ignoring peer_left for recovering voice user ${ev.userId}`,
-        );
+      // Takes nobody out: switching channels closes the old peer first, and the
+      // event names one room. The sync sees every room once this wait is over.
+      const inCall = Object.values(clientsInfo).some(
+        (ci) => ci.serverUserId === ev.userId && ci.hasJoinedChannel,
+      );
+      if (inCall) {
+        consola.info(`[SFU-Sync] peer_left for ${ev.userId}, still in a call here; waiting for their media`);
+        beginVoiceRecoveryGrace(ev.userId, Date.now(), SFU_RECONNECT_GRACE_MS);
         return;
       }
 
-      sfuClient.untrackUserConnection(ev.userId);
-
-      let changed = false;
-      for (const [sid, ci] of Object.entries(clientsInfo)) {
-        if (ci.serverUserId === ev.userId && ci.hasJoinedChannel) {
-          const nickname = ci.nickname;
-          const channelId = ci.voiceChannelId || "";
-          const roomName = channelId ? voiceRoomName(serverId, channelId) : "";
-          ci.hasJoinedChannel = false;
-          ci.voiceChannelId = "";
-          ci.streamID = "";
-          ci.isConnectedToVoice = false;
-          ci.cameraEnabled = false;
-          ci.cameraStreamID = "";
-          ci.screenShareEnabled = false;
-          ci.screenShareVideoStreamID = "";
-          ci.screenShareAudioStreamID = "";
-
-          const sock = io.sockets.sockets.get(sid);
-          if (sock) {
-            if (roomName) {
-              sock.leave(roomName);
-              sock.to(roomName).emit("voice:peer:left", { clientId: sid, nickname, channelId });
-            }
-            sock.emit("voice:channel:joined", false);
-            sock.emit("voice:stream:set", "");
-            sock.emit("voice:room:leave");
-          }
-          changed = true;
-        }
+      // Nothing carries the call now, unless an app that reconnected since the
+      // drop is on its way back to it. The sync settles it against the SFU's list.
+      const stashed = stashedVoiceState.get(ev.userId);
+      if (!stashed || !recoveringSocketId(io, clientsInfo, ev.userId, stashed.heldAt)) {
+        sfuClient.untrackUserConnection(ev.userId);
       }
-
-      if (changed) {
-        syncAllClients(io, clientsInfo);
-        broadcastMemberList(io, clientsInfo, serverId);
-      }
+      if (stashed) sfuClient.requestSync();
     },
 
     onSyncResponse(rooms: SFUSyncRoom[]) {
@@ -162,8 +99,7 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
           userToChannelId.set(uid, channelId);
           clearVoiceRecoveryGrace(uid);
 
-          // Refresh a missing/wrong-room tracker, but not every sync: re-stamping
-          // every 2s would keep genuine peer_left events inside reconnect grace.
+          // Refresh a missing or wrong-room tracker. It is the seat, so it follows the SFU.
           const tracked = sfuClient.getTrackedUser(uid);
           if (!tracked || tracked.roomId !== room.room_id) {
             if (tracked) sfuClient.untrackUserConnection(uid);
@@ -198,26 +134,16 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
         // mid-join. Not ours to invent a stream id for.
         if (!stashed) continue;
 
-        // Somebody whose media is up but whose client has not reconnected has
-        // nothing to attach to, and the entry keeps waiting.
-        const sockets = Object.entries(clientsInfo).filter(
-          ([, ci]) => ci.serverUserId === uid,
-        );
-        if (sockets.length === 0) continue;
-
-        // The newest, which is insertion order. A user with two is mid-device
-        // switch, and the one that just arrived is the one they are looking at.
-        const [sid] = sockets[sockets.length - 1];
-        const sock = io.sockets.sockets.get(sid);
-        if (!sock) continue;
+        // Media up with no client back yet leaves the entry waiting. A phone that
+        // was already open is not this client, and would be put in the call.
+        const sid = recoveringSocketId(io, clientsInfo, uid, stashed.heldAt);
+        const sock = sid ? io.sockets.sockets.get(sid) : undefined;
+        if (!sid || !sock) continue;
 
         const channelId = userToChannelId.get(uid) || stashed.voiceChannelId;
         stashedVoiceState.delete(uid);
         consola.info(`[SFU-Sync] Restoring voice for ${uid} in ${channelId} — SFU has them, this server did not`);
-        applyVoiceState(sock, sid, stashed, channelId, serverId);
-
-        // No `voice:peer:joined`: nobody was told this person left, so the join
-        // chime would be a chime on a recovery.
+        applyVoiceState(sock, clientsInfo[sid], stashed, channelId, serverId);
         changed = true;
       }
 
@@ -225,7 +151,12 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
       // into a call that ended while they were away.
       for (const [uid, stashed] of [...stashedVoiceState.entries()]) {
         if (sfuUsers.has(uid)) continue;
-        if (isVoiceRecoveryGraceActive(uid)) {
+        // Media cannot come back before signalling does, so with no app back
+        // since the drop there is nothing to wait for.
+        if (
+          isVoiceRecoveryGraceActive(uid) &&
+          recoveringSocketId(io, clientsInfo, uid, stashed.heldAt)
+        ) {
           consola.info(
             `[SFU-Sync] Holding voice state for recovering user ${uid} while SFU catches up`,
           );
@@ -462,6 +393,9 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
       delete clientsInfo[clientId];
       syncAllClients(io, clientsInfo);
       broadcastMemberList(io, clientsInfo, serverId);
+      // The SFU may have dropped the peer before the socket went, and then no
+      // peer_left is coming. Its list says whether anything is left to hold.
+      if (sfuClient?.isConnected()) sfuClient.requestSync();
       return;
     }
 
@@ -544,16 +478,8 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
           clientsInfo[clientId].isServerMuted = moderation.isServerMuted;
           clientsInfo[clientId].isServerDeafened = moderation.isServerDeafened;
 
-          // The fast path; the SFU sync below is the backstop. Doing it here
-          // means a reconnect is whole by the time the client hears anything.
-          const stashed = stashedVoiceState.get(tokenPayload.serverUserId);
-          if (stashed) {
-            stashedVoiceState.delete(tokenPayload.serverUserId);
-            beginVoiceRecoveryGrace(tokenPayload.serverUserId);
-            consola.info(`[Voice:Stash] Restored voice state for ${tokenPayload.nickname} (${tokenPayload.serverUserId})`);
-            applyVoiceState(socket, clientId, stashed, stashed.voiceChannelId, serverId);
-          }
-
+          // Held voice is not put back here: a reload restores a session too. The
+          // app asking for its channel again does it, or the SFU still carrying them.
           const otherCount = countOtherSessions(clientsInfo, clientId, tokenPayload.grytUserId);
           consola.info(
             `Restored session: ${tokenPayload.nickname} (${tokenPayload.serverUserId})` +

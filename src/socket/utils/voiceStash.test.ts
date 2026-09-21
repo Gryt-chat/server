@@ -49,6 +49,16 @@ describe("voice recovery grace", () => {
     );
   });
 
+  it("keeps the longer deadline when a short wait starts inside it", () => {
+    beginVoiceRecoveryGrace(USER, 1_000);
+    beginVoiceRecoveryGrace(USER, 2_000, 10_000);
+
+    assert.equal(
+      isVoiceRecoveryGraceActive(USER, 1_000 + VOICE_RECOVERY_GRACE_MS - 1),
+      true,
+    );
+  });
+
   it("clears as soon as the SFU confirms the replacement peer", () => {
     beginVoiceRecoveryGrace(USER, 1_000);
     clearVoiceRecoveryGrace(USER);
@@ -68,6 +78,7 @@ describe("voice recovery grace", () => {
       cameraStreamID: "",
       isMuted: false,
       isDeafened: false,
+      heldAt: 1_000,
     });
     beginVoiceRecoveryGrace(USER, 1_000);
 

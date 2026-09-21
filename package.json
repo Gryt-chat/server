@@ -42,6 +42,7 @@
     "esbuild": "^0.28.1",
     "eslint": "^9.39.2",
     "globals": "^17.11.0",
+    "socket.io-client": "4.8.3",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.56.0"
