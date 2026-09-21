@@ -317,6 +317,11 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
             socket.emit("dm:error", { error: "invalid_target", message: "You cannot add a bot to a group" });
             return;
           }
+          // The same rule as `dm:open`, or a group is the way around a block.
+          if (await eitherHasBlocked(auth.tokenPayload.grytUserId, user.gryt_user_id)) {
+            socket.emit("dm:error", { error: "unknown_member", message: "Somebody in that list is not a member of this server" });
+            return;
+          }
         }
 
         if (typeof payload.iconFileId === "string" && payload.iconFileId
@@ -367,7 +372,8 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
         }
 
         const target = await getUserByServerId(payload.targetServerUserId);
-        if (!target || !target.is_active || isBotIdentity(target.gryt_user_id)) {
+        if (!target || !target.is_active || isBotIdentity(target.gryt_user_id)
+          || (await eitherHasBlocked(auth.tokenPayload.grytUserId, target.gryt_user_id))) {
           socket.emit("dm:error", { error: "unknown_member", message: "That person is not a member of this server" });
           return;
         }

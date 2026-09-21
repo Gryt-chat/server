@@ -367,6 +367,57 @@ describe("what a block stops", () => {
 
     await unblock(alice, mallory);
   });
+
+  it("refuses a group that would put the two of them in it, started by either", async () => {
+    await block(alice, mallory);
+
+    await mallory.handlers["dm:group:create"]({
+      accessToken: mallory.accessToken,
+      memberIds: [alice.serverUserId, bob.serverUserId],
+    });
+    assert.equal(mallory.received("dm:opened").length, 0, "she put Alice in a group anyway");
+    assert.equal((mallory.received("dm:error")[0] as { error?: string } | undefined)?.error, "unknown_member");
+
+    clearAll();
+    await alice.handlers["dm:group:create"]({
+      accessToken: alice.accessToken,
+      memberIds: [mallory.serverUserId, bob.serverUserId],
+    });
+    assert.equal(alice.received("dm:opened").length, 0, "Alice made a group with somebody she blocked");
+
+    await unblock(alice, mallory);
+  });
+
+  it("refuses adding one of them to a group the other is in", async () => {
+    const dave = await connectMember("Dave");
+    clearAll();
+    await bob.handlers["dm:group:create"]({
+      accessToken: bob.accessToken,
+      memberIds: [mallory.serverUserId, dave.serverUserId],
+    });
+    const groupId = (bob.received("dm:opened").at(-1) as { conversation_id: string }).conversation_id;
+
+    await block(alice, mallory);
+    await mallory.handlers["dm:group:add"]({
+      accessToken: mallory.accessToken,
+      conversationId: groupId,
+      targetServerUserId: alice.serverUserId,
+    });
+    assert.equal(alice.received("dm:opened").length, 0, "Mallory added Alice after Alice blocked her");
+    assert.equal((mallory.received("dm:error")[0] as { error?: string } | undefined)?.error, "unknown_member");
+
+    /* Between the one adding and the one added, like `dm:open`. Bob has no block
+     * with Alice, so she can share a group with Mallory the way she shares a channel. */
+    clearAll();
+    await bob.handlers["dm:group:add"]({
+      accessToken: bob.accessToken,
+      conversationId: groupId,
+      targetServerUserId: alice.serverUserId,
+    });
+    assert.equal(alice.received("dm:opened").length, 1, "a block between two people stopped a third adding one of them");
+
+    await unblock(alice, mallory);
+  });
 });
 
 describe("unblocking", () => {
