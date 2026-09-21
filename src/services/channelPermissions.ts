@@ -1,6 +1,6 @@
 import type { ChannelPermission } from "../constants/permissions";
-import type { ChannelPermissionRuleRecord } from "../db/interfaces";
-import { listAllPermissionRules, listServerChannels } from "../db";
+import type { ChannelPermissionRuleRecord, ServerSidebarItemRecord } from "../db/interfaces";
+import { listAllPermissionRules, listServerChannels, listServerSidebarItems, resolveChannelScopes } from "../db";
 import { getEffectiveStanding } from "./permissions";
 
 /**
@@ -22,10 +22,15 @@ interface CachedRules {
 let rulesCache: CachedRules | null = null;
 
 async function readRules(): Promise<CachedRules> {
-  const [byScope, channels] = await Promise.all([listAllPermissionRules(), listServerChannels()]);
-  const scopeByChannel = new Map<string, string | null>(
-    channels.map((c) => [c.channel_id, c.permission_scope_id ?? null]),
-  );
+  const [byScope, channels, items] = await Promise.all([
+    listAllPermissionRules(),
+    listServerChannels(),
+    listServerSidebarItems(),
+  ]);
+  const scopeByChannel = new Map<string, string | null>();
+  for (const [channelId, resolved] of resolveChannelScopes(channels, items)) {
+    scopeByChannel.set(channelId, resolved.scopeId);
+  }
   rulesCache = { byScope, scopeByChannel, fetchedAt: Date.now() };
   return rulesCache;
 }
@@ -37,7 +42,7 @@ async function currentRules(): Promise<CachedRules> {
 }
 
 /** After any write that could change an answer: editing a scope, repointing a
-    channel, deleting a template, deleting a role that rules name. */
+    channel or a folder, moving a channel, deleting a template or a role. */
 export function resetChannelPermissionCache(): void {
   rulesCache = null;
 }
@@ -191,5 +196,35 @@ export async function scopedChannelIds(): Promise<Set<string>> {
     // Unreadable rules put the broadcast paths on the careful branch rather
     // than the fast one. An empty set here would be the fail-open answer.
     return new Set([UNREADABLE]);
+  }
+}
+
+/** Hidden channels' rows go, then every folder with none of its rows left. A
+    manager keeps empty folders, having somewhere to put a channel. */
+export function visibleSidebarItems<
+  T extends Pick<ServerSidebarItemRecord, "item_id" | "kind" | "channel_id" | "parent_item_id">,
+>(items: readonly T[], visible: ReadonlySet<string>, keepEmptyFolders: boolean): T[] {
+  const kept = items.filter((it) => it.kind !== "channel" || !it.channel_id || visible.has(it.channel_id));
+  if (keepEmptyFolders) return kept;
+
+  const filled = new Set<string>();
+  for (const it of kept) {
+    if (it.kind === "channel" && it.channel_id && it.parent_item_id) filled.add(it.parent_item_id);
+  }
+  return kept.filter((it) => it.kind !== "folder" || filled.has(it.item_id));
+}
+
+/** `manage_channels` lists every channel anyway, so its empty folders name
+    nothing new. Fails shut, to hiding them. */
+export async function keepsEmptyFolders(
+  serverUserId: string | null | undefined,
+  grytUserId?: string,
+): Promise<boolean> {
+  if (!serverUserId || serverUserId.startsWith("temp_")) return false;
+  try {
+    const standing = await getEffectiveStanding(serverUserId, grytUserId);
+    return standing.isOwner || standing.permissions.has("manage_channels");
+  } catch {
+    return false;
   }
 }

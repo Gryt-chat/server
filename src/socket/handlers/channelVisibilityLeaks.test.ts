@@ -236,6 +236,14 @@ const PATHS: {
     skipPermittedHalf: true,
   },
   {
+    name: "server:sidebar:list — the sidebar asked for on its own",
+    run: async (who) => {
+      const h = harness(who);
+      await registerAdminChannelHandlers(h.ctx)["server:sidebar:list"]({ accessToken: who.accessToken });
+      return h.mine();
+    },
+  },
+  {
     name: "chat:send — posting into a guessed id",
     run: async (who) => {
       const h = harness(who);

@@ -349,9 +349,12 @@ export interface ServerChannelRecord {
   /** Null means anybody holding send_messages, which is every channel unless an
       operator narrows it. */
   post_min_rank: number | null;
-  /** Null means the channel has no opinion. Never resolve a permission by
-      reading this; `channelPermissions.ts` is the one answer. */
+  /** Null means no scope of its own. Never resolve a permission by reading
+      this; `resolveChannelScopes` is the one answer, folder included. */
   permission_scope_id: string | null;
+  /** Whether a channel with no scope of its own takes its folder's. False once
+      somebody picks its permissions, which only shows for Everyone. */
+  follows_folder: boolean;
   /** Migrated into a scope on upgrade and unread afterwards. Kept so a rollback
       still enforces the gate it had rather than losing it silently. */
   view_min_rank: number | null;
@@ -403,6 +406,8 @@ export interface ServerSidebarItemRecord {
   /** Only a channel may have one: the sidebar has one indent step, and a divider
       inside a folder divides nothing. */
   parent_item_id: string | null;
+  /** A folder's scope, taken by every channel in it that follows it. */
+  permission_scope_id: string | null;
   created_at: Date;
   updated_at: Date;
 }

@@ -245,10 +245,13 @@ function createSchema(d: DatabaseSync): void {
       view_min_rank INTEGER,
       -- Which permission scope decides what each role may do here.
       --
-      -- NULL means the channel has no opinion: every role gets exactly what its
-      -- server-wide definition gives it. That is every channel until somebody
-      -- narrows one, so the common case stores nothing and costs nothing.
+      -- NULL means the channel has no scope of its own. It takes its folder's
+      -- while follows_folder is 1, and otherwise every role gets exactly what its
+      -- server-wide definition gives it. resolveChannelScopes decides which.
       permission_scope_id TEXT,
+      -- 0 once somebody picks the channel's permissions for it. Only Everyone
+      -- needs it, since a scope of its own wins whatever this says.
+      follows_folder INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -303,6 +306,8 @@ function createSchema(d: DatabaseSync): void {
       spacer_height INTEGER,
       label TEXT,
       parent_item_id TEXT,
+      -- A folder's scope, which its channels take unless they have their own.
+      permission_scope_id TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -591,6 +596,15 @@ function runMigrations(d: DatabaseSync): void {
   // NULL is the top level, so an upgrade leaves the sidebar exactly as it was.
   if (!hasColumn(d, "sidebar_items", "parent_item_id")) {
     d.exec("ALTER TABLE sidebar_items ADD COLUMN parent_item_id TEXT");
+  }
+
+  // No backfill: every folder starts with no scope, so a channel following one
+  // reads through to the server-wide answer it had before.
+  if (!hasColumn(d, "sidebar_items", "permission_scope_id")) {
+    d.exec("ALTER TABLE sidebar_items ADD COLUMN permission_scope_id TEXT");
+  }
+  if (!hasColumn(d, "channels", "follows_folder")) {
+    d.exec("ALTER TABLE channels ADD COLUMN follows_folder INTEGER NOT NULL DEFAULT 1");
   }
 
   // Older databases predate both tables. CREATE TABLE IF NOT EXISTS above only

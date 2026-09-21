@@ -1,4 +1,10 @@
 import type { ChannelNotificationLevel, ForumTag, ServerChannelRecord, ServerSidebarItemKind, ServerSidebarItemRecord } from "../interfaces";
+import {
+  dropPermissionScopeIfUnused,
+  keepScopesOfChannelsLeavingFolders,
+  resolveChannelScopes,
+  type ResolvedChannelScope,
+} from "./channelScopes";
 import { fromIso, getSqliteDb, intToBool, toIso } from "./connection";
 
 function normalizeChannelType(t: unknown): "text" | "voice" {
@@ -69,6 +75,7 @@ function rowToChannel(r: Record<string, unknown>): ServerChannelRecord {
     post_min_rank: r.post_min_rank != null ? Number(r.post_min_rank) : null,
     view_min_rank: r.view_min_rank != null ? Number(r.view_min_rank) : null,
     permission_scope_id: (r.permission_scope_id as string) ?? null,
+    follows_folder: intToBool(r.follows_folder as number),
     created_at: fromIso(r.created_at as string),
     updated_at: fromIso(r.updated_at as string),
   };
@@ -83,6 +90,7 @@ function rowToSidebarItem(r: Record<string, unknown>): ServerSidebarItemRecord {
     spacer_height: r.spacer_height != null ? Number(r.spacer_height) : null,
     label: (r.label as string) ?? null,
     parent_item_id: (r.parent_item_id as string) ?? null,
+    permission_scope_id: (r.permission_scope_id as string) ?? null,
     created_at: fromIso(r.created_at as string),
     updated_at: fromIso(r.updated_at as string),
   };
@@ -215,10 +223,39 @@ export async function upsertServerSidebarItem(item: {
     : null;
   const parentItemId = resolveParentFolder(db, itemId, kind, item.parentItemId);
 
-  db.prepare(
-    `INSERT INTO sidebar_items (item_id, kind, position, channel_id, spacer_height, label, parent_item_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(item_id) DO UPDATE SET kind=?, position=?, channel_id=?, spacer_height=?, label=?, parent_item_id=?, updated_at=?`
-  ).run(itemId, kind, position, channelId, spacerHeight, label, parentItemId, now, now, kind, position, channelId, spacerHeight, label, parentItemId, now);
+  const upsert = () => {
+    db.prepare(
+      `INSERT INTO sidebar_items (item_id, kind, position, channel_id, spacer_height, label, parent_item_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(item_id) DO UPDATE SET kind=?, position=?, channel_id=?, spacer_height=?, label=?, parent_item_id=?, updated_at=?`
+    ).run(itemId, kind, position, channelId, spacerHeight, label, parentItemId, now, now, kind, position, channelId, spacerHeight, label, parentItemId, now);
+    // One row per channel, and the one written wins. In the same step, so nothing
+    // reads the channel drawn twice in between.
+    if (kind === "channel" && channelId) {
+      db.prepare(`DELETE FROM sidebar_items WHERE kind = 'channel' AND channel_id = ? AND item_id <> ?`).run(channelId, itemId);
+    }
+  };
+
+  // Only an existing row changing shape, or a second row going, can take a channel out of a folder.
+  const stored = db
+    .prepare(`SELECT kind, channel_id, parent_item_id FROM sidebar_items WHERE item_id = ?`)
+    .get(itemId) as { kind: string; channel_id: string | null; parent_item_id: string | null } | undefined;
+  const another = kind === "channel" && channelId
+    ? db.prepare(`SELECT 1 FROM sidebar_items WHERE kind = 'channel' AND channel_id = ? AND item_id <> ?`).get(channelId, itemId)
+    : undefined;
+  const reshapes = !!another || (!!stored && (
+    stored.kind !== kind || (stored.channel_id ?? null) !== channelId || (stored.parent_item_id ?? null) !== parentItemId
+  ));
+  if (reshapes) writeKeepingFolderScopes(upsert);
+  else upsert();
+}
+
+/** A new channel's first row, unless one is already down. Checked and written in
+    one step: the desktop sends its own row right behind the channel. */
+export async function addChannelRowIfMissing(channelId: string, parentItemId: string | null): Promise<void> {
+  const db = getSqliteDb();
+  if (db.prepare(`SELECT 1 FROM sidebar_items WHERE kind = 'channel' AND channel_id = ?`).get(channelId)) return;
+  const { end } = db.prepare(`SELECT COALESCE(MAX(position), 0) + 10 AS end FROM sidebar_items`).get() as { end: number };
+  await upsertServerSidebarItem({ itemId: `sb_ch_${channelId.slice(0, 54)}`, kind: "channel", channelId, position: end, parentItemId });
 }
 
 /** A channel's sidebar entry is the only thing that puts it on screen, so
@@ -227,8 +264,42 @@ export async function deleteServerSidebarItem(itemId: string): Promise<void> {
   const db = getSqliteDb();
   const norm = String(itemId || "").trim().slice(0, 64);
   if (!norm) return;
-  db.prepare(`UPDATE sidebar_items SET parent_item_id = NULL WHERE parent_item_id = ?`).run(norm);
-  db.prepare(`DELETE FROM sidebar_items WHERE item_id = ?`).run(norm);
+  const folder = db
+    .prepare(`SELECT permission_scope_id FROM sidebar_items WHERE item_id = ? AND kind = 'folder'`)
+    .get(norm) as { permission_scope_id: string | null } | undefined;
+
+  writeKeepingFolderScopes(() => {
+    db.prepare(`UPDATE sidebar_items SET parent_item_id = NULL WHERE parent_item_id = ?`).run(norm);
+    db.prepare(`DELETE FROM sidebar_items WHERE item_id = ?`).run(norm);
+  });
+  // Not before: its channels were copying from it until the write above.
+  if (folder?.permission_scope_id) dropPermissionScopeIfUnused(folder.permission_scope_id);
+}
+
+/** Each channel's scope as it stands, read synchronously so it can sit inside
+    a transaction. */
+function scopesNow(): Map<string, ResolvedChannelScope> {
+  const db = getSqliteDb();
+  const channels = (db.prepare(`SELECT * FROM channels`).all() as Record<string, unknown>[]).map(rowToChannel);
+  const items = (db.prepare(`SELECT * FROM sidebar_items ORDER BY position ASC, item_id ASC`).all() as Record<string, unknown>[])
+    .map(rowToSidebarItem);
+  return resolveChannelScopes(channels, items);
+}
+
+/** The write and the scopes it hands out commit together, so no reader sees a
+    channel out of its folder and open in between. */
+function writeKeepingFolderScopes(write: () => void): void {
+  const db = getSqliteDb();
+  db.exec("BEGIN");
+  try {
+    const before = scopesNow();
+    write();
+    keepScopesOfChannelsLeavingFolders(before, scopesNow());
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
 }
 
 /** As {@link ensureDefaultChannels}: true when this call seeded something. */
