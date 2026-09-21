@@ -233,6 +233,8 @@ function createSchema(d: DatabaseSync): void {
       layout TEXT NOT NULL DEFAULT 'chat',
       automated INTEGER NOT NULL DEFAULT 0,
       forum_tags TEXT,
+      -- 'all' | 'mentions' | 'none', or NULL to follow the kind. GRYT-1302.
+      default_notification TEXT,
       -- Both of these are migrated into channel_permission_scopes on upgrade
       -- and nothing reads them afterwards. They stay so that a server rolled
       -- back to an older build still enforces the gate it had, which a dropped
@@ -775,6 +777,10 @@ function runMigrations(d: DatabaseSync): void {
   }
   if (!hasColumn(d, "channels", "automated")) {
     d.exec("ALTER TABLE channels ADD COLUMN automated INTEGER NOT NULL DEFAULT 0");
+  }
+  // NULL on every existing channel, so automated ones go quiet by default. GRYT-1302.
+  if (!hasColumn(d, "channels", "default_notification")) {
+    d.exec("ALTER TABLE channels ADD COLUMN default_notification TEXT");
   }
 
   // A forum channel's tag palette, and the tag ids a topic carries. Both JSON,

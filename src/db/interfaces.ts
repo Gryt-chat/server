@@ -322,6 +322,9 @@ export interface ServerBanRecord {
 
 // ── Channel types ────────────────────────────────────────────────
 
+/** The same three words the client's per-channel setting uses. */
+export type ChannelNotificationLevel = "all" | "mentions" | "none";
+
 export interface ServerChannelRecord {
   channel_id: string;
   name: string;
@@ -338,6 +341,9 @@ export interface ServerChannelRecord {
   /** Only bots, webhooks and system messages may post: a human holding
       send_messages is still refused, in the send path. */
   automated: boolean;
+  /** What a member hears here until they pick their own level. Null follows
+      the kind: an automated channel is "none", anything else "all". */
+  default_notification: ChannelNotificationLevel | null;
   /** The tags a forum channel offers its topics. Empty on a normal channel. GRYT-981. */
   forum_tags: ForumTag[];
   /** Null means anybody holding send_messages, which is every channel unless an

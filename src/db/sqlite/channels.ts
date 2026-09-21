@@ -1,4 +1,4 @@
-import type { ForumTag, ServerChannelRecord, ServerSidebarItemKind, ServerSidebarItemRecord } from "../interfaces";
+import type { ChannelNotificationLevel, ForumTag, ServerChannelRecord, ServerSidebarItemKind, ServerSidebarItemRecord } from "../interfaces";
 import { fromIso, getSqliteDb, intToBool, toIso } from "./connection";
 
 function normalizeChannelType(t: unknown): "text" | "voice" {
@@ -8,6 +8,18 @@ function normalizeChannelType(t: unknown): "text" | "voice" {
 
 function normalizeChannelLayout(v: unknown): "chat" | "forum" {
   return String(v || "").toLowerCase() === "forum" ? "forum" : "chat";
+}
+
+/** Anything but the three levels is null, which follows the channel's kind. */
+function normalizeNotificationLevel(v: unknown): ChannelNotificationLevel | null {
+  return v === "all" || v === "mentions" || v === "none" ? v : null;
+}
+
+/** What the stored value comes out as for a member who has not set their own. */
+export function channelNotificationLevel(
+  c: Pick<ServerChannelRecord, "automated" | "default_notification">,
+): ChannelNotificationLevel {
+  return c.default_notification ?? (c.automated ? "none" : "all");
 }
 
 function parseForumTags(v: unknown): ForumTag[] {
@@ -52,6 +64,7 @@ function rowToChannel(r: Record<string, unknown>): ServerChannelRecord {
     text_in_voice: intToBool(r.text_in_voice as number),
     layout: normalizeChannelLayout(r.layout),
     automated: intToBool(r.automated as number),
+    default_notification: normalizeNotificationLevel(r.default_notification),
     forum_tags: parseForumTags(r.forum_tags),
     post_min_rank: r.post_min_rank != null ? Number(r.post_min_rank) : null,
     view_min_rank: r.view_min_rank != null ? Number(r.view_min_rank) : null,
@@ -85,6 +98,7 @@ export async function upsertServerChannel(channel: {
   channelId: string; name: string; type: "text" | "voice"; position?: number; description?: string | null;
   requirePushToTalk?: boolean; disableRnnoise?: boolean; maxBitrate?: number | null; eSportsMode?: boolean; textInVoice?: boolean;
   layout?: "chat" | "forum"; automated?: boolean; forumTags?: ForumTag[];
+  defaultNotificationLevel?: ChannelNotificationLevel | null;
 }): Promise<void> {
   const db = getSqliteDb();
   const now = toIso(new Date());
@@ -103,15 +117,16 @@ export async function upsertServerChannel(channel: {
   const layout = type === "text" && channel.layout === "forum" ? "forum" : "chat";
   const automated = type === "text" && channel.automated ? 1 : 0;
   const forumTags = Array.isArray(channel.forumTags) ? JSON.stringify(parseForumTags(JSON.stringify(channel.forumTags))) : null;
+  const defaultNotification = normalizeNotificationLevel(channel.defaultNotificationLevel);
 
   db.prepare(
     // Absent on purpose: `setChannelPermissionScope` sets it and cleans up an
     // orphaned scope, so a rename would otherwise change who can see it.
-    `INSERT INTO channels (channel_id, name, type, position, description, require_push_to_talk, disable_rnnoise, max_bitrate, esports_mode, text_in_voice, layout, automated, forum_tags, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(channel_id) DO UPDATE SET name=?, type=?, position=?, description=?, require_push_to_talk=?, disable_rnnoise=?, max_bitrate=?, esports_mode=?, text_in_voice=?, layout=?, automated=?, forum_tags=?, updated_at=?`
-  ).run(channelId, name, type, position, description, rPtt, dRnn, maxBr, eMode, tiv, layout, automated, forumTags, now, now,
-    name, type, position, description, rPtt, dRnn, maxBr, eMode, tiv, layout, automated, forumTags, now);
+    `INSERT INTO channels (channel_id, name, type, position, description, require_push_to_talk, disable_rnnoise, max_bitrate, esports_mode, text_in_voice, layout, automated, forum_tags, default_notification, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(channel_id) DO UPDATE SET name=?, type=?, position=?, description=?, require_push_to_talk=?, disable_rnnoise=?, max_bitrate=?, esports_mode=?, text_in_voice=?, layout=?, automated=?, forum_tags=?, default_notification=?, updated_at=?`
+  ).run(channelId, name, type, position, description, rPtt, dRnn, maxBr, eMode, tiv, layout, automated, forumTags, defaultNotification, now, now,
+    name, type, position, description, rPtt, dRnn, maxBr, eMode, tiv, layout, automated, forumTags, defaultNotification, now);
 }
 
 export async function getServerChannel(channelId: string): Promise<ServerChannelRecord | null> {
