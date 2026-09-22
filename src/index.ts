@@ -491,9 +491,8 @@ httpServer.listen(PORT, HOST, () => {
 const SHUTDOWN_TIMEOUT_MS = 3_000;
 let shuttingDown = false;
 
-// Closes every socket before exiting so a restart reads as a clean
-// disconnect instead of a dropped connection (GRYT-1354). Capped at
-// SHUTDOWN_TIMEOUT_MS so a stuck client or a slow mDNS goodbye can't hang exit.
+// Closes every socket before exiting so a restart reads as a clean disconnect
+// (GRYT-1354). Timed out so a stuck client or a slow mDNS goodbye can't hang exit.
 function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
