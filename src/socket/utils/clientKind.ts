@@ -7,11 +7,9 @@ export function classifyClientKind(userAgent: string | undefined | null): Client
   const ua = userAgent.toLowerCase();
 
   if (ua.includes("electron/")) return "desktop";
-  if (ua.includes("okhttp") || ua.includes("android")) return "android";
+  if (ua.includes("mozilla/")) return "web";
+  if (ua.includes("okhttp")) return "android";
   if (ua.includes("cfnetwork") || ua.includes("darwin")) return "ios";
-  if (ua.includes("mozilla/") || ua.includes("chrome/") || ua.includes("safari/") || ua.includes("firefox/")) {
-    return "web";
-  }
 
   return "other";
 }
