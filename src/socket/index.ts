@@ -2,6 +2,7 @@ import { sfuRoomId, voiceRoomName } from "./utils/voiceRooms";
 import consola from "consola";
 
 import { addressLabel } from "../utils/addressLabel";
+import { classifyClientKind } from "./utils/clientKind";
 import { Server, Socket } from "socket.io";
 import { Clients } from "../types";
 import { colors } from "../utils/colors";
@@ -268,7 +269,8 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
 
   /* A label, not the address: logging the address wrote one down for every
      connection ever made, which the privacy policy does not cover. */
-  consola.info(`Client ${clientId} connected from ${addressLabel(getClientIp(socket))}`);
+  const clientKind = classifyClientKind(socket.handshake.headers["user-agent"]);
+  consola.info(`Client ${clientId} connected from ${addressLabel(getClientIp(socket))} client=${clientKind}`);
 
   if (verboseLogs) {
     const originalEmit = socket.emit;
@@ -369,7 +371,7 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
     /* Who and from where: a socket id names something that no longer exists,
        and two stacks on one address is a different diagnosis. */
     consola.info(
-      `Client disconnected: ${clientId} user=${serverUserId || "anonymous"} ip=${addressLabel(getClientIp(socket))} (${reason})`,
+      `Client disconnected: ${clientId} user=${serverUserId || "anonymous"} ip=${addressLabel(getClientIp(socket))} client=${clientKind} (${reason})`,
     );
     const wasRegistered = serverUserId && !serverUserId.startsWith("temp_");
     const hadVoice = clientInfo?.hasJoinedChannel ?? false;
