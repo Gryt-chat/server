@@ -488,10 +488,21 @@ httpServer.listen(PORT, HOST, () => {
   // not reliably open yet. syncMdnsAdvertising runs off the SQLite chain.
 });
 
-const shutdownMdns = () => {
-  // Wait for the goodbye packets before exiting, otherwise the record outlives
-  // the process and clients keep listing a server that is gone.
-  void stopMdns().finally(() => process.exit(0));
-};
-process.on("SIGTERM", shutdownMdns);
-process.on("SIGINT", shutdownMdns);
+const SHUTDOWN_TIMEOUT_MS = 3_000;
+let shuttingDown = false;
+
+// Closes every socket before exiting so a restart reads as a clean disconnect
+// (GRYT-1354). Timed out so a stuck client or a slow mDNS goodbye can't hang exit.
+function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  consola.info("Shutting down: closing sockets (server shutting down)");
+
+  const forceExit = setTimeout(() => process.exit(0), SHUTDOWN_TIMEOUT_MS);
+  Promise.allSettled([new Promise<void>((resolve) => io.close(() => resolve())), stopMdns()]).finally(() => {
+    clearTimeout(forceExit);
+    process.exit(0);
+  });
+}
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);
