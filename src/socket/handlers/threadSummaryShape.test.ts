@@ -15,12 +15,8 @@ import { registerChatHandlers } from "./chat";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
 /**
- * GRYT-1391: chat:fetch's threads[], thread:create's thread:created, and
- * forum:topic:create's thread:created all build a thread summary through the
- * same toThreadSummary now, so they carry the same base fields. forum:topics
- * needs more than a thread record can give it (a participant count, the
- * root's author, a preview), and that is the one place a summary legitimately
- * grows past the shared shape.
+ * GRYT-1391: chat:fetch, thread:create and forum:topic:create now share one
+ * summary shape. forum:topics grows past it for what only it needs.
  */
 
 const HOST = "shape.test:5001";
@@ -108,9 +104,8 @@ describe("one thread summary shape everywhere (GRYT-1391)", () => {
   });
 
   it("chat:fetch's threads[] carries the same base fields", async () => {
-    // chat:fetch's cache only holds messages sent through chat:send, so it is
-    // only the thread:create root (the first test) that can show up here —
-    // the forum topic's root was inserted straight to the DB.
+    // Only the thread:create root can show up here: chat:fetch's cache holds
+    // chat:send messages only, and the forum topic's root skipped that path.
     await alice.handlers["chat:fetch"]({ conversationId: CHANNEL, limit: 50 });
     const history = alice.received("chat:history").at(-1) as { threads: Record<string, unknown>[] };
 
