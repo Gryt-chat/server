@@ -492,6 +492,9 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
           syncAllClients(io, clientsInfo);
           broadcastMemberList(io, clientsInfo, serverId);
           sendServerDetails(socket, clientsInfo, serverId).catch((e) => consola.warn("sendServerDetails failed", e));
+          // Connect-time sendInfo ran before this restore, so it had no member
+          // to send the version to. Resend it now.
+          sendInfo(socket, clientsInfo, serverId).catch((e) => consola.warn("sendInfo failed", e));
         } catch (error) {
           consola.error(`Error restoring session for ${clientId}:`, error);
           socket.emit("token:invalid", "Database error. Please rejoin.");
