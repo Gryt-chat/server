@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 
+import { blockUser, eitherHasBlocked, listBlocks } from "./blocks";
 import { initSqlite } from "./connection";
 import {
   claimServerOwner,
@@ -91,5 +92,68 @@ describe("carrying an identity forward", () => {
       status: "no_prior_membership",
     });
     assert.equal((await getUserByGrytId("account-4"))?.nickname, "Account");
+  });
+});
+
+/**
+ * Blocks are keyed on the gryt id on both sides, and the move only rewrites the
+ * one on `users`. Same four cases the merge path is tested for.
+ */
+describe("blocks follow a membership that moves to an account", () => {
+  it("carries both directions and leaves nothing on the old id", async () => {
+    await upsertUser("key:blocks-1", "Guest");
+    await blockUser("account-pest-1", "key:blocks-1");
+    await blockUser("key:blocks-1", "account-nuisance-1");
+
+    assert.deepEqual(await carryIdentityForward("key:blocks-1", "account-blocks-1"), {
+      status: "carried",
+    });
+
+    assert.equal(
+      await eitherHasBlocked("account-pest-1", "account-blocks-1"),
+      true,
+      "the block somebody put on the guest stopped applying",
+    );
+    assert.deepEqual(
+      (await listBlocks("account-blocks-1")).map((b) => b.grytUserId),
+      ["account-nuisance-1"],
+      "the block the guest made stopped applying",
+    );
+    assert.deepEqual(await listBlocks("key:blocks-1"), [], "left behind on the old id");
+    assert.equal(await eitherHasBlocked("account-pest-1", "key:blocks-1"), false);
+  });
+
+  it("does not leave the account blocking itself", async () => {
+    await upsertUser("key:blocks-2", "Guest");
+    await blockUser("key:blocks-2", "account-blocks-2");
+    await blockUser("account-blocks-2", "key:blocks-2");
+
+    assert.deepEqual(await carryIdentityForward("key:blocks-2", "account-blocks-2"), {
+      status: "carried",
+    });
+
+    assert.deepEqual(await listBlocks("account-blocks-2"), [], "a block on yourself");
+    assert.equal(await eitherHasBlocked("account-blocks-2", "account-blocks-2"), false);
+  });
+
+  it("keeps one row when both ids had blocked the same person", async () => {
+    await upsertUser("key:blocks-3", "Guest");
+    await blockUser("key:blocks-3", "account-pest-3");
+    await blockUser("account-blocks-3", "account-pest-3");
+    await blockUser("account-pest-3", "key:blocks-3");
+    await blockUser("account-pest-3", "account-blocks-3");
+
+    assert.deepEqual(await carryIdentityForward("key:blocks-3", "account-blocks-3"), {
+      status: "carried",
+    });
+
+    assert.deepEqual(
+      (await listBlocks("account-blocks-3")).map((b) => b.grytUserId),
+      ["account-pest-3"],
+    );
+    assert.deepEqual(
+      (await listBlocks("account-pest-3")).map((b) => b.grytUserId),
+      ["account-blocks-3"],
+    );
   });
 });
