@@ -229,16 +229,17 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
     return recipientsOf(conversationId, access, clientsInfo, sfuClient);
   }
 
-  /** Emits the refusal itself and returns null, so every call site is one
-      `if (!access) return;`. */
+  /* Emits the refusal itself, on the event the rest of that handler refuses
+     on: a thread panel listening for thread:error hears nothing otherwise. */
   async function requireConversationAccess(
     conversationId: string,
     serverUserId: string | null | undefined,
+    errorEvent: "chat:error" | "thread:error" | "forum:error" = "chat:error",
   ): Promise<AllowedConversationAccess | null> {
     const access = await resolveConversationAccess(conversationId, serverUserId);
     if (!access.allowed) {
       const { error, message } = DENIAL_RESPONSES[access.reason];
-      socket.emit("chat:error", { error, message });
+      socket.emit(errorEvent, { error, message });
       return null;
     }
     return access;
@@ -727,7 +728,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         }
         const auth = await requireAuth(socket, payload, { permission: "send_messages" });
         if (!auth) return;
-        const access = await requireConversationAccess(payload.conversationId, auth.tokenPayload.serverUserId);
+        const access = await requireConversationAccess(payload.conversationId, auth.tokenPayload.serverUserId, "thread:error");
         if (!access) return;
         if (access.kind === "dm") {
           socket.emit("thread:error", { error: "threads_not_allowed", message: "Threads are not available in direct messages." });
@@ -790,7 +791,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           socket.emit("thread:error", "Invalid fetch payload");
           return;
         }
-        if (!(await requireConversationAccess(payload.conversationId, userId))) return;
+        if (!(await requireConversationAccess(payload.conversationId, userId, "thread:error"))) return;
         const thread = await getThread(payload.threadId);
         if (!thread || thread.conversation_id !== payload.conversationId) {
           socket.emit("thread:error", { error: "thread_not_found", message: "That thread no longer exists." });
@@ -864,7 +865,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         }
         const auth = await requireAuth(socket, payload, { permission: "send_messages" });
         if (!auth) return;
-        const access = await requireConversationAccess(payload.conversationId, auth.tokenPayload.serverUserId);
+        const access = await requireConversationAccess(payload.conversationId, auth.tokenPayload.serverUserId, "thread:error");
         if (!access) return;
         const thread = await getThread(payload.threadId);
         if (!thread || thread.conversation_id !== payload.conversationId) {
@@ -914,7 +915,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         }
         const auth = await requireAuth(socket, payload, { permission: "send_messages" });
         if (!auth) return;
-        const access = await requireConversationAccess(payload.conversationId, auth.tokenPayload.serverUserId);
+        const access = await requireConversationAccess(payload.conversationId, auth.tokenPayload.serverUserId, "thread:error");
         if (!access) return;
         const thread = await getThread(payload.threadId);
         if (!thread || thread.conversation_id !== payload.conversationId) {
@@ -965,7 +966,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
         if (!payload || typeof payload.conversationId !== "string") { socket.emit("forum:error", "Invalid payload"); return; }
-        if (!(await requireConversationAccess(payload.conversationId, userId))) return;
+        if (!(await requireConversationAccess(payload.conversationId, userId, "forum:error"))) return;
 
         const threads = await listThreadsByConversation(payload.conversationId);
         const rootRecords = (await Promise.all(
@@ -1020,7 +1021,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         if (!auth) return;
         const sendMute = await textMuteFor(auth.tokenPayload.serverUserId);
         if (sendMute.muted) { socket.emit("forum:error", textMuteError(sendMute)); return; }
-        const access = await requireConversationAccess(payload.conversationId, auth.tokenPayload.serverUserId);
+        const access = await requireConversationAccess(payload.conversationId, auth.tokenPayload.serverUserId, "forum:error");
         if (!access) return;
         if (access.kind === "dm") { socket.emit("forum:error", { error: "not_a_forum", message: "Topics can only be created in a channel." }); return; }
         if (!(await mayInChannel(payload.conversationId, auth.tokenPayload.serverUserId, "send_messages", auth.tokenPayload.grytUserId))) {
