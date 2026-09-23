@@ -7,9 +7,14 @@ import { socketMay } from "../utils/standing";
 import { looksLikeABotName } from "../../auth/identity";
 import { readWornUpdate } from "../../utils/wornString";
 import { normaliseActivity } from "../../utils/activityText";
+import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
+
+/* Every accepted change fans out to the whole server, so it is bounded like the
+   chat events. Ten in ten seconds is well past anything done by hand. */
+const RL_ACTIVITY: RateLimitRule = { limit: 10, windowMs: 10_000, banMs: 30_000, scorePerAction: 1, maxScore: 10, scoreDecayMs: 2_000 };
 
 export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
-  const { io, socket, clientId, serverId, clientsInfo } = ctx;
+  const { io, socket, clientId, serverId, clientsInfo, getClientIp } = ctx;
 
   return {
     // Gated on being a verified member rather than on a role, which is what the
@@ -46,6 +51,12 @@ export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
       // `temp_` clients are filtered out of the member list, so this would be a
       // status nobody can see on nobody in particular.
       if (!info.serverUserId || info.serverUserId.startsWith("temp_")) return;
+
+      const rl = checkRateLimit("presence:activity", info.serverUserId, getClientIp(), RL_ACTIVITY);
+      if (!rl.allowed) {
+        socket.emit("server:error", { error: "rate_limited", retryAfterMs: rl.retryAfterMs });
+        return;
+      }
 
       const activity = normaliseActivity(data?.activity);
 
