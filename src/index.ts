@@ -1,5 +1,5 @@
 import { config } from "dotenv";
-import { isOriginAllowed, readAllowedOrigins, setCorsHeaders } from "./config/cors";
+import { applyCors, isOriginAllowed, readAllowedOrigins } from "./config/cors";
 import { RL_HTTP_API, RL_HTTP_EMOJI_WRITE, RL_HTTP_FILE, RL_HTTP_OUTBOUND, RL_HTTP_PUBLIC, RL_HTTP_UPLOAD, httpRateLimit } from "./middleware/rateLimitHttp";
 config({ path: "config.env", override: false });
 config({ override: false });
@@ -62,9 +62,7 @@ function isAllowedOrigin(origin: string, requestHost?: string): boolean {
 // Without this, browser requests like POST /api/server/icon will fail preflight and show "Failed to fetch".
 app.use((req, res, next) => {
   const origin = req.headers.origin as string | undefined;
-  if (origin && isAllowedOrigin(origin, req.headers.host)) {
-    setCorsHeaders(res, origin);
-  }
+  applyCors(res, origin, allowedCorsOrigins, req.headers.host);
   if (req.method === "OPTIONS") {
     res.status(204).end();
     return;
