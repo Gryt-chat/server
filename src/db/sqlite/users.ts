@@ -171,9 +171,11 @@ export async function getAllRegisteredUsers(): Promise<UserRecord[]> {
   return rows.map(rowToUser);
 }
 
+/** Active members only, like every other member count. Leaving keeps the row
+    and clears `is_active`, so COUNT(*) counted everyone who ever left. */
 export async function getRegisteredUserCount(): Promise<number> {
   const db = getSqliteDb();
-  const row = db.prepare(`SELECT COUNT(*) as count FROM users`).get() as { count: number };
+  const row = db.prepare(`SELECT COUNT(*) as count FROM users WHERE is_active = 1`).get() as { count: number };
   return row.count;
 }
 
