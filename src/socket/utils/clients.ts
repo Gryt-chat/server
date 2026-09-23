@@ -24,6 +24,19 @@ export function unverifyClient(socket: Socket) {
   socket.leave("verifiedClients");
 }
 
+/** Back to an unidentified connection, which receives no member broadcasts. For
+    when a membership stops belonging to the identity a socket proved. */
+export function forgetSocketIdentity(io: Server, clientsInfo: Clients, sid: string): void {
+  const ci = clientsInfo[sid];
+  if (!ci) return;
+  ci.serverUserId = `temp_${sid}`;
+  ci.grytUserId = undefined;
+  ci.accessToken = undefined;
+  ci.permissions = undefined;
+  const s = io.sockets.sockets.get(sid);
+  if (s) unverifyClient(s);
+}
+
 /** A DM's id is derived from the sorted pair, so naming it says who is talking
     to whom. `isConnectedToVoice` stays true, which everyone may know. */
 function publicVoiceRoom(voiceChannelId: string | undefined): string {

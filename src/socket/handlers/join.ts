@@ -1,7 +1,7 @@
 import consola from "consola";
 import type { HandlerContext, EventHandlerMap } from "./types";
 import { applyInviteRole } from "../../services/inviteRoles";
-import { syncAllClients, broadcastMemberList, countOtherSessions, unverifyClient, verifyClient } from "../utils/clients";
+import { syncAllClients, broadcastMemberList, countOtherSessions, forgetSocketIdentity, verifyClient } from "../utils/clients";
 import { resetMessageCache } from "../utils/messageCache";
 import { broadcastConversation } from "./dm";
 import { sendInfo, sendServerDetails } from "../utils/server";
@@ -184,17 +184,7 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
 
   const helpers = registerJoinHelpers(ctx);
 
-  /** Back to an unidentified connection, which receives no member broadcasts. */
-  function forgetIdentity(sid: string): void {
-    const ci = clientsInfo[sid];
-    if (!ci) return;
-    ci.serverUserId = `temp_${sid}`;
-    ci.grytUserId = undefined;
-    ci.accessToken = undefined;
-    ci.permissions = undefined;
-    const s = io.sockets.sockets.get(sid);
-    if (s) unverifyClient(s);
-  }
+  const forgetIdentity = (sid: string) => forgetSocketIdentity(io, clientsInfo, sid);
 
   /** Another tab still connected as the guest. No message, so it refreshes or
       rejoins quietly as whoever this device is now. */
