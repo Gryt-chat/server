@@ -5,7 +5,12 @@ import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 
 import { BOT_SUB_PREFIX } from "../../auth/identity";
-import { initSqlite } from "../../db/sqlite/connection";
+import {
+  clearHiddenConversations,
+  getSqliteDb,
+  HIDDEN_CONVERSATIONS_KEY,
+  initSqlite,
+} from "../../db/sqlite/connection";
 import { BUILT_IN_ROLES } from "../../constants/permissions";
 import { insertFile } from "../../db/sqlite/messages";
 import { createRoleDefinition } from "../../db/sqlite/roleDefinitions";
@@ -561,7 +566,7 @@ describe("a role that may message people but not start groups", () => {
   });
 });
 
-describe("hiding a conversation", () => {
+describe("conversations an older build hid", () => {
   /** What this member's sidebar would show right now. */
   async function listFor(who: Participant): Promise<string[]> {
     who.clear();
@@ -570,83 +575,49 @@ describe("hiding a conversation", () => {
     return list.items.map((i) => i.conversation_id);
   }
 
-  async function hide(who: Participant, conversationId: string, hidden: boolean): Promise<void> {
-    await who.handlers["dm:setHidden"]({
-      accessToken: who.accessToken,
-      conversationId,
-      hidden,
-    });
+  /** What a build before GRYT-1379 wrote when somebody hid a conversation. */
+  function writeHiddenAt(conversationId: string, serverUserId: string): void {
+    getSqliteDb()
+      .prepare(`UPDATE conversation_members SET hidden_at = ? WHERE conversation_id = ? AND server_user_id = ?`)
+      .run(new Date().toISOString(), conversationId, serverUserId);
   }
 
-  it("takes it out of your list and leaves theirs alone", async () => {
-    // `hidden_at` is on the membership row, so it is one person's answer. A
-    // column on `conversations` would hide it for both.
-    const conversationId = await openDm(alice, bob);
-
-    await hide(alice, conversationId, true);
-
-    assert.equal((await listFor(alice)).includes(conversationId), false, "still in Alice's list");
-    assert.equal((await listFor(bob)).includes(conversationId), true, "hiding took it off Bob's too");
+  it("no longer takes dm:setHidden", async () => {
+    // Hiding is the client's own now, per device. An older client emitting this
+    // gets no answer, which is the accepted cost of the server letting go.
+    assert.equal(alice.handlers["dm:setHidden"], undefined);
   });
 
-  it("keeps every message", async () => {
+  it("lists one that still carries hidden_at", async () => {
+    // The list stopped filtering on the column, so a row an older build hid is
+    // sent again and the client decides whether to draw it.
     const conversationId = await openDm(alice, bob);
-    await alice.handlers["chat:send"]({ conversationId, accessToken: alice.accessToken, text: "still here" });
+    writeHiddenAt(conversationId, alice.serverUserId);
 
-    await hide(alice, conversationId, true);
-
-    clearAll();
-    await alice.handlers["chat:fetch"]({ conversationId });
-    const history = alice.received("chat:history")[0] as { items: { text: string }[] } | undefined;
-    assert.ok(history, "hiding took the history away, and it must not");
-    assert.ok(history.items.some((m) => m.text === "still here"));
+    assert.equal((await listFor(alice)).includes(conversationId), true, "still filtered out of the list");
   });
 
-  it("comes back when they say something", async () => {
-    // Otherwise hiding is a way to never hear from somebody again, and the
-    // only sign would be an unread count on a row that is not there.
+  it("clears the column once, and leaves the marker behind", async () => {
     const conversationId = await openDm(alice, bob);
-    await hide(alice, conversationId, true);
-    assert.equal((await listFor(alice)).includes(conversationId), false);
+    writeHiddenAt(conversationId, alice.serverUserId);
 
-    clearAll();
-    await bob.handlers["chat:send"]({ conversationId, accessToken: bob.accessToken, text: "you there?" });
+    const db = getSqliteDb();
+    db.prepare(`DELETE FROM schema_meta WHERE key = ?`).run(HIDDEN_CONVERSATIONS_KEY);
+    clearHiddenConversations(db);
 
-    // Read before `listFor`, which clears what the socket has seen.
-    const toldAlice = alice.received("dm:opened").some(
-      (v) => (v as { conversation_id?: string }).conversation_id === conversationId,
-    );
+    const row = db
+      .prepare(`SELECT hidden_at FROM conversation_members WHERE conversation_id = ? AND server_user_id = ?`)
+      .get(conversationId, alice.serverUserId) as { hidden_at: string | null } | undefined;
+    assert.equal(row?.hidden_at, null, "the migration left a hidden_at behind");
 
-    assert.equal((await listFor(alice)).includes(conversationId), true, "stayed hidden through a new message");
-    assert.ok(toldAlice, "Alice was never told it came back, so her sidebar would not know");
-  });
-
-  it("comes back when you open it again", async () => {
-    const conversationId = await openDm(alice, bob);
-    await hide(alice, conversationId, true);
-
-    await alice.handlers["dm:open"]({ accessToken: alice.accessToken, targetServerUserId: bob.serverUserId });
-
-    assert.equal((await listFor(alice)).includes(conversationId), true);
-  });
-
-  it("can be put back by hand", async () => {
-    const conversationId = await openDm(alice, bob);
-    await hide(alice, conversationId, true);
-    await hide(alice, conversationId, false);
-
-    assert.equal((await listFor(alice)).includes(conversationId), true);
-  });
-
-  it("refuses a conversation that is not yours", async () => {
-    const conversationId = await openDm(alice, bob);
-    clearAll();
-
-    await hide(mallory, conversationId, true);
-
-    assert.ok(mallory.received("dm:error").length > 0, "no refusal");
-    assert.equal((await listFor(alice)).includes(conversationId), true, "Mallory hid somebody else's conversation");
-    assert.equal((await listFor(bob)).includes(conversationId), true);
+    // Stamped, so it never runs again — and a rollback to an older build finds
+    // the column still there rather than a missing one.
+    writeHiddenAt(conversationId, alice.serverUserId);
+    clearHiddenConversations(db);
+    const again = db
+      .prepare(`SELECT hidden_at FROM conversation_members WHERE conversation_id = ? AND server_user_id = ?`)
+      .get(conversationId, alice.serverUserId) as { hidden_at: string | null } | undefined;
+    assert.notEqual(again?.hidden_at, null, "the one-shot ran a second time");
   });
 });
 

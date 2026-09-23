@@ -15,7 +15,6 @@ import {
   MAX_CONVERSATION_MEMBERS,
   purgeOrphanedConversations,
   openDirectConversation,
-  setConversationHidden,
   setConversationIcon,
   setConversationName,
   eitherHasBlocked,
@@ -199,10 +198,6 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
 
         const conversation = await openDirectConversation(self, target);
 
-        // Asking for a hidden conversation is asking for it back. The caller's
-        // row only; a message is what brings the other party's back.
-        await setConversationHidden(conversation.conversation_id, self, false);
-
         /* The other end only once there is something to tell them about. An empty
            conversation is in nobody's list but its opener's. */
         const audience = conversation.last_message_at ? [self, target] : [self];
@@ -219,51 +214,6 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
       } catch (err) {
         consola.error("dm:open failed", err);
         socket.emit("dm:error", { error: "failed", message: "Could not open the conversation" });
-      }
-    },
-
-    /** `hidden_at` is on the caller's own row and a new message brings it back,
-        so this is not a way to stop somebody talking to you. */
-    'dm:setHidden': async (payload: { accessToken: string; conversationId: string; hidden: boolean }) => {
-      try {
-        const ip = getClientIp();
-        const rl = checkRateLimit("dm:setHidden", clientsInfo[clientId]?.serverUserId, ip, RL_OPEN);
-        if (!rl.allowed) {
-          socket.emit("dm:error", { error: "rate_limited", retryAfterMs: rl.retryAfterMs, message: `Too fast. Wait ${Math.ceil((rl.retryAfterMs || 0) / 1000)}s.` });
-          return;
-        }
-
-        if (!payload || typeof payload.accessToken !== "string" || typeof payload.conversationId !== "string" || typeof payload.hidden !== "boolean") {
-          socket.emit("dm:error", { error: "invalid_payload", message: "Invalid payload" });
-          return;
-        }
-
-        const auth = await requireAuth(socket, payload);
-        if (!auth) return;
-
-        const self = auth.tokenPayload.serverUserId;
-
-        // The membership check is what stops a row being written for somebody
-        // else's conversation if the table ever gains a different key.
-        const conversation = await getConversation(payload.conversationId);
-        if (!conversation || !(await isConversationMember(payload.conversationId, self))) {
-          socket.emit("dm:error", { error: "not_found", message: "No such conversation" });
-          return;
-        }
-
-        await setConversationHidden(payload.conversationId, self, payload.hidden);
-
-        // Every socket this person has, so hiding on the desktop takes it off
-        // the phone as well.
-        for (const cid of socketIdsFor(self)) {
-          io.sockets.sockets.get(cid)?.emit("dm:hidden", {
-            conversation_id: payload.conversationId,
-            hidden: payload.hidden,
-          });
-        }
-      } catch (err) {
-        consola.error("dm:setHidden failed", err);
-        socket.emit("dm:error", { error: "failed", message: "Could not update the conversation" });
       }
     },
 
