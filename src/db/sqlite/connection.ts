@@ -753,8 +753,8 @@ function runMigrations(d: DatabaseSync): void {
     d.exec("ALTER TABLE conversations ADD COLUMN icon_file_id TEXT");
   }
 
-  // On the membership row, since it is one person's answer. Nothing is deleted,
-  // and a new message brings it back.
+  // Unused since GRYT-1379: hiding a conversation is a client-side, per-device
+  // thing now. Kept so an older binary rolling back still finds the column.
   if (!hasColumn(d, "conversation_members", "hidden_at")) {
     d.exec("ALTER TABLE conversation_members ADD COLUMN hidden_at TEXT");
   }
@@ -829,6 +829,7 @@ function runMigrations(d: DatabaseSync): void {
   )`);
 
   migrateFileOwnership(d);
+  clearHiddenConversations(d);
 
   d.prepare("UPDATE server_config SET avatar_thumb_px = ?").run(AVATAR_THUMB_PX);
 
@@ -846,6 +847,24 @@ function runMigrations(d: DatabaseSync): void {
   // Last, and only on an existing server: retires access tokens minted before
   // the GRYT-1239 fix, since one that leaked cannot be recalled.
   reissueAccessTokensAfterLeak(d);
+}
+
+export const HIDDEN_CONVERSATIONS_KEY = "hidden_conversations_cleared";
+
+/**
+ * Anything hidden before GRYT-1379 is still filtered out of the old client's
+ * list, and the new one cannot show what it is not sent. Once, then stamped.
+ */
+export function clearHiddenConversations(d: DatabaseSync): void {
+  if (readSchemaMeta(d, HIDDEN_CONVERSATIONS_KEY)) return;
+
+  const result = d
+    .prepare(`UPDATE conversation_members SET hidden_at = NULL WHERE hidden_at IS NOT NULL`)
+    .run();
+  if (Number(result.changes) > 0) {
+    console.log(`[conversations] unhid ${result.changes} conversation membership(s)`);
+  }
+  writeSchemaMeta(d, HIDDEN_CONVERSATIONS_KEY, "1");
 }
 
 /**

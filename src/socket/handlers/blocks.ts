@@ -6,7 +6,6 @@ import {
   unblockUser,
   listBlocks,
   getUserByServerId,
-  hideConversationsBetween,
 } from "../../db";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 
@@ -63,13 +62,8 @@ export function registerBlockHandlers(ctx: HandlerContext): EventHandlerMap {
 
         await blockUser(auth.tokenPayload.grytUserId, target.gryt_user_id);
 
-        /* Only the blocker's list. `hidden_at` is per member and already exists
-           for closing a conversation, so this is what they could do by hand. */
-        await hideConversationsBetween(
-          auth.tokenPayload.serverUserId,
-          payload.serverUserId,
-        );
-
+        /* The conversation used to be hidden here too. Hiding is the client's
+           own, per device, since GRYT-1379, so it does that on `user:blocked`. */
         socket.emit("user:blocked", { serverUserId: payload.serverUserId });
       } catch (err) {
         consola.error("user:block failed", err);

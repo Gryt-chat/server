@@ -77,8 +77,8 @@ export interface ConversationSummary extends ConversationRecord {
   other_server_user_ids: string[];
 }
 
-/* Hidden rows and empty ones are filtered here, so one place decides what a list
-   holds. `created_at` is the fallback sort, for a conversation opened and unused. */
+/* Empty ones are filtered here, so one place decides what a list holds.
+   `created_at` is the fallback sort, for a conversation opened and unused. */
 export async function listConversationsForUser(serverUserId: string): Promise<ConversationSummary[]> {
   const db = getSqliteDb();
   const rows = db
@@ -87,7 +87,7 @@ export async function listConversationsForUser(serverUserId: string): Promise<Co
          a member list fills everybody else's. Groups are exempt. */
       `SELECT c.* FROM conversations c
        JOIN conversation_members m ON m.conversation_id = c.conversation_id
-       WHERE m.server_user_id = ? AND m.hidden_at IS NULL
+       WHERE m.server_user_id = ?
          AND (c.kind != 'dm'
               OR c.last_message_at IS NOT NULL
               OR c.created_by_server_user_id = ?)
@@ -233,58 +233,6 @@ export async function openDirectConversation(
   const created = await getConversation(conversationId);
   if (!created) throw new Error("openDirectConversation: conversation vanished after insert");
   return created;
-}
-
-/**
- * The blocker's sidebar only, with nothing deleted. Only the direct
- * conversation: touching a group both are in is a block with a blast radius.
- */
-export async function hideConversationsBetween(
-  blockerServerUserId: string,
-  blockedServerUserId: string,
-): Promise<void> {
-  const db = getSqliteDb();
-  db.prepare(
-    `UPDATE conversation_members SET hidden_at = ?
-      WHERE conversation_id = ? AND server_user_id = ? AND hidden_at IS NULL`,
-  ).run(
-    toIso(new Date()),
-    directConversationId(blockerServerUserId, blockedServerUserId),
-    blockerServerUserId,
-  );
-}
-
-export async function setConversationHidden(
-  conversationId: string,
-  serverUserId: string,
-  hidden: boolean,
-): Promise<boolean> {
-  const db = getSqliteDb();
-  const result = db
-    .prepare(
-      `UPDATE conversation_members SET hidden_at = ?
-       WHERE conversation_id = ? AND server_user_id = ? AND (hidden_at IS NULL) = ?`,
-    )
-    .run(hidden ? toIso(new Date()) : null, conversationId, serverUserId, hidden ? 1 : 0);
-  return result.changes > 0;
-}
-
-/** Hiding is "not in my sidebar", so without this a hidden conversation swallows
-    everything sent afterwards. Returns whose list changed. */
-export async function clearConversationHidden(conversationId: string): Promise<string[]> {
-  const db = getSqliteDb();
-  const rows = db
-    .prepare(
-      `SELECT server_user_id FROM conversation_members
-       WHERE conversation_id = ? AND hidden_at IS NOT NULL`,
-    )
-    .all(conversationId) as { server_user_id: string }[];
-  if (rows.length === 0) return [];
-
-  db.prepare(`UPDATE conversation_members SET hidden_at = NULL WHERE conversation_id = ?`).run(
-    conversationId,
-  );
-  return rows.map((r) => r.server_user_id);
 }
 
 export async function touchConversation(conversationId: string, at: Date = new Date()): Promise<void> {

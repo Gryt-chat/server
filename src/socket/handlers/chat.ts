@@ -21,7 +21,6 @@ import {
   getFilesByIds,
   getServerConfig,
   getWebhooksByIds,
-  clearConversationHidden,
   getConversation,
   touchConversation,
   DEFAULT_UPLOAD_MAX_BYTES,
@@ -514,14 +513,10 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
             consola.warn("touchConversation failed", created.conversation_id, err),
           );
 
-          // A message unhides a conversation, since hiding only means "not in
-          // my sidebar". After the send, and swallowed: it cannot block one.
+          // The first message is what puts the conversation in everybody else's
+          // list. After the send, and swallowed: it cannot block one.
           try {
-            const restored = await clearConversationHidden(created.conversation_id);
-            const announce = wasEmpty
-              ? [...new Set([...restored, ...access.memberIds])]
-              : restored;
-            for (const serverUserId of announce) {
+            for (const serverUserId of wasEmpty ? new Set(access.memberIds) : []) {
               const views = await directConversationViews(serverUserId);
               const view = views.find((v) => v.conversation_id === created.conversation_id);
               if (!view) continue;
@@ -531,7 +526,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
               }
             }
           } catch (err) {
-            consola.warn("un-hiding the conversation failed", created.conversation_id, err);
+            consola.warn("announcing the conversation failed", created.conversation_id, err);
           }
         }
 
