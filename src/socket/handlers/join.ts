@@ -4,7 +4,7 @@ import { applyInviteRole } from "../../services/inviteRoles";
 import { syncAllClients, broadcastMemberList, countOtherSessions, unverifyClient, verifyClient } from "../utils/clients";
 import { resetMessageCache } from "../utils/messageCache";
 import { broadcastConversation } from "./dm";
-import { sendServerDetails } from "../utils/server";
+import { sendInfo, sendServerDetails } from "../utils/server";
 import { remindOutdatedWindowsClient } from "../utils/outdatedClient";
 import { postSystemMessage, formatJoinMessage } from "../utils/systemMessages";
 import { createChallenge, consumeChallenge, verifyCertificate, verifyAssertion, verifyIdentityLink, identityTierAccepted, identityTierOf, IdentityVerificationError, type BotDeclaration, type IdentityTier, looksLikeABotName } from "../../auth/identity";
@@ -751,6 +751,9 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
         } catch (e) {
           consola.error("Failed to send server details after join:", e);
         }
+        // The one sent on connect left the version out, because nobody had
+        // joined yet. Resend it now that this socket is a member.
+        sendInfo(socket, clientsInfo, serverId).catch((e) => consola.warn("sendInfo failed", e));
         syncAllClients(io, clientsInfo);
         broadcastMemberList(io, clientsInfo, serverId);
         if (merge) await announceMerge(merge);

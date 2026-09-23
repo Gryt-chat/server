@@ -177,7 +177,11 @@ export async function sendInfo(socket: Socket, clientsInfo: Clients | undefined,
   const activeMembers = clientsInfo ? Object.values(clientsInfo).filter((client) => 
     client.serverUserId && !client.serverUserId.startsWith('temp_')
   ).length : 0;
-  
+
+  // grytUserId is set only after a join or a session restore has checked a
+  // token against this host and the current token version, as HTTP /info does.
+  const isMember = !!clientsInfo?.[socket.id]?.grytUserId;
+
   let displayName = process.env.SERVER_NAME || "Unknown Server";
   let description = process.env.SERVER_DESCRIPTION || "A Gryt server";
   // Falls back to the stricter answer if the config cannot be read, so a
@@ -196,7 +200,9 @@ export async function sendInfo(socket: Socket, clientsInfo: Clients | undefined,
     name: displayName,
     description,
     members: activeMembers.toString(),
-    version: process.env.SERVER_VERSION || "1.0.0",
+    // Members only, matching HTTP /info: a precise build number lets anyone
+    // scan for hosts running a version with a known vulnerability.
+    ...(isMember ? { version: process.env.SERVER_VERSION || "1.0.0" } : {}),
     // Sent before anyone joins, so a client can say what is needed rather than
     // after a refusal. Unauthenticated: it is the server's own advertisement.
     identityTiers: getAcceptedIdentityTiers(),
