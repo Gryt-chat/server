@@ -107,7 +107,7 @@ function mergeInTransaction(
   }
 
   mergeReactions(db, from, to);
-  mergeBlocks(db, guestGrytUserId, accountGrytUserId);
+  carryBlocksForward(db, guestGrytUserId, accountGrytUserId);
 
   const ownerMoved =
     db
@@ -172,20 +172,20 @@ function mergeReactions(db: DatabaseSync, from: string, to: string): void {
   }
 }
 
-/** Both directions, so a block on the guest still holds against the same person.
-    A block between the guest and the account would be a block on yourself, and goes. */
-function mergeBlocks(db: DatabaseSync, guest: string, account: string): void {
+/** Both directions, so a block on the old id still holds against the same person.
+    A block between the two ids would be a block on yourself, and goes. */
+export function carryBlocksForward(db: DatabaseSync, from: string, to: string): void {
   db.prepare(
     `INSERT OR IGNORE INTO blocks (blocker_gryt_user_id, blocked_gryt_user_id, created_at)
      SELECT ?, blocked_gryt_user_id, created_at FROM blocks
       WHERE blocker_gryt_user_id = ? AND blocked_gryt_user_id <> ?`,
-  ).run(account, guest, account);
+  ).run(to, from, to);
   db.prepare(
     `INSERT OR IGNORE INTO blocks (blocker_gryt_user_id, blocked_gryt_user_id, created_at)
      SELECT blocker_gryt_user_id, ?, created_at FROM blocks
       WHERE blocked_gryt_user_id = ? AND blocker_gryt_user_id <> ?`,
-  ).run(account, guest, account);
-  db.prepare(`DELETE FROM blocks WHERE blocker_gryt_user_id = ? OR blocked_gryt_user_id = ?`).run(guest, guest);
+  ).run(to, from, to);
+  db.prepare(`DELETE FROM blocks WHERE blocker_gryt_user_id = ? OR blocked_gryt_user_id = ?`).run(from, from);
 }
 
 function strongerMute(

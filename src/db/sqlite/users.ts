@@ -2,7 +2,7 @@ import { randomUUID } from "crypto";
 
 import type { UserRecord } from "../interfaces";
 import { fromIso, getSqliteDb, intToBool, toIso, type SQLInputValue } from "./connection";
-import { mergeGuestIntoAccount, type GuestMerge } from "./mergeGuest";
+import { carryBlocksForward, mergeGuestIntoAccount, type GuestMerge } from "./mergeGuest";
 import { getServerConfig, setServerOwner } from "./servers";
 import { revokeUserRefreshTokens } from "./tokens";
 
@@ -279,7 +279,17 @@ export async function replaceUserIdentity(
   const existing = await getUserByGrytId(newGrytUserId);
   if (existing) throw new Error("New identity already belongs to another user on this server.");
 
-  db.prepare(`UPDATE users SET gryt_user_id = ? WHERE server_user_id = ?`).run(newGrytUserId, serverUserId);
+  /* Blocks are keyed on the gryt id, so without moving them a block somebody put
+     on this member, and any block they made, stop applying to the same person. */
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare(`UPDATE users SET gryt_user_id = ? WHERE server_user_id = ?`).run(newGrytUserId, serverUserId);
+    carryBlocksForward(db, oldGrytUserId, newGrytUserId);
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
 
   let ownerUpdated = false;
   const cfg = await getServerConfig();
