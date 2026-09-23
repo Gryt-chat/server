@@ -52,13 +52,17 @@ export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
       // status nobody can see on nobody in particular.
       if (!info.serverUserId || info.serverUserId.startsWith("temp_")) return;
 
-      const rl = checkRateLimit("presence:activity", info.serverUserId, getClientIp(), RL_ACTIVITY);
-      if (!rl.allowed) {
-        socket.emit("server:error", { error: "rate_limited", retryAfterMs: rl.retryAfterMs });
-        return;
-      }
-
       const activity = normaliseActivity(data?.activity);
+
+      /* Setting one is what fans out, so only that is limited or scored. A clear
+         always goes through, or a ban is a status you cannot take off. */
+      if (activity !== null) {
+        const rl = checkRateLimit("presence:activity", info.serverUserId, getClientIp(), RL_ACTIVITY);
+        if (!rl.allowed) {
+          socket.emit("server:error", { error: "rate_limited", retryAfterMs: rl.retryAfterMs });
+          return;
+        }
+      }
 
       /* On the way up only, like turning a camera off: losing the permission
          must not leave somebody wearing a status they cannot remove. */

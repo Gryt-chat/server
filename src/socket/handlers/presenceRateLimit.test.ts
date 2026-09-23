@@ -121,6 +121,40 @@ describe("a status cannot be changed in a loop", () => {
     assert.equal(ctx.clientsInfo[ctx.clientId].activity, "status 9");
   });
 
+  /* The one thing a ban must not do. Clearing is already allowed without
+     set_activity for the same reason. */
+  it("still clears a status for somebody who has hit the limit", async () => {
+    const { ctx, emitted } = makeContext();
+    await seat(ctx, true);
+    const handlers = registerMemberHandlers(ctx);
+
+    for (let i = 0; i < 11; i++) {
+      await handlers["presence:activity"]({ activity: `status ${i}` });
+    }
+    assert.equal(limited(emitted).length, 1, "the run was not limited to begin with");
+
+    await handlers["presence:activity"]({ activity: "" });
+
+    assert.equal(ctx.clientsInfo[ctx.clientId].activity, undefined, "stuck wearing it");
+    assert.equal(limited(emitted).length, 1, "the clear was refused");
+  });
+
+  it("stops a set, clear, set, clear loop at the set", async () => {
+    const { ctx, emitted } = makeContext();
+    await seat(ctx, true);
+    const handlers = registerMemberHandlers(ctx);
+
+    // A clear is free, so the loop would be unbounded if it also reset the
+    // score the sets build up.
+    for (let i = 0; i < 20; i++) {
+      await handlers["presence:activity"]({ activity: `status ${i}` });
+      await handlers["presence:activity"]({ activity: "" });
+    }
+
+    assert.equal(limited(emitted).length, 10, "the sets kept going through");
+    assert.equal(ctx.clientsInfo[ctx.clientId].activity, undefined);
+  });
+
   it("counts a caller who has no permission to set one", async () => {
     const { ctx, emitted } = makeContext();
     await seat(ctx, false);
