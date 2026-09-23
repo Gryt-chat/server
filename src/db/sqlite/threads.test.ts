@@ -14,6 +14,7 @@ import {
   getThread,
   getThreadByRoot,
   listThreadsByConversation,
+  listThreadsByRootMessageIds,
 } from "./threads";
 
 /** Replies live in the messages table and never come back from `listMessages`,
@@ -173,5 +174,32 @@ describe("threads persistence", () => {
       listed.map((t) => t.thread_id),
       [newer.thread_id, older.thread_id],
     );
+  });
+
+  it("looks up a page of roots at once, and only in this conversation", async () => {
+    const conv = "channel-page";
+    const other = "channel-elsewhere";
+    const rootA = (await insertMessage({ conversation_id: conv, sender_server_id: "u_a", text: "a", attachments: null, reactions: null })).message_id;
+    const rootB = (await insertMessage({ conversation_id: conv, sender_server_id: "u_a", text: "b", attachments: null, reactions: null })).message_id;
+    const plain = (await insertMessage({ conversation_id: conv, sender_server_id: "u_a", text: "no thread here", attachments: null, reactions: null })).message_id;
+    const rootElsewhere = (await insertMessage({ conversation_id: other, sender_server_id: "u_a", text: "c", attachments: null, reactions: null })).message_id;
+
+    const a = await createThread({ conversation_id: conv, root_message_id: rootA, created_by: "u_a", title: "A" });
+    const b = await createThread({ conversation_id: conv, root_message_id: rootB, created_by: "u_a", tags: ["t1"] });
+    await createThread({ conversation_id: other, root_message_id: rootElsewhere, created_by: "u_a" });
+    await bumpThreadOnReply(b.thread_id, new Date(5000));
+
+    const found = await listThreadsByRootMessageIds(conv, [rootA, rootB, plain, rootElsewhere]);
+    assert.deepEqual(
+      found.map((t) => t.thread_id).sort(),
+      [a.thread_id, b.thread_id].sort(),
+      "a root in another conversation must not come back",
+    );
+    const byRoot = new Map(found.map((t) => [t.root_message_id, t]));
+    assert.equal(byRoot.get(rootA)?.title, "A");
+    assert.equal(byRoot.get(rootB)?.reply_count, 1, "the reply count a reload has to show");
+    assert.deepEqual(byRoot.get(rootB)?.tags, ["t1"]);
+
+    assert.deepEqual(await listThreadsByRootMessageIds(conv, []), [], "an empty page runs no query");
   });
 });

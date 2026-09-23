@@ -91,6 +91,21 @@ export async function listThreadsByConversation(conversationId: string): Promise
   return rows.map(rowToThread);
 }
 
+/* The threads hanging off a page of messages, in one statement (GRYT-1386).
+   On root_message_id alone: adding the conversation loses that unique index. */
+export async function listThreadsByRootMessageIds(
+  conversationId: string,
+  rootMessageIds: string[],
+): Promise<ThreadRecord[]> {
+  if (rootMessageIds.length === 0) return [];
+  const db = getSqliteDb();
+  const placeholders = rootMessageIds.map(() => "?").join(",");
+  const rows = db
+    .prepare(`SELECT * FROM threads WHERE root_message_id IN (${placeholders})`)
+    .all(...rootMessageIds) as Record<string, unknown>[];
+  return rows.map(rowToThread).filter((t) => t.conversation_id === conversationId);
+}
+
 /** Distinct people in a thread: the root author plus everyone who replied. */
 export async function countThreadParticipants(threadId: string, rootMessageId: string): Promise<number> {
   const db = getSqliteDb();
