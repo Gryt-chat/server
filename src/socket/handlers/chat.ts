@@ -787,18 +787,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           created_by: auth.tokenPayload.serverUserId,
           title,
         });
-        const summary = {
-          thread_id: thread.thread_id,
-          conversation_id: thread.conversation_id,
-          root_message_id: thread.root_message_id,
-          title: thread.title,
-          created_by: thread.created_by,
-          status: thread.status,
-          reply_count: thread.reply_count,
-          locked: thread.locked,
-          created_at: thread.created_at.toISOString(),
-          last_message_at: thread.last_message_at.toISOString(),
-        };
+        const summary = toThreadSummary(thread);
         (await deliverableClientIds(payload.conversationId, access, auth.tokenPayload.serverUserId))
           .forEach((cid) => io.sockets.sockets.get(cid)?.emit("thread:created", summary));
       } catch (err) {
@@ -1010,23 +999,17 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         const enrichedRoots = await enrichMessages(rootRecords);
         const rootById = new Map(enrichedRoots.map((r) => [r.message_id, r]));
 
+        // Same base fields as chat:fetch and thread:created, plus what only a
+        // topic row needs: participant count and the root's author and preview.
         const topics = await Promise.all(threads.map(async (t) => {
           const root = rootById.get(t.root_message_id);
           const participantCount = await countThreadParticipants(t.thread_id, t.root_message_id);
           return {
-            thread_id: t.thread_id,
-            conversation_id: t.conversation_id,
-            root_message_id: t.root_message_id,
-            title: t.title,
-            status: t.status,
-            reply_count: t.reply_count,
+            ...toThreadSummary(t),
             participant_count: participantCount,
-            created_at: t.created_at.toISOString(),
-            last_message_at: t.last_message_at.toISOString(),
             creator_server_id: t.created_by,
             creator_nickname: root?.sender_nickname ?? null,
             creator_avatar_file_id: root?.sender_avatar_file_id ?? null,
-            tags: t.tags,
             preview: root?.text ? root.text.slice(0, 200) : null,
           };
         }));
@@ -1093,18 +1076,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           title,
           tags,
         });
-        const summary = {
-          thread_id: thread.thread_id,
-          conversation_id: thread.conversation_id,
-          root_message_id: thread.root_message_id,
-          title: thread.title,
-          created_by: thread.created_by,
-          status: thread.status,
-          reply_count: thread.reply_count,
-          locked: thread.locked,
-          created_at: thread.created_at.toISOString(),
-          last_message_at: thread.last_message_at.toISOString(),
-        };
+        const summary = toThreadSummary(thread);
         (await deliverableClientIds(payload.conversationId, access, auth.tokenPayload.serverUserId))
           .forEach((cid) => io.sockets.sockets.get(cid)?.emit("thread:created", summary));
         socket.emit("forum:topic:created", {
