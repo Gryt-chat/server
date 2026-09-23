@@ -35,9 +35,11 @@ import {
   bumpThreadOnReply,
   listThreadMessages,
   listThreadsByConversation,
+  listThreadsByRootMessageIds,
   countThreadParticipants,
   setThreadStatus,
   setThreadTags,
+  type ThreadRecord,
 } from "../../db";
 import { processProfanity, type CensorStyle, type ProfanityMode } from "../../utils/profanityFilter";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
@@ -91,6 +93,24 @@ async function getMentionableMembers(): Promise<MentionableMember[]> {
   }));
   mentionableCache = { members, fetchedAt: now };
   return members;
+}
+
+/* The wire shape of a thread, the same one thread:created sends, so a client
+   that reloads ends up with what a client that watched them arrive has. */
+function toThreadSummary(t: ThreadRecord) {
+  return {
+    thread_id: t.thread_id,
+    conversation_id: t.conversation_id,
+    root_message_id: t.root_message_id,
+    title: t.title,
+    created_by: t.created_by,
+    status: t.status,
+    reply_count: t.reply_count,
+    locked: t.locked,
+    tags: t.tags,
+    created_at: t.created_at.toISOString(),
+    last_message_at: t.last_message_at.toISOString(),
+  };
 }
 
 const NONCE_TTL_MS = 60_000;
@@ -696,9 +716,24 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
 
         let enrichedItems = await enrichMessages(visible);
         enrichedItems = await enrichAttachments(enrichedItems);
-        const response: { conversation_id: string; items: typeof enrichedItems; hasMore: boolean; before?: string } = {
+        /* One statement for the whole page. Without it a reply count only ever
+           arrives live, so a reload reads every thread as 0 (GRYT-1386). */
+        const threads = (
+          await listThreadsByRootMessageIds(
+            payload.conversationId,
+            enrichedItems.map((m) => m.message_id),
+          )
+        ).map(toThreadSummary);
+        const response: {
+          conversation_id: string;
+          items: typeof enrichedItems;
+          threads: typeof threads;
+          hasMore: boolean;
+          before?: string;
+        } = {
           conversation_id: payload.conversationId,
           items: enrichedItems,
+          threads,
           hasMore: enrichedItems.length >= limit,
         };
         consola.info("[chat:fetch] response", { itemCount: enrichedItems.length, hasMore: response.hasMore, before: response.before });
