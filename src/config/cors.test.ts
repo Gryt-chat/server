@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  applyCors,
   DEV_CORS_ORIGINS,
   isOriginAllowed,
   originIsHost,
@@ -102,5 +103,42 @@ describe("setCorsHeaders", () => {
     assert.equal(headers["access-control-allow-origin"], "https://app.gryt.chat");
     const exposed = (headers["access-control-expose-headers"] ?? "").split(",").map((h) => h.trim().toLowerCase());
     assert.ok(exposed.includes("retry-after"));
+  });
+});
+
+describe("applyCors", () => {
+  function run(origin: string | undefined, host?: string) {
+    const headers: Record<string, string> = {};
+    applyCors({ setHeader: (k, v) => { headers[k.toLowerCase()] = v; } }, origin, LIST, host);
+    return headers;
+  }
+
+  it("sets Vary: Origin when the request carries no Origin at all", () => {
+    // The <img> case. Without this the browser stores the upload with no CORS
+    // headers, and the app's later fetch of the same URL reads that entry.
+    const headers = run(undefined);
+
+    assert.equal(headers["vary"], "Origin");
+    assert.equal(headers["access-control-allow-origin"], undefined);
+  });
+
+  it("sets Vary: Origin for an origin that is not allowed, and still no ACAO", () => {
+    const headers = run("https://evil.example");
+
+    assert.equal(headers["vary"], "Origin");
+    assert.equal(headers["access-control-allow-origin"], undefined);
+  });
+
+  it("answers an allowed origin with both", () => {
+    const headers = run("https://app.gryt.chat");
+
+    assert.equal(headers["vary"], "Origin");
+    assert.equal(headers["access-control-allow-origin"], "https://app.gryt.chat");
+  });
+
+  it("answers the request host itself, which is how the phone arrives", () => {
+    const headers = run("https://chat.example.com", "chat.example.com");
+
+    assert.equal(headers["access-control-allow-origin"], "https://chat.example.com");
   });
 });

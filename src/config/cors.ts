@@ -21,11 +21,17 @@ export function readAllowedOrigins(
 
 type HeaderSink = { setHeader(name: string, value: string): unknown };
 
+/** An <img> or <video> sends no Origin, so without this the browser caches an
+    upload with no CORS headers and serves that entry to a later fetch. */
+export function setVaryOrigin(res: HeaderSink): void {
+  res.setHeader("Vary", "Origin");
+}
+
 /** For a request whose origin already passed `isOriginAllowed`. A browser hides
     any response header not listed in Expose-Headers from cross-origin scripts. */
 export function setCorsHeaders(res: HeaderSink, origin: string): void {
   res.setHeader("Access-Control-Allow-Origin", origin);
-  res.setHeader("Vary", "Origin");
+  setVaryOrigin(res);
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
   res.setHeader(
     "Access-Control-Allow-Headers",
@@ -60,4 +66,18 @@ export function isOriginAllowed(
   if (origin === "null") return true;
   if (allowed.includes(origin)) return true;
   return requestHost !== undefined && originIsHost(origin, requestHost);
+}
+
+/** What the REST middleware does with one request. Vary goes on every
+    response, allowed origin or not, because the cached one has no Origin. */
+export function applyCors(
+  res: HeaderSink,
+  origin: string | undefined,
+  allowed: string[],
+  requestHost?: string,
+): void {
+  setVaryOrigin(res);
+  if (origin && isOriginAllowed(origin, allowed, requestHost)) {
+    setCorsHeaders(res, origin);
+  }
 }
