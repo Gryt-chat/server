@@ -7,9 +7,14 @@ import { socketMay } from "../utils/standing";
 import { looksLikeABotName } from "../../auth/identity";
 import { readWornUpdate } from "../../utils/wornString";
 import { normaliseActivity } from "../../utils/activityText";
+import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
+
+/* Every accepted change fans out to the whole server, so it is bounded like the
+   chat events. Ten in ten seconds is well past anything done by hand. */
+const RL_ACTIVITY: RateLimitRule = { limit: 10, windowMs: 10_000, banMs: 30_000, scorePerAction: 1, maxScore: 10, scoreDecayMs: 2_000 };
 
 export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
-  const { io, socket, clientId, serverId, clientsInfo } = ctx;
+  const { io, socket, clientId, serverId, clientsInfo, getClientIp } = ctx;
 
   return {
     // Gated on being a verified member rather than on a role, which is what the
@@ -48,6 +53,16 @@ export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
       if (!info.serverUserId || info.serverUserId.startsWith("temp_")) return;
 
       const activity = normaliseActivity(data?.activity);
+
+      /* Setting one is what fans out, so only that is limited or scored. A clear
+         always goes through, or a ban is a status you cannot take off. */
+      if (activity !== null) {
+        const rl = checkRateLimit("presence:activity", info.serverUserId, getClientIp(), RL_ACTIVITY);
+        if (!rl.allowed) {
+          socket.emit("server:error", { error: "rate_limited", retryAfterMs: rl.retryAfterMs });
+          return;
+        }
+      }
 
       /* On the way up only, like turning a camera off: losing the permission
          must not leave somebody wearing a status they cannot remove. */
