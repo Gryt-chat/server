@@ -10,7 +10,7 @@ import { requireAuth, requireOutranks } from "../middleware/auth";
 import { listRolesByMember } from "../../services/permissions";
 import { broadcastServerUiUpdate, sendEmojiQueueStateToSocket } from "../utils/server";
 import { applyServerSettings, settingsView } from "../../settings/serverSettings";
-import { syncAllClients, broadcastMemberList } from "../utils/clients";
+import { syncAllClients, broadcastMemberList, forgetSocketIdentity } from "../utils/clients";
 import {
   getServerConfig,
   createServerConfigIfNotExists,
@@ -1550,6 +1550,19 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           newGrytUserId: newGrytId,
           ownerUpdated: result.ownerUpdated,
         });
+
+        /* Those sockets proved they hold the old identity, and the membership
+           is not that identity's any more. Same answer as a merge (GRYT-1250). */
+        for (const sid of Object.keys(clientsInfo)) {
+          if (clientsInfo[sid]?.serverUserId !== targetId) continue;
+          forgetSocketIdentity(io, clientsInfo, sid);
+          io.sockets.sockets.get(sid)?.emit("token:revoked", {
+            reason: "identity_replaced",
+            message: "This membership now belongs to another identity. Please rejoin.",
+          });
+        }
+        syncAllClients(io, clientsInfo);
+        broadcastMemberList(io, clientsInfo, serverId);
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Failed to replace user identity.";
         consola.error("server:user:replace failed", e);
