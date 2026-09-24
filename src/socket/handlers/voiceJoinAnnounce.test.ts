@@ -61,12 +61,15 @@ async function connectMember(nickname: string): Promise<Member> {
   const user = await upsertUser(grytUserId, nickname);
   await setServerRole(user.server_user_id, "member");
 
+  // `rooms` because a real socket has one, and the voice handlers read it.
+  const rooms = new Set<string>([clientId]);
   const socket = {
     id: clientId,
+    rooms,
     handshake: { headers: { host: HOST }, address: "127.0.0.1" },
     emit: () => true,
-    join() {},
-    leave() {},
+    join(room: string) { rooms.add(room); },
+    leave(room: string) { rooms.delete(room); },
     to() {
       return { emit() {} };
     },
