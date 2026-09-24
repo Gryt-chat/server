@@ -46,9 +46,8 @@ describe("a sealed upload", () => {
       assert.equal(storage.key, "uploads/abc.bin");
       assert.equal(storage.treatAsSvg, false, "a sealed upload must never reach the SVG path");
       assert.equal(storage.validateAsImage, false, "there is no picture to validate");
-      assert.equal(storage.extractVideoThumbnail, false);
       assert.equal(storage.measureAsVideo, false, "ciphertext has no headers to read");
-      assert.equal(storage.queueImageJob, false, "the worker would hand ciphertext to sharp");
+      assert.equal(storage.queueImageJob, false, "the worker would hand ciphertext to sharp or ffmpeg");
     }
   });
 
@@ -72,7 +71,6 @@ describe("an ordinary upload", () => {
     assert.equal(png.validateAsImage, true);
     assert.equal(png.queueImageJob, true);
     assert.equal(png.treatAsSvg, false);
-    assert.equal(png.extractVideoThumbnail, false);
     assert.equal(png.measureAsVideo, false);
   });
 
@@ -86,13 +84,20 @@ describe("an ordinary upload", () => {
     assert.equal(svg.queueImageJob, false, "and the worker must not either");
   });
 
-  it("pulls a poster frame out of a video", () => {
-    const video = storageForUpload({ ...base, sealed: false, mimetype: "video/mp4" });
+  it("sends a video to the worker for its poster", () => {
+    for (const mimetype of ["video/mp4", "video/webm", "video/quicktime", "VIDEO/MP4"]) {
+      const video = storageForUpload({ ...base, sealed: false, mimetype });
 
-    assert.equal(video.extractVideoThumbnail, true);
-    assert.equal(video.measureAsVideo, true);
-    assert.equal(video.validateAsImage, false);
-    assert.equal(video.queueImageJob, false);
+      assert.equal(video.queueImageJob, true, `${mimetype} gets no poster`);
+      assert.equal(video.measureAsVideo, true);
+      assert.equal(video.validateAsImage, false);
+    }
+  });
+
+  it("queues nothing that is neither a picture nor a video", () => {
+    for (const mimetype of ["application/pdf", "audio/mpeg", "text/plain", undefined]) {
+      assert.equal(storageForUpload({ ...base, sealed: false, mimetype }).queueImageJob, false, String(mimetype));
+    }
   });
 
   it("falls back to .bin for a type with no known extension", () => {
@@ -157,15 +162,24 @@ describe("the route uses it", () => {
 
   it("gates every side effect on the decision", () => {
     // Each of these needs the picture. A sealed upload has ciphertext, and
-    // sharp, ffmpeg and the SVG sanitiser would each be handed it.
+    // sharp, the worker and the SVG sanitiser would each be handed it.
     for (const [what, gate] of [
       ["the SVG sanitiser", "if (storage.treatAsSvg)"],
       ["image validation", "if (storage.validateAsImage)"],
-      ["the video poster frame", "if (storage.extractVideoThumbnail)"],
       ["the video container parser", "if (storage.measureAsVideo)"],
       ["the image worker", "if (storage.queueImageJob)"],
     ]) {
       assert.ok(source.includes(gate), `${what} is not gated on the decision`);
     }
+  });
+
+  it("decodes no video in the request", () => {
+    // Posters are the sandboxed image worker's job (GRYT-1423). This was an
+    // unconfined ffmpeg on PATH, run inside the upload.
+    assert.doesNotMatch(file, /ffmpeg|child_process|execFile|spawn\(/);
+  });
+
+  it("answers the uploader the same whether or not a poster ever comes", () => {
+    assert.match(source, /res\.status\(201\)\.json\(\{ fileId, key, thumbnailKey: null \}\)/);
   });
 });

@@ -13,12 +13,10 @@ export interface UploadStorage {
   validateAsImage: boolean;
   /** Whether to sanitise and store this as a vector rather than a raster. */
   treatAsSvg: boolean;
-  /** Whether to pull a poster frame out of it. */
-  extractVideoThumbnail: boolean;
   /** Whether to read its display size from the container headers. */
   measureAsVideo: boolean;
-  /** False for SVG, which is not an oversight: the worker hands its input to
-      sharp, and sharp renders SVG through librsvg. */
+  /** Images for a thumbnail, videos for a poster. False for SVG, which is not an
+      oversight: the worker hands its input to sharp, which renders SVG through librsvg. */
   queueImageJob: boolean;
 }
 
@@ -47,7 +45,6 @@ export function storageForUpload({
       originalName: null,
       validateAsImage: false,
       treatAsSvg: false,
-      extractVideoThumbnail: false,
       measureAsVideo: false,
       queueImageJob: false,
     };
@@ -61,8 +58,8 @@ export function storageForUpload({
     originalName: originalName || null,
     validateAsImage: fileMime.startsWith("image/") && fileMime !== "image/svg+xml",
     treatAsSvg: fileMime === "image/svg+xml",
-    extractVideoThumbnail: fileMime.startsWith("video/"),
     measureAsVideo: fileMime.startsWith("video/"),
-    queueImageJob: fileMime.startsWith("image/") && fileMime !== "image/svg+xml",
+    queueImageJob:
+      (fileMime.startsWith("image/") && fileMime !== "image/svg+xml") || fileMime.startsWith("video/"),
   };
 }

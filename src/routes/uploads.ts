@@ -4,10 +4,7 @@ import type { Request, Response, NextFunction } from "express";
 import multer from "multer";
 import { v4 as uuidv4 } from "uuid";
 import mime from "mime-types";
-import { execFile } from "child_process";
 import { unlink, readFile } from "fs/promises";
-import { tmpdir } from "os";
-import { join } from "path";
 import { putObject, getObject } from "../storage";
 import { insertFile, insertImageJob, getFile, updateUserAvatar, setUserAvatar, getServerConfig, getUserByServerId, DEFAULT_AVATAR_MAX_BYTES, DEFAULT_UPLOAD_MAX_BYTES } from "../db";
 import { isSealedUpload, storageForUpload } from "./uploadStorage";
@@ -21,31 +18,6 @@ import { ensurePermission } from "../middleware/requirePermission";
 import { validateImage } from "../utils/imageValidation";
 import { sanitizeSvg } from "../utils/svgSanitize";
 import { PARSE_LIMITS, readVideoDimensionsFromFile } from "../utils/videoDimensions";
-
-/** Takes multer's path, so a video never has to fit in memory. */
-async function extractVideoThumbnail(inputPath: string, fileId: string): Promise<Buffer | null> {
-  const outputPath = join(tmpdir(), `gryt-thumb-${fileId}.jpg`);
-  try {
-    await new Promise<void>((resolve, reject) => {
-      execFile("ffmpeg", [
-        "-i", inputPath,
-        "-ss", "00:00:01",
-        "-vframes", "1",
-        "-vf", "scale=320:-1",
-        "-q:v", "5",
-        "-y", outputPath,
-      ], { timeout: 15000 }, (err) => {
-        if (err) reject(err); else resolve();
-      });
-    });
-    return await readFile(outputPath);
-  } catch {
-    return null;
-  } finally {
-    // Only the output. The input belongs to the caller, which cleans it up.
-    await unlink(outputPath).catch((e) => consola.warn("temp file cleanup failed", e));
-  }
-}
 
 /** SVG is on this list only because it has been through sanitizeSvg(), is drawn
     through `<img>`, and is sandboxed by the CSP below. That header is required. */
@@ -166,7 +138,6 @@ uploadsRouter.post(
         }
 
         const { key, storedMime } = storage;
-        let thumbKey: string | null = null;
         let width: number | null = null;
         let height: number | null = null;
 
@@ -247,14 +218,6 @@ uploadsRouter.post(
           }
         }
 
-        if (storage.extractVideoThumbnail) {
-          const thumb = await extractVideoThumbnail(file.path, fileId);
-          if (thumb) {
-            thumbKey = `thumbnails/${fileId}.jpg`;
-            await putObject({ bucket, key: thumbKey, body: thumb, contentType: "image/jpeg" }).catch(() => { thumbKey = null; });
-          }
-        }
-
         await insertFile({
           file_id: fileId,
           s3_key: key,
@@ -262,7 +225,8 @@ uploadsRouter.post(
           size: file.size,
           width,
           height,
-          thumbnail_key: thumbKey,
+          // A video's poster, like an image's thumbnail, is the worker's to fill in.
+          thumbnail_key: null,
           original_name: storage.originalName,
           uploaded_by_server_user_id: req.tokenPayload?.serverUserId ?? null,
           created_at: new Date(),
@@ -279,7 +243,7 @@ uploadsRouter.post(
           }).catch((e: unknown) => consola.warn("Failed to queue image job", e));
         }
 
-        res.status(201).json({ fileId, key, thumbnailKey: thumbKey });
+        res.status(201).json({ fileId, key, thumbnailKey: null });
       })
       // Every exit path, including the early returns and anything that threw:
       // multer's temp file is ours and nothing else removes it.
