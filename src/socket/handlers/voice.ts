@@ -146,7 +146,7 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
       let isMuted = Boolean(clientState.isMuted);
       /* Unidentified is not unpermitted: muting a socket mid-restore records
          the wrong state on the strength of not knowing yet. */
-      if (!isMuted && socketIsIdentified(clientsInfo, clientId) && !(await socketMay("speak"))) {
+      if (!isMuted && socketIsIdentified(clientsInfo, clientId) && !(await mayInRoom("speak"))) {
         isMuted = true;
         socket.emit("voice:room:error", {
           error: "forbidden",
@@ -342,17 +342,8 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
           consola.info(`[Voice:Step 1] not identified yet client=${clientId} — asked to retry`);
           return;
         }
-        if (!(await socketMay("join_voice"))) {
-          consola.warn(`[Voice:Step 1] FORBIDDEN client=${clientId} user=${userId} lacks join_voice`);
-          socket.emit("voice:room:error", {
-            error: "forbidden",
-            message: "You do not have permission to join voice on this server.",
-            permission: "join_voice",
-          });
-          return;
-        }
-        /* `join_voice` says whether somebody may use voice, not where, and a
-           DM's id is computable from a member list. Same answer chat gets. */
+        /* A DM's id is computable from a member list, so whether the room is
+           theirs to see comes first. Same answer chat gets. */
         const access = await resolveConversationAccess(roomId, userId);
         if (!access.allowed) {
           const denial = DENIAL_RESPONSES[access.reason];
@@ -366,13 +357,15 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
           });
           return;
         }
-        // A room can be visible and shut: the scope's `join_voice`, which the
-        // client already draws as `canJoin`.
-        if (access.kind === "channel" && !(await mayInChannel(roomId, userId, "join_voice", clientsInfo[clientId]?.grytUserId))) {
+        // The room's answer alone, so an allow opens a room to a role without
+        // join_voice elsewhere (GRYT-1418). A call has no scope: the server's.
+        if (!(await mayInRoom("join_voice", roomId))) {
           consola.warn(`[Voice:Step 1] REFUSED client=${clientId} user=${userId} room=${roomId} reason=join_voice`);
           socket.emit("voice:room:error", {
             error: "forbidden",
-            message: "You do not have permission to join this voice channel.",
+            message: access.kind === "channel"
+              ? "You do not have permission to join this voice channel."
+              : "You do not have permission to join voice on this server.",
             permission: "join_voice",
           });
           return;
@@ -477,10 +470,12 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
       // the member list, so ungated it is a way to appear where you may not be.
       if (newJoinedState && refusedAsUnidentified()) return;
 
-      if (newJoinedState && !(await socketMay("join_voice"))) {
+      // The room's answer, as at the grant: server-wide here refused a room
+      // that allows join_voice after granting it (GRYT-1418).
+      if (newJoinedState && !(await mayInRoom("join_voice", channelId))) {
         socket.emit("voice:room:error", {
           error: "forbidden",
-          message: "You do not have permission to join voice on this server.",
+          message: "You don't have permission to join voice here.",
           permission: "join_voice",
         });
         return;
