@@ -1555,7 +1555,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
            is not that identity's any more. Same answer as a merge (GRYT-1250). */
         for (const sid of Object.keys(clientsInfo)) {
           if (clientsInfo[sid]?.serverUserId !== targetId) continue;
-          forgetSocketIdentity(io, clientsInfo, sid);
+          await forgetSocketIdentity(io, clientsInfo, serverId, sfuClient, sid);
           io.sockets.sockets.get(sid)?.emit("token:revoked", {
             reason: "identity_replaced",
             message: "This membership now belongs to another identity. Please rejoin.",

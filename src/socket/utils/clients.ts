@@ -7,6 +7,7 @@ import {
   listConversationMemberIds,
 } from "../../db";
 import { voiceRoomName } from "./voiceRooms";
+import { removeFromVoice, type VoiceSfu } from "./voiceLeave";
 import { clientMayReceive, refreshClientPermissions } from "./standing";
 import { isBotIdentity } from "../../auth/identity";
 import { memberIdentity } from "./memberIdentity";
@@ -26,9 +27,17 @@ export function unverifyClient(socket: Socket) {
 
 /** Back to an unidentified connection, which receives no member broadcasts. For
     when a membership stops belonging to the identity a socket proved. */
-export function forgetSocketIdentity(io: Server, clientsInfo: Clients, sid: string): void {
+export async function forgetSocketIdentity(
+  io: Server,
+  clientsInfo: Clients,
+  serverId: string,
+  sfuClient: VoiceSfu | null,
+  sid: string,
+): Promise<void> {
   const ci = clientsInfo[sid];
   if (!ci) return;
+  // First, while the record still carries the id the SFU and the room know it by.
+  await removeFromVoice({ io, clientsInfo, serverId, sfuClient, sid });
   ci.serverUserId = `temp_${sid}`;
   ci.grytUserId = undefined;
   ci.accessToken = undefined;

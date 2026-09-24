@@ -180,18 +180,18 @@ async function admitBot(
 }
 
 export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
-  const { io, socket, clientId, serverId, clientsInfo, getClientIp, clientAddressIsOwn } = ctx;
+  const { io, socket, clientId, serverId, clientsInfo, sfuClient, getClientIp, clientAddressIsOwn } = ctx;
 
   const helpers = registerJoinHelpers(ctx);
 
-  const forgetIdentity = (sid: string) => forgetSocketIdentity(io, clientsInfo, sid);
+  const forgetIdentity = (sid: string) => forgetSocketIdentity(io, clientsInfo, serverId, sfuClient, sid);
 
   /** Another tab still connected as the guest. No message, so it refreshes or
       rejoins quietly as whoever this device is now. */
-  function forgetGuestSockets(guestServerUserId: string): void {
+  async function forgetGuestSockets(guestServerUserId: string): Promise<void> {
     for (const [sid, ci] of Object.entries(clientsInfo)) {
       if (sid === clientId || ci.serverUserId !== guestServerUserId) continue;
-      forgetIdentity(sid);
+      await forgetIdentity(sid);
       io.sockets.sockets.get(sid)?.emit("token:revoked", { reason: "identity_merged" });
     }
   }
@@ -385,7 +385,7 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
         // A socket proving somebody else stops being who it was, even if the new
         // identity is refused below. Otherwise it goes on receiving as the old one.
         const previous = clientsInfo[clientId]?.grytUserId;
-        if (previous && previous !== grytUserId) forgetIdentity(clientId);
+        if (previous && previous !== grytUserId) await forgetIdentity(clientId);
 
         // Says exactly what is wrong, since the accepted tiers are already in
         // `server:info`. Bots come from the registry, not GRYT_IDENTITY_TIERS.
@@ -479,7 +479,7 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
                   (merge.ownerMoved ? ", and ownership moved with it" : ""),
               );
               resetMessageCache();
-              forgetGuestSockets(merge.guestServerUserId);
+              await forgetGuestSockets(merge.guestServerUserId);
             }
             // `cfg` was read before the carry-over, which can change who owns
             // the server. Stale, it sends `isOwner: false` to the owner.
