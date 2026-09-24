@@ -47,6 +47,7 @@ describe("a sealed upload", () => {
       assert.equal(storage.treatAsSvg, false, "a sealed upload must never reach the SVG path");
       assert.equal(storage.validateAsImage, false, "there is no picture to validate");
       assert.equal(storage.extractVideoThumbnail, false);
+      assert.equal(storage.measureAsVideo, false, "ciphertext has no headers to read");
       assert.equal(storage.queueImageJob, false, "the worker would hand ciphertext to sharp");
     }
   });
@@ -72,6 +73,7 @@ describe("an ordinary upload", () => {
     assert.equal(png.queueImageJob, true);
     assert.equal(png.treatAsSvg, false);
     assert.equal(png.extractVideoThumbnail, false);
+    assert.equal(png.measureAsVideo, false);
   });
 
   it("sends an SVG to the sanitiser and never to the worker", () => {
@@ -88,6 +90,7 @@ describe("an ordinary upload", () => {
     const video = storageForUpload({ ...base, sealed: false, mimetype: "video/mp4" });
 
     assert.equal(video.extractVideoThumbnail, true);
+    assert.equal(video.measureAsVideo, true);
     assert.equal(video.validateAsImage, false);
     assert.equal(video.queueImageJob, false);
   });
@@ -159,6 +162,7 @@ describe("the route uses it", () => {
       ["the SVG sanitiser", "if (storage.treatAsSvg)"],
       ["image validation", "if (storage.validateAsImage)"],
       ["the video poster frame", "if (storage.extractVideoThumbnail)"],
+      ["the video container parser", "if (storage.measureAsVideo)"],
       ["the image worker", "if (storage.queueImageJob)"],
     ]) {
       assert.ok(source.includes(gate), `${what} is not gated on the decision`);

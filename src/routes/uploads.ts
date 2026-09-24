@@ -19,6 +19,7 @@ import { RangeNotSatisfiableError } from "../utils/byteRange";
 import { ensurePermission } from "../middleware/requirePermission";
 import { validateImage } from "../utils/imageValidation";
 import { sanitizeSvg } from "../utils/svgSanitize";
+import { PARSE_LIMITS, readVideoDimensionsFromFile } from "../utils/videoDimensions";
 
 /** Takes multer's path, so a video never has to fit in memory. */
 async function extractVideoThumbnail(inputPath: string, fileId: string): Promise<Buffer | null> {
@@ -232,6 +233,18 @@ uploadsRouter.post(
         // The whole point of the exercise: the bytes go from multer's temp file
         // to storage without the process ever holding them.
         await putObject({ bucket, key, sourcePath: file.path, contentType: storedMime });
+
+        // Headers only, never a decode. The client's claim is the fallback, as it
+        // is for images, and only counts when it gives both sides.
+        if (storage.measureAsVideo) {
+          const claimed = { width: parseDimField(req.body?.width), height: parseDimField(req.body?.height) };
+          const measured = (await readVideoDimensionsFromFile(file.path)) ?? claimed;
+          const fits = (n: number | null) => n !== null && n <= PARSE_LIMITS.maxSide;
+          if (fits(measured.width) && fits(measured.height)) {
+            width = measured.width;
+            height = measured.height;
+          }
+        }
 
         if (storage.extractVideoThumbnail) {
           const thumb = await extractVideoThumbnail(file.path, fileId);
