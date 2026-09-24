@@ -256,11 +256,13 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
     conversationId: string,
     serverUserId: string | null | undefined,
     errorEvent: "chat:error" | "thread:error" | "forum:error" = "chat:error",
+    nonce?: string,
   ): Promise<AllowedConversationAccess | null> {
     const access = await resolveConversationAccess(conversationId, serverUserId);
     if (!access.allowed) {
       const { error, message } = DENIAL_RESPONSES[access.reason];
-      socket.emit(errorEvent, { error, message });
+      if (nonce) socket.emit(errorEvent, { error, message }, { nonce });
+      else socket.emit(errorEvent, { error, message });
       return null;
     }
     return access;
@@ -274,17 +276,21 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
 
   return {
     'chat:send': async (payload: { conversationId: string; accessToken: string; text?: string; sealed?: string; attachments?: string[]; replyToMessageId?: string; threadId?: string; nonce?: string }) => {
+      /* Names the send refused, or a burst of refusals can only settle the last
+         row queued. After the payload, so older clients read it as before. */
+      const nonce = typeof payload?.nonce === "string" && payload.nonce ? payload.nonce : undefined;
+      const refuse = (error: unknown) => (nonce ? socket.emit("chat:error", error, { nonce }) : socket.emit("chat:error", error));
       try {
         const ip = getClientIp();
         const userId = clientsInfo[clientId]?.serverUserId;
         const rl = checkRateLimit("chat:send", userId, ip, RL_SEND);
         if (!rl.allowed) {
-          socket.emit("chat:error", { error: "rate_limited", retryAfterMs: rl.retryAfterMs, message: `Too fast. Wait ${Math.ceil((rl.retryAfterMs || 0) / 1000)}s.` });
+          refuse({ error: "rate_limited", retryAfterMs: rl.retryAfterMs, message: `Too fast. Wait ${Math.ceil((rl.retryAfterMs || 0) / 1000)}s.` });
           return;
         }
 
         if (!payload || typeof payload.conversationId !== "string" || typeof payload.accessToken !== "string") {
-          socket.emit("chat:error", "Invalid payload");
+          refuse("Invalid payload");
           return;
         }
 
@@ -294,17 +300,17 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         // A mute covers text as well as voice (GRYT-917).
         const sendMute = await textMuteFor(auth.tokenPayload.serverUserId);
         if (sendMute.muted) {
-          socket.emit("chat:error", textMuteError(sendMute));
+          refuse(textMuteError(sendMute));
           return;
         }
 
-        const access = await requireConversationAccess(payload.conversationId, auth.tokenPayload.serverUserId);
+        const access = await requireConversationAccess(payload.conversationId, auth.tokenPayload.serverUserId, "chat:error", nonce);
         if (!access) return;
 
         // `send_messages` is whether they may talk, the scope whether they may
         // talk here. A DM has no scope and falls through to the first.
         if (!(await mayInChannel(payload.conversationId, auth.tokenPayload.serverUserId, "send_messages", auth.tokenPayload.grytUserId))) {
-          socket.emit("chat:error", {
+          refuse({
             error: "forbidden",
             message: "This channel is read-only for your role.",
           });
@@ -315,7 +321,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         // so an automated channel just means: humans refused, bots not.
         const automatedChannel = access.kind === "dm" ? null : await getServerChannel(payload.conversationId);
         if (automatedChannel?.automated && !isBotIdentity(auth.tokenPayload.grytUserId)) {
-          socket.emit("chat:error", {
+          refuse({
             error: "automated_channel",
             message: "This is an automated channel — only bots and the system can post here.",
           });
@@ -327,16 +333,16 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         let threadId: string | null = null;
         if (typeof payload.threadId === "string" && payload.threadId) {
           if (access.kind === "dm") {
-            socket.emit("chat:error", { error: "threads_not_allowed", message: "Threads are not available in direct messages." });
+            refuse({ error: "threads_not_allowed", message: "Threads are not available in direct messages." });
             return;
           }
           const thread = await getThread(payload.threadId);
           if (!thread || thread.conversation_id !== payload.conversationId) {
-            socket.emit("chat:error", { error: "thread_not_found", message: "That thread no longer exists." });
+            refuse({ error: "thread_not_found", message: "That thread no longer exists." });
             return;
           }
           if (thread.locked || thread.status === "closed") {
-            socket.emit("chat:error", { error: "thread_closed", message: "This thread is closed to new replies." });
+            refuse({ error: "thread_closed", message: "This thread is closed to new replies." });
             return;
           }
           threadId = thread.thread_id;
@@ -345,17 +351,17 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         // Identity verification
         if (userId && payload.accessToken) {
           const identityValid = await verifyUserIdentity(auth.tokenPayload.serverUserId, auth.tokenPayload.grytUserId);
-          if (!identityValid) { socket.emit("chat:error", "Identity verification failed"); return; }
+          if (!identityValid) { refuse("Identity verification failed"); return; }
         }
 
         // Voice channel gate
         if (userId && isConversationAVoiceChannel(payload.conversationId, sfuClient)) {
           if (!await isTextInVoiceEnabled(payload.conversationId)) {
-            socket.emit("chat:error", "Text chat is disabled in this voice channel");
+            refuse("Text chat is disabled in this voice channel");
             return;
           }
           if (!isUserConnectedToSpecificVoiceChannel(userId, payload.conversationId, sfuClient)) {
-            socket.emit("chat:error", "You must be connected to this voice channel to send messages");
+            refuse("You must be connected to this voice channel to send messages");
             return;
           }
         }
@@ -364,35 +370,35 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         const sealed = typeof payload.sealed === "string" ? payload.sealed : null;
         const attachments = Array.isArray(payload.attachments) ? payload.attachments : null;
         if (!text && !sealed && (!attachments || attachments.length === 0)) {
-          socket.emit("chat:error", "Message is empty");
+          refuse("Message is empty");
           return;
         }
 
         /* Refused rather than picking one: whichever is kept, the other was
            already written down. */
         if (sealed && text) {
-          socket.emit("chat:error", "A message is sealed or it is not.");
+          refuse("A message is sealed or it is not.");
           return;
         }
 
         // Generous next to a real envelope, which the member cap already
         // bounds. A cap at all, so the column is not a place to park data.
         if (sealed && sealed.length > SEALED_MAX_LENGTH) {
-          socket.emit("chat:error", "That message is too large to send encrypted.");
+          refuse("That message is too large to send encrypted.");
           return;
         }
 
         // Refused rather than truncated, so somebody can see what they would
         // lose and decide.
         if (text.length > MESSAGE_MAX_LENGTH) {
-          socket.emit("chat:error", MESSAGE_TOO_LONG);
+          refuse(MESSAGE_TOO_LONG);
           return;
         }
 
         // Also at the upload endpoint, but an id can be reused from an earlier
         // message. This caps how many; the size limit is per file.
         if (attachments && attachments.length > MAX_ATTACHMENTS_PER_MESSAGE) {
-          socket.emit("chat:error", {
+          refuse({
             error: "too_many_attachments",
             message: `A message can carry at most ${MAX_ATTACHMENTS_PER_MESSAGE} files.`,
           });
@@ -400,7 +406,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         }
 
         if (attachments && attachments.length > 0 && !(await mayHere(auth, payload.conversationId, "attach_files"))) {
-          socket.emit("chat:error", {
+          refuse({
             error: "forbidden",
             message: "You do not have permission to attach files here.",
             permission: "attach_files",
@@ -413,14 +419,14 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         // Switching DMs off stops new ones without hiding what is there, so
         // turning it back on has nothing to undo.
         if (access.kind === "dm" && cfg && cfg.allow_dms === false) {
-          socket.emit("chat:error", { error: "dms_disabled", message: "Direct messages are turned off on this server" });
+          refuse({ error: "dms_disabled", message: "Direct messages are turned off on this server" });
           return;
         }
 
         /* A channel has no fixed set of keys to seal to, so anybody admitted
            later would find every message unreadable. */
         if (sealed && access.kind !== "dm") {
-          socket.emit("chat:error", {
+          refuse({
             error: "sealed_not_allowed",
             message: "Only direct messages can be encrypted.",
           });
@@ -428,7 +434,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         }
 
         if (access.kind === "dm" && !auth.permissions.has("send_direct_messages")) {
-          socket.emit("chat:error", {
+          refuse({
             error: "forbidden",
             message: "You do not have permission to send direct messages here.",
             permission: "send_direct_messages",
@@ -444,19 +450,19 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
             // Attaching a file publishes it to this conversation, so it has to
             // be one the sender could already read.
             if (!f || (await fileReadVerdict(id, auth.tokenPayload.serverUserId, auth.tokenPayload.grytUserId)) !== "allowed") {
-              socket.emit("chat:error", `Attachment not found: ${id}`);
+              refuse(`Attachment not found: ${id}`);
               return;
             }
             if (typeof maxBytes === "number" && maxBytes > 0 && f.size != null && f.size > maxBytes) {
               const limitMb = (maxBytes / (1024 * 1024)).toFixed(1);
-              socket.emit("chat:error", `File "${f.original_name || id}" is too large. Max ${limitMb}MB.`);
+              refuse(`File "${f.original_name || id}" is too large. Max ${limitMb}MB.`);
               return;
             }
           }
         }
 
         const user = await getUserByServerId(auth.tokenPayload.serverUserId);
-        if (!user) { socket.emit("chat:error", "User not found. Please rejoin."); return; }
+        if (!user) { refuse("User not found. Please rejoin."); return; }
 
         const replyToMessageId = typeof payload.replyToMessageId === "string" ? payload.replyToMessageId : null;
 
@@ -470,7 +476,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         if (profanityMode !== "off" && finalText) {
           const result = await processProfanity(finalText, profanityMode, censorStyle);
           if (result.action === "reject") {
-            socket.emit("chat:error", "Message blocked: contains profanity.");
+            refuse("Message blocked: contains profanity.");
             return;
           }
           finalText = result.text;
@@ -668,8 +674,8 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           fallbackRecipients.forEach((cid) => {
             io.sockets.sockets.get(cid)?.emit("chat:new", fallback);
           });
-          socket.emit("chat:error", "Message not persisted (temporary storage issue)");
-        } catch { socket.emit("chat:error", "Failed to send message"); }
+          refuse("Message not persisted (temporary storage issue)");
+        } catch { refuse("Failed to send message"); }
       }
     },
 
