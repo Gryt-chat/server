@@ -35,6 +35,9 @@ interface StorageBackend {
   deleteObject(params: { bucket: string; key: string }): Promise<void>;
 }
 
+/** The image worker defaults to the same name, so the two agree when neither is told. */
+export const DEFAULT_FILESYSTEM_BUCKET = "gryt";
+
 let _backend: StorageBackend | null = null;
 
 function getBackend(): StorageBackend {
@@ -48,6 +51,8 @@ export function initStorage(): void {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const fs = require("./filesystem") as typeof import("./filesystem");
     fs.initFilesystem();
+    // Here the bucket is only a folder under DATA_DIR, and every route refuses without one.
+    if (!(process.env.S3_BUCKET || "").trim()) process.env.S3_BUCKET = DEFAULT_FILESYSTEM_BUCKET;
     _backend = fs;
   } else {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
