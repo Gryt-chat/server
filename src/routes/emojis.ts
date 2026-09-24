@@ -18,6 +18,7 @@ import {
   renameEmoji,
 } from "../db";
 import { processEmojiToOptimizedImage } from "../utils/emojiProcessing";
+import { sendStoredBody } from "../utils/sendStoredBody";
 import {
   emojiUpload,
   EMOJI_NAME_RE,
@@ -245,7 +246,7 @@ emojisRouter.get(
         res.setHeader("X-Content-Type-Options", "nosniff");
         res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
 
-        body.pipe(res);
+        sendStoredBody(body, res, `emoji ${name}`);
       })
       .catch(next);
   },

@@ -16,6 +16,7 @@ import { verifyFileToken, type FileTokenPayload } from "../utils/jwt";
 import { storeAvatarPicture } from "../services/avatarImage";
 import { fileReadVerdict } from "../services/fileAccess";
 import { RangeNotSatisfiableError } from "../utils/byteRange";
+import { sendStoredBody } from "../utils/sendStoredBody";
 import { ensurePermission } from "../middleware/requirePermission";
 import { validateImage } from "../utils/imageValidation";
 import { sanitizeSvg } from "../utils/svgSanitize";
@@ -555,7 +556,7 @@ uploadsRouter.get(
           res.setHeader("Content-Length", String(obj.ContentLength));
         }
 
-        body.pipe(res);
+        sendStoredBody(body, res, `file ${fileId}`);
       })
       .catch(next);
   },
