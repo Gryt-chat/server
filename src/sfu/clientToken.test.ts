@@ -5,7 +5,10 @@ import {
   signClientToken,
   signClientTokenV2,
   mintClientToken,
+  CAP_SHARE_SCREEN,
+  CAP_SHARE_VIDEO,
   CAP_SPEAK,
+  CAP_VIDEO_CHECKED,
   TOKEN_VERSION,
   TOKEN_VERSION_2,
 } from "./clientToken";
@@ -77,6 +80,19 @@ describe("signClientTokenV2", () => {
     assert.equal(
       signClientTokenV2(SECRET, "user-abc", "room-xyz", 1788000000000, "nonce-1", []),
       "v2.dXNlci1hYmN8cm9vbS14eXp8MTc4ODAwMDAwMDAwMHxub25jZS0xfA.caTW8CLQDzyjZJbUzMtPb_OAsKzfH6lPOO2G9kBEeWE",
+    );
+  });
+
+  // What voice.ts mints for a member allowed everything, in that order.
+  it("matches the SFU's vector for the video capabilities", () => {
+    assert.equal(
+      signClientTokenV2(SECRET, "user-abc", "room-xyz", 1788000000000, "nonce-1", [
+        CAP_SPEAK,
+        CAP_VIDEO_CHECKED,
+        CAP_SHARE_VIDEO,
+        CAP_SHARE_SCREEN,
+      ]),
+      "v2.dXNlci1hYmN8cm9vbS14eXp8MTc4ODAwMDAwMDAwMHxub25jZS0xfHNwZWFrLHZpZGVvX2NoZWNrZWQsc2hhcmVfdmlkZW8sc2hhcmVfc2NyZWVu.Qx-j1KxaPI1WbjnTkvxx3duSBx4WMK3Jg03pQIZZZ2g",
     );
   });
 

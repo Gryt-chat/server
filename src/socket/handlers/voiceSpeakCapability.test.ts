@@ -17,7 +17,7 @@ import { registerVoiceHandlers } from "./voice";
 
 /**
  * Audio never reaches this server, so the capability list on the token is the
- * whole gate. The SFU side is `internal/websocket/handler_speakgate_test.go`.
+ * whole gate. The SFU side is `handler_speakgate_test.go` and `handler_videogate_test.go`.
  */
 
 const HOST = "voicespeak.test:5001";
@@ -109,7 +109,7 @@ async function connectMember(nickname: string, roleId: string, minted: MintedTok
   return { handlers: registerVoiceHandlers(ctx) as EventHandlerMap, serverUserId: user.server_user_id };
 }
 
-describe("the speak capability on a voice join token", () => {
+describe("the capabilities on a voice join token", () => {
   before(async () => {
     dir = mkdtempSync(join(tmpdir(), "gryt-voice-speak-"));
     process.env.DATA_DIR = dir;
@@ -123,6 +123,12 @@ describe("the speak capability on a voice join token", () => {
     const scopeId = await createPermissionScope({ name: "Stage", isTemplate: true });
     await replacePermissionRules(scopeId, [{ roleId: "member", permission: "speak", effect: "deny" }]);
     await setChannelPermissionScope("stage", scopeId);
+
+    // Talk, share a screen, but no cameras for members (GRYT-1417).
+    await upsertServerChannel({ channelId: "no-cameras", name: "No cameras", type: "voice" });
+    const noCameras = await createPermissionScope({ name: "No cameras", isTemplate: true });
+    await replacePermissionRules(noCameras, [{ roleId: "member", permission: "share_video", effect: "deny" }]);
+    await setChannelPermissionScope("no-cameras", noCameras);
 
     resetChannelIdCache();
     resetChannelPermissionCache();
@@ -181,5 +187,40 @@ describe("the speak capability on a voice join token", () => {
       !minted[0].capabilities.includes("speak"),
       "the scope was still consulted, so the lookup used the channel id",
     );
+  });
+
+  // Without the marker an SFU reads a missing video capability as allowed, so
+  // it has to be on every token this server mints, denied or not.
+  it("grants both video capabilities, and says it decided them", async () => {
+    const minted: MintedToken[] = [];
+    const { handlers } = await connectMember("Open sharer", "member", minted);
+
+    await handlers["voice:room:request"]("open-room");
+
+    for (const cap of ["video_checked", "share_video", "share_screen"]) {
+      assert.ok(minted[0].capabilities.includes(cap), `an unscoped channel must carry ${cap}`);
+    }
+  });
+
+  it("withholds share_video where the scope denies it, and nothing else", async () => {
+    const minted: MintedToken[] = [];
+    const { handlers } = await connectMember("Camera-shy member", "member", minted);
+
+    await handlers["voice:room:request"]("no-cameras");
+
+    const caps = minted[0].capabilities;
+    assert.ok(caps.includes("video_checked"), "the marker is what makes the missing capability a denial");
+    assert.ok(!caps.includes("share_video"), "a member denied share_video must not be handed it");
+    assert.ok(caps.includes("share_screen"), "the deny is on the camera only");
+    assert.ok(caps.includes("speak"), "and does not touch the microphone");
+  });
+
+  it("still grants share_video to a role the scope did not deny", async () => {
+    const minted: MintedToken[] = [];
+    const { handlers } = await connectMember("Camera mod", "mod", minted);
+
+    await handlers["voice:room:request"]("no-cameras");
+
+    assert.ok(minted[0].capabilities.includes("share_video"));
   });
 });

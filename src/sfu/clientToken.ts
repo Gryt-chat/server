@@ -13,6 +13,15 @@ export const TOKEN_VERSION_2 = "v2";
     the whole mechanism. Screen-share audio is `share_screen`. */
 export const CAP_SPEAK = "speak";
 
+/** The camera, and a share's video and audio. Read only beside
+    `CAP_VIDEO_CHECKED`, so an older server's members keep their video. */
+export const CAP_SHARE_VIDEO = "share_video";
+export const CAP_SHARE_SCREEN = "share_screen";
+
+/** Says both video capabilities were decided, so one missing is a denial. An
+    SFU that predates them ignores all three. */
+export const CAP_VIDEO_CHECKED = "video_checked";
+
 /** Long enough for a slow WebRTC setup, short enough that a copied one is not
     worth keeping. */
 export const TOKEN_TTL_MS = 5 * 60 * 1000;
