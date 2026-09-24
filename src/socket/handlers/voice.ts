@@ -16,7 +16,7 @@ import {
 import { DENIAL_RESPONSES, resolveConversationAccess } from "../utils/conversationAccess";
 import { isConversationId } from "../../db";
 import { endRingsFor } from "./calls";
-import type { Permission } from "../../constants/permissions";
+import type { ChannelPermission, Permission } from "../../constants/permissions";
 import { mayInChannel } from "../../services/channelPermissions";
 import { CAP_SPEAK } from "../../sfu/clientToken";
 
@@ -33,6 +33,13 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
       `clientsInfo` is what answers. */
   function socketMay(permission: Permission): Promise<boolean> {
     return socketMayFor(clientsInfo, clientId, permission);
+  }
+
+  /** Against the room this socket is in. Outside one, or in a call, there is no
+      scope and the answer is the server-wide one. */
+  function mayInRoom(permission: ChannelPermission, roomId = clientsInfo[clientId]?.voiceChannelId ?? ""): Promise<boolean> {
+    const ci = clientsInfo[clientId];
+    return mayInChannel(roomId, ci?.serverUserId, permission, ci?.grytUserId);
   }
 
   /** `session:restore` and the voice re-announce race, and `forbidden` is the
@@ -97,7 +104,7 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
       if (enabled && refusedAsUnidentified()) return;
       // Turning a camera *off* is never refused. A permission that was taken
       // away mid-call would otherwise leave somebody unable to stop streaming.
-      if (enabled && !(await socketMay("share_video"))) {
+      if (enabled && !(await mayInRoom("share_video"))) {
         socket.emit("voice:room:error", {
           error: "forbidden",
           message: "You do not have permission to share video here.",
@@ -117,7 +124,7 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
       const audioStreamId = typeof payload === 'object' ? (payload.audioStreamId || "") : "";
       // As above (GRYT-717). Turning a share off is never refused either.
       if (enabled && refusedAsUnidentified()) return;
-      if (enabled && !(await socketMay("share_screen"))) {
+      if (enabled && !(await mayInRoom("share_screen"))) {
         socket.emit("voice:room:error", {
           error: "forbidden",
           message: "You do not have permission to share your screen here.",
@@ -424,6 +431,19 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
 
         // Before the grant, whose reply re-sends camera and screen over the held ones.
         resumeHeldVoice(roomId);
+
+        /* A camera or share carried in from the last room answers to this one.
+           Quietly: an error before the grant reads to the client as a failed join. */
+        const carried = clientsInfo[clientId];
+        if (carried?.cameraEnabled && !(await mayInRoom("share_video", roomId))) {
+          carried.cameraEnabled = false;
+          carried.cameraStreamID = "";
+        }
+        if (carried?.screenShareEnabled && !(await mayInRoom("share_screen", roomId))) {
+          carried.screenShareEnabled = false;
+          carried.screenShareVideoStreamID = "";
+          carried.screenShareAudioStreamID = "";
+        }
 
         consola.success(`[Voice:Step 5] Granting room access: client=${clientId} room=${uniqueRoomId} sfu_urls=${sfuPublicUrls.join(", ")}`);
         socket.emit("voice:room:granted", { room_id: uniqueRoomId, join_token: joinToken, sfu_url: sfuPublicUrl, sfu_urls: sfuPublicUrls, timestamp: Date.now() });

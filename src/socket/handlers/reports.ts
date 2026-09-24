@@ -1,5 +1,5 @@
 import consola from "consola";
-import { mayViewChannel } from "../../services/channelPermissions";
+import { mayInChannel, mayViewChannel } from "../../services/channelPermissions";
 import type { HandlerContext, EventHandlerMap } from "./types";
 import { requireAuth, requireOutranks, requirePermission } from "../middleware/auth";
 import { evictUser, resolveGrytUserId } from "../../moderation/evict";
@@ -61,8 +61,19 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        const auth = await requireAuth(socket, payload, { permission: "report_messages" });
+        const auth = await requireAuth(socket, payload);
         if (!auth) return;
+
+        // Where the message is, which already folds in the server-wide answer.
+        // `user:report` below has no channel and stays server-wide.
+        if (!(await mayInChannel(payload.conversationId, auth.tokenPayload.serverUserId, "report_messages", auth.tokenPayload.grytUserId))) {
+          socket.emit("chat:error", {
+            error: "forbidden",
+            message: "You do not have permission to report messages here.",
+            permission: "report_messages",
+          });
+          return;
+        }
 
         const message = await getMessageById(payload.conversationId, payload.messageId);
         if (!message) {

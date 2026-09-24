@@ -2,7 +2,8 @@ import consola from "consola";
 
 import { randomUUID } from "crypto";
 import type { HandlerContext, EventHandlerMap } from "./types";
-import { requireAuth } from "../middleware/auth";
+import { requireAuth, type AuthResult } from "../middleware/auth";
+import type { ChannelPermission } from "../../constants/permissions";
 import { isBotIdentity } from "../../auth/identity";
 import { socketMay } from "../utils/standing";
 import {
@@ -265,6 +266,12 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
     return access;
   }
 
+  /* The channel's answer, which already folds in the server-wide one. A thread
+     is in its parent channel, and a DM has no scope and gets the server's. */
+  function mayHere(auth: AuthResult, conversationId: string, permission: ChannelPermission): Promise<boolean> {
+    return mayInChannel(conversationId, auth.tokenPayload.serverUserId, permission, auth.tokenPayload.grytUserId);
+  }
+
   return {
     'chat:send': async (payload: { conversationId: string; accessToken: string; text?: string; sealed?: string; attachments?: string[]; replyToMessageId?: string; threadId?: string; nonce?: string }) => {
       try {
@@ -392,7 +399,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        if (attachments && attachments.length > 0 && !auth.permissions.has("attach_files")) {
+        if (attachments && attachments.length > 0 && !(await mayHere(auth, payload.conversationId, "attach_files"))) {
           socket.emit("chat:error", {
             error: "forbidden",
             message: "You do not have permission to attach files here.",
@@ -899,7 +906,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         // The author can settle their own topic; everyone else needs the
         // moderator permission.
         const isAuthor = thread.created_by === auth.tokenPayload.serverUserId;
-        if (!isAuthor && !auth.permissions.has("manage_messages")) {
+        if (!isAuthor && !(await mayHere(auth, payload.conversationId, "manage_messages"))) {
           socket.emit("thread:error", { error: "forbidden", message: "Only the topic's author or a moderator can change this.", permission: "manage_messages" });
           return;
         }
@@ -947,7 +954,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
         const isAuthor = thread.created_by === auth.tokenPayload.serverUserId;
-        if (!isAuthor && !auth.permissions.has("manage_messages")) {
+        if (!isAuthor && !(await mayHere(auth, payload.conversationId, "manage_messages"))) {
           socket.emit("thread:error", { error: "forbidden", message: "Only the topic's author or a moderator can change this.", permission: "manage_messages" });
           return;
         }
@@ -1104,11 +1111,20 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        const auth = await requireAuth(socket, payload, { permission: "add_reactions" });
+        const auth = await requireAuth(socket, payload);
         if (!auth) return;
 
         const access = await requireConversationAccess(payload.conversationId, auth.tokenPayload.serverUserId);
         if (!access) return;
+
+        if (!(await mayHere(auth, payload.conversationId, "add_reactions"))) {
+          socket.emit("chat:error", {
+            error: "forbidden",
+            message: "You do not have permission to react here.",
+            permission: "add_reactions",
+          });
+          return;
+        }
 
         const user = await getUserByServerId(auth.tokenPayload.serverUserId);
         if (!user) { socket.emit("chat:error", "User not found"); return; }
@@ -1155,8 +1171,9 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
 
         const isOwnMessage = message.sender_server_id === auth.tokenPayload.serverUserId;
         const mayDelete = isOwnMessage
-          ? auth.permissions.has("delete_own_messages") || auth.permissions.has("manage_messages")
-          : auth.permissions.has("manage_messages");
+          ? (await mayHere(auth, payload.conversationId, "delete_own_messages")) ||
+            (await mayHere(auth, payload.conversationId, "manage_messages"))
+          : await mayHere(auth, payload.conversationId, "manage_messages");
         if (!mayDelete) {
           socket.emit("chat:error", {
             error: "forbidden",
@@ -1237,7 +1254,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        if (!auth.permissions.has("edit_own_messages")) {
+        if (!(await mayHere(auth, payload.conversationId, "edit_own_messages"))) {
           socket.emit("chat:error", {
             error: "forbidden",
             message: "You do not have permission to edit messages here.",

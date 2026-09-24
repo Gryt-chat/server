@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 
 import { PERMISSIONS, type Permission } from "../../constants/permissions";
+import { upsertServerChannel } from "../../db/sqlite/channels";
 import { initSqlite } from "../../db/sqlite/connection";
 import {
   createRoleDefinition,
@@ -38,6 +39,9 @@ before(async () => {
   // requireAuth refuses everything when there is no config row, which would
   // make the permitted half of this file pass without ever reaching a gate.
   await createServerConfigIfNotExists();
+  // A real channel, for the gates that ask the channel after asking whether it
+  // exists: a missing one is refused as missing, before any permission.
+  await upsertServerChannel({ channelId: "general", name: "general", type: "text" });
 });
 
 after(() => {
