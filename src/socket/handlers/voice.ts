@@ -18,7 +18,7 @@ import { isConversationId } from "../../db";
 import { endRingsFor } from "./calls";
 import type { ChannelPermission, Permission } from "../../constants/permissions";
 import { mayInChannel } from "../../services/channelPermissions";
-import { CAP_SPEAK } from "../../sfu/clientToken";
+import { CAP_SHARE_SCREEN, CAP_SHARE_VIDEO, CAP_SPEAK, CAP_VIDEO_CHECKED } from "../../sfu/clientToken";
 
 const RL_REQUEST_ROOM: RateLimitRule = { limit: 10, windowMs: 60_000, scorePerAction: 1, maxScore: 8, scoreDecayMs: 5000 };
 const RL_JOINED_CHANNEL: RateLimitRule = { limit: 10, windowMs: 60_000, scorePerAction: 0.5, maxScore: 6, scoreDecayMs: 3000 };
@@ -421,7 +421,11 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
 
         /* Audio never reaches this server, so the token is the whole mechanism.
            Against the channel id: `uniqueRoomId` matches no scope. */
-        const capabilities = (await mayInChannel(roomId, serverUserId, "speak")) ? [CAP_SPEAK] : [];
+        const capabilities: string[] = (await mayInChannel(roomId, serverUserId, "speak")) ? [CAP_SPEAK] : [];
+        // A client can skip announcing a camera or share. It cannot skip the SFU.
+        capabilities.push(CAP_VIDEO_CHECKED);
+        if (await mayInRoom("share_video", roomId)) capabilities.push(CAP_SHARE_VIDEO);
+        if (await mayInRoom("share_screen", roomId)) capabilities.push(CAP_SHARE_SCREEN);
 
         consola.info(`[Voice:Step 4] Generating join token for client=${clientId} user=${serverUserId} room=${uniqueRoomId} caps=[${capabilities.join(",")}]`);
         const joinToken = sfuClient.generateClientJoinToken(uniqueRoomId, serverUserId, capabilities);
