@@ -1,11 +1,9 @@
-import consola from "consola";
 import type { Server as SocketIoServer } from "socket.io";
 
 import { getUserByServerId, setUserInactive, revokeUserRefreshTokens } from "../db";
 import { pluginEvents } from "../plugins";
 import type { Clients } from "../types";
-import { sfuRoomId, voiceRoomName } from "../socket/utils/voiceRooms";
-import { forgetStashedVoiceState } from "../socket/utils/voiceStash";
+import { removeFromVoice, type VoiceSfu } from "../socket/utils/voiceLeave";
 
 /** Bans and refresh tokens are keyed on `gryt_user_id` while the moderation
     events speak `serverUserId`. */
@@ -28,7 +26,7 @@ export async function evictUser(params: {
   io: SocketIoServer;
   clientsInfo: Clients;
   serverId: string;
-  sfuClient: { disconnectUser(roomId: string, userId: string): Promise<void>; untrackUserConnection(userId: string): void } | null;
+  sfuClient: VoiceSfu | null;
   targetServerUserId: string;
   targetGrytUserId: string;
   action: "kick" | "ban";
@@ -62,35 +60,7 @@ export async function evictUser(params: {
 
     // Before the socket goes: disconnecting does not touch the media path, so
     // a client that ignores the event keeps talking to the room.
-    if (ci.hasJoinedChannel && ci.voiceChannelId) {
-      const roomId = sfuRoomId(serverId, ci.voiceChannelId);
-      if (sfuClient) {
-        await sfuClient
-          .disconnectUser(roomId, ci.serverUserId)
-          .catch((e) => consola.warn("SFU disconnect on eviction failed", e));
-        sfuClient.untrackUserConnection(ci.serverUserId);
-      }
-
-      // The disconnect handler stashes voice state and the SFU sync puts it
-      // back, which for somebody being thrown out is the wrong way round.
-      forgetStashedVoiceState(ci.serverUserId);
-
-      // Tell the room, and tell them, rather than relying on the disconnect
-      // handler, because this is deliberate rather than accidental.
-      s.to(voiceRoomName(serverId, ci.voiceChannelId)).emit("voice:peer:left", {
-        clientId: sid,
-        nickname: ci.nickname,
-        channelId: ci.voiceChannelId,
-      });
-      s.emit("voice:channel:joined", false);
-      s.emit("voice:stream:set", "");
-      s.emit("voice:room:leave");
-
-      ci.hasJoinedChannel = false;
-      ci.voiceChannelId = "";
-      ci.streamID = "";
-      ci.isConnectedToVoice = false;
-    }
+    await removeFromVoice({ io, clientsInfo, serverId, sfuClient, sid });
 
     s.emit("server:kicked", {
       action,
@@ -111,7 +81,7 @@ export async function disconnectOtherSessions(params: {
   io: SocketIoServer;
   clientsInfo: Clients;
   serverId: string;
-  sfuClient: { disconnectUser(roomId: string, userId: string): Promise<void>; untrackUserConnection(userId: string): void } | null;
+  sfuClient: VoiceSfu | null;
   targetGrytUserId: string;
   keepSocketId: string;
 }): Promise<number> {
@@ -124,27 +94,7 @@ export async function disconnectOtherSessions(params: {
     if (!ci) continue;
     if (ci.grytUserId !== targetGrytUserId) continue;
 
-    if (ci.hasJoinedChannel && ci.voiceChannelId) {
-      const roomId = sfuRoomId(serverId, ci.voiceChannelId);
-      if (sfuClient) {
-        await sfuClient
-          .disconnectUser(roomId, ci.serverUserId)
-          .catch((e) => consola.warn("SFU disconnect on sign-out failed", e));
-        sfuClient.untrackUserConnection(ci.serverUserId);
-      }
-      forgetStashedVoiceState(ci.serverUserId);
-
-      s.to(voiceRoomName(serverId, ci.voiceChannelId)).emit("voice:peer:left", {
-        clientId: sid,
-        nickname: ci.nickname,
-        channelId: ci.voiceChannelId,
-      });
-
-      ci.hasJoinedChannel = false;
-      ci.voiceChannelId = "";
-      ci.streamID = "";
-      ci.isConnectedToVoice = false;
-    }
+    await removeFromVoice({ io, clientsInfo, serverId, sfuClient, sid });
 
     // The same event the gates emit when a stale token turns up, so a client
     // that already knows how to react to one needs nothing new for this.
