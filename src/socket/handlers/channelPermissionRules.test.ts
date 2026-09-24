@@ -35,6 +35,10 @@ const OPEN_ROOM = "cr-open-room";
 const MEMBER_ROLE = "cr-member";
 const MOD_ROLE = "cr-mod";
 const LIMITED_ROLE = "cr-limited";
+const QUIET_ROLE = "cr-quiet";
+const SEND_ALLOWED = "cr-send-allowed";
+const JOIN_ALLOWED = "cr-join-allowed";
+const SPEAK_ALLOWED = "cr-speak-allowed";
 
 /** One channel per permission, denying only that one to both roles. */
 const deniedIn = (permission: ChannelPermission) => `cr-no-${permission}`;
@@ -81,6 +85,7 @@ let member: Member;
 let other: Member;
 let mod: Member;
 let limited: Member;
+let quiet: Member;
 
 interface Emitted {
   event: string;
@@ -93,6 +98,7 @@ const fakeSfu = {
   generateClientJoinToken: (roomId: string, userId: string) => ({ room_id: roomId, user_token: "stub", user_id: userId }),
   getActiveUsers: () => new Map(),
   untrackUserConnection: () => {},
+  updateUserAudioState: async () => {},
 };
 
 let ipSeq = 0;
@@ -233,6 +239,9 @@ before(async () => {
   other = await memberWith("other", MEMBER_ROLE);
   mod = await memberWith("mod", MOD_ROLE);
   limited = await memberWith("limited", LIMITED_ROLE);
+  // Reads and nothing else, so a channel allow is the only way to post or join.
+  await createRoleDefinition(QUIET_ROLE, { name: "Quiet", rank: 5, permissions: ["read_messages", "view_members"] });
+  quiet = await memberWith("quiet", QUIET_ROLE);
 
   await upsertServerChannel({ channelId: OPEN, name: "Open", type: "text" });
   await upsertServerChannel({ channelId: OPEN_ROOM, name: "Open room", type: "voice" });
@@ -249,6 +258,12 @@ before(async () => {
   for (const p of TEXT_RULES) await scoped(deniedIn(p), "text", denyBoth(p));
   for (const p of VOICE_RULES) await scoped(deniedRoom(p), "voice", denyBoth(p));
   await scoped("cr-reactions-allowed", "text", [{ roleId: LIMITED_ROLE, permission: "add_reactions", effect: "allow" }]);
+  await scoped(SEND_ALLOWED, "text", [{ roleId: QUIET_ROLE, permission: "send_messages", effect: "allow" }]);
+  await scoped(JOIN_ALLOWED, "voice", [{ roleId: QUIET_ROLE, permission: "join_voice", effect: "allow" }]);
+  await scoped(SPEAK_ALLOWED, "voice", [
+    { roleId: QUIET_ROLE, permission: "join_voice", effect: "allow" },
+    { roleId: QUIET_ROLE, permission: "speak", effect: "allow" },
+  ]);
 
   resetChannelPermissionCache();
   resetChannelIdCache();
@@ -303,6 +318,74 @@ describe("a channel that allows what the role cannot elsewhere", () => {
   it("lets the role react there and nowhere else", async () => {
     assert.deepEqual(refusedFor(await act.add_reactions("cr-reactions-allowed", limited)), []);
     assert.ok(refusedFor(await act.add_reactions(OPEN, limited)).includes("add_reactions"));
+  });
+});
+
+describe("an allow for send_messages or join_voice (GRYT-1418)", () => {
+  /* These two used to ask server-wide first, so the channel's allow was never
+     reached. Now they go through the channel like the other eleven. */
+  it("lets the role post there and nowhere else", async () => {
+    const there = await chat(quiet, "chat:send", { conversationId: SEND_ALLOWED, text: "hello" });
+    assert.deepEqual(refusedFor(there.emitted), [], JSON.stringify(there.emitted));
+    assert.equal(there.emitted.some((e) => e.event === "chat:error" || e.event === "server:error"), false, JSON.stringify(there.emitted));
+
+    const elsewhere = await chat(quiet, "chat:send", { conversationId: OPEN, text: "hello" });
+    assert.ok(refusedFor(elsewhere.emitted).includes("send_messages"), JSON.stringify(elsewhere.emitted));
+  });
+
+  it("lets the role start a thread there and nowhere else", async () => {
+    const root = await post(SEND_ALLOWED, other, "start one off this");
+    const there = await chat(quiet, "thread:create", { conversationId: SEND_ALLOWED, rootMessageId: root.message_id });
+    assert.deepEqual(refusedFor(there.emitted), [], JSON.stringify(there.emitted));
+
+    const openRoot = await post(OPEN, other, "and this");
+    const elsewhere = await chat(quiet, "thread:create", { conversationId: OPEN, rootMessageId: openRoot.message_id });
+    assert.ok(refusedFor(elsewhere.emitted).includes("send_messages"), JSON.stringify(elsewhere.emitted));
+  });
+
+  it("lets the role open a forum topic there and nowhere else", async () => {
+    const there = await chat(quiet, "forum:topic:create", { conversationId: SEND_ALLOWED, title: "A question", text: "Anyone?" });
+    assert.deepEqual(refusedFor(there.emitted), [], JSON.stringify(there.emitted));
+    assert.ok(there.emitted.some((e) => e.event === "forum:topic:created"), JSON.stringify(there.emitted));
+
+    const elsewhere = await chat(quiet, "forum:topic:create", { conversationId: OPEN, title: "A question", text: "Anyone?" });
+    assert.ok(refusedFor(elsewhere.emitted).includes("send_messages"), JSON.stringify(elsewhere.emitted));
+  });
+
+  it("lets the role into that room and no other", async () => {
+    const there = harness(quiet);
+    await registerVoiceHandlers(there.ctx)["voice:room:request"](JOIN_ALLOWED);
+    assert.deepEqual(refusedFor(there.emitted), [], JSON.stringify(there.emitted));
+    assert.ok(there.emitted.some((e) => e.event === "voice:room:granted"), JSON.stringify(there.emitted));
+
+    const elsewhere = harness(quiet);
+    await registerVoiceHandlers(elsewhere.ctx)["voice:room:request"](OPEN_ROOM);
+    assert.ok(refusedFor(elsewhere.emitted).includes("join_voice"), JSON.stringify(elsewhere.emitted));
+  });
+
+  it("does not refuse the join announced after the grant", async () => {
+    const there = harness(quiet, JOIN_ALLOWED);
+    there.client.hasJoinedChannel = false;
+    await registerVoiceHandlers(there.ctx)["voice:channel:joined"](true);
+    assert.deepEqual(refusedFor(there.emitted), [], JSON.stringify(there.emitted));
+    assert.equal(there.client.hasJoinedChannel, true);
+
+    const elsewhere = harness(quiet, OPEN_ROOM);
+    elsewhere.client.hasJoinedChannel = false;
+    await registerVoiceHandlers(elsewhere.ctx)["voice:channel:joined"](true);
+    assert.ok(refusedFor(elsewhere.emitted).includes("join_voice"), JSON.stringify(elsewhere.emitted));
+  });
+
+  it("records the role unmuted in a room that allows speak, and muted elsewhere", async () => {
+    const there = harness(quiet, SPEAK_ALLOWED);
+    await registerVoiceHandlers(there.ctx)["voice:state:update"]({ isMuted: false, isDeafened: false, isAFK: false });
+    assert.deepEqual(refusedFor(there.emitted), [], JSON.stringify(there.emitted));
+    assert.equal(there.client.isMuted, false);
+
+    const elsewhere = harness(quiet, JOIN_ALLOWED);
+    await registerVoiceHandlers(elsewhere.ctx)["voice:state:update"]({ isMuted: false, isDeafened: false, isAFK: false });
+    assert.ok(refusedFor(elsewhere.emitted).includes("speak"));
+    assert.equal(elsewhere.client.isMuted, true);
   });
 });
 

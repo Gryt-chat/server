@@ -294,7 +294,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        const auth = await requireAuth(socket, payload, { permission: "send_messages" });
+        const auth = await requireAuth(socket, payload);
         if (!auth) return;
 
         // A mute covers text as well as voice (GRYT-917).
@@ -307,12 +307,15 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         const access = await requireConversationAccess(payload.conversationId, auth.tokenPayload.serverUserId, "chat:error", nonce);
         if (!access) return;
 
-        // `send_messages` is whether they may talk, the scope whether they may
-        // talk here. A DM has no scope and falls through to the first.
-        if (!(await mayInChannel(payload.conversationId, auth.tokenPayload.serverUserId, "send_messages", auth.tokenPayload.grytUserId))) {
+        // The channel's answer alone, so an allow here opens it for a role that
+        // lacks it elsewhere (GRYT-1418). A DM has no scope and gets the server's.
+        if (!(await mayHere(auth, payload.conversationId, "send_messages"))) {
           refuse({
             error: "forbidden",
-            message: "This channel is read-only for your role.",
+            message: access.kind === "dm"
+              ? "You don't have permission to send messages on this server."
+              : "This channel is read-only for your role.",
+            permission: "send_messages",
           });
           return;
         }
@@ -774,7 +777,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           socket.emit("thread:error", "Invalid payload");
           return;
         }
-        const auth = await requireAuth(socket, payload, { permission: "send_messages" });
+        const auth = await requireAuth(socket, payload);
         if (!auth) return;
         const access = await requireConversationAccess(payload.conversationId, auth.tokenPayload.serverUserId, "thread:error");
         if (!access) return;
@@ -782,8 +785,8 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           socket.emit("thread:error", { error: "threads_not_allowed", message: "Threads are not available in direct messages." });
           return;
         }
-        if (!(await mayInChannel(payload.conversationId, auth.tokenPayload.serverUserId, "send_messages", auth.tokenPayload.grytUserId))) {
-          socket.emit("thread:error", { error: "forbidden", message: "This channel is read-only for your role." });
+        if (!(await mayHere(auth, payload.conversationId, "send_messages"))) {
+          socket.emit("thread:error", { error: "forbidden", message: "This channel is read-only for your role.", permission: "send_messages" });
           return;
         }
         const root = await getMessageById(payload.conversationId, payload.rootMessageId);
@@ -900,10 +903,14 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           socket.emit("thread:error", { error: "bad_status", message: "A topic is open, solved or closed." });
           return;
         }
-        const auth = await requireAuth(socket, payload, { permission: "send_messages" });
+        const auth = await requireAuth(socket, payload);
         if (!auth) return;
         const access = await requireConversationAccess(payload.conversationId, auth.tokenPayload.serverUserId, "thread:error");
         if (!access) return;
+        if (!(await mayHere(auth, payload.conversationId, "send_messages"))) {
+          socket.emit("thread:error", { error: "forbidden", message: "This channel is read-only for your role.", permission: "send_messages" });
+          return;
+        }
         const thread = await getThread(payload.threadId);
         if (!thread || thread.conversation_id !== payload.conversationId) {
           socket.emit("thread:error", { error: "thread_not_found", message: "That thread no longer exists." });
@@ -950,10 +957,14 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           socket.emit("thread:error", "Invalid payload");
           return;
         }
-        const auth = await requireAuth(socket, payload, { permission: "send_messages" });
+        const auth = await requireAuth(socket, payload);
         if (!auth) return;
         const access = await requireConversationAccess(payload.conversationId, auth.tokenPayload.serverUserId, "thread:error");
         if (!access) return;
+        if (!(await mayHere(auth, payload.conversationId, "send_messages"))) {
+          socket.emit("thread:error", { error: "forbidden", message: "This channel is read-only for your role.", permission: "send_messages" });
+          return;
+        }
         const thread = await getThread(payload.threadId);
         if (!thread || thread.conversation_id !== payload.conversationId) {
           socket.emit("thread:error", { error: "thread_not_found", message: "That thread no longer exists." });
@@ -1048,15 +1059,15 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           socket.emit("forum:error", "Invalid payload");
           return;
         }
-        const auth = await requireAuth(socket, payload, { permission: "send_messages" });
+        const auth = await requireAuth(socket, payload);
         if (!auth) return;
         const sendMute = await textMuteFor(auth.tokenPayload.serverUserId);
         if (sendMute.muted) { socket.emit("forum:error", textMuteError(sendMute)); return; }
         const access = await requireConversationAccess(payload.conversationId, auth.tokenPayload.serverUserId, "forum:error");
         if (!access) return;
         if (access.kind === "dm") { socket.emit("forum:error", { error: "not_a_forum", message: "Topics can only be created in a channel." }); return; }
-        if (!(await mayInChannel(payload.conversationId, auth.tokenPayload.serverUserId, "send_messages", auth.tokenPayload.grytUserId))) {
-          socket.emit("forum:error", { error: "forbidden", message: "This channel is read-only for your role." });
+        if (!(await mayHere(auth, payload.conversationId, "send_messages"))) {
+          socket.emit("forum:error", { error: "forbidden", message: "This channel is read-only for your role.", permission: "send_messages" });
           return;
         }
         const channel = await getServerChannel(payload.conversationId);

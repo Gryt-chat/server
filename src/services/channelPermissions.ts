@@ -1,4 +1,4 @@
-import type { ChannelPermission } from "../constants/permissions";
+import { CHANNEL_PERMISSIONS, type ChannelPermission } from "../constants/permissions";
 import type { ChannelPermissionRuleRecord, ServerSidebarItemRecord } from "../db/interfaces";
 import { listAllPermissionRules, listServerChannels, listServerSidebarItems, resolveChannelScopes } from "../db";
 import { getEffectiveStanding } from "./permissions";
@@ -139,6 +139,49 @@ async function channelIdsAllowing(
   }
 }
 
+/** Every channel permission a member holds, per channel: one read of the rules,
+    one standing, and one pass per scope. Fails shut, to an empty map. */
+export async function channelPermissionsByChannel(
+  serverUserId: string | null | undefined,
+  grytUserId?: string,
+): Promise<Map<string, readonly ChannelPermission[]>> {
+  const held = new Map<string, readonly ChannelPermission[]>();
+  if (!serverUserId || serverUserId.startsWith("temp_")) return held;
+
+  try {
+    const [rules, standing] = await Promise.all([
+      currentRules(),
+      getEffectiveStanding(serverUserId, grytUserId),
+    ]);
+    if (standing.isOwner) {
+      for (const channelId of rules.scopeByChannel.keys()) held.set(channelId, CHANNEL_PERMISSIONS);
+      return held;
+    }
+
+    const base = CHANNEL_PERMISSIONS.filter((p) => standing.permissions.has(p));
+    // Channels following one template share its scope, so each is worked out once.
+    const byScope = new Map<string, ChannelPermission[]>();
+    for (const [channelId, scopeId] of rules.scopeByChannel) {
+      if (!scopeId) {
+        held.set(channelId, base);
+        continue;
+      }
+      let inScope = byScope.get(scopeId);
+      if (!inScope) {
+        const scopeRules = rules.byScope.get(scopeId);
+        inScope = CHANNEL_PERMISSIONS.filter(
+          (p) => ruleVerdict(scopeRules, standing.roleIds, p) ?? standing.permissions.has(p),
+        );
+        byScope.set(scopeId, inScope);
+      }
+      held.set(channelId, inScope);
+    }
+    return held;
+  } catch {
+    return new Map();
+  }
+}
+
 /** Visibility is `read_messages` per channel, not a second setting: a template
     that denies reading hides the channel, and the server stops naming it. */
 export async function visibleChannelIds(
@@ -146,24 +189,6 @@ export async function visibleChannelIds(
   grytUserId?: string,
 ): Promise<Set<string>> {
   return channelIdsAllowing("read_messages", serverUserId, grytUserId);
-}
-
-/** So a client can draw a read-only channel as read-only rather than refusing
-    a typed paragraph. What the client shows; `chat:send` decides. */
-export async function postableChannelIds(
-  serverUserId: string | null | undefined,
-  grytUserId?: string,
-): Promise<Set<string>> {
-  return channelIdsAllowing("send_messages", serverUserId, grytUserId);
-}
-
-/** So a client can draw a locked room as locked: a voice channel is visible to
-    anybody who may read it. What the client shows; the voice grant decides. */
-export async function joinableChannelIds(
-  serverUserId: string | null | undefined,
-  grytUserId?: string,
-): Promise<Set<string>> {
-  return channelIdsAllowing("join_voice", serverUserId, grytUserId);
 }
 
 /** True for an id that is not a channel: DM ids reach this and have no scope,

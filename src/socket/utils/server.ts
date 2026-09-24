@@ -3,14 +3,12 @@ import { Server, Socket } from "socket.io";
 import { Clients } from "../../types";
 import { publicClientList } from "./clients";
 import type { ChannelNotificationLevel, JoinPolicy, RoleDefinitionRecord } from "../../db/interfaces";
-import { FALLBACK_ROLE_ID, PERMISSIONS } from "../../constants/permissions";
+import { type ChannelPermission, FALLBACK_ROLE_ID, PERMISSIONS } from "../../constants/permissions";
 import { getEffectiveStanding } from "../../services/permissions";
 import {
-  joinableChannelIds,
+  channelPermissionsByChannel,
   keepsEmptyFolders,
-  postableChannelIds,
   resetChannelPermissionCache,
-  visibleChannelIds,
   visibleSidebarItems,
 } from "../../services/channelPermissions";
 import { getAcceptedIdentityTiers } from "../../auth/identity";
@@ -235,7 +233,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
   // Sidebar items are persisted in DB; bootstrap defaults if missing.
   // We still emit `channels` for backward compatibility (derived from sidebar items).
   let sidebar_items: { id: string; kind: string; position: number; channelId?: string; spacerHeight?: number; label?: string; parentItemId?: string }[] = [];
-  let channels: { id: string; name: string; type: string; description?: string; requirePushToTalk?: boolean; disableRnnoise?: boolean; maxBitrate?: number; eSportsMode?: boolean; textInVoice?: boolean; layout?: "chat" | "forum"; automated?: boolean; defaultNotificationLevel?: ChannelNotificationLevel; forumTags?: { id: string; name: string; emoji?: string | null; color?: string | null }[]; permissionScopeId?: string | null; canSend?: boolean; canJoin?: boolean }[] = [];
+  let channels: { id: string; name: string; type: string; description?: string; requirePushToTalk?: boolean; disableRnnoise?: boolean; maxBitrate?: number; eSportsMode?: boolean; textInVoice?: boolean; layout?: "chat" | "forum"; automated?: boolean; defaultNotificationLevel?: ChannelNotificationLevel; forumTags?: { id: string; name: string; emoji?: string | null; color?: string | null }[]; permissionScopeId?: string | null; canSend?: boolean; canJoin?: boolean; myPermissions?: readonly ChannelPermission[] }[] = [];
   // Empty until read, so a failed read names nobody's voice channel.
   let visibleToThem: ReadonlySet<string> = new Set();
   try {
@@ -253,14 +251,17 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
 
     // Both arrays below derive from `items`. Filtering `channels` alone leaves
     // the id, position and label in `sidebar_items`, which the client draws.
-    const [visible, postable, joinable, keepEmpty] = await Promise.all([
-      visibleChannelIds(client.serverUserId, client.grytUserId),
-      // What the client draws a composer and an unlocked voice room for.
-      // `chat:send` and the voice grant still decide.
-      postableChannelIds(client.serverUserId, client.grytUserId),
-      joinableChannelIds(client.serverUserId, client.grytUserId),
+    const [held, keepEmpty] = await Promise.all([
+      channelPermissionsByChannel(client.serverUserId, client.grytUserId),
       keepsEmptyFolders(client.serverUserId, client.grytUserId),
     ]);
+    // What the client draws each control for, per channel; the handlers still
+    // decide. Seeing, posting and joining are read off the same lists.
+    const allowing = (permission: ChannelPermission) =>
+      new Set([...held].filter(([, list]) => list.includes(permission)).map(([id]) => id));
+    const visible = allowing("read_messages");
+    const postable = allowing("send_messages");
+    const joinable = allowing("join_voice");
     visibleToThem = visible;
     // A folder goes with its last visible channel, so its name goes with it too.
     const items = visibleSidebarItems(allItems, visible, keepEmpty);
@@ -298,6 +299,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
           permissionScopeId: scopes.get(c.channel_id)?.scopeId ?? null,
           canSend: postable.has(c.channel_id),
           canJoin: joinable.has(c.channel_id),
+          myPermissions: held.get(c.channel_id) ?? [],
         }];
       });
 
@@ -321,6 +323,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
         permissionScopeId: scopes.get(c.channel_id)?.scopeId ?? null,
         canSend: postable.has(c.channel_id),
         canJoin: joinable.has(c.channel_id),
+        myPermissions: held.get(c.channel_id) ?? [],
       }));
     }
   } catch (e) {
