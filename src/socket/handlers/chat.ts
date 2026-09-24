@@ -1,6 +1,7 @@
 import consola from "consola";
 
 import { randomUUID } from "crypto";
+import { v5 as uuidv5 } from "uuid";
 import type { HandlerContext, EventHandlerMap } from "./types";
 import { requireAuth, type AuthResult } from "../middleware/auth";
 import type { ChannelPermission } from "../../constants/permissions";
@@ -118,16 +119,25 @@ function toThreadSummary(t: ThreadRecord) {
   };
 }
 
-const NONCE_TTL_MS = 60_000;
-const recentNonces = new Map<string, { message: MessageRecord; createdAt: number }>();
-
 setInterval(() => {
-  const now = Date.now();
-  sweepMessageCache(now);
-  for (const [nonce, entry] of recentNonces) {
-    if (now - entry.createdAt > NONCE_TTL_MS) recentNonces.delete(nonce);
-  }
+  sweepMessageCache(Date.now());
 }, 60_000).unref();
+
+/** Fixed forever: changing it gives every resend a new id, and every resend a second row. */
+const NONCE_NAMESPACE = "5a0c5d3e-8f63-4b8e-9d0a-6b1f4c2e7a19";
+const NONCE_MAX_LENGTH = 128;
+
+/* A send's id comes from who sent it, where, and its nonce, so a resend names the
+   row already written and the key refuses it, across a restart too. GRYT-1453. */
+export function messageIdForNonce(senderServerUserId: string, conversationId: string, nonce: string): string {
+  return uuidv5(JSON.stringify([senderServerUserId, conversationId, nonce]), NONCE_NAMESPACE);
+}
+
+/** SQLite's answer to a second row under a key already taken. */
+function isDuplicateKey(err: unknown): boolean {
+  const text = err instanceof Error ? `${(err as { code?: string }).code ?? ""} ${err.message}` : String(err);
+  return /SQLITE_CONSTRAINT|UNIQUE constraint failed/.test(text);
+}
 
 let channelTextCache: { channels: Map<string, boolean>; fetchedAt: number } | null = null;
 const CHANNEL_TEXT_CACHE_TTL = 15_000;
@@ -300,7 +310,9 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
     'chat:send': async (payload: { conversationId: string; accessToken: string; text?: string; sealed?: string; attachments?: string[]; replyToMessageId?: string; threadId?: string; nonce?: string }) => {
       /* Names the send refused, or a burst of refusals can only settle the last
          row queued. After the payload, so older clients read it as before. */
-      const nonce = typeof payload?.nonce === "string" && payload.nonce ? payload.nonce : undefined;
+      const nonce = typeof payload?.nonce === "string" && payload.nonce && payload.nonce.length <= NONCE_MAX_LENGTH
+        ? payload.nonce
+        : undefined;
       const refuse = (error: unknown) => (nonce ? socket.emit("chat:error", error, { nonce }) : socket.emit("chat:error", error));
       try {
         const ip = getClientIp();
@@ -328,6 +340,23 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
 
         const access = await requireConversationAccess(payload.conversationId, auth.tokenPayload.serverUserId, "chat:error", nonce);
         if (!access) return;
+
+        const messageId = nonce ? messageIdForNonce(auth.tokenPayload.serverUserId, payload.conversationId, nonce) : undefined;
+
+        /* A resend of a message already written is echoed with its nonce, so the row
+           settles, before any check a second attempt could fail after the first passed. */
+        const echoWritten = async (): Promise<boolean> => {
+          if (!messageId) return false;
+          const written = await getMessageById(payload.conversationId, messageId);
+          if (!written) return false;
+          const sender = await getUserByServerId(auth.tokenPayload.serverUserId);
+          const [again] = await enrichAttachments([
+            { ...written, sender_nickname: sender?.nickname, sender_avatar_file_id: sender?.avatar_file_id },
+          ]);
+          socket.emit("chat:new", { ...again, nonce });
+          return true;
+        };
+        if (await echoWritten()) return;
 
         // The channel's answer alone, so an allow here opens it for a role that
         // lacks it elsewhere (GRYT-1418). A DM has no scope and gets the server's.
@@ -512,24 +541,24 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           profanityMatches = result.matches;
         }
 
-        // A resend. The nonce travels back or the retrying client cannot tell
-        // this is the message it holds and draws it twice.
-        if (payload.nonce && recentNonces.has(payload.nonce)) {
-          const cached = recentNonces.get(payload.nonce)!;
-          socket.emit("chat:new", { ...cached.message, nonce: payload.nonce });
-          return;
+        let created: MessageRecord;
+        try {
+          created = await insertMessage({
+            conversation_id: payload.conversationId,
+            message_id: messageId,
+            sender_server_id: auth.tokenPayload.serverUserId,
+            text: finalText || null,
+            sealed,
+            attachments: attachments && attachments.length > 0 ? attachments : null,
+            reactions: null,
+            reply_to_message_id: replyToMessageId,
+            thread_id: threadId,
+          });
+        } catch (err) {
+          // The same send twice at once: the other one wrote it a moment ago.
+          if (isDuplicateKey(err) && (await echoWritten())) return;
+          throw err;
         }
-
-        const created = await insertMessage({
-          conversation_id: payload.conversationId,
-          sender_server_id: auth.tokenPayload.serverUserId,
-          text: finalText || null,
-          sealed,
-          attachments: attachments && attachments.length > 0 ? attachments : null,
-          reactions: null,
-          reply_to_message_id: replyToMessageId,
-          thread_id: threadId,
-        });
 
         let enriched: MessageRecord = {
           ...created,
@@ -539,10 +568,6 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         };
         const [withAttachments] = await enrichAttachments([enriched]);
         enriched = withAttachments;
-
-        if (payload.nonce) {
-          recentNonces.set(payload.nonce, { message: enriched, createdAt: Date.now() });
-        }
 
         // A thread reply is kept out of the channel's first-page cache — it must
         // not leak into the main timeline. It bumps the thread counters instead.
@@ -599,11 +624,14 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           auth.tokenPayload.serverUserId,
         );
         recipients.forEach((cid) => {
-          const msg = cid === clientId && payload.nonce
-            ? { ...enriched, nonce: payload.nonce }
+          const msg = cid === clientId && nonce
+            ? { ...enriched, nonce }
             : enriched;
           io.sockets.sockets.get(cid)?.emit("chat:new", msg);
         });
+        /* A socket back from a restart but not yet restored is nobody's recipient.
+           It still sent this, and without the echo its row never settles. */
+        if (nonce && !recipients.includes(clientId)) socket.emit("chat:new", { ...enriched, nonce });
 
         // The root's "N replies" summary and the thread's activity sort ride on
         // this, sent to the same audience that got the message. GRYT-981.
