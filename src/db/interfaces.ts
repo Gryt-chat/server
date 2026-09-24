@@ -271,6 +271,8 @@ export interface RoleDefinitionRecord {
   /** Off until somebody ticks it, and never settable on owner, admin, or a role
       that grants permissions. The rules live in `services/inviteRoles.ts`. */
   grantable_by_invite: boolean;
+  /** "Anyone can mention this role": pinging it then needs no Mention everyone. */
+  mentionable: boolean;
   /** Both null is never and both set means both must be true, since time alone
       lands a trusted tier on an account that never spoke. Promotion only. */
   auto_grant_after_days: number | null;

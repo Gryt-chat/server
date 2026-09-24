@@ -354,6 +354,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
   let cfgUploadMaxBytes: number = DEFAULT_UPLOAD_MAX_BYTES;
   let isOwner = false;
   let role = FALLBACK_ROLE_ID;
+  let roleIds: string[] = [];
   // Advisory only, so the UI can stop offering what the server will refuse.
   // Every one is enforced here too.
   let permissions: string[] = [];
@@ -369,6 +370,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
     if (client.serverUserId && !client.serverUserId.startsWith("temp_")) {
       const standing = await getEffectiveStanding(client.serverUserId, client.grytUserId);
       role = standing.roleId;
+      roleIds = standing.roleIds;
       permissions = [...standing.permissions];
     } else if (isOwner) {
       role = "owner";
@@ -396,6 +398,8 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
       icon_url: cfgIconUrl,
       is_owner: isOwner,
       role,
+      /** Every role they hold, so a client can tell a role mention aimed at them. */
+      role_ids: roleIds.length > 0 ? roleIds : [role],
       permissions,
       /** So a newer client can tell "denied" from "never heard of it": both are
           an absence in `permissions`, and the second reads as a blank server. */
@@ -407,6 +411,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
         rank: r.rank,
         permissions: r.permissions,
         isSystem: r.is_system,
+        mentionable: r.mentionable,
       })),
       max_members: parseInt(process.env.MAX_MEMBERS || "100"),
       voice_enabled: !!sfuHost,

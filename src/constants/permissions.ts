@@ -22,6 +22,9 @@ export const PERMISSIONS = [
   "report_messages",
   /** Unfurl links. Reader-side: the displaying client fetches the preview. */
   "use_link_previews",
+  /** Ping with @everyone, @here or any role. Without it those go out as plain
+      text; a role marked mentionable needs nothing. */
+  "mention_everyone",
 
   // ── Voice ─────────────────────────────────────────────────────────
   /** Enter a voice channel at all. Without it the channel is not joinable. */
@@ -104,6 +107,7 @@ export const CHANNEL_PERMISSIONS = [
   "add_reactions",
   "report_messages",
   "use_link_previews",
+  "mention_everyone",
   "manage_messages",
   "join_voice",
   "speak",
@@ -263,7 +267,7 @@ export interface PermissionBackfill {
 }
 
 /** Bump this when adding a batch, and give the new entries the new number. */
-export const PERMISSION_SCHEMA_VERSION = 8;
+export const PERMISSION_SCHEMA_VERSION = 9;
 
 export const PERMISSION_BACKFILLS: readonly PermissionBackfill[] = [
   // Had no gate before: anybody admitted to the server could do all four.
@@ -300,6 +304,9 @@ export const PERMISSION_BACKFILLS: readonly PermissionBackfill[] = [
 
   // GRYT-1342. Groups needed only `send_direct_messages` before.
   { version: 8, permission: "create_groups", grantedWith: "send_direct_messages" },
+
+  // GRYT-1455. A new gate, so admin-level roles only; members never get it here.
+  { version: 9, permission: "mention_everyone", grantedWith: "manage_channels" },
 ];
 
 /** Pure: getting this wrong is a silent privilege change in either direction. */
