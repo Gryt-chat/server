@@ -54,7 +54,7 @@ import {
 import { deleteFilesNow } from "../../jobs/mediaSweep";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 import { evictUser, resolveGrytUserId } from "../../moderation/evict";
-import { sfuRoomId } from "../utils/voiceRooms";
+import { announceMute, pushSfuAudioState } from "../../moderation/timeout";
 import { getVersionStatus } from "../../versionCheck";
 import { registerAdminChannelHandlers } from "./adminChannels";
 import {
@@ -97,25 +97,6 @@ function resolveMuteExpiry(expiresInMinutes?: number | null): Date | null {
   const minutes = Math.floor(Number(expiresInMinutes));
   if (!Number.isFinite(minutes) || minutes <= 0) return null;
   return new Date(Date.now() + Math.min(minutes, MAX_MUTE_MINUTES) * 60_000);
-}
-
-/** The room is `${serverId}_${voiceChannelId}` and the user is the server user
-    id. Both were once wrong, so only a cooperating client was ever muted. */
-function pushSfuAudioState(
-  sfuClient: HandlerContext["sfuClient"],
-  serverId: string,
-  ci: { serverUserId: string; hasJoinedChannel: boolean; voiceChannelId: string; isMuted: boolean; isDeafened: boolean; isServerMuted: boolean; isServerDeafened: boolean },
-): void {
-  if (!sfuClient || !ci.hasJoinedChannel || !ci.voiceChannelId) return;
-  const roomId = sfuRoomId(serverId, ci.voiceChannelId);
-  sfuClient
-    .updateUserAudioState(
-      roomId,
-      ci.serverUserId,
-      ci.isMuted || ci.isServerMuted,
-      ci.isDeafened || ci.isServerDeafened,
-    )
-    .catch((e) => consola.error("Failed to update SFU audio state:", e));
 }
 
 /** `undefined` leaves it alone, anything not a positive number becomes null.
@@ -315,6 +296,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       lanOpen?: boolean;
       joinPolicy?: string;
       discoverable?: boolean;
+      spamFilter?: boolean;
+      spamSensitivity?: string;
     }) => {
       try {
         const rl = rlCheck("server:settings:update", ctx, RL_SETTINGS);
@@ -1470,14 +1453,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         const mutedUntil = resolveMuteExpiry(payload.expiresInMinutes);
         await setUserModerationState(targetId, { muted: payload.muted, mutedUntil });
 
-        for (const [sid, s] of io.sockets.sockets) {
-          const ci = clientsInfo[sid];
-          if (ci?.serverUserId === targetId) {
-            ci.isServerMuted = payload.muted;
-            s.emit("server:muted", { muted: payload.muted, expiresAt: mutedUntil?.toISOString() ?? null });
-            pushSfuAudioState(sfuClient, serverId, ci);
-          }
-        }
+        announceMute({ io, clientsInfo, sfuClient, serverId, serverUserId: targetId, muted: payload.muted, until: mutedUntil });
 
         insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: payload.muted ? "server_mute" : "server_unmute", target: targetId, meta: { expiresAt: mutedUntil?.toISOString() ?? null } }).catch((e) => consola.warn("audit log write failed", e));
         socket.emit("server:mute:success", { targetServerUserId: targetId, muted: payload.muted });

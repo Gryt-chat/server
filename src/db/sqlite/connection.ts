@@ -64,6 +64,8 @@ function createSchema(d: DatabaseSync): void {
       lan_open INTEGER NOT NULL DEFAULT 0,
       discoverable INTEGER NOT NULL DEFAULT 1,
       allow_dms INTEGER NOT NULL DEFAULT 1,
+      spam_filter INTEGER NOT NULL DEFAULT 1,
+      spam_sensitivity TEXT NOT NULL DEFAULT 'normal',
       is_configured INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -771,6 +773,14 @@ function runMigrations(d: DatabaseSync): void {
 
   if (!hasColumn(d, "server_config", "allow_dms")) {
     d.exec("ALTER TABLE server_config ADD COLUMN allow_dms INTEGER NOT NULL DEFAULT 1");
+  }
+
+  // On by default for existing servers too (GRYT-1472).
+  if (!hasColumn(d, "server_config", "spam_filter")) {
+    d.exec("ALTER TABLE server_config ADD COLUMN spam_filter INTEGER NOT NULL DEFAULT 1");
+  }
+  if (!hasColumn(d, "server_config", "spam_sensitivity")) {
+    d.exec("ALTER TABLE server_config ADD COLUMN spam_sensitivity TEXT NOT NULL DEFAULT 'normal'");
   }
 
   // Stored and handed back whole, and never read here. One column rather than a

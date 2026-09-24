@@ -14,9 +14,11 @@ import type {
   ServerConfigRecord,
   ServerRole,
   ServerRoleRecord,
+  SpamSensitivity,
 } from "../interfaces";
 import { FALLBACK_ROLE_ID, isValidRoleId } from "../../constants/permissions";
 import { normalizeCensorStyle } from "../../utils/profanityFilter";
+import { normalizeSpamSensitivity } from "../../moderation/spamFilter";
 import { fromIso, getSqliteDb, toIso, type SQLInputValue } from "./connection";
 import { getUserByGrytId } from "./users";
 import { randomBytes } from "crypto";
@@ -73,6 +75,8 @@ function rowToConfig(r: Record<string, unknown>): ServerConfigRecord {
     default_role_local: normalizeRoleId(r.default_role_local ?? FALLBACK_ROLE_ID),
     discoverable: (r.discoverable as number) !== 0,
     allow_dms: (r.allow_dms as number) !== 0,
+    spam_filter_enabled: (r.spam_filter as number) !== 0,
+    spam_filter_sensitivity: normalizeSpamSensitivity(r.spam_sensitivity),
     is_configured: (r.is_configured as number) === 1,
     created_at: fromIso(r.created_at as string),
     updated_at: fromIso(r.updated_at as string),
@@ -235,6 +239,8 @@ export async function updateServerConfig(patch: {
   botJoinPolicy?: BotJoinPolicy;
   discoverable?: boolean;
   allowDms?: boolean;
+  spamFilter?: boolean;
+  spamSensitivity?: SpamSensitivity;
   isConfigured?: boolean;
 }): Promise<ServerConfigRecord> {
   const db = getSqliteDb();
@@ -262,6 +268,8 @@ export async function updateServerConfig(patch: {
     defaultRoleLocal: { col: "default_role_local", transform: (v) => normalizeRoleId(v) },
     discoverable: { col: "discoverable", transform: (v) => v ? 1 : 0 },
     allowDms: { col: "allow_dms", transform: (v) => v ? 1 : 0 },
+    spamFilter: { col: "spam_filter", transform: (v) => v ? 1 : 0 },
+    spamSensitivity: { col: "spam_sensitivity", transform: (v) => normalizeSpamSensitivity(v) },
     isConfigured: { col: "is_configured", transform: (v) => v ? 1 : 0 },
   };
 

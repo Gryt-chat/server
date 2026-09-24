@@ -128,6 +128,16 @@ export async function insertServerAudit(entry: {
   return { created_at, event_id, actor_server_user_id: entry.actorServerUserId ?? null, action, target, meta_json };
 }
 
+/** Rows naming this action and target since a time. The spam filter's strikes are
+    these, so its escalation survives a restart without a table of its own. */
+export async function countServerAudit(action: string, target: string, since: Date): Promise<number> {
+  const db = getSqliteDb();
+  const row = db
+    .prepare(`SELECT COUNT(*) AS n FROM audit_log WHERE action = ? AND target = ? AND created_at >= ?`)
+    .get(action, target, toIso(since)) as { n: number } | undefined;
+  return Number(row?.n ?? 0);
+}
+
 export async function listServerAudit(limit = 50, before?: Date): Promise<ServerAuditRecord[]> {
   const db = getSqliteDb();
   const lim = Math.max(1, Math.min(200, Math.floor(limit)));
