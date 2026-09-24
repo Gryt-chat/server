@@ -81,7 +81,8 @@ describe("reading a first page", () => {
   it("takes the last N when a limit is given", async () => {
     const c = conversation();
     const one = await message(c, "one");
-    for (const t of ["one", "two", "three"]) appendCachedMessage(c, { ...one, message_id: t, text: t });
+    await getMessagesCached(c);
+    for (const t of ["two", "three"]) appendCachedMessage(c, { ...one, message_id: t, text: t });
 
     assert.deepEqual((await getMessagesCached(c, 2)).map((m) => m.text), ["two", "three"]);
   });
@@ -103,18 +104,20 @@ describe("a new message", () => {
     // Order here *is* this module's: append puts it on the end.
   });
 
-  /* Allowed, as long as it does not leave an entry that reads as a full first
-     page. */
-  it("can start an entry that did not exist", async () => {
+  /* A restarted server's cache is empty, and a message sent before anybody read
+     the conversation made an entry of itself alone. GRYT-1453. */
+  it("does not start an entry that would hide what came before it", async () => {
     const c = conversation();
-    appendCachedMessage(c, await message(c, "first anybody has seen"));
+    await message(c, "written before the restart");
+    appendCachedMessage(c, await message(c, "first sent after it"));
 
-    assert.deepEqual((await getMessagesCached(c)).map((m) => m.text), ["first anybody has seen"]);
+    assert.deepEqual(texts(await getMessagesCached(c)), ["first sent after it", "written before the restart"]);
   });
 
   it("keeps the cache from growing without limit", async () => {
     const c = conversation();
     const one = await message(c, "kept");
+    await getMessagesCached(c);
     for (let i = 0; i < 130; i++) appendCachedMessage(c, { ...one, message_id: `m${i}` });
 
     const items = await getMessagesCached(c, 500);

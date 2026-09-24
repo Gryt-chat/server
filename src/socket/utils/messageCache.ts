@@ -37,11 +37,12 @@ export async function getMessagesCached(
   return items;
 }
 
-/** `fetchedAt` is set either way, so a new entry holding one message cannot
-    pass as a full first page past the TTL. */
+/** Does nothing when the conversation is not cached: after a restart the first
+    send made an entry of one message, and everything before it left the first page. */
 export function appendCachedMessage(conversationId: string, message: MessageRecord): void {
   const existing = cache.get(conversationId);
-  const appended = existing?.items ? [...existing.items, message] : [message];
+  if (!existing?.items) return;
+  const appended = [...existing.items, message];
   const items =
     appended.length > MAX_PER_CONVERSATION ? appended.slice(-MAX_PER_CONVERSATION) : appended;
   cache.set(conversationId, { items, fetchedAt: Date.now() });
