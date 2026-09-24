@@ -75,6 +75,18 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
     broadcastMemberList(io, clientsInfo, serverId);
   }
 
+  /** The voice rooms this socket is in other than `keep`. A switch leaves the
+      channel it came from behind, and `socket.rooms` is the only record of it. */
+  function stalePeerRooms(keep: string): string[] {
+    const prefix = voiceRoomName(serverId, "");
+    return [...socket.rooms].filter((room) => room !== keep && room.startsWith(prefix));
+  }
+
+  /** The channel id back out of a socket.io room name. */
+  function channelOfRoom(room: string): string {
+    return room.slice(voiceRoomName(serverId, "").length);
+  }
+
   return {
     'voice:camera:state': async (payload: { enabled: boolean; streamId?: string }) => {
       if (!clientsInfo[clientId]) return;
@@ -434,7 +446,12 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
 
       const wasInChannel = clientsInfo[clientId].hasJoinedChannel;
       const newJoinedState = Boolean(hasJoined);
-      if (wasInChannel === newJoinedState) return;
+      const channelId = clientsInfo[clientId].voiceChannelId || "";
+      const roomName = channelId ? voiceRoomName(serverId, channelId) : "";
+      /* A switch announces a join while already in one, so the flag does not
+         move and the socket is left in the old channel's room. GRYT-1326. */
+      const switched = newJoinedState && wasInChannel && roomName !== "" && !socket.rooms.has(roomName);
+      if (wasInChannel === newJoinedState && !switched) return;
 
       // Joining is refused, leaving never is. The flag is what puts somebody in
       // the member list, so ungated it is a way to appear where you may not be.
@@ -449,10 +466,16 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
         return;
       }
 
-      const channelId = clientsInfo[clientId].voiceChannelId || "";
-      const roomName = channelId ? voiceRoomName(serverId, channelId) : "";
-
       if (newJoinedState) {
+        // The channel being left hears it, since nothing else announces a switch.
+        for (const stale of stalePeerRooms(roomName)) {
+          socket.leave(stale);
+          socket.to(stale).emit("voice:peer:left", {
+            clientId,
+            nickname: clientsInfo[clientId].nickname,
+            channelId: channelOfRoom(stale),
+          });
+        }
         if (roomName) socket.join(roomName);
 
         // Answering is joining the room; there is no `call:accept`. Ends the
@@ -492,7 +515,7 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
          `voice:stream:set` the first caller got an empty voice view. */
       broadcastMemberList(io, clientsInfo, serverId);
 
-      if (newJoinedState && !wasInChannel) {
+      if (newJoinedState && (!wasInChannel || switched)) {
         if (roomName) {
           socket.to(roomName).emit("voice:peer:joined", {
             clientId,
