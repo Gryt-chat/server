@@ -16,6 +16,7 @@ import {
 import { DENIAL_RESPONSES, resolveConversationAccess } from "../utils/conversationAccess";
 import { isConversationId } from "../../db";
 import { endRingsFor } from "./calls";
+import { unreachableFrom } from "../utils/blocking";
 import type { ChannelPermission, Permission } from "../../constants/permissions";
 import { mayInChannel } from "../../services/channelPermissions";
 import { CAP_SHARE_SCREEN, CAP_SHARE_VIDEO, CAP_SPEAK, CAP_VIDEO_CHECKED } from "../../sfu/clientToken";
@@ -356,6 +357,17 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
             ...(access.reason === "undetermined" ? { retryAfterMs: 3000 } : {}),
           });
           return;
+        }
+        /* A one-to-one with somebody either of them blocked, with the answer a
+           stranger gets. A group's call stays open, as its messages do. */
+        if (access.kind === "dm" && !access.group && userId) {
+          const unreachable = await unreachableFrom(userId, access);
+          if (access.memberIds.some((id) => id !== userId && unreachable.has(id))) {
+            const denial = DENIAL_RESPONSES.not_a_member;
+            consola.warn(`[Voice:Step 1] REFUSED client=${clientId} user=${userId} room=${roomId} reason=blocked`);
+            socket.emit("voice:room:error", { error: denial.error, message: denial.message });
+            return;
+          }
         }
         // The room's answer alone, so an allow opens a room to a role without
         // join_voice elsewhere (GRYT-1418). A call has no scope: the server's.

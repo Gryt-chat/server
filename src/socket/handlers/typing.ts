@@ -4,6 +4,7 @@ import { effectiveModerationState } from "../../db/sqlite/users";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 import { mayViewChannel } from "../../services/channelPermissions";
 import { resolveConversationAccess } from "../utils/conversationAccess";
+import { blockersOfSender } from "../../db";
 
 const RL_TYPING: RateLimitRule = { limit: 30, windowMs: 10_000, scorePerAction: 0.2, maxScore: 6, scoreDecayMs: 1500 };
 const TYPING_TIMEOUT_MS = 8_000;
@@ -25,7 +26,11 @@ export function registerTypingHandlers(ctx: HandlerContext): EventHandlerMap {
 		const access = await resolveConversationAccess(conversationId, typistId);
 		if (!access.allowed) return null;
 
-		const others = Object.keys(clientsInfo).filter((cid) => cid !== clientId);
+		// Minus whoever blocked the typist, the same people their messages skip.
+		const blockers = await blockersOfSender(typistId);
+		const others = Object.keys(clientsInfo).filter(
+			(cid) => cid !== clientId && !blockers.has(clientsInfo[cid]?.serverUserId ?? ""),
+		);
 
 		if (access.kind === "dm") {
 			const members = new Set(access.memberIds);
