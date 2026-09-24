@@ -14,6 +14,7 @@ import {
   type CallRing,
   type RingEnd,
 } from "../utils/callRings";
+import { unreachableFrom } from "../utils/blocking";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
 /**
@@ -99,8 +100,13 @@ export function registerCallHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
+        /* Dropped without a word, like their messages. The caller rings until the
+           timeout, and a one-to-one's join is refused in voice.ts. */
+        const unreachable = await unreachableFrom(self, access);
+        const rung = others.filter((id) => !unreachable.has(id));
+
         const ring = startRing(
-          { conversationId: payload.conversationId, fromServerUserId: self, toServerUserIds: others },
+          { conversationId: payload.conversationId, fromServerUserId: self, toServerUserIds: rung },
           Date.now(),
           (expired) => withdraw(expired, "timeout"),
         );
@@ -118,12 +124,12 @@ export function registerCallHandlers(ctx: HandlerContext): EventHandlerMap {
           expires_at: ring.expiresAt,
         };
 
-        for (const id of others) emitTo(id, "call:incoming", incoming);
+        for (const id of rung) emitTo(id, "call:incoming", incoming);
         // The caller's own devices, so a ring started on the phone shows as
         // ringing on the laptop rather than as nothing at all.
         emitTo(self, "call:ringing", incoming);
 
-        consola.info(`[Call] ${self} is ringing ${others.length} in ${payload.conversationId}`);
+        consola.info(`[Call] ${self} is ringing ${rung.length} of ${others.length} in ${payload.conversationId}`);
       } catch (error) {
         consola.error(`[Call] ring failed:`, error);
         socket.emit("call:error", { error: "failed", message: "Could not start the call" });

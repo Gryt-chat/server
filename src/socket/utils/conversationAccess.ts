@@ -6,7 +6,7 @@ import { mayViewChannel } from "../../services/channelPermissions";
 
 export type ConversationAccess =
   | { allowed: true; kind: "channel" }
-  | { allowed: true; kind: "dm"; memberIds: string[] }
+  | { allowed: true; kind: "dm"; memberIds: string[]; group: boolean }
   | { allowed: false; reason: AccessDenial };
 
 /** The half of {@link ConversationAccess} that means yes. */
@@ -74,7 +74,12 @@ export async function resolveConversationAccess(
     if (!(await isConversationMember(conversationId, serverUserId))) {
       return { allowed: false, reason: "not_a_member" };
     }
-    return { allowed: true, kind: "dm", memberIds: await listConversationMemberIds(conversationId) };
+    return {
+      allowed: true,
+      kind: "dm",
+      memberIds: await listConversationMemberIds(conversationId),
+      group: conversation.kind === "group",
+    };
   }
 
   if (await channelExists(conversationId)) {

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { after, before, describe, it } from "node:test";
+import { after, before, beforeEach, describe, it } from "node:test";
 
 import { initSqlite } from "../../db/sqlite/connection";
 import { createServerConfigIfNotExists, setServerRole } from "../../db/sqlite/servers";
@@ -14,6 +14,12 @@ import { resetChannelIdCache } from "../utils/conversationAccess";
 import { registerChatHandlers } from "./chat";
 import { registerDirectMessageHandlers } from "./dm";
 import { registerBlockHandlers } from "./blocks";
+import { registerCallHandlers } from "./calls";
+import { registerTypingHandlers } from "./typing";
+import { registerVoiceHandlers } from "./voice";
+import { createGroupConversation, openDirectConversation } from "../../db/sqlite/conversations";
+import { resetRings } from "../utils/callRings";
+import { resetRateLimits } from "../../utils/rateLimiter";
 import { upsertServerChannel } from "../../db/sqlite/channels";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
@@ -152,6 +158,9 @@ async function connectMember(
       ...registerChatHandlers(ctx),
       ...registerDirectMessageHandlers(ctx),
       ...registerBlockHandlers(ctx),
+      ...registerCallHandlers(ctx),
+      ...registerTypingHandlers(ctx),
+      ...registerVoiceHandlers(ctx),
     },
     received: (event: string) => emitted.filter((e) => e.event === event).map((e) => e.payload),
     clear: () => {
@@ -415,6 +424,127 @@ describe("what a block stops", () => {
       targetServerUserId: alice.serverUserId,
     });
     assert.equal(alice.received("dm:opened").length, 1, "a block between two people stopped a third adding one of them");
+
+    await unblock(alice, mallory);
+  });
+});
+
+/* Opened before the block, which is the case that matters: a block stops a new
+ * one-to-one, so only an old one can still ring. */
+describe("what a block stops in calls and typing", () => {
+  let pairId: string;
+  let groupId: string;
+
+  before(async () => {
+    pairId = (await openDirectConversation(alice.serverUserId, mallory.serverUserId)).conversation_id;
+    groupId = (await createGroupConversation(bob.serverUserId, [bob.serverUserId, alice.serverUserId, mallory.serverUserId]))
+      .conversation_id;
+  });
+
+  beforeEach(() => {
+    resetRings();
+    resetRateLimits();
+  });
+
+  after(() => resetRings());
+
+  async function ring(who: Participant, conversationId: string): Promise<void> {
+    await who.handlers["call:ring"]({ accessToken: who.accessToken, conversationId });
+  }
+
+  function rungIn(who: Participant, conversationId: string): boolean {
+    return who.received("call:incoming").some((c) => (c as { conversation_id: string }).conversation_id === conversationId);
+  }
+
+  async function roomAnswer(who: Participant, conversationId: string): Promise<unknown> {
+    who.clear();
+    await who.handlers["voice:room:request"](conversationId);
+    return who.received("voice:room:error")[0];
+  }
+
+  function typingFrom(who: Participant, from: Participant): unknown[] {
+    return who.received("chat:typing").filter((t) => (t as { serverUserId: string }).serverUserId === from.serverUserId);
+  }
+
+  it("keeps their ring from reaching the blocker, and tells them nothing", async () => {
+    await block(alice, mallory);
+    await ring(mallory, pairId);
+
+    assert.ok(!rungIn(alice, pairId), "Alice's phone rang");
+    assert.equal(mallory.received("call:error").length, 0, "Mallory was told something went wrong");
+    assert.equal(mallory.received("call:ringing").length, 1, "and her own side rings, as for anybody who does not pick up");
+
+    await unblock(alice, mallory);
+  });
+
+  it("keeps the blocker's ring from them in a one-to-one", async () => {
+    await block(alice, mallory);
+    await ring(alice, pairId);
+
+    assert.ok(!rungIn(mallory, pairId), "Alice rang somebody she blocked");
+
+    await unblock(alice, mallory);
+  });
+
+  it("rings the rest of a group, and not the blocker", async () => {
+    await block(alice, mallory);
+    await ring(mallory, groupId);
+
+    assert.ok(rungIn(bob, groupId), "Bob, who blocked nobody, is rung");
+    assert.ok(!rungIn(alice, groupId), "Alice is not");
+
+    await unblock(alice, mallory);
+  });
+
+  it("rings again once unblocked", async () => {
+    await block(alice, mallory);
+    await unblock(alice, mallory);
+    await ring(mallory, pairId);
+
+    assert.ok(rungIn(alice, pairId));
+  });
+
+  it("refuses the one-to-one call room both ways, with the answer a stranger gets", async () => {
+    await block(alice, mallory);
+
+    const stranger = await roomAnswer(bob, pairId);
+    assert.deepEqual(await roomAnswer(mallory, pairId), stranger, "Mallory joined the call room of somebody who blocked her");
+    assert.deepEqual(await roomAnswer(alice, pairId), stranger, "Alice joined a call with somebody she blocked");
+
+    await unblock(alice, mallory);
+    assert.notDeepEqual(await roomAnswer(mallory, pairId), stranger, "and unblocking lets her back in");
+  });
+
+  it("leaves a group's call room open, as its messages are", async () => {
+    await block(alice, mallory);
+
+    const answer = (await roomAnswer(mallory, groupId)) as { error?: string } | string | undefined;
+    assert.notEqual(typeof answer === "object" ? answer?.error : answer, "not_found");
+
+    await unblock(alice, mallory);
+  });
+
+  it("keeps their typing from the blocker, in a one-to-one and in a channel", async () => {
+    await block(alice, mallory);
+
+    for (const conversationId of [pairId, "general"]) {
+      await mallory.handlers["chat:typing"]({ conversationId });
+      await mallory.handlers["chat:stop_typing"]({ conversationId });
+    }
+
+    assert.equal(typingFrom(alice, mallory).length, 0, "Alice saw Mallory typing");
+    assert.equal(alice.received("chat:stop_typing").length, 0);
+    assert.equal(typingFrom(bob, mallory).length, 1, "Bob still sees her typing in the channel");
+
+    await unblock(alice, mallory);
+  });
+
+  it("does not stop the blocker's typing being seen", async () => {
+    await block(alice, mallory);
+
+    await alice.handlers["chat:typing"]({ conversationId: pairId });
+    await alice.handlers["chat:stop_typing"]({ conversationId: pairId });
+    assert.equal(typingFrom(mallory, alice).length, 1);
 
     await unblock(alice, mallory);
   });
