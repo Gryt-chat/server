@@ -636,6 +636,16 @@ function runMigrations(d: DatabaseSync): void {
     d.exec("ALTER TABLE role_definitions ADD COLUMN grantable_by_invite INTEGER NOT NULL DEFAULT 0");
   }
 
+  // GRYT-1455. Off, so a role nobody opened up needs Mention everyone to ping.
+  if (!hasColumn(d, "role_definitions", "mentionable")) {
+    d.exec("ALTER TABLE role_definitions ADD COLUMN mentionable INTEGER NOT NULL DEFAULT 0");
+  }
+
+  // What named them: user, role, here or everyone. Existing rows were all users.
+  if (!hasColumn(d, "mentions", "kind")) {
+    d.exec("ALTER TABLE mentions ADD COLUMN kind TEXT NOT NULL DEFAULT 'user'");
+  }
+
   // The snapshot is the whole defence against the role being edited upward:
   // without it the link hands out whatever it grew into.
   if (!hasColumn(d, "invites", "granted_role_id")) {

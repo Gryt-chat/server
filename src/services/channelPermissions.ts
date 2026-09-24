@@ -107,6 +107,31 @@ export async function mayInChannel(
   }
 }
 
+/** Which of these people can read one channel, with the roles each holds. One
+    rules read for all of them. Fails shut, to nobody. */
+export async function channelReaders(
+  channelId: string,
+  people: readonly { serverUserId: string; grytUserId?: string }[],
+): Promise<Map<string, readonly string[]>> {
+  const readers = new Map<string, readonly string[]>();
+  try {
+    const rules = await currentRules();
+    const scopeId = rules.scopeByChannel.get(channelId);
+    const scopeRules = scopeId ? rules.byScope.get(scopeId) : undefined;
+    for (const person of people) {
+      if (!person.serverUserId || person.serverUserId.startsWith("temp_")) continue;
+      const standing = await getEffectiveStanding(person.serverUserId, person.grytUserId);
+      const base = standing.permissions.has("read_messages");
+      const may =
+        standing.isOwner || (ruleVerdict(scopeRules, standing.roleIds, "read_messages") ?? base);
+      if (may) readers.set(person.serverUserId, standing.roleIds);
+    }
+  } catch {
+    return new Map();
+  }
+  return readers;
+}
+
 /** One read of the rules and one resolution of standing, for every channel.
     Fails shut: unreadable returns an empty set, never every channel. */
 async function channelIdsAllowing(

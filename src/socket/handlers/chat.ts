@@ -29,7 +29,9 @@ import {
   blockersOfSender,
   blockedServerIdsFor,
   getAllRegisteredUsers,
+  listRoleDefinitions,
   recordMentions,
+  type MentionKind,
   createThread,
   getThread,
   getThreadByRoot,
@@ -48,7 +50,9 @@ import { textMuteError, textMuteFor } from "../../moderation/textMute";
 import { MESSAGE_MAX_LENGTH, MESSAGE_TOO_LONG, SEALED_MAX_LENGTH } from "../../utils/messageLimits";
 import { applyAutoRoles } from "../../services/autoRoles";
 import { findMentions, type MentionableMember } from "../../services/mentions";
-import { mayInChannel } from "../../services/channelPermissions";
+import { canonicalizeMentions, type CanonicalMentions, type MentionRights } from "../../services/mentionSyntax";
+import { massMentionAudience } from "../../services/massMentions";
+import { mayInChannel, visibleChannelIds } from "../../services/channelPermissions";
 import { fileReadVerdict } from "../../services/fileAccess";
 import { pluginEvents } from "../../plugins";
 import { deleteMessageEverywhere } from "../../moderation/deleteMessage";
@@ -274,6 +278,24 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
     return mayInChannel(conversationId, auth.tokenPayload.serverUserId, permission, auth.tokenPayload.grytUserId);
   }
 
+  /* What the sender may ping here. A DM has no channel to reach everybody in,
+     so there everything but a user mention goes out as plain text. */
+  async function mentionRights(auth: AuthResult, conversationId: string, isDm: boolean, text: string): Promise<MentionRights> {
+    const roles = new Map<string, { name: string; mentionable: boolean }>();
+    if (text.includes("@")) {
+      for (const r of await listRoleDefinitions()) roles.set(r.role_id, { name: r.name, mentionable: r.mentionable });
+    }
+    const everyone = !isDm && text.includes("@") && (await mayHere(auth, conversationId, "mention_everyone"));
+    let channels: { id: string; name: string }[] = [];
+    if (!isDm && text.includes("#")) {
+      const visible = await visibleChannelIds(auth.tokenPayload.serverUserId, auth.tokenPayload.grytUserId);
+      channels = (await listServerChannels())
+        .filter((c) => visible.has(c.channel_id))
+        .map((c) => ({ id: c.channel_id, name: c.name }));
+    }
+    return { everyone, roles, channels };
+  }
+
   return {
     'chat:send': async (payload: { conversationId: string; accessToken: string; text?: string; sealed?: string; attachments?: string[]; replyToMessageId?: string; threadId?: string; nonce?: string }) => {
       /* Names the send refused, or a burst of refusals can only settle the last
@@ -471,7 +493,11 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
 
         const profanityMode: ProfanityMode = cfg?.profanity_mode ?? "off";
         const censorStyle: CensorStyle = cfg?.profanity_censor_style ?? "grawlix";
-        let finalText = text;
+        // Before the profanity pass, whose match offsets are into the stored text.
+        const canonical: CanonicalMentions | null = text
+          ? canonicalizeMentions(text, await mentionRights(auth, payload.conversationId, access.kind === "dm", text))
+          : null;
+        let finalText = canonical?.text ?? text;
         let profanityMatches: { startIndex: number; endIndex: number }[] | undefined;
 
         // A sealed message has no text here to filter or moderate.
@@ -601,32 +627,56 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
 
         /* After delivery, so a parse that threw cannot stop a message. Sealed
            messages are skipped: the server holds ciphertext. */
-        if (finalText?.includes("@")) {
+        const mass = canonical && access.kind !== "dm"
+          && (canonical.everyone || canonical.here || canonical.roleIds.length > 0);
+        if (canonical && (finalText?.includes("@") || mass)) {
           try {
-            const named = findMentions(finalText, await getMentionableMembers());
-            if (named.length > 0) {
+            const batches: [MentionKind, string[]][] = [
+              ["user", findMentions(canonical.forNicknames, await getMentionableMembers())],
+            ];
+            if (mass) {
+              const connected = new Set(recipients.map((cid) => clientsInfo[cid]?.serverUserId).filter(Boolean) as string[]);
+              const audience = await massMentionAudience({
+                channelId: created.conversation_id,
+                senderServerUserId: auth.tokenPayload.serverUserId,
+                everyone: canonical.everyone,
+                here: canonical.here,
+                roleIds: canonical.roleIds,
+                connected,
+                blockers: await blockersOfSender(auth.tokenPayload.serverUserId),
+              });
+              // Most specific first: the first row written is the one kept.
+              batches.push(["role", audience.role], ["here", audience.here], ["everyone", audience.everyone]);
+            }
+
+            const kindOf = new Map<string, MentionKind>();
+            for (const [kind, ids] of batches) {
+              const fresh = ids.filter((id) => !kindOf.has(id));
+              if (fresh.length === 0) continue;
               const stored = await recordMentions({
                 conversationId: created.conversation_id,
                 messageId: created.message_id,
                 senderServerUserId: auth.tokenPayload.serverUserId,
-                serverUserIds: named,
+                serverUserIds: fresh,
+                kind,
               });
+              for (const id of stored) kindOf.set(id, kind);
+            }
 
-              // The row is what survives being offline. This is only what makes
-              // it arrive without a refresh.
-              const online = new Set(stored);
-              for (const [cid, info] of Object.entries(clientsInfo)) {
-                if (!info?.serverUserId || !online.has(info.serverUserId)) continue;
-                if (!recipients.includes(cid)) continue;
-                io.sockets.sockets.get(cid)?.emit("mention:new", {
-                  conversationId: created.conversation_id,
-                  messageId: created.message_id,
-                  createdAt: created.created_at,
-                  /* Null for a mention in the channel itself. Without it a
-                     mention in a thread cannot say where in the channel. */
-                  threadId: created.thread_id ?? null,
-                });
-              }
+            // The row is what survives being offline. This is only what makes
+            // it arrive without a refresh.
+            for (const [cid, info] of Object.entries(clientsInfo)) {
+              const kind = info?.serverUserId ? kindOf.get(info.serverUserId) : undefined;
+              if (!kind || !recipients.includes(cid)) continue;
+              io.sockets.sockets.get(cid)?.emit("mention:new", {
+                conversationId: created.conversation_id,
+                messageId: created.message_id,
+                createdAt: created.created_at,
+                /* Null for a mention in the channel itself. Without it a
+                   mention in a thread cannot say where in the channel. */
+                threadId: created.thread_id ?? null,
+                kind,
+              });
             }
           } catch (err) {
             consola.warn("recording mentions failed", created.message_id, err);
@@ -1280,7 +1330,9 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
 
-        const updated = await updateMessageText(payload.conversationId, payload.messageId, text);
+        // An edit cannot add a ping the sender could not have sent, and it notifies nobody.
+        const edited = canonicalizeMentions(text, await mentionRights(auth, payload.conversationId, access.kind === "dm", text)).text;
+        const updated = await updateMessageText(payload.conversationId, payload.messageId, edited);
         if (!updated) { socket.emit("chat:error", "Failed to edit message"); return; }
 
         const user = await getUserByServerId(auth.tokenPayload.serverUserId);

@@ -155,6 +155,7 @@ async function roleEditorState() {
       autoGrantAfterDays: r.auto_grant_after_days,
       autoGrantAfterMessages: r.auto_grant_after_messages,
       grantableByInvite: r.grantable_by_invite,
+      mentionable: r.mentionable,
       memberCount: await countRoleHolders(r.role_id),
     })),
   );
@@ -653,6 +654,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       autoGrantAfterDays?: number | null;
       autoGrantAfterMessages?: number | null;
       grantableByInvite?: boolean;
+      mentionable?: boolean;
     }) => {
       try {
         const rl = rlCheck("server:roles:definitions:save", ctx, RL_SETTINGS);
@@ -682,7 +684,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
             payload?.permissions === undefined &&
             payload?.autoGrantAfterDays === undefined &&
             payload?.autoGrantAfterMessages === undefined &&
-            payload?.grantableByInvite === undefined;
+            payload?.grantableByInvite === undefined &&
+            payload?.mentionable === undefined;
 
           if (!colourOnly || !existing) {
             socket.emit("server:error", {
@@ -708,6 +711,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
             autoGrantAfterDays: existing.auto_grant_after_days,
             autoGrantAfterMessages: existing.auto_grant_after_messages,
             grantableByInvite: existing.grantable_by_invite,
+            mentionable: existing.mentionable,
           });
 
           // Null means the row went between the read and the write, and a
@@ -798,6 +802,10 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           }
         }
 
+        const mentionable = typeof payload?.mentionable === "boolean"
+          ? payload.mentionable
+          : existing?.mentionable ?? false;
+
         const saved = existing
           ? await updateRoleDefinition(roleId, {
               name,
@@ -807,6 +815,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
               autoGrantAfterDays,
               autoGrantAfterMessages,
               grantableByInvite,
+              mentionable,
             })
           : await createRoleDefinition(roleId, {
               name,
@@ -816,13 +825,14 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
               autoGrantAfterDays,
               autoGrantAfterMessages,
               grantableByInvite,
+              mentionable,
             });
 
         insertServerAudit({
           actorServerUserId: auth.tokenPayload.serverUserId,
           action: existing ? "role_definition_update" : "role_definition_create",
           target: roleId,
-          meta: { name, rank, permissions, autoGrantAfterDays, autoGrantAfterMessages, grantableByInvite },
+          meta: { name, rank, permissions, autoGrantAfterDays, autoGrantAfterMessages, grantableByInvite, mentionable },
         }).catch((e) => consola.warn("audit log write failed", e));
 
         io.to("verifiedClients").emit("server:roles:definition:updated", { serverId, role: saved });

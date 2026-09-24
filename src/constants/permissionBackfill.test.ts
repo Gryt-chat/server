@@ -192,3 +192,19 @@ describe("what the backfill will and will not do", () => {
     assert.deepEqual(backfillFor(["send_messages", "read_messages"], 7, 8), []);
   });
 });
+
+describe("Mention everyone on upgrade (GRYT-1455)", () => {
+  it("goes to a role that manages channels", () => {
+    assert.ok(backfillFor(["manage_channels"], 8).includes("mention_everyone"));
+  });
+
+  it("never goes to a plain member or a moderator", () => {
+    assert.equal(backfillFor(seeded("member"), 8).includes("mention_everyone"), false);
+    assert.equal(backfillFor(seeded("mod"), 8).includes("mention_everyone"), false);
+  });
+
+  it("is seeded for admin and not for member on a new server", () => {
+    assert.ok(seeded("admin").includes("mention_everyone"));
+    assert.equal(seeded("member").includes("mention_everyone"), false);
+  });
+});

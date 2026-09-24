@@ -1,9 +1,13 @@
 import { getSqliteDb, toIso } from "./connection";
 
+/** Why a row exists. A client suppressing @everyone and @here drops those two. */
+export type MentionKind = "user" | "role" | "here" | "everyone";
+
 export interface MentionRecord {
   conversation_id: string;
   message_id: string;
   created_at: string;
+  kind: MentionKind;
   /** Read off the message rather than stored: the foreign key means the thread
       is already known, and a column here is a second copy that can disagree. */
   thread_id: string | null;
@@ -16,6 +20,8 @@ export async function recordMentions(args: {
   messageId: string;
   senderServerUserId: string;
   serverUserIds: string[];
+  /** The first write wins, so record the most specific kind first. */
+  kind?: MentionKind;
 }): Promise<string[]> {
   const targets = args.serverUserIds.filter((id) => id && id !== args.senderServerUserId);
   if (targets.length === 0) return [];
@@ -23,13 +29,13 @@ export async function recordMentions(args: {
   const db = getSqliteDb();
   const created_at = toIso(new Date());
   const insert = db.prepare(
-    `INSERT OR IGNORE INTO mentions (conversation_id, message_id, server_user_id, created_at) VALUES (?, ?, ?, ?)`,
+    `INSERT OR IGNORE INTO mentions (conversation_id, message_id, server_user_id, created_at, kind) VALUES (?, ?, ?, ?, ?)`,
   );
 
   db.exec("BEGIN");
   try {
     for (const id of targets) {
-      insert.run(args.conversationId, args.messageId, id, created_at);
+      insert.run(args.conversationId, args.messageId, id, created_at, args.kind ?? "user");
     }
     db.exec("COMMIT");
   } catch (err) {
@@ -50,7 +56,7 @@ export async function listUnseenMentions(
     .prepare(
       /* Joined, not left-joined: the foreign key means a mention whose message is
          gone went with it, so this cannot lose a row worth counting. */
-      `SELECT m.conversation_id, m.message_id, m.created_at, msg.thread_id
+      `SELECT m.conversation_id, m.message_id, m.created_at, m.kind, msg.thread_id
          FROM mentions m
          JOIN messages msg
            ON msg.conversation_id = m.conversation_id
