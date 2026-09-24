@@ -37,6 +37,7 @@ import { mediaMetadataRouter } from "./routes/mediaMetadata";
 import { webhooksRouter } from "./routes/webhooks";
 import { parsesOwnJson } from "./routes/ownJsonParsers";
 import { apiErrorHandler, jsonBodyExcept } from "./utils/httpErrors";
+import { sendStoredBody } from "./utils/sendStoredBody";
 import { startMediaSweep } from "./jobs/mediaSweep";
 import { startEmojiQueueWorker } from "./jobs/emojiQueueWorker";
 import { initPlugins } from "./plugins";
@@ -299,7 +300,7 @@ app.get("/icon", httpRateLimit("http:public", RL_HTTP_PUBLIC), async (req, res) 
     }
 
     if (obj.ContentType) res.setHeader("Content-Type", obj.ContentType);
-    body.pipe(res);
+    sendStoredBody(body, res, "server icon");
   } catch {
     res
       .status(404)
