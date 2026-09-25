@@ -183,6 +183,30 @@ export class SFURoomManager {
     return new Map(this.activeUsers);
   }
 
+  /** Who `userId` gets no audio or video from in this room. Replaces the last list,
+      so an empty one undoes it. SFUs older than GRYT-1477 ignore the event. */
+  async setHiddenPeers(roomId: string, userId: string, hidden: string[]): Promise<void> {
+    const ws = this.getWs();
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      consola.warn('SFU connection not available for user_hidden_peers');
+      return;
+    }
+
+    const message: WebSocketMessage = {
+      event: 'user_hidden_peers',
+      data: JSON.stringify({
+        room_id: roomId,
+        user_id: userId,
+        server_id: this.serverId,
+        server_password: this.serverToken,
+        hidden,
+      }),
+    };
+
+    ws.send(JSON.stringify(message));
+    consola.info(`[SFU] Sent user_hidden_peers for user=${userId} room=${roomId} hidden=${hidden.length}`);
+  }
+
   async disconnectUser(roomId: string, userId: string): Promise<void> {
     const ws = this.getWs();
     if (!ws || ws.readyState !== WebSocket.OPEN) {
