@@ -31,6 +31,8 @@ import {
   resolveChannelScopes,
 } from "../../db";
 
+import { pushVoiceCapabilities } from "./voiceCapabilities";
+
 // Module-level references set by socketHandler so REST routes can trigger broadcasts
 let _io: Server | null = null;
 let _serverId: string | null = null;
@@ -59,6 +61,7 @@ export function broadcastServerUiUpdate(reason: "settings" | "icon" | "other" = 
   }
   syncAllClients(_io, _clientsInfo);
   broadcastMemberList(_io, _clientsInfo, _serverId);
+  void pushVoiceCapabilities();
 }
 
 export function broadcastChatNew(message: Record<string, unknown>): void {

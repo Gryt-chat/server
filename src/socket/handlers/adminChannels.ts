@@ -7,6 +7,7 @@ import { requireAuth, requirePermission } from "../middleware/auth";
 import type { ChannelNotificationLevel, ForumTag } from "../../db/interfaces";
 import { syncAllClients, broadcastMemberList, invalidateBroadcastDedupe } from "../utils/clients";
 import { sendServerDetails } from "../utils/server";
+import { pushVoiceCapabilities } from "../utils/voiceCapabilities";
 import {
   channelNotificationLevel,
   listServerChannels,
@@ -219,6 +220,8 @@ function broadcastDetails(ctx: HandlerContext) {
       sendServerDetails(s, clientsInfo, serverId).catch((e) => consola.warn("sendServerDetails failed", e));
     }
   }
+  // Every caller moved a scope, a rule or a channel, so a call in progress may owe the SFU.
+  void pushVoiceCapabilities();
 }
 
 export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerMap {

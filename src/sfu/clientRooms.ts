@@ -150,6 +150,30 @@ export class SFURoomManager {
     consola.info(`Updated audio state for user ${userId} in room ${roomId}: muted=${isMuted}, deafened=${isDeafened}`);
   }
 
+  /** Replaces what a connected member may send, as their join token did. An SFU
+      from before GRYT-1426 logs it as unknown and keeps the token's answer. */
+  async setUserCapabilities(roomId: string, userId: string, capabilities: readonly string[]): Promise<void> {
+    const ws = this.getWs();
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      consola.warn('SFU connection not available for user_capabilities');
+      return;
+    }
+
+    const message: WebSocketMessage = {
+      event: 'user_capabilities',
+      data: JSON.stringify({
+        room_id: roomId,
+        user_id: userId,
+        server_id: this.serverId,
+        server_password: this.serverToken,
+        capabilities,
+      }),
+    };
+
+    ws.send(JSON.stringify(message));
+    consola.info(`[SFU] Sent user_capabilities for user=${userId} room=${roomId} caps=[${capabilities.join(",")}]`);
+  }
+
   trackUserConnection(roomId: string, userId: string): boolean {
     const existingConnection = this.activeUsers.get(userId);
     if (existingConnection) {
