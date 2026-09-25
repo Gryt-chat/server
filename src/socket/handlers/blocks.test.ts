@@ -7,6 +7,7 @@ import { after, before, beforeEach, describe, it } from "node:test";
 import { initSqlite } from "../../db/sqlite/connection";
 import { createServerConfigIfNotExists, setServerRole } from "../../db/sqlite/servers";
 import { upsertUser } from "../../db/sqlite/users";
+import { setContactPrefs } from "../../db/sqlite/contactPrefs";
 import type { Clients } from "../../types";
 import { generateAccessToken } from "../../utils/jwt";
 import { refreshClientPermissions } from "../utils/standing";
@@ -84,6 +85,8 @@ async function connectMember(
   const grytUserId = grytUserIdOverride ?? `account-block-${seq}`;
   const user = await upsertUser(grytUserId, nickname);
   await setServerRole(user.server_user_id, roleId);
+  // About blocks, not settings: calls default to friends only since GRYT-1470.
+  await setContactPrefs(grytUserId, { messages: "everyone", calls: "everyone" });
 
   const emitted: Emitted[] = [];
   const socket = {

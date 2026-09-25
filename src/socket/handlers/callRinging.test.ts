@@ -15,6 +15,7 @@ import {
 import { createRoleDefinition } from "../../db/sqlite/roleDefinitions";
 import { createServerConfigIfNotExists, setServerRole } from "../../db/sqlite/servers";
 import { upsertUser } from "../../db/sqlite/users";
+import { setContactPrefs } from "../../db/sqlite/contactPrefs";
 import { generateAccessToken } from "../../utils/jwt";
 import { resetRateLimits } from "../../utils/rateLimiter";
 import type { Clients } from "../../types";
@@ -73,6 +74,9 @@ async function connectPerson(nickname: string, permissions?: Permission[]): Prom
   seq += 1;
   const grytUserId = `account-call-${seq}`;
   const user = await upsertUser(grytUserId, nickname);
+  // About the ring, not who may ring: contactPrefs.test.ts has that, and calls
+  // default to friends only since GRYT-1470.
+  await setContactPrefs(grytUserId, { messages: "everyone", calls: "everyone" });
 
   if (permissions) {
     const roleId = `call-role-${seq}`;
