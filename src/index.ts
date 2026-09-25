@@ -39,6 +39,7 @@ import { parsesOwnJson } from "./routes/ownJsonParsers";
 import { apiErrorHandler, jsonBodyExcept } from "./utils/httpErrors";
 import { sendStoredBody } from "./utils/sendStoredBody";
 import { startMediaSweep } from "./jobs/mediaSweep";
+import { startMlsRetention } from "./jobs/mlsRetention";
 import { startEmojiQueueWorker } from "./jobs/emojiQueueWorker";
 import { initPlugins } from "./plugins";
 import {
@@ -134,6 +135,7 @@ initSqlite()
   })
   .then(() => {
     if (!disableS3) startMediaSweep();
+    startMlsRetention();
     if (!disableS3 && (process.env.S3_BUCKET || "").trim()) {
       startEmojiQueueWorker();
     }

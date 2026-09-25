@@ -50,6 +50,7 @@ import { registerFriendHandlers } from "./handlers/friends";
 import { registerTypingHandlers } from "./handlers/typing";
 import { registerPluginHandlers } from "./handlers/plugins";
 import { registerDmKeyHandlers } from "./handlers/dmKeys";
+import { registerMlsHandlers } from "./handlers/mls";
 import { registerMentionHandlers } from "./handlers/mentions";
 import { addressIsOwn, resolveClientIp, trustedProxyHops } from "../config/clientAddress";
 
@@ -346,6 +347,7 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
     ...registerTypingHandlers(ctx),
     ...registerPluginHandlers(ctx),
     ...registerDmKeyHandlers(ctx),
+    ...registerMlsHandlers(ctx),
     ...registerMentionHandlers(ctx),
   };
 
