@@ -337,6 +337,10 @@ export class SFUClient {
     return this.roomManager.updateUserAudioState(roomId, userId, isMuted, isDeafened);
   }
 
+  async setUserCapabilities(roomId: string, userId: string, capabilities: readonly string[]): Promise<void> {
+    return this.roomManager.setUserCapabilities(roomId, userId, capabilities);
+  }
+
   trackUserConnection(roomId: string, userId: string): boolean {
     return this.roomManager.trackUserConnection(roomId, userId);
   }

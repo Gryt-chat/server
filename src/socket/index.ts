@@ -25,6 +25,11 @@ import { SFU_RECONNECT_GRACE_MS } from "./utils/sfuReconnectGrace";
 import { setPluginRefs } from "../plugins/refs";
 import { sendInfo, sendServerDetails, setSocketRefs, broadcastChatNew, broadcastCustomEmojisUpdate, broadcastEmojiQueueUpdate, broadcastServerUiUpdate } from "./utils/server";
 import { getServerIdFromEnv } from "../utils/serverId";
+import {
+  forgetVoiceCapabilities,
+  pushVoiceCapabilitiesFor,
+  setVoiceCapabilityRefs,
+} from "./utils/voiceCapabilities";
 
 import type { HandlerContext, EventHandlerMap } from "./handlers/types";
 import { registerJoinHandlers } from "./handlers/join";
@@ -59,15 +64,19 @@ const MAX_CLIENT_NONCE_LENGTH = 256;
 export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
   const serverId = getServerIdFromEnv();
 
+  setVoiceCapabilityRefs({ io, clientsInfo, serverId, sfu: sfuClient });
+
   sfuClient.setCallbacks({
     onPeerJoined(ev: SFUPeerEvent) {
       // The SFU has the peer, so any recovery is over and the seat follows it here.
       clearVoiceRecoveryGrace(ev.userId);
       sfuClient.untrackUserConnection(ev.userId);
       sfuClient.trackUserConnection(ev.roomId, ev.userId);
+      void pushVoiceCapabilitiesFor(ev.roomId, ev.userId);
     },
 
     onPeerLeft(ev: SFUPeerEvent) {
+      forgetVoiceCapabilities(ev.userId);
       // Takes nobody out: switching channels closes the old peer first, and the
       // event names one room. The sync sees every room once this wait is over.
       const inCall = Object.values(clientsInfo).some(
