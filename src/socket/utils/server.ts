@@ -32,6 +32,8 @@ import {
 } from "../../db";
 
 import { pushVoiceCapabilities } from "./voiceCapabilities";
+import { MLS_CIPHERSUITE_ID } from "../../services/mlsWire";
+import { mlsRetentionDays } from "../../jobs/mlsRetention";
 
 // Module-level references set by socketHandler so REST routes can trigger broadcasts
 let _io: Server | null = null;
@@ -213,6 +215,9 @@ export async function sendInfo(socket: Socket, clientsInfo: Clients | undefined,
     /** A constant, not a setting: either the code relays the column or it does
         not. Absent means no, so no client needs a table of versions. */
     encryptedDirectMessages: true,
+    /** The MLS delivery service (GRYT-1500). A client only uses MLS where this is present,
+        and `retentionDays` is how long a device can be away and still catch up. */
+    mls: { version: 1, ciphersuites: [MLS_CIPHERSUITE_ID], retentionDays: mlsRetentionDays() },
   };
   
   socket.emit("server:info", serverInfo);
