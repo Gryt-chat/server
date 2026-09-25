@@ -16,6 +16,7 @@ import {
 import { DENIAL_RESPONSES, resolveConversationAccess } from "../utils/conversationAccess";
 import { isConversationId } from "../../db";
 import { endRingsFor } from "./calls";
+import { syncHiddenPeers } from "../utils/blockedInVoice";
 import { unreachableFrom } from "../utils/blocking";
 import { getRing } from "../utils/callRings";
 import { CONTACT_REFUSALS, mayJoinOneToOneCall } from "../utils/contactGate";
@@ -552,6 +553,13 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
       }
 
       syncAllClients(io, clientsInfo);
+
+      // Kept by the SFU per user and room, so every join into a call sends it again.
+      if (newJoinedState && isConversationId(channelId)) {
+        syncHiddenPeers({ clientsInfo, serverId, sfuClient }, clientsInfo[clientId].serverUserId).catch((e) =>
+          consola.warn("[Voice] could not send the SFU who this user blocked", e),
+        );
+      }
 
       /* This sets `hasJoinedChannel`, so it is what announces the call. On
          `voice:stream:set` the first caller got an empty voice view. */

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { after, before, beforeEach, describe, it } from "node:test";
+import { after, afterEach, before, beforeEach, describe, it } from "node:test";
 
 import { initSqlite } from "../../db/sqlite/connection";
 import { createServerConfigIfNotExists, setServerRole } from "../../db/sqlite/servers";
@@ -56,7 +56,11 @@ interface Participant {
 /** One `io` shared by everybody, so a targeted emit can be observed. */
 function makeWorld() {
   const clientsInfo: Clients = {};
-  const sockets = new Map<string, { emit: (event: string, payload?: unknown) => boolean }>();
+  const sockets = new Map<string, {
+    emit: (event: string, payload?: unknown) => boolean;
+    leave: () => void;
+    to: () => { emit: () => void };
+  }>();
 
   const io = {
     to() {
@@ -98,6 +102,7 @@ async function connectMember(
     },
     join() {},
     leave() {},
+    rooms: new Set<string>(),
     to() {
       return { emit() {} };
     },
@@ -107,6 +112,11 @@ async function connectMember(
     emit(event: string, payload?: unknown) {
       emitted.push({ event, payload });
       return true;
+    },
+    // What removeFromVoice reaches for when the server takes somebody out of a call.
+    leave() {},
+    to() {
+      return { emit() {} };
     },
   });
 
@@ -587,5 +597,151 @@ describe("unblocking", () => {
 
     const errors = alice.received("server:error");
     assert.equal(errors.length, 0, "no error for undoing something that was not done");
+  });
+});
+
+/* GRYT-1477. The join check only runs on a join, so a call already going when one of
+ * them blocks the other has to be ended by the block itself. */
+describe("a block during a call", () => {
+  let pairId: string;
+  let groupId: string;
+
+  before(async () => {
+    pairId = (await openDirectConversation(alice.serverUserId, mallory.serverUserId)).conversation_id;
+    groupId = (await createGroupConversation(bob.serverUserId, [bob.serverUserId, alice.serverUserId, mallory.serverUserId]))
+      .conversation_id;
+  });
+
+  beforeEach(() => {
+    resetRings();
+    resetRateLimits();
+  });
+
+  afterEach(async () => {
+    for (const who of [alice, bob, mallory]) leaveCall(who);
+    await unblock(alice, mallory);
+  });
+
+  /** What a socket looks like once `voice:channel:joined` has run for this room. */
+  function inCall(who: Participant, roomId: string): void {
+    Object.assign(world.clientsInfo[who.clientId], {
+      hasJoinedChannel: true,
+      isConnectedToVoice: true,
+      voiceChannelId: roomId,
+      streamID: `stream-${who.clientId}`,
+    });
+  }
+
+  function leaveCall(who: Participant): void {
+    Object.assign(world.clientsInfo[who.clientId], { hasJoinedChannel: false, isConnectedToVoice: false, voiceChannelId: "", streamID: "" });
+  }
+
+  /** An SFU that records what the server asks of it. */
+  function fakeSfu() {
+    const calls = { disconnected: [] as string[][], hidden: [] as { roomId: string; userId: string; hidden: string[] }[] };
+    const sfuClient = {
+      disconnectUser: async (roomId: string, userId: string) => {
+        calls.disconnected.push([roomId, userId]);
+      },
+      untrackUserConnection() {},
+      setHiddenPeers: async (roomId: string, userId: string, hidden: string[]) => {
+        calls.hidden.push({ roomId, userId, hidden });
+      },
+    };
+    return { calls, sfuClient: sfuClient as unknown as HandlerContext["sfuClient"] };
+  }
+
+  async function blockWith(sfuClient: HandlerContext["sfuClient"], who: Participant, whom: Participant, event = "user:block") {
+    clearAll();
+    await registerBlockHandlers({ ...who.ctx, sfuClient })[event]({ accessToken: who.accessToken, serverUserId: whom.serverUserId });
+  }
+
+  function toldToLeave(who: Participant): boolean {
+    return who.received("voice:room:leave").length === 1 && who.received("voice:channel:joined").includes(false);
+  }
+
+  it("ends a one-to-one call for both of them", async () => {
+    inCall(alice, pairId);
+    inCall(mallory, pairId);
+    const { calls, sfuClient } = fakeSfu();
+
+    await blockWith(sfuClient, alice, mallory);
+
+    for (const who of [alice, mallory]) {
+      const ci = world.clientsInfo[who.clientId];
+      assert.equal(ci.hasJoinedChannel, false, `${ci.nickname} is still in the call`);
+      assert.equal(ci.voiceChannelId, "");
+      assert.ok(toldToLeave(who), `${ci.nickname} was not told the call ended`);
+    }
+    assert.deepEqual(
+      calls.disconnected.map(([, userId]) => userId).sort(),
+      [alice.serverUserId, mallory.serverUserId].sort(),
+      "the SFU was not told to drop both of them",
+    );
+    // Told the call ended, and nothing that says why.
+    assert.equal(mallory.received("user:blocked").length, 0);
+    assert.equal(mallory.received("voice:kicked").length, 0);
+  });
+
+  it("ends it when the one blocked is the one who blocks back, too", async () => {
+    inCall(alice, pairId);
+    inCall(mallory, pairId);
+    await blockWith(null, mallory, alice);
+
+    assert.equal(world.clientsInfo[alice.clientId].hasJoinedChannel, false);
+    assert.equal(world.clientsInfo[mallory.clientId].hasJoinedChannel, false);
+    await unblock(mallory, alice);
+  });
+
+  it("withdraws a ring between them, on both sides", async () => {
+    await mallory.handlers["call:ring"]({ accessToken: mallory.accessToken, conversationId: pairId });
+    assert.ok(alice.received("call:incoming").length > 0, "the ring never started");
+
+    await blockWith(null, alice, mallory);
+
+    for (const who of [alice, mallory]) {
+      const withdrawn = who.received("call:withdrawn") as { conversation_id: string; reason: string; ended_by: string | null }[];
+      assert.deepEqual(withdrawn, [{ conversation_id: pairId, reason: "cancelled", ended_by: null }]);
+    }
+  });
+
+  it("leaves somebody else's one-to-one alone", async () => {
+    const aliceBob = (await openDirectConversation(alice.serverUserId, bob.serverUserId)).conversation_id;
+    inCall(alice, aliceBob);
+    inCall(bob, aliceBob);
+
+    await blockWith(null, alice, mallory);
+
+    assert.equal(world.clientsInfo[alice.clientId].voiceChannelId, aliceBob);
+    assert.equal(world.clientsInfo[bob.clientId].hasJoinedChannel, true);
+  });
+
+  it("keeps both in a group call, and has the SFU stop sending the blocker their media", async () => {
+    inCall(alice, groupId);
+    inCall(mallory, groupId);
+    const { calls, sfuClient } = fakeSfu();
+
+    await blockWith(sfuClient, alice, mallory);
+
+    assert.equal(world.clientsInfo[alice.clientId].voiceChannelId, groupId);
+    assert.equal(world.clientsInfo[mallory.clientId].voiceChannelId, groupId);
+    assert.equal(calls.disconnected.length, 0);
+    assert.deepEqual(calls.hidden, [{ roomId: `block-test_${groupId}`, userId: alice.serverUserId, hidden: [mallory.serverUserId] }]);
+
+    // Only the blocker's list: Mallory still gets Alice, as blocking is about what reaches you.
+    await blockWith(sfuClient, alice, mallory, "user:unblock");
+    assert.deepEqual(calls.hidden.at(-1), { roomId: `block-test_${groupId}`, userId: alice.serverUserId, hidden: [] });
+  });
+
+  it("sends the list when the blocker joins a group call", async () => {
+    await block(alice, mallory);
+    world.clientsInfo[alice.clientId].voiceChannelId = groupId;
+    const { calls, sfuClient } = fakeSfu();
+
+    await registerVoiceHandlers({ ...alice.ctx, sfuClient })["voice:channel:joined"](true);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(world.clientsInfo[alice.clientId].hasJoinedChannel, true, `the join was refused: ${JSON.stringify(alice.received("voice:room:error"))}`);
+    assert.deepEqual(calls.hidden, [{ roomId: `block-test_${groupId}`, userId: alice.serverUserId, hidden: [mallory.serverUserId] }]);
   });
 });

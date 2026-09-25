@@ -357,6 +357,10 @@ export class SFUClient {
     return this.roomManager.disconnectUser(roomId, userId);
   }
 
+  async setHiddenPeers(roomId: string, userId: string, hidden: string[]): Promise<void> {
+    return this.roomManager.setHiddenPeers(roomId, userId, hidden);
+  }
+
   requestSync(): void {
     this.roomManager.requestSync();
   }

@@ -206,12 +206,12 @@ export function registerCallHandlers(ctx: HandlerContext): EventHandlerMap {
   };
 }
 
-/** Called when they join the call they were ringing about, and when their last
-    socket goes away. */
+/** Called when they join the call they were ringing about, when their last
+    socket goes away, and when one of a one-to-one blocks the other. */
 export function endRingsFor(
   io: HandlerContext["io"],
   clientsInfo: HandlerContext["clientsInfo"],
-  options: { conversationId: string; answeredBy: string } | { callerGone: string },
+  options: { conversationId: string; answeredBy: string } | { callerGone: string } | { withdrawn: string },
 ): void {
   const emitTo = (serverUserId: string, event: string, payload: unknown) => {
     for (const [cid, ci] of Object.entries(clientsInfo)) {
@@ -229,6 +229,13 @@ export function endRingsFor(
   if ("conversationId" in options) {
     const ring = endRing(options.conversationId);
     if (ring) tell(ring, "answered", options.answeredBy);
+    return;
+  }
+
+  // Ended by the server, with no one named, so a block reads as the caller giving up.
+  if ("withdrawn" in options) {
+    const ring = endRing(options.withdrawn);
+    if (ring) tell(ring, "cancelled", null);
     return;
   }
 

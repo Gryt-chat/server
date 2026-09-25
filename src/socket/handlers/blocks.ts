@@ -8,6 +8,7 @@ import {
   getUserByServerId,
 } from "../../db";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
+import { endOneToOneCall, syncHiddenPeers } from "../utils/blockedInVoice";
 
 /**
  * No permission is checked: blocking has to work against somebody who outranks
@@ -19,7 +20,8 @@ import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 const RL_BLOCK: RateLimitRule = { limit: 30, windowMs: 60_000, scorePerAction: 1, maxScore: 20, scoreDecayMs: 3_000 };
 
 export function registerBlockHandlers(ctx: HandlerContext): EventHandlerMap {
-  const { socket, clientId, clientsInfo } = ctx;
+  const { io, socket, clientId, clientsInfo, serverId, sfuClient } = ctx;
+  const world = { io, clientsInfo, serverId, sfuClient };
 
   function rlCheck(event: string) {
     const ip = ctx.getClientIp();
@@ -61,6 +63,9 @@ export function registerBlockHandlers(ctx: HandlerContext): EventHandlerMap {
         }
 
         await blockUser(auth.tokenPayload.grytUserId, target.gryt_user_id);
+        // The join is refused from now on (GRYT-1469). A call already going has to end too.
+        await endOneToOneCall(world, auth.tokenPayload.serverUserId, payload.serverUserId);
+        await syncHiddenPeers(world, auth.tokenPayload.serverUserId);
 
         /* The conversation used to be hidden here too. Hiding is the client's
            own, per device, since GRYT-1379, so it does that on `user:blocked`. */
@@ -92,6 +97,7 @@ export function registerBlockHandlers(ctx: HandlerContext): EventHandlerMap {
         const target = await getUserByServerId(payload.serverUserId);
         if (target) {
           await unblockUser(auth.tokenPayload.grytUserId, target.gryt_user_id);
+          await syncHiddenPeers(world, auth.tokenPayload.serverUserId);
         }
 
         socket.emit("user:unblocked", { serverUserId: payload.serverUserId });
