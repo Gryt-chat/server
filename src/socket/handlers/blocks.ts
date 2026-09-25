@@ -6,7 +6,9 @@ import {
   unblockUser,
   listBlocks,
   getUserByServerId,
+  forgetFriendship,
 } from "../../db";
+import { pushFriendList } from "./friends";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 import { endOneToOneCall, syncHiddenPeers } from "../utils/blockedInVoice";
 
@@ -66,6 +68,10 @@ export function registerBlockHandlers(ctx: HandlerContext): EventHandlerMap {
         // The join is refused from now on (GRYT-1469). A call already going has to end too.
         await endOneToOneCall(world, auth.tokenPayload.serverUserId, payload.serverUserId);
         await syncHiddenPeers(world, auth.tokenPayload.serverUserId);
+        // Ends the friendship and any request either way (GRYT-1471).
+        await forgetFriendship(auth.tokenPayload.grytUserId, target.gryt_user_id);
+        await pushFriendList(ctx.io, clientsInfo, auth.tokenPayload.serverUserId, auth.tokenPayload.grytUserId);
+        await pushFriendList(ctx.io, clientsInfo, target.server_user_id, target.gryt_user_id);
 
         /* The conversation used to be hidden here too. Hiding is the client's
            own, per device, since GRYT-1379, so it does that on `user:blocked`. */
@@ -98,6 +104,9 @@ export function registerBlockHandlers(ctx: HandlerContext): EventHandlerMap {
         if (target) {
           await unblockUser(auth.tokenPayload.grytUserId, target.gryt_user_id);
           await syncHiddenPeers(world, auth.tokenPayload.serverUserId);
+          // A request sent during the block was never shown, and shouldn't surface now.
+          await forgetFriendship(auth.tokenPayload.grytUserId, target.gryt_user_id);
+          await pushFriendList(ctx.io, clientsInfo, target.server_user_id, target.gryt_user_id);
         }
 
         socket.emit("user:unblocked", { serverUserId: payload.serverUserId });
