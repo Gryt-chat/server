@@ -219,6 +219,26 @@ function createSchema(d: DatabaseSync): void {
       updated_at TEXT NOT NULL
     );
 
+    -- Friends on this server (GRYT-1471), one row per pair with the smaller id
+    -- first. Each person's whole list is on their own devices.
+    CREATE TABLE IF NOT EXISTS friendships (
+      a_gryt_user_id TEXT NOT NULL,
+      b_gryt_user_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (a_gryt_user_id, b_gryt_user_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_friendships_b ON friendships(b_gryt_user_id);
+
+    -- Requests still waiting. ignored = declined, which the sender isn't told.
+    CREATE TABLE IF NOT EXISTS friend_requests (
+      from_gryt_user_id TEXT NOT NULL,
+      to_gryt_user_id TEXT NOT NULL,
+      ignored INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (from_gryt_user_id, to_gryt_user_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_friend_requests_to ON friend_requests(to_gryt_user_id);
+
     CREATE TABLE IF NOT EXISTS join_requests (
       gryt_user_id TEXT PRIMARY KEY,
       nickname TEXT NOT NULL,

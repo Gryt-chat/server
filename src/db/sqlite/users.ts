@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 
 import type { UserRecord } from "../interfaces";
 import { fromIso, getSqliteDb, intToBool, toIso, type SQLInputValue } from "./connection";
+import { carryFriendsForward } from "./friends";
 import { carryBlocksForward, mergeGuestIntoAccount, type GuestMerge } from "./mergeGuest";
 import { getServerConfig, setServerOwner } from "./servers";
 import { revokeUserRefreshTokens } from "./tokens";
@@ -285,6 +286,7 @@ export async function replaceUserIdentity(
   try {
     db.prepare(`UPDATE users SET gryt_user_id = ? WHERE server_user_id = ?`).run(newGrytUserId, serverUserId);
     carryBlocksForward(db, oldGrytUserId, newGrytUserId);
+    carryFriendsForward(db, oldGrytUserId, newGrytUserId);
     db.exec("COMMIT");
   } catch (err) {
     db.exec("ROLLBACK");

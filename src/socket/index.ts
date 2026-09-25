@@ -46,6 +46,7 @@ import { registerVoiceLatencyHandlers } from "./handlers/voiceLatency";
 import { registerReportHandlers } from "./handlers/reports";
 import { registerBlockHandlers } from "./handlers/blocks";
 import { registerContactPrefsHandlers } from "./handlers/contactPrefs";
+import { registerFriendHandlers } from "./handlers/friends";
 import { registerTypingHandlers } from "./handlers/typing";
 import { registerPluginHandlers } from "./handlers/plugins";
 import { registerDmKeyHandlers } from "./handlers/dmKeys";
@@ -339,6 +340,7 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
     ...registerReportHandlers(ctx),
     ...registerBlockHandlers(ctx),
     ...registerContactPrefsHandlers(ctx),
+    ...registerFriendHandlers(ctx),
     ...registerDiagnosticsHandlers(ctx),
     ...registerVoiceLatencyHandlers(ctx),
     ...registerTypingHandlers(ctx),

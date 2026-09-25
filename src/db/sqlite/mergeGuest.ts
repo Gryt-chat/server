@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 import type { Reaction } from "../interfaces";
 import { getSqliteDb, toIso } from "./connection";
+import { carryFriendsForward } from "./friends";
 
 export interface GuestMerge {
   guestServerUserId: string;
@@ -108,6 +109,7 @@ function mergeInTransaction(
 
   mergeReactions(db, from, to);
   carryBlocksForward(db, guestGrytUserId, accountGrytUserId);
+  carryFriendsForward(db, guestGrytUserId, accountGrytUserId);
 
   const ownerMoved =
     db

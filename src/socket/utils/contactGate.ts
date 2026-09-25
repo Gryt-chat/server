@@ -1,4 +1,4 @@
-import { getContactPrefs, getUserByServerId, hasWrittenTo, type ContactPrefs, type ContactRule } from "../../db";
+import { areFriends, getContactPrefs, getUserByServerId, hasAnyFriend, hasWrittenTo, type ContactPrefs, type ContactRule } from "../../db";
 
 /**
  * The recipient's own settings, asked on every DM open, send, group add, ring and
@@ -8,15 +8,27 @@ import { getContactPrefs, getUserByServerId, hasWrittenTo, type ContactPrefs, ty
 /** What the sender is told. Plain on purpose: this is a preference, not a block. */
 export const CONTACT_REFUSALS = {
   messages: { error: "contact_refused", message: "They're not taking messages from you on this server." },
+  friends: { error: "contact_refused", message: "They're not taking friend requests on this server." },
   calls: { error: "contact_refused", message: "They're not taking calls from you on this server." },
 } as const;
 
 /**
- * Stands in for friends until GRYT-1471: somebody the recipient has written to in
- * their one-to-one. Swap this body for the friendships table when that lands.
+ * A friend on this server (GRYT-1471). Until somebody has one here, people they've
+ * written to one-to-one still count, so calls don't stop for everyone on upgrade.
  */
 export async function isFriendOf(recipientServerUserId: string, senderServerUserId: string): Promise<boolean> {
+  const [recipient, sender] = await Promise.all([getUserByServerId(recipientServerUserId), getUserByServerId(senderServerUserId)]);
+  if (!recipient || !sender) return false;
+  if (await areFriends(recipient.gryt_user_id, sender.gryt_user_id)) return true;
+  if (await hasAnyFriend(recipient.gryt_user_id)) return false;
   return hasWrittenTo(recipientServerUserId, senderServerUserId);
+}
+
+/** Friend requests are a way to message somebody, so "Nobody" shuts them too. "Friends"
+    can't, or nobody could ever become one. */
+export async function mayRequestFriendship(recipientServerUserId: string): Promise<boolean> {
+  const prefs = await prefsOf(recipientServerUserId);
+  return !!prefs && prefs.messages !== "nobody";
 }
 
 async function prefsOf(serverUserId: string): Promise<ContactPrefs | null> {
