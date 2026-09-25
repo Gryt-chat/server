@@ -6,7 +6,7 @@ import { getSqliteDb, toIso } from "./connection";
  * so no permission, and nobody's rank gets past it.
  */
 
-/** "friends" stands in for real friends until GRYT-1471: see `isFriendOf` in socket/utils/contactGate.ts. */
+/** Who counts as a friend is `isFriendOf` in socket/utils/contactGate.ts. */
 export type ContactRule = "everyone" | "friends" | "nobody";
 
 export interface ContactPrefs {

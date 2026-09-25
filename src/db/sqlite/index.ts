@@ -19,5 +19,6 @@ export * from "./reports";
 export * from "./userReports";
 export * from "./blocks";
 export * from "./contactPrefs";
+export * from "./friends";
 export * from "./mentions";
 export * from "./webhooks";
