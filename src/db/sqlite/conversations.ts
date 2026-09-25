@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "crypto";
 
 import type { ConversationRecord } from "../interfaces";
 import { fromIso, fromIsoNullable, getSqliteDb, toIso } from "./connection";
+import { dropMlsGroupForConversation } from "./mls";
 
 /**
  * Nothing here is cross-server: a DM is filed under `server_user_id`, this
@@ -262,6 +263,7 @@ export async function purgeOrphanedConversations(): Promise<string[]> {
   const deleteMembers = db.prepare(`DELETE FROM conversation_members WHERE conversation_id = ?`);
   const deleteConversation = db.prepare(`DELETE FROM conversations WHERE conversation_id = ?`);
   for (const id of ids) {
+    dropMlsGroupForConversation(id);
     deleteMessages.run(id);
     deleteMembers.run(id);
     deleteConversation.run(id);
