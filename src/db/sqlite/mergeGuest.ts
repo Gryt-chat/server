@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Reaction } from "../interfaces";
 import { getSqliteDb, toIso } from "./connection";
 import { carryFriendsForward } from "./friends";
+import { carryMlsDevicesForward } from "./mls";
 
 export interface GuestMerge {
   guestServerUserId: string;
@@ -34,6 +35,8 @@ export const AUTHOR_COLUMNS: ReadonlyArray<readonly [table: string, column: stri
   ["bots", "decided_by_server_user_id"],
   ["audit_log", "actor_server_user_id"],
   ["audit_log", "target"],
+  ["mls_groups", "created_by_server_user_id"],
+  ["mls_log", "sender_server_user_id"],
 ];
 
 interface MemberRow {
@@ -110,6 +113,7 @@ function mergeInTransaction(
   mergeReactions(db, from, to);
   carryBlocksForward(db, guestGrytUserId, accountGrytUserId);
   carryFriendsForward(db, guestGrytUserId, accountGrytUserId);
+  carryMlsDevicesForward(db, from, to);
 
   const ownerMoved =
     db

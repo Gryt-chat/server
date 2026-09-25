@@ -579,6 +579,65 @@ function createSchema(d: DatabaseSync): void {
       updated_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_image_jobs_status ON image_jobs(status, created_at);
+
+    -- MLS delivery service (GRYT-1500). Blobs are MLS wire bytes the server can't
+    -- open. Keyed on server_user_id like conversations, since the groups are theirs.
+    CREATE TABLE IF NOT EXISTS mls_devices (
+      server_user_id TEXT NOT NULL,
+      device_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      last_seen_at TEXT NOT NULL,
+      PRIMARY KEY (server_user_id, device_id)
+    );
+
+    -- data goes to NULL when a package is handed out. The row stays until the
+    -- retention sweep, so a Welcome naming the ref can still find its device.
+    CREATE TABLE IF NOT EXISTS mls_key_packages (
+      key_package_ref TEXT PRIMARY KEY,
+      server_user_id TEXT NOT NULL,
+      device_id TEXT NOT NULL,
+      data BLOB,
+      last_resort INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      claimed_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_mls_key_packages_device
+      ON mls_key_packages(server_user_id, device_id, last_resort, claimed_at);
+
+    -- One group per conversation. head_seq is kept here rather than read off the
+    -- log, because the log gets swept and a cursor must never be handed out twice.
+    CREATE TABLE IF NOT EXISTS mls_groups (
+      group_id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL UNIQUE,
+      epoch INTEGER NOT NULL,
+      head_seq INTEGER NOT NULL,
+      created_by_server_user_id TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS mls_log (
+      group_id TEXT NOT NULL,
+      seq INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      epoch INTEGER NOT NULL,
+      sender_server_user_id TEXT NOT NULL,
+      sender_device_id TEXT NOT NULL,
+      data BLOB NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (group_id, seq)
+    );
+    CREATE INDEX IF NOT EXISTS idx_mls_log_created ON mls_log(created_at);
+
+    CREATE TABLE IF NOT EXISTS mls_welcomes (
+      welcome_id TEXT PRIMARY KEY,
+      server_user_id TEXT NOT NULL,
+      device_id TEXT NOT NULL,
+      group_id TEXT NOT NULL,
+      data BLOB NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_mls_welcomes_device ON mls_welcomes(server_user_id, device_id);
+    CREATE INDEX IF NOT EXISTS idx_mls_welcomes_created ON mls_welcomes(created_at);
   `);
 }
 
