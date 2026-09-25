@@ -235,7 +235,8 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
       const blockers = await blockersOfSender(entry.senderServerUserId);
       audience = memberIds.filter((id) => id === entry.senderServerUserId || !blockers.has(id));
     }
-    emitTo(socketsOf(audience), "mls:message", entryView(conversationId, entry));
+    const recipients = socketsOf(audience);
+    emitTo(recipients, "mls:message", entryView(conversationId, entry));
   }
 
   /* Whoever shares a DM with them adds the new device the next time they send. */
@@ -244,7 +245,8 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
     for (const c of await listConversationsForUser(serverUserId)) {
       for (const id of c.other_server_user_ids) people.add(id);
     }
-    emitTo(socketsOf(people), "mls:devices:changed", { serverUserId });
+    const recipients = socketsOf(people);
+    emitTo(recipients, "mls:devices:changed", { serverUserId });
   }
 
   return {
@@ -508,7 +510,8 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
         };
         await fanOut(memberIds, entry, payload.conversationId);
         welcomes.forEach((w, i) => {
-          emitTo(socketsOf([w.serverUserId]), "mls:welcome", {
+          const recipients = socketsOf([w.serverUserId]);
+          emitTo(recipients, "mls:welcome", {
             welcomeId: result.welcomeIds[i],
             conversationId: payload.conversationId,
             groupId: group.groupId,
@@ -602,7 +605,8 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
           if (wasEmpty) {
             for (const id of memberIds) {
               const view = (await directConversationViews(id)).find((v) => v.conversation_id === payload.conversationId);
-              if (view) emitTo(socketsOf([id]), "dm:opened", view);
+              const recipients = socketsOf([id]);
+              if (view) emitTo(recipients, "dm:opened", view);
             }
           }
         }
