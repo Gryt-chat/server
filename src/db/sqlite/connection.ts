@@ -209,6 +209,16 @@ function createSchema(d: DatabaseSync): void {
     -- opposite direction from the one the primary key serves.
     CREATE INDEX IF NOT EXISTS idx_blocks_blocked ON blocks(blocked_gryt_user_id);
 
+    -- Who may message or ring somebody here (GRYT-1470). No row means the
+    -- defaults in contactPrefs.ts, so changing one is a code change. Keyed on
+    -- gryt_user_id like blocks, so it outlasts leaving and rejoining.
+    CREATE TABLE IF NOT EXISTS contact_prefs (
+      gryt_user_id TEXT PRIMARY KEY,
+      messages TEXT NOT NULL,
+      calls TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS join_requests (
       gryt_user_id TEXT PRIMARY KEY,
       nickname TEXT NOT NULL,
