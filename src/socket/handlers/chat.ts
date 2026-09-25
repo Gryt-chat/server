@@ -61,6 +61,7 @@ import { spamFilter, type SpamSend } from "../../moderation/spamFilter";
 import { isSpamExempt, spamRefusal, timeOutSpammer } from "../../moderation/spamTimeout";
 import { broadcastServerUiUpdate } from "../utils/server";
 import { directConversationViews } from "./dm";
+import { CONTACT_REFUSALS, mayMessage, peerOf } from "../utils/contactGate";
 import {
   DENIAL_RESPONSES,
   resolveConversationAccess,
@@ -539,6 +540,14 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
             message: "You do not have permission to send direct messages here.",
             permission: "send_direct_messages",
           });
+          return;
+        }
+
+        /* Every send, so a stricter setting closes a conversation already open
+           (decision 7). A group is gated when somebody is added, not here. */
+        const peer = access.kind === "dm" && !access.group ? peerOf(access.memberIds, auth.tokenPayload.serverUserId) : null;
+        if (peer && !(await mayMessage(auth.tokenPayload.serverUserId, peer))) {
+          refuse(CONTACT_REFUSALS.messages);
           return;
         }
 

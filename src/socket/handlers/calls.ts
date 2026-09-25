@@ -15,6 +15,7 @@ import {
   type RingEnd,
 } from "../utils/callRings";
 import { unreachableFrom } from "../utils/blocking";
+import { CONTACT_REFUSALS, mayCall } from "../utils/contactGate";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
 /**
@@ -105,8 +106,19 @@ export function registerCallHandlers(ctx: HandlerContext): EventHandlerMap {
         const unreachable = await unreachableFrom(self, access);
         const rung = others.filter((id) => !unreachable.has(id));
 
+        /* Then each person's own call setting (GRYT-1470). Refused out loud only
+           when a setting is why nobody is rung, so it never gives a block away. */
+        const callable: string[] = [];
+        for (const id of rung) if (await mayCall(self, id)) callable.push(id);
+        if (rung.length > 0 && callable.length === 0) {
+          socket.emit("call:error", others.length === 1
+            ? CONTACT_REFUSALS.calls
+            : { ...CONTACT_REFUSALS.calls, message: "Nobody in this group is taking calls from you on this server." });
+          return;
+        }
+
         const ring = startRing(
-          { conversationId: payload.conversationId, fromServerUserId: self, toServerUserIds: rung },
+          { conversationId: payload.conversationId, fromServerUserId: self, toServerUserIds: callable },
           Date.now(),
           (expired) => withdraw(expired, "timeout"),
         );
@@ -124,12 +136,12 @@ export function registerCallHandlers(ctx: HandlerContext): EventHandlerMap {
           expires_at: ring.expiresAt,
         };
 
-        for (const id of rung) emitTo(id, "call:incoming", incoming);
+        for (const id of callable) emitTo(id, "call:incoming", incoming);
         // The caller's own devices, so a ring started on the phone shows as
         // ringing on the laptop rather than as nothing at all.
         emitTo(self, "call:ringing", incoming);
 
-        consola.info(`[Call] ${self} is ringing ${rung.length} of ${others.length} in ${payload.conversationId}`);
+        consola.info(`[Call] ${self} is ringing ${callable.length} of ${others.length} in ${payload.conversationId}`);
       } catch (error) {
         consola.error(`[Call] ring failed:`, error);
         socket.emit("call:error", { error: "failed", message: "Could not start the call" });

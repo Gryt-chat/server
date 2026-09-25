@@ -17,6 +17,8 @@ import { DENIAL_RESPONSES, resolveConversationAccess } from "../utils/conversati
 import { isConversationId } from "../../db";
 import { endRingsFor } from "./calls";
 import { unreachableFrom } from "../utils/blocking";
+import { getRing } from "../utils/callRings";
+import { CONTACT_REFUSALS, mayJoinOneToOneCall } from "../utils/contactGate";
 import type { ChannelPermission, Permission } from "../../constants/permissions";
 import { mayInChannel } from "../../services/channelPermissions";
 import { CAP_SHARE_SCREEN, CAP_SHARE_VIDEO, CAP_SPEAK, CAP_VIDEO_CHECKED } from "../../sfu/clientToken";
@@ -366,6 +368,15 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
             const denial = DENIAL_RESPONSES.not_a_member;
             consola.warn(`[Voice:Step 1] REFUSED client=${clientId} user=${userId} room=${roomId} reason=blocked`);
             socket.emit("voice:room:error", { error: denial.error, message: denial.message });
+            return;
+          }
+          // Then the other person's call setting, after the block so it can't give one away.
+          const peerIsWaiting = (peer: string) =>
+            getRing(roomId)?.fromServerUserId === peer
+            || Object.values(clientsInfo).some((ci) => ci.serverUserId === peer && ci.hasJoinedChannel && ci.voiceChannelId === roomId);
+          if (!(await mayJoinOneToOneCall(access.memberIds, userId, peerIsWaiting))) {
+            consola.warn(`[Voice:Step 1] REFUSED client=${clientId} user=${userId} room=${roomId} reason=contact_prefs`);
+            socket.emit("voice:room:error", CONTACT_REFUSALS.calls);
             return;
           }
         }

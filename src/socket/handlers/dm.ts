@@ -3,6 +3,7 @@ import consola from "consola";
 import {
   addConversationMember,
   createGroupConversation,
+  directConversationId,
   getConversation,
   getServerConfig,
   getUserByServerId,
@@ -23,6 +24,7 @@ import { isBotIdentity } from "../../auth/identity";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 import { requireAuth, requirePermission } from "../middleware/auth";
 import { fileReadVerdict } from "../../services/fileAccess";
+import { CONTACT_REFUSALS, mayMessage } from "../utils/contactGate";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
 /** Opening and listing only. Once a DM exists it goes through the same `chat:*`
@@ -196,6 +198,13 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
           return;
         }
 
+        /* Only a new one: an existing conversation opening is a read, and its
+           sends are gated in chat.ts. */
+        if (!(await getConversation(directConversationId(self, target))) && !(await mayMessage(self, target))) {
+          socket.emit("dm:error", CONTACT_REFUSALS.messages);
+          return;
+        }
+
         const conversation = await openDirectConversation(self, target);
 
         /* The other end only once there is something to tell them about. An empty
@@ -272,6 +281,14 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
             socket.emit("dm:error", { error: "unknown_member", message: "Somebody in that list is not a member of this server" });
             return;
           }
+          if (!(await mayMessage(self, id))) {
+            socket.emit("dm:error", {
+              ...CONTACT_REFUSALS.messages,
+              message: `${user.nickname} isn't taking messages from you on this server.`,
+              server_user_id: id,
+            });
+            return;
+          }
         }
 
         if (typeof payload.iconFileId === "string" && payload.iconFileId
@@ -325,6 +342,11 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
         if (!target || !target.is_active || isBotIdentity(target.gryt_user_id)
           || (await eitherHasBlocked(auth.tokenPayload.grytUserId, target.gryt_user_id))) {
           socket.emit("dm:error", { error: "unknown_member", message: "That person is not a member of this server" });
+          return;
+        }
+
+        if (!(await mayMessage(self, payload.targetServerUserId))) {
+          socket.emit("dm:error", { ...CONTACT_REFUSALS.messages, server_user_id: payload.targetServerUserId });
           return;
         }
 
