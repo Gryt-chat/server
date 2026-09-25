@@ -14,7 +14,7 @@ import {
 import { initSqlite } from "../../db/sqlite/connection";
 import { listUnseenMentions, markMentionsSeen } from "../../db/sqlite/mentions";
 import { createRoleDefinition } from "../../db/sqlite/roleDefinitions";
-import { createServerConfigIfNotExists, setServerRole } from "../../db/sqlite/servers";
+import { createServerConfigIfNotExists, setServerRole, updateServerConfig } from "../../db/sqlite/servers";
 import { upsertUser } from "../../db/sqlite/users";
 import { resetChannelPermissionCache } from "../../services/channelPermissions";
 import type { Clients } from "../../types";
@@ -59,6 +59,8 @@ before(async () => {
   process.env.DATA_DIR = dir;
   await initSqlite();
   await createServerConfigIfNotExists();
+  // The same few new members ping everybody over and over here, which is spam.
+  await updateServerConfig({ spamFilter: false });
 
   await upsertServerChannel({ channelId: OPEN, name: "General", type: "text", position: 10 });
   await upsertServerChannel({ channelId: HIDDEN, name: "Staff room", type: "text", position: 20 });

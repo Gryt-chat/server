@@ -2,9 +2,10 @@ import { randomBytes, scrypt as scryptCb, timingSafeEqual } from "crypto";
 import { promisify } from "util";
 
 import type { Permission } from "../constants/permissions";
+import type { SpamSensitivity } from "../moderation/spamFilter";
 import type { CensorStyle, ProfanityMode } from "../utils/profanityFilter";
 
-export type { CensorStyle, ProfanityMode };
+export type { CensorStyle, ProfanityMode, SpamSensitivity };
 
 /**
  * Not about identity tiers. A list, because the reader and the writer both check
@@ -240,6 +241,9 @@ export interface ServerConfigRecord {
   bot_join_policy: BotJoinPolicy;
   discoverable: boolean;
   allow_dms: boolean;
+  /** On unless the owner turns it off. */
+  spam_filter_enabled: boolean;
+  spam_filter_sensitivity: SpamSensitivity;
   is_configured: boolean;
   created_at: Date;
   updated_at: Date;

@@ -12,6 +12,7 @@ import { invalidateSystemChannelCache } from "../socket/utils/systemMessages";
 import { broadcastServerUiUpdate } from "../socket/utils/server";
 import { syncMdnsAdvertising } from "../mdns";
 import { VALID_CENSOR_STYLES, type CensorStyle } from "../utils/profanityFilter";
+import { SPAM_SENSITIVITIES, type SpamSensitivity } from "../moderation/spamFilter";
 
 /**
  * One place, for the side effects rather than the validation: a caller that only
@@ -31,6 +32,8 @@ export interface SettingsPatch {
   lanOpen?: boolean;
   joinPolicy?: string;
   discoverable?: boolean;
+  spamFilter?: boolean;
+  spamSensitivity?: string;
 }
 
 /** Who asked for the change, for the audit trail. */
@@ -95,6 +98,11 @@ export async function applyServerSettings(
 
   const discoverable: boolean | undefined = typeof patch.discoverable === "boolean" ? patch.discoverable : undefined;
 
+  const spamFilter: boolean | undefined = typeof patch.spamFilter === "boolean" ? patch.spamFilter : undefined;
+  const spamSensitivity: SpamSensitivity | undefined = SPAM_SENSITIVITIES.includes(patch.spamSensitivity as SpamSensitivity)
+    ? patch.spamSensitivity as SpamSensitivity
+    : undefined;
+
   const updated = await updateServerConfig({
     displayName: displayName === undefined ? undefined : (displayName.length > 0 ? displayName : null),
     description: description === undefined ? undefined : (description.length > 0 ? description : null),
@@ -109,6 +117,8 @@ export async function applyServerSettings(
     lanOpen,
     joinPolicy,
     discoverable,
+    spamFilter,
+    spamSensitivity,
   });
 
   if (systemChannelId !== undefined) invalidateSystemChannelCache();
@@ -129,6 +139,9 @@ export async function applyServerSettings(
       via: actor.via,
       displayName: displayName ?? null,
       description: description ?? null,
+      // So the log says who turned the spam filter off or down.
+      ...(spamFilter !== undefined ? { spamFilter } : {}),
+      ...(spamSensitivity !== undefined ? { spamSensitivity } : {}),
     },
   }).catch((e) => consola.warn("audit log write failed", e));
 
@@ -154,5 +167,7 @@ export function settingsView(cfg: ServerConfigRecord, serverId: string, isOwner:
     lanOpen: !!cfg.lan_open,
     joinPolicy: cfg.join_policy ?? "invite",
     discoverable: cfg.discoverable !== false,
+    spamFilter: cfg.spam_filter_enabled !== false,
+    spamSensitivity: cfg.spam_filter_sensitivity ?? "normal",
   };
 }

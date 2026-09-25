@@ -57,6 +57,8 @@ import { mayInChannel, visibleChannelIds } from "../../services/channelPermissio
 import { fileReadVerdict } from "../../services/fileAccess";
 import { pluginEvents } from "../../plugins";
 import { deleteMessageEverywhere } from "../../moderation/deleteMessage";
+import { spamFilter, type SpamSend } from "../../moderation/spamFilter";
+import { isSpamExempt, spamRefusal, timeOutSpammer } from "../../moderation/spamTimeout";
 import { broadcastServerUiUpdate } from "../utils/server";
 import { directConversationViews } from "./dm";
 import {
@@ -306,6 +308,50 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
     return { everyone, roles, channels };
   }
 
+  /* True when the send was dropped and its sender timed out. Before the insert,
+     so nothing a spammer sent after tripping it is ever written. */
+  async function droppedAsSpam(
+    auth: AuthResult,
+    user: { server_user_id: string; created_at: Date },
+    cfg: Awaited<ReturnType<typeof getServerConfig>>,
+    send: SpamSend,
+    refuseWith: (error: unknown) => void,
+  ): Promise<boolean> {
+    if (cfg && cfg.spam_filter_enabled === false) return false;
+    if (isSpamExempt({ isOwner: auth.isOwner, permissions: auth.permissions, grytUserId: auth.tokenPayload.grytUserId })) {
+      return false;
+    }
+    const sensitivity = cfg?.spam_filter_sensitivity ?? "normal";
+    const verdict = spamFilter.evaluate({ id: user.server_user_id, memberSince: user.created_at }, send, sensitivity);
+    if (!verdict.spam) return false;
+
+    const { until } = await timeOutSpammer({
+      io,
+      clientsInfo,
+      sfuClient,
+      serverId,
+      serverUserId: user.server_user_id,
+      verdict,
+      sensitivity,
+      where: send.kind,
+    });
+    refuseWith(spamRefusal(until));
+    return true;
+  }
+
+  /* Who a message names, counting what it tried and was refused: an @everyone
+     that went out as plain text is still somebody trying. */
+  async function attemptedMentions(text: string, rights: MentionRights | null): Promise<{ users: number; mass: number; roles: number; allowed: boolean }> {
+    if (!rights || !text.includes("@")) return { users: 0, mass: 0, roles: 0, allowed: !!rights?.everyone };
+    const tried = canonicalizeMentions(text, { ...rights, everyone: true });
+    return {
+      users: findMentions(tried.forNicknames, await getMentionableMembers()).length,
+      mass: (tried.everyone ? 1 : 0) + (tried.here ? 1 : 0),
+      roles: tried.roleIds.length,
+      allowed: rights.everyone,
+    };
+  }
+
   return {
     'chat:send': async (payload: { conversationId: string; accessToken: string; text?: string; sealed?: string; attachments?: string[]; replyToMessageId?: string; threadId?: string; nonce?: string }) => {
       /* Names the send refused, or a burst of refusals can only settle the last
@@ -523,9 +569,8 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         const profanityMode: ProfanityMode = cfg?.profanity_mode ?? "off";
         const censorStyle: CensorStyle = cfg?.profanity_censor_style ?? "grawlix";
         // Before the profanity pass, whose match offsets are into the stored text.
-        const canonical: CanonicalMentions | null = text
-          ? canonicalizeMentions(text, await mentionRights(auth, payload.conversationId, access.kind === "dm", text))
-          : null;
+        const rights = text ? await mentionRights(auth, payload.conversationId, access.kind === "dm", text) : null;
+        const canonical: CanonicalMentions | null = text && rights ? canonicalizeMentions(text, rights) : null;
         let finalText = canonical?.text ?? text;
         let profanityMatches: { startIndex: number; endIndex: number }[] | undefined;
 
@@ -540,6 +585,35 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           finalText = result.text;
           profanityMatches = result.matches;
         }
+
+        /* Read before the insert and before touching: a conversation with no
+           messages is in nobody's list but its opener's, so the first one announces it. */
+        const wasEmpty = access.kind === "dm" && !(await getConversation(payload.conversationId))?.last_message_at;
+
+        // DMs on metadata alone: who, how many, how big. Never the text, sealed or not.
+        const spamSend: SpamSend = access.kind === "dm"
+          ? {
+            kind: "dm",
+            conversationId: payload.conversationId,
+            recipients: access.memberIds.filter((id) => id !== auth.tokenPayload.serverUserId),
+            size: sealed ? sealed.length : text.length,
+            newConversation: wasEmpty,
+            attachments: attachments?.length ?? 0,
+          }
+          : await (async () => {
+            const mentioned = await attemptedMentions(text, rights);
+            return {
+              kind: "channel" as const,
+              conversationId: payload.conversationId,
+              text,
+              userMentions: mentioned.users,
+              massMentions: mentioned.mass,
+              roleMentions: mentioned.roles,
+              mayMentionEveryone: mentioned.allowed,
+              attachments: attachments?.length ?? 0,
+            };
+          })();
+        if (await droppedAsSpam(auth, user, cfg, spamSend, refuse)) return;
 
         let created: MessageRecord;
         try {
@@ -593,10 +667,6 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         }
 
         if (access.kind === "dm") {
-          /* Read before touching. A conversation with no messages is in nobody's
-             list but its opener's, so the first one has to announce it. */
-          const wasEmpty = !(await getConversation(created.conversation_id))?.last_message_at;
-
           await touchConversation(created.conversation_id, created.created_at).catch((err) =>
             consola.warn("touchConversation failed", created.conversation_id, err),
           );
@@ -1161,6 +1231,22 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
 
         const user = await getUserByServerId(auth.tokenPayload.serverUserId);
         if (!user) { socket.emit("forum:error", "User not found. Please rejoin."); return; }
+
+        const topicText = `${title}\n${text}`;
+        const topicRights = await mentionRights(auth, payload.conversationId, false, topicText);
+        const mentioned = await attemptedMentions(topicText, topicRights);
+        const topicCfg = await getServerConfig().catch(() => null);
+        const topicSend: SpamSend = {
+          kind: "channel",
+          conversationId: payload.conversationId,
+          text: topicText,
+          userMentions: mentioned.users,
+          massMentions: mentioned.mass,
+          roleMentions: mentioned.roles,
+          mayMentionEveryone: mentioned.allowed,
+          attachments: 0,
+        };
+        if (await droppedAsSpam(auth, user, topicCfg, topicSend, (e) => socket.emit("forum:error", e))) return;
 
         const created = await insertMessage({
           conversation_id: payload.conversationId,
