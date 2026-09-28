@@ -599,7 +599,9 @@ function createSchema(d: DatabaseSync): void {
       data BLOB,
       last_resort INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
-      claimed_at TEXT
+      claimed_at TEXT,
+      not_before INTEGER NOT NULL DEFAULT 0,
+      not_after INTEGER NOT NULL DEFAULT 0
     );
     CREATE INDEX IF NOT EXISTS idx_mls_key_packages_device
       ON mls_key_packages(server_user_id, device_id, last_resort, claimed_at);
@@ -768,6 +770,13 @@ function runMigrations(d: DatabaseSync): void {
 
   if (!hasColumn(d, "users", "nickname_changed_at")) {
     d.exec("ALTER TABLE users ADD COLUMN nickname_changed_at TEXT");
+  }
+
+  // A KeyPackage's lifetime, in seconds (GRYT-1510). Rows from before it read as
+  // expired, so they're never handed out and the next sweep retires them.
+  if (!hasColumn(d, "mls_key_packages", "not_after")) {
+    d.exec("ALTER TABLE mls_key_packages ADD COLUMN not_before INTEGER NOT NULL DEFAULT 0");
+    d.exec("ALTER TABLE mls_key_packages ADD COLUMN not_after INTEGER NOT NULL DEFAULT 0");
   }
 
   if (!hasColumn(d, "server_config", "join_policy")) {

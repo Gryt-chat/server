@@ -20,7 +20,15 @@ const { makeKeyPackageRef } = require("ts-mls/keyPackage.js") as typeof import("
 export const MLS_CIPHERSUITE = "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519";
 export const MLS_CIPHERSUITE_ID = 1;
 
-export type WireRefusal = { error: string; message: string };
+/** In seconds. @gryt/crypto writes exactly this, starting an hour back (GRYT-1510). */
+export const MLS_KEY_PACKAGE_LIFETIME = 30 * 24 * 60 * 60;
+
+/* ts-mls's default, 0 to 2^63-1, which @gryt/crypto 0.6.0 and older write. Taken for now
+   and kept 30 days from upload, since nothing makes the new ones yet. */
+const LEGACY_NOT_AFTER = BigInt("9223372036854775807");
+
+/** `serverTime` (seconds) comes with a lifetime refusal, so a device with a fast clock can retry. */
+export type WireRefusal = { error: string; message: string; serverTime?: number };
 
 const refuse = (error: string, message: string): { ok: false } & WireRefusal => ({ ok: false, error, message });
 
@@ -56,15 +64,46 @@ export async function keyPackageRef(kp: KeyPackage): Promise<string> {
   return Buffer.from(await makeKeyPackageRef(kp, sha256)).toString("hex");
 }
 
+/** Seconds since the epoch, from the leaf node's lifetime. Both ends are inside it. */
+export interface KeyPackageLifetime {
+  notBefore: number;
+  notAfter: number;
+}
+
+/** Checked against the server's own clock, which is what claims are checked against too. */
+export function checkKeyPackageLifetime(
+  lifetime: { notBefore: bigint; notAfter: bigint },
+  now = new Date(),
+): ({ ok: true } & KeyPackageLifetime) | ({ ok: false } & WireRefusal) {
+  const serverTime = Math.floor(now.getTime() / 1000);
+  const { notBefore, notAfter } = lifetime;
+  if (notBefore === BigInt(0) && notAfter === LEGACY_NOT_AFTER) {
+    return { ok: true, notBefore: serverTime, notAfter: serverTime + MLS_KEY_PACKAGE_LIFETIME };
+  }
+  if (notAfter < notBefore || notAfter - notBefore > BigInt(MLS_KEY_PACKAGE_LIFETIME)) {
+    return { ok: false, serverTime, error: "key_package_lifetime", message: "A KeyPackage can last 30 days at most." };
+  }
+  if (notAfter < BigInt(serverTime)) {
+    return { ok: false, serverTime, error: "key_package_expired", message: "That KeyPackage has expired." };
+  }
+  if (notBefore > BigInt(serverTime)) {
+    return { ok: false, serverTime, error: "key_package_not_yet_valid", message: "That KeyPackage isn't valid yet by this server's clock." };
+  }
+  return { ok: true, notBefore: Number(notBefore), notAfter: Number(notAfter) };
+}
+
 export async function parseKeyPackage(
   bytes: Uint8Array,
-): Promise<{ ok: true; ref: string } | ({ ok: false } & WireRefusal)> {
+  now = new Date(),
+): Promise<({ ok: true; ref: string } & KeyPackageLifetime) | ({ ok: false } & WireRefusal)> {
   const msg = decodeWhole(bytes);
   if (!msg || msg.wireformat !== "mls_key_package") return refuse("invalid_key_package", "That isn't an MLS KeyPackage.");
   if (msg.keyPackage.cipherSuite !== MLS_CIPHERSUITE) {
     return refuse("unsupported_ciphersuite", `Only ${MLS_CIPHERSUITE} is accepted here.`);
   }
-  return { ok: true, ref: await keyPackageRef(msg.keyPackage) };
+  const lifetime = checkKeyPackageLifetime(msg.keyPackage.leafNode.lifetime, now);
+  if (!lifetime.ok) return lifetime;
+  return { ok: true, ref: await keyPackageRef(msg.keyPackage), notBefore: lifetime.notBefore, notAfter: lifetime.notAfter };
 }
 
 export interface ParsedHandshake {
