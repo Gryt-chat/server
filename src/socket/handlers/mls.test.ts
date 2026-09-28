@@ -12,7 +12,7 @@ import { blockUser, unblockUser } from "../../db/sqlite/blocks";
 import { getSqliteDb, initSqlite } from "../../db/sqlite/connection";
 import { setContactPrefs } from "../../db/sqlite/contactPrefs";
 import { createGroupConversation, openDirectConversation } from "../../db/sqlite/conversations";
-import { getMlsGroupForConversation } from "../../db/sqlite/mls";
+import { appendMlsMessage, createMlsGroup, getMlsGroupForConversation } from "../../db/sqlite/mls";
 import { createServerConfigIfNotExists, setServerRole, updateServerConfig } from "../../db/sqlite/servers";
 import { hasWrittenTo } from "../../db/sqlite/contactPrefs";
 import { listMessages } from "../../db/sqlite/messages";
@@ -407,6 +407,7 @@ describe("KeyPackages", () => {
     const claimed = await gina.call("mls:keypackages:claim", { conversationId: conv, deviceId: ginaLaptop.id });
     assert.deepEqual(claimed.keyPackages, []);
     assert.deepEqual(claimed.missing, [{ serverUserId: hans.serverUserId, deviceId: hansPhone.id }]);
+    assert.deepEqual(claimed.more, [], "nothing left over: a DM never has more than nine other devices");
 
     const sync = await hans.call("mls:sync", { deviceId: hansPhone.id });
     assert.equal((sync.keyPackages as { unclaimed: number }).unclaimed, 0, "so the phone knows to upload more");
@@ -706,6 +707,46 @@ describe("a DM over MLS", () => {
 
     const odd = await alice.call("mls:send", { conversationId: dm, deviceId: a1.id, message: await applicationMessage(a1, "x"), placeholder: "no" });
     assert.equal(odd.error, "invalid_payload");
+  });
+});
+
+describe("packets socket.io will carry", () => {
+  /* socket.io-parser closes the connection on more than ten binary parts (GRYT-1528). */
+  it("hands out waiting Welcomes nine at a time, and says when there are more", async () => {
+    const kim = await connect("Kim");
+    const phone = await makeDevice("kim-phone", 1);
+    await publish(kim, phone);
+    const insert = getSqliteDb().prepare(
+      `INSERT INTO mls_welcomes (welcome_id, server_user_id, device_id, group_id, data, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    for (let i = 0; i < 11; i++) {
+      insert.run(`kim-welcome-${i}`, kim.serverUserId, phone.id, `ab${i}`, new Uint8Array([i]), new Date(Date.now() + i).toISOString());
+    }
+
+    const first = await kim.call("mls:sync", { deviceId: phone.id });
+    const ids = (first.welcomes as { welcomeId: string }[]).map((w) => w.welcomeId);
+    assert.deepEqual(ids, Array.from({ length: 9 }, (_, i) => `kim-welcome-${i}`), "oldest first");
+    assert.equal(first.moreWelcomes, true);
+
+    await kim.call("mls:welcome:ack", { deviceId: phone.id, welcomeIds: ids });
+    const rest = await kim.call("mls:sync", { deviceId: phone.id });
+    assert.equal((rest.welcomes as unknown[]).length, 2);
+    assert.equal(rest.moreWelcomes, false);
+  });
+
+  it("pages the log ten entries at a time, whatever limit is asked for", async () => {
+    const lou = await connect("Lou");
+    const max = await connect("Max");
+    const conv = (await openDirectConversation(lou.serverUserId, max.serverUserId)).conversation_id;
+    createMlsGroup("cafe01", conv, lou.serverUserId);
+    for (let i = 0; i < 12; i++) {
+      appendMlsMessage("application", { groupId: "cafe01", epoch: 0, senderServerUserId: lou.serverUserId, senderDeviceId: "d", data: new Uint8Array([i, 1]) });
+    }
+    for (const limit of [200, undefined]) {
+      const page = await max.call("mls:log:fetch", { conversationId: conv, after: 0, limit });
+      assert.equal((page.entries as unknown[]).length, 10);
+      assert.equal(page.hasMore, true);
+    }
   });
 });
 
