@@ -64,8 +64,12 @@ const GROUP_ID = /^(?:[0-9a-f]{2}){1,64}$/;
 const MAX_KEY_PACKAGE_BYTES = 16 * 1024;
 /** A DM commit adds at most ten devices; a Welcome carries the tree for all of them. */
 const MAX_HANDSHAKE_BYTES = 256 * 1024;
-const MAX_LOG_PAGE = 200;
-const MAX_CLAIM_DEVICES = 50;
+/** socket.io-parser closes the connection on a packet with more than ten binary parts,
+    so no reply carries more (GRYT-1528). Nine where the count is ours to pick. */
+const MAX_BINARY_PARTS = 10;
+const MAX_LOG_PAGE = MAX_BINARY_PARTS;
+const MAX_CLAIM_DEVICES = MAX_BINARY_PARTS - 1;
+const MAX_SYNC_WELCOMES = MAX_BINARY_PARTS - 1;
 
 const RL_PUBLISH: RateLimitRule = { limit: 10, windowMs: 60_000, scorePerAction: 1, maxScore: 10, scoreDecayMs: 6000 };
 /** Every claim uses up somebody else's packages, so it is the one to hold back. */
@@ -386,6 +390,8 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
           const asked = new Set(payload.devices.map((d) => `${d?.serverUserId}\u0000${d?.deviceId}`));
           targets = targets.filter((d) => asked.has(`${d.serverUserId}\u0000${d.deviceId}`));
         }
+        // A DM has nine other devices at most, so `more` is for later stages; name them to get them.
+        const more = targets.slice(MAX_CLAIM_DEVICES).map((d) => ({ serverUserId: d.serverUserId, deviceId: d.deviceId }));
         targets = targets.slice(0, MAX_CLAIM_DEVICES);
 
         const peers = new Set(targets.map((d) => d.serverUserId).filter((id) => id !== self));
@@ -415,7 +421,7 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
             missing.push({ serverUserId: d.serverUserId, deviceId: d.deviceId });
           }
         }
-        ack({ ok: true, keyPackages, missing });
+        ack({ ok: true, keyPackages, missing, more });
       } catch (err) {
         consola.error("mls:keypackages:claim failed", err);
         ack(fail("failed", "Could not hand out KeyPackages"));
@@ -676,7 +682,7 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
           ack(fail("invalid_payload", "after has to be a seq, 0 for the start."));
           return;
         }
-        const limit = typeof payload.limit === "number" && payload.limit >= 1 ? Math.min(Math.floor(payload.limit), MAX_LOG_PAGE) : 100;
+        const limit = typeof payload.limit === "number" && payload.limit >= 1 ? Math.min(Math.floor(payload.limit), MAX_LOG_PAGE) : MAX_LOG_PAGE;
         const group = getMlsGroupForConversation(payload.conversationId);
         if (!group) {
           ack({ ok: true, group: null, entries: [], nextCursor: after, hasMore: false, gap: false });
@@ -714,14 +720,15 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
         const self = auth.tokenPayload.serverUserId;
         const registered = isMlsDevice(self, payload.deviceId);
         if (registered) touchMlsDevice(self, payload.deviceId);
+        // Oldest first, a page at a time. Acking them is what brings the next ones.
+        const waiting = registered ? listMlsWelcomes(self, payload.deviceId) : [];
 
         ack({
           ok: true,
           registered,
           groups: listMlsGroupsForMember(self).map((g) => ({ ...groupView(g), oldestSeq: g.oldestSeq })),
-          welcomes: registered
-            ? listMlsWelcomes(self, payload.deviceId).map((w) => ({ ...w, data: Buffer.from(w.data) }))
-            : [],
+          welcomes: waiting.slice(0, MAX_SYNC_WELCOMES).map((w) => ({ ...w, data: Buffer.from(w.data) })),
+          moreWelcomes: waiting.length > MAX_SYNC_WELCOMES,
           keyPackages: { ...countMlsKeyPackages(self, payload.deviceId), target: MLS_MAX_KEY_PACKAGES },
         });
       } catch (err) {
