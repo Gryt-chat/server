@@ -244,6 +244,8 @@ export async function buildMemberList(clientsInfo: Clients) {
         /** Passed through untouched: a server vouching for the binding would
             be vouching for what a peer has to establish for itself. */
         dmKeyBinding: user.dm_key_binding,
+        /** Checked against the DM key binding's signer on the way in (GRYT-1515). */
+        personKeyBinding: user.person_key_binding,
         avatarFileId: user.avatar_file_id || null,
         avatarColor: user.avatar_file_id
           ? avatarFiles.get(user.avatar_file_id)?.dominant_color ?? null
@@ -297,6 +299,8 @@ export function memberStateHash(members: MemberListEntry[]): string {
       // A peer holding the old key encrypts to one nobody has, so a new binding
       // must not sit unsent waiting for something else to move.
       dmKeyBinding: m.dmKeyBinding,
+      // Without it a new person key never goes out, and nobody can add that member's devices.
+      personKeyBinding: m.personKeyBinding,
       // Redundant with `nickname`, except for a rename back to a previous name,
       // which leaves that field looking untouched.
       nicknameChangedAt: m.nicknameChangedAt,
