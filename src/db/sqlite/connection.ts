@@ -22,6 +22,32 @@ export function getSqliteDb(): DatabaseSync {
   return db;
 }
 
+export type WriteProbeResult = "ok" | "busy" | "failed";
+
+/** Writes a row and rolls it back. BEGIN IMMEDIATE alone succeeds on a read-only
+    file, and busy_timeout is 0 here so a writer in another process can't stall us. */
+export function probeSqliteWrite(d: DatabaseSync | null = db): WriteProbeResult {
+  if (!d) return "failed";
+  if (d.isTransaction) return "busy";
+  const { timeout } = d.prepare("PRAGMA busy_timeout").get() as { timeout: number };
+  d.exec("PRAGMA busy_timeout = 0");
+  try {
+    d.exec("BEGIN IMMEDIATE");
+    try {
+      d.exec("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('write_probe', '')");
+    } finally {
+      d.exec("ROLLBACK");
+    }
+    return "ok";
+  } catch (e) {
+    const code = (e as { errcode?: number }).errcode ?? 0;
+    // SQLITE_BUSY and SQLITE_LOCKED, including their extended codes.
+    return (code & 0xff) === 5 || (code & 0xff) === 6 ? "busy" : "failed";
+  } finally {
+    d.exec(`PRAGMA busy_timeout = ${timeout}`);
+  }
+}
+
 export async function initSqlite(): Promise<void> {
   const dataDir = process.env.DATA_DIR || "./data";
   const dbPath = join(dataDir, "gryt.db");
