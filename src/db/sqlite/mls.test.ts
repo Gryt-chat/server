@@ -21,6 +21,7 @@ import {
   listMlsLog,
   listMlsWelcomes,
   MLS_MAX_DEVICES,
+  MLS_KEY_PACKAGE_CLAIM_MARGIN,
   MLS_MAX_KEY_PACKAGES,
   mlsKeyPackageOwner,
   oldestMlsSeq,
@@ -47,6 +48,8 @@ after(() => {
 
 const bytes = (...b: number[]) => new Uint8Array(b);
 const DAY = 24 * 60 * 60 * 1000;
+/** A lifetime nothing here gets near either end of. The expiry tests set their own. */
+const LIVE = { notBefore: 0, notAfter: 2 ** 40 };
 
 let uniq = 0;
 async function member(): Promise<string> {
@@ -71,7 +74,7 @@ describe("devices", () => {
   it("frees the slot, its packages and its Welcomes when removed", async () => {
     const me = await member();
     touchMlsDevice(me, "phone");
-    addMlsKeyPackages(me, "phone", [{ ref: "ref-removed", data: bytes(1), lastResort: false }]);
+    addMlsKeyPackages(me, "phone", [{ ref: "ref-removed", data: bytes(1), lastResort: false, ...LIVE }]);
 
     assert.equal(removeMlsDevice(me, "phone"), true);
     assert.deepEqual(listMlsDevices([me]), []);
@@ -86,6 +89,7 @@ describe("KeyPackages", () => {
       ref: `kp-${me}-${i}`,
       data: bytes(i),
       lastResort: false,
+      ...LIVE,
     }));
     const t0 = new Date("2026-09-25T10:00:00Z");
     const { stored, unclaimed } = addMlsKeyPackages(me, "laptop", packages, t0);
@@ -109,8 +113,8 @@ describe("KeyPackages", () => {
   it("falls back to the last-resort package, again and again", async () => {
     const me = await member();
     addMlsKeyPackages(me, "tablet", [
-      { ref: `once-${me}`, data: bytes(1), lastResort: false },
-      { ref: `last-${me}`, data: bytes(9), lastResort: true },
+      { ref: `once-${me}`, data: bytes(1), lastResort: false, ...LIVE },
+      { ref: `last-${me}`, data: bytes(9), lastResort: true, ...LIVE },
     ]);
 
     assert.equal(claimMlsKeyPackage(me, "tablet")?.ref, `once-${me}`);
@@ -123,8 +127,8 @@ describe("KeyPackages", () => {
 
   it("retires the old last-resort package when a new one comes, and still routes to it", async () => {
     const me = await member();
-    addMlsKeyPackages(me, "desk", [{ ref: `old-${me}`, data: bytes(1), lastResort: true }]);
-    addMlsKeyPackages(me, "desk", [{ ref: `new-${me}`, data: bytes(2), lastResort: true }]);
+    addMlsKeyPackages(me, "desk", [{ ref: `old-${me}`, data: bytes(1), lastResort: true, ...LIVE }]);
+    addMlsKeyPackages(me, "desk", [{ ref: `new-${me}`, data: bytes(2), lastResort: true, ...LIVE }]);
 
     assert.equal(claimMlsKeyPackage(me, "desk")?.ref, `new-${me}`);
     assert.deepEqual(mlsKeyPackageOwner(`old-${me}`), { serverUserId: me, deviceId: "desk" });
@@ -132,6 +136,44 @@ describe("KeyPackages", () => {
 
   it("gives nothing for a device with nothing", async () => {
     assert.equal(claimMlsKeyPackage(await member(), "nothing"), null);
+  });
+
+  it("hands out only packages inside their lifetime, with an hour to spare", async () => {
+    const me = await member();
+    const now = new Date("2026-09-25T10:00:00Z");
+    const t = Math.floor(now.getTime() / 1000);
+    addMlsKeyPackages(me, "phone", [
+      { ref: `gone-${me}`, data: bytes(1), lastResort: false, notBefore: t - 31 * 86400, notAfter: t - 86400 },
+      { ref: `ending-${me}`, data: bytes(2), lastResort: false, notBefore: t - 86400, notAfter: t + MLS_KEY_PACKAGE_CLAIM_MARGIN - 1 },
+      { ref: `early-${me}`, data: bytes(3), lastResort: false, notBefore: t + 60, notAfter: t + 30 * 86400 },
+      { ref: `good-${me}`, data: bytes(4), lastResort: false, notBefore: t - 3600, notAfter: t + 30 * 86400 },
+      { ref: `last-${me}`, data: bytes(5), lastResort: true, notBefore: t - 86400, notAfter: t + 60 },
+    ], now);
+
+    assert.deepEqual(countMlsKeyPackages(me, "phone", now), { unclaimed: 2, lastResort: false },
+      "what can't be handed out isn't counted, so the device tops up");
+    assert.equal(claimMlsKeyPackage(me, "phone", now)?.ref, `good-${me}`);
+    assert.equal(claimMlsKeyPackage(me, "phone", now), null, "the last-resort one is too close to its end too");
+    assert.equal(claimMlsKeyPackage(me, "phone", new Date((t + 120) * 1000))?.ref, `early-${me}`);
+  });
+
+  it("retires expired packages in the sweep, and still routes a Welcome to one", async () => {
+    const me = await member();
+    const now = new Date();
+    const t = Math.floor(now.getTime() / 1000);
+    addMlsKeyPackages(me, "old", [
+      { ref: `expired-${me}`, data: bytes(1), lastResort: false, notBefore: t - 31 * 86400, notAfter: t - 60 },
+      { ref: `fine-${me}`, data: bytes(2), lastResort: false, notBefore: t - 3600, notAfter: t + 29 * 86400 },
+    ], now);
+
+    assert.ok(sweepMls(new Date(now.getTime() - 30 * DAY), now).expired >= 1);
+    const row = (ref: string) =>
+      getSqliteDb().prepare(`SELECT data, claimed_at FROM mls_key_packages WHERE key_package_ref = ?`).get(ref) as
+        { data: Uint8Array | null; claimed_at: string | null };
+    assert.equal(row(`expired-${me}`).data, null);
+    assert.ok(row(`expired-${me}`).claimed_at, "its ref goes with the claimed ones, after the retention window");
+    assert.deepEqual(mlsKeyPackageOwner(`expired-${me}`), { serverUserId: me, deviceId: "old" });
+    assert.ok(row(`fine-${me}`).data, "one still inside its lifetime keeps its bytes");
   });
 });
 
@@ -271,8 +313,8 @@ describe("retention", () => {
 
     const me = await member();
     addMlsKeyPackages(me, "d", [
-      { ref: `swept-${me}`, data: bytes(1), lastResort: false },
-      { ref: `waiting-${me}`, data: bytes(2), lastResort: false },
+      { ref: `swept-${me}`, data: bytes(1), lastResort: false, ...LIVE },
+      { ref: `waiting-${me}`, data: bytes(2), lastResort: false, ...LIVE },
     ], old);
     claimMlsKeyPackage(me, "d", old);
 
@@ -322,7 +364,7 @@ describe("lifecycle", () => {
     touchMlsDevice(guest.server_user_id, "shared");
     touchMlsDevice(guest.server_user_id, "only-guest");
     touchMlsDevice(account.server_user_id, "shared");
-    addMlsKeyPackages(guest.server_user_id, "only-guest", [{ ref: "guest-kp", data: bytes(1), lastResort: false }]);
+    addMlsKeyPackages(guest.server_user_id, "only-guest", [{ ref: "guest-kp", data: bytes(1), lastResort: false, ...LIVE }]);
 
     assert.ok(mergeGuestIntoAccount("mls-guest", "mls-account"));
     assert.deepEqual(listMlsDevices([account.server_user_id]).map((d) => d.deviceId).sort(), ["only-guest", "shared"]);

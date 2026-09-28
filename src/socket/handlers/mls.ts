@@ -277,10 +277,11 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
           }
           const parsed = await parseKeyPackage(bytes);
           if (!parsed.ok) {
-            ack(fail(parsed.error, parsed.message));
+            const { error, message, serverTime } = parsed;
+            ack(fail(error, message, serverTime === undefined ? {} : { serverTime }));
             return;
           }
-          packages.push({ ref: parsed.ref, data: bytes, lastResort });
+          packages.push({ ref: parsed.ref, data: bytes, lastResort, notBefore: parsed.notBefore, notAfter: parsed.notAfter });
         }
 
         const isNew = !isMlsDevice(self, payload.deviceId);

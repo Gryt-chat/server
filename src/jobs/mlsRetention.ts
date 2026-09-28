@@ -19,8 +19,8 @@ export function mlsRetentionDays(env: NodeJS.ProcessEnv = process.env): number {
 }
 
 export function runMlsRetention(now = new Date()): ReturnType<typeof sweepMls> {
-  const swept = sweepMls(new Date(now.getTime() - mlsRetentionDays() * DAY_MS));
-  if (swept.log || swept.welcomes || swept.keyPackages || swept.groups) {
+  const swept = sweepMls(new Date(now.getTime() - mlsRetentionDays() * DAY_MS), now);
+  if (swept.log || swept.welcomes || swept.keyPackages || swept.expired || swept.groups) {
     consola.info("[mls-retention] swept", swept);
   }
   return swept;

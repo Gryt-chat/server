@@ -14,6 +14,12 @@ export const MLS_MAX_DEVICES = 5;
 /** Unclaimed KeyPackages a device may hold, not counting its last-resort one. */
 export const MLS_MAX_KEY_PACKAGES = 20;
 
+/** In seconds. A package this close to its notAfter isn't handed out, so the adder
+    doesn't get one that expires before its commit lands. */
+export const MLS_KEY_PACKAGE_CLAIM_MARGIN = 60 * 60;
+
+const seconds = (d: Date) => Math.floor(d.getTime() / 1000);
+
 export type MlsLogKind = "commit" | "proposal" | "application";
 
 export interface MlsDevice {
@@ -174,6 +180,9 @@ export interface NewKeyPackage {
   ref: string;
   data: Uint8Array;
   lastResort: boolean;
+  /** The leaf node's lifetime, seconds since the epoch. */
+  notBefore: number;
+  notAfter: number;
 }
 
 /**
@@ -191,43 +200,49 @@ export function addMlsKeyPackages(
     const at = toIso(now);
     const insert = db.prepare(
       `INSERT OR IGNORE INTO mls_key_packages
-         (key_package_ref, server_user_id, device_id, data, last_resort, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+         (key_package_ref, server_user_id, device_id, data, last_resort, created_at, not_before, not_after)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const retire = db.prepare(
       `UPDATE mls_key_packages SET data = NULL, claimed_at = ?
         WHERE server_user_id = ? AND device_id = ? AND last_resort = 1
           AND claimed_at IS NULL AND key_package_ref != ?`,
     );
-    let unclaimed = countMlsKeyPackages(serverUserId, deviceId).unclaimed;
+    let unclaimed = countMlsKeyPackages(serverUserId, deviceId, now).unclaimed;
 
     let stored = 0;
     for (const p of packages) {
       if (!p.lastResort && unclaimed >= MLS_MAX_KEY_PACKAGES) continue;
-      const r = insert.run(p.ref, serverUserId, deviceId, p.data, p.lastResort ? 1 : 0, at);
+      const r = insert.run(p.ref, serverUserId, deviceId, p.data, p.lastResort ? 1 : 0, at, p.notBefore, p.notAfter);
       if (Number(r.changes) === 0) continue;
       if (p.lastResort) retire.run(at, serverUserId, deviceId, p.ref);
       stored += 1;
       if (!p.lastResort) unclaimed += 1;
     }
-    return { stored, ...countMlsKeyPackages(serverUserId, deviceId) };
+    return { stored, ...countMlsKeyPackages(serverUserId, deviceId, now) };
   });
 }
 
-export function countMlsKeyPackages(serverUserId: string, deviceId: string): { unclaimed: number; lastResort: boolean } {
+/** Only what can still be handed out, so a device tops up before its packages run out. */
+export function countMlsKeyPackages(
+  serverUserId: string,
+  deviceId: string,
+  now = new Date(),
+): { unclaimed: number; lastResort: boolean } {
   const db = getSqliteDb();
+  const until = seconds(now) + MLS_KEY_PACKAGE_CLAIM_MARGIN;
   const { n } = db
     .prepare(
       `SELECT COUNT(*) AS n FROM mls_key_packages
-        WHERE server_user_id = ? AND device_id = ? AND last_resort = 0 AND claimed_at IS NULL`,
+        WHERE server_user_id = ? AND device_id = ? AND last_resort = 0 AND claimed_at IS NULL AND not_after >= ?`,
     )
-    .get(serverUserId, deviceId) as { n: number };
+    .get(serverUserId, deviceId, until) as { n: number };
   const last = db
     .prepare(
       `SELECT 1 FROM mls_key_packages
-        WHERE server_user_id = ? AND device_id = ? AND last_resort = 1 AND claimed_at IS NULL`,
+        WHERE server_user_id = ? AND device_id = ? AND last_resort = 1 AND claimed_at IS NULL AND not_after >= ?`,
     )
-    .get(serverUserId, deviceId);
+    .get(serverUserId, deviceId, until);
   return { unclaimed: n, lastResort: !!last };
 }
 
@@ -242,13 +257,16 @@ export function claimMlsKeyPackage(
 ): { ref: string; data: Uint8Array; lastResort: boolean } | null {
   return inTransaction(() => {
     const db = getSqliteDb();
+    const live = [seconds(now), seconds(now) + MLS_KEY_PACKAGE_CLAIM_MARGIN] as const;
+    // Only inside the package's lifetime, with the margin to spare.
     const fresh = db
       .prepare(
         `SELECT key_package_ref, data FROM mls_key_packages
           WHERE server_user_id = ? AND device_id = ? AND last_resort = 0 AND claimed_at IS NULL
+            AND not_before <= ? AND not_after >= ?
           ORDER BY created_at, rowid LIMIT 1`,
       )
-      .get(serverUserId, deviceId) as { key_package_ref: string; data: Uint8Array } | undefined;
+      .get(serverUserId, deviceId, ...live) as { key_package_ref: string; data: Uint8Array } | undefined;
     if (fresh) {
       db.prepare(`UPDATE mls_key_packages SET data = NULL, claimed_at = ? WHERE key_package_ref = ?`).run(
         toIso(now),
@@ -260,9 +278,10 @@ export function claimMlsKeyPackage(
     const last = db
       .prepare(
         `SELECT key_package_ref, data FROM mls_key_packages
-          WHERE server_user_id = ? AND device_id = ? AND last_resort = 1 AND claimed_at IS NULL`,
+          WHERE server_user_id = ? AND device_id = ? AND last_resort = 1 AND claimed_at IS NULL
+            AND not_before <= ? AND not_after >= ?`,
       )
-      .get(serverUserId, deviceId) as { key_package_ref: string; data: Uint8Array } | undefined;
+      .get(serverUserId, deviceId, ...live) as { key_package_ref: string; data: Uint8Array } | undefined;
     return last ? { ref: last.key_package_ref, data: last.data, lastResort: true } : null;
   });
 }
@@ -490,10 +509,20 @@ export function deleteMlsWelcomes(serverUserId: string, deviceId: string, welcom
  * Drops ciphertext, Welcomes and claimed package refs older than the cutoff, and every
  * group whose conversation is gone. A kept group's epoch and head_seq never go back.
  */
-export function sweepMls(cutoff: Date): { log: number; welcomes: number; keyPackages: number; groups: number } {
+export function sweepMls(
+  cutoff: Date,
+  now = new Date(),
+): { log: number; welcomes: number; keyPackages: number; expired: number; groups: number } {
   return inTransaction(() => {
     const db = getSqliteDb();
     const before = toIso(cutoff);
+    // Expired ones lose their bytes like a replaced last-resort one, so a Welcome still routes.
+    const expired = db
+      .prepare(
+        `UPDATE mls_key_packages SET data = NULL, claimed_at = ?
+          WHERE claimed_at IS NULL AND not_after < ?`,
+      )
+      .run(toIso(now), seconds(now) + MLS_KEY_PACKAGE_CLAIM_MARGIN);
     const orphans = db
       .prepare(
         `SELECT conversation_id FROM mls_groups g
@@ -511,6 +540,7 @@ export function sweepMls(cutoff: Date): { log: number; welcomes: number; keyPack
       log: Number(log.changes),
       welcomes: Number(welcomes.changes),
       keyPackages: Number(keyPackages.changes),
+      expired: Number(expired.changes),
       groups: orphans.length,
     };
   });

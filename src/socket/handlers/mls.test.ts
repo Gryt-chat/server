@@ -16,7 +16,7 @@ import { getMlsGroupForConversation } from "../../db/sqlite/mls";
 import { createServerConfigIfNotExists, setServerRole, updateServerConfig } from "../../db/sqlite/servers";
 import { setUserModerationState, upsertUser } from "../../db/sqlite/users";
 import { mlsRetentionDays, runMlsRetention } from "../../jobs/mlsRetention";
-import { parseGroupMessage, parseKeyPackage, parseWelcome } from "../../services/mlsWire";
+import { checkKeyPackageLifetime, parseGroupMessage, parseKeyPackage, parseWelcome } from "../../services/mlsWire";
 import type { Clients } from "../../types";
 import { generateAccessToken } from "../../utils/jwt";
 import { resetChannelIdCache } from "../utils/conversationAccess";
@@ -129,14 +129,19 @@ interface Device {
 
 const encodeKp = (kp: KeyPackage) => mls.encodeMlsMessage({ version: "mls10", wireformat: "mls_key_package", keyPackage: kp });
 
-async function makeDevice(id: string, count: number): Promise<Device> {
+/** What the crypto engine writes: 30 days, starting an hour back. */
+function lifetimeFrom(start = Math.floor(Date.now() / 1000) - 3600, days = 30) {
+  return { notBefore: BigInt(start), notAfter: BigInt(start + days * 24 * 60 * 60) };
+}
+
+async function makeDevice(id: string, count: number, lifetime = lifetimeFrom()): Promise<Device> {
   const packages = [];
   for (let i = 0; i < count; i++) {
     packages.push(
       await mls.generateKeyPackage(
         { credentialType: "basic", identity: new TextEncoder().encode(id) },
         mls.defaultCapabilities(),
-        mls.defaultLifetime,
+        lifetime,
         [],
         impl,
       ),
@@ -279,6 +284,59 @@ describe("KeyPackages", () => {
   it("are refused when they aren't KeyPackages", async () => {
     const reply = await alice.call("mls:keypackages:publish", { deviceId: "junk", keyPackages: [Buffer.from("hello")] });
     assert.equal(reply.error, "invalid_key_package");
+  });
+
+  it("are refused when they'd last past 30 days, or already have", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const cases: [ReturnType<typeof lifetimeFrom>, string][] = [
+      [lifetimeFrom(now - 3600, 31), "key_package_lifetime"],
+      [{ notBefore: BigInt(0), notAfter: BigInt("18446744073709551615") }, "key_package_lifetime"],
+      [lifetimeFrom(now - 31 * 86400), "key_package_expired"],
+      [lifetimeFrom(now + 60), "key_package_not_yet_valid"],
+    ];
+    for (const [lifetime, error] of cases) {
+      const d = await makeDevice("lifetimes", 1, lifetime);
+      const r = await publish(alice, d);
+      assert.equal(r.error, error);
+      assert.ok(Math.abs((r.serverTime as number) - now) < 5, "the server's clock comes back, to retry against");
+    }
+  });
+
+  it("take both ends of the 30 days, and ts-mls's default for now", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const at = new Date(now * 1000);
+    const edge = (lt: ReturnType<typeof lifetimeFrom>) => checkKeyPackageLifetime(lt, at).ok;
+    assert.equal(edge(lifetimeFrom(now)), true, "valid from its first second");
+    assert.equal(edge(lifetimeFrom(now - 30 * 86400)), true, "and through its last");
+    assert.equal(edge(lifetimeFrom(now + 1)), false);
+    assert.equal(edge(lifetimeFrom(now - 30 * 86400 - 1)), false);
+
+    const lena = await connect("Lena");
+    const legacy = await makeDevice("legacy", 1, mls.defaultLifetime);
+    assert.equal((await publish(lena, legacy)).ok, true, "@gryt/crypto 0.6.0 and older write this");
+    const row = getSqliteDb().prepare(`SELECT not_before, not_after FROM mls_key_packages WHERE device_id = ?`)
+      .get(legacy.id) as { not_before: number; not_after: number };
+    assert.ok(Math.abs(row.not_before - now) < 5);
+    assert.equal(row.not_after - row.not_before, 30 * 86400, "kept 30 days from upload");
+  });
+
+  it("aren't handed out once expired", async () => {
+    const gina = await connect("Gina");
+    const hans = await connect("Hans");
+    const conv = (await openDirectConversation(gina.serverUserId, hans.serverUserId)).conversation_id;
+    const hansPhone = await makeDevice("hans-phone", 1);
+    await publish(hans, hansPhone);
+    const ginaLaptop = await makeDevice("gina-laptop", 1);
+    await publish(gina, ginaLaptop);
+
+    getSqliteDb().prepare(`UPDATE mls_key_packages SET not_after = ? WHERE device_id = ?`)
+      .run(Math.floor(Date.now() / 1000) - 1, hansPhone.id);
+    const claimed = await gina.call("mls:keypackages:claim", { conversationId: conv, deviceId: ginaLaptop.id });
+    assert.deepEqual(claimed.keyPackages, []);
+    assert.deepEqual(claimed.missing, [{ serverUserId: hans.serverUserId, deviceId: hansPhone.id }]);
+
+    const sync = await hans.call("mls:sync", { deviceId: hansPhone.id });
+    assert.equal((sync.keyPackages as { unclaimed: number }).unclaimed, 0, "so the phone knows to upload more");
   });
 
   it("stop at five devices per member", async () => {
