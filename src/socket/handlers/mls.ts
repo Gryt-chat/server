@@ -15,6 +15,7 @@ import {
   getMlsGroupForConversation,
   getServerConfig,
   getUserByServerId,
+  insertMessage,
   isMlsDevice,
   listConversationsForUser,
   listMlsDevices,
@@ -37,6 +38,8 @@ import { textMuteError, textMuteFor } from "../../moderation/textMute";
 import { mayInChannel } from "../../services/channelPermissions";
 import { asBytes, parseGroupMessage, parseKeyPackage, parseWelcome } from "../../services/mlsWire";
 import { SEALED_MAX_LENGTH } from "../../utils/messageLimits";
+import { appendCachedMessage } from "../utils/messageCache";
+import { formatMlsPlaceholder, SYSTEM_SENDER_ID } from "../utils/systemMessages";
 import { checkRateLimit, type RateLimitRule } from "../../utils/rateLimiter";
 import { requireAuth, type AuthResult } from "../middleware/auth";
 import { CONTACT_REFUSALS, mayMessage, peerOf } from "../utils/contactGate";
@@ -237,6 +240,26 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
     }
     const recipients = socketsOf(audience);
     emitTo(recipients, "mls:message", entryView(conversationId, entry));
+  }
+
+  /* The line apps from before MLS show instead (GRYT-1508). Not to the sender's own
+     sockets: their old apps find it in history, and aren't notified about themselves. */
+  async function writePlaceholder(self: string, memberIds: string[], conversationId: string, seq: number, createdAt: string): Promise<void> {
+    const sender = await getUserByServerId(self);
+    if (!sender) return;
+    const msg = await insertMessage({
+      conversation_id: conversationId,
+      sender_server_id: SYSTEM_SENDER_ID,
+      text: formatMlsPlaceholder(sender.nickname, sender.server_user_id),
+      attachments: null,
+      reactions: null,
+      mls_placeholder: { seq, sender_server_id: sender.server_user_id },
+      created_at: new Date(createdAt),
+    });
+    appendCachedMessage(conversationId, msg);
+    const blockers = await blockersOfSender(sender.server_user_id);
+    const audience = memberIds.filter((id) => id !== sender.server_user_id && !blockers.has(id));
+    emitTo(socketsOf(audience), "chat:new", { ...msg, sender_nickname: "System", sender_avatar_file_id: undefined });
   }
 
   /* Whoever shares a DM with them adds the new device the next time they send. */
@@ -530,13 +553,17 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
 
     /** An application message (PrivateMessage) or a proposal (PublicMessage). */
     "mls:send": async (
-      payload: { accessToken: string; conversationId: string; deviceId: string; message: unknown },
+      payload: { accessToken: string; conversationId: string; deviceId: string; message: unknown; placeholder?: unknown },
       ack: Ack,
     ) => {
       ack = typeof ack === "function" ? ack : () => {};
       try {
         const auth = await begin("mls:send", RL_SEND, payload, ack);
         if (!auth || !ownDevice(auth, payload.deviceId, ack)) return;
+        if (payload.placeholder !== undefined && typeof payload.placeholder !== "boolean") {
+          ack(fail("invalid_payload", "placeholder has to be true or false."));
+          return;
+        }
         const self = auth.tokenPayload.serverUserId;
         const memberIds = await dmOf(payload.conversationId, self, ack);
         if (!memberIds) return;
@@ -615,6 +642,12 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
           groupId: group.groupId, seq: result.seq, kind: parsed.kind, epoch: parsed.epoch,
           senderServerUserId: self, senderDeviceId: payload.deviceId, data: bytes, createdAt: result.createdAt,
         }, payload.conversationId);
+        // A reaction, edit or delete says false, or old apps show a line for each one.
+        if (application && payload.placeholder !== false) {
+          await writePlaceholder(self, memberIds, payload.conversationId, result.seq, result.createdAt).catch((err) =>
+            consola.warn("mls placeholder failed", payload.conversationId, err),
+          );
+        }
         ack({ ok: true, seq: result.seq });
       } catch (err) {
         consola.error("mls:send failed", err);

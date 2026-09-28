@@ -886,7 +886,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         const hidden = await blockedServerIdsFor(clientsInfo[clientId]?.serverUserId ?? "");
         const visible = hidden.size === 0
           ? items
-          : items.filter((m) => !hidden.has(m.sender_server_id));
+          : items.filter((m) => !hidden.has(m.sender_server_id) && !hidden.has(m.mls_placeholder?.sender_server_id ?? ""));
 
         let enrichedItems = await enrichMessages(visible);
         enrichedItems = await enrichAttachments(enrichedItems);
