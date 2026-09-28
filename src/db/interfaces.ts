@@ -147,6 +147,16 @@ export interface MessageRecord {
   text_fallback?: boolean;
   /** What a webhook posted under. Enrichment turns it into sender_nickname. */
   sender_display_name?: string | null;
+  /** Set on the notice the server writes for apps from before MLS, sent as "system".
+      Apps that read MLS hide these rows (GRYT-1508). */
+  mls_placeholder?: MlsPlaceholder;
+}
+
+export interface MlsPlaceholder {
+  /** The entry in the conversation's MLS group log this row stands in for. */
+  seq: number;
+  /** Who really sent it, so a block hides the notice too. */
+  sender_server_id: string;
 }
 
 export interface StoredWebhookCard {

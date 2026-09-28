@@ -929,6 +929,12 @@ function runMigrations(d: DatabaseSync): void {
   if (!hasColumn(d, "messages", "sender_avatar_file_id")) {
     d.exec("ALTER TABLE messages ADD COLUMN sender_avatar_file_id TEXT");
   }
+  // A placeholder the server writes for apps from before MLS, and whose MLS message
+  // it stands in for (GRYT-1508). NULL on every other row.
+  if (!hasColumn(d, "messages", "mls_seq")) {
+    d.exec("ALTER TABLE messages ADD COLUMN mls_seq INTEGER");
+    d.exec("ALTER TABLE messages ADD COLUMN mls_sender_server_id TEXT");
+  }
   // One stored file per picture a webhook sends, however often it sends it.
   d.exec(`CREATE TABLE IF NOT EXISTS webhook_media (
     webhook_id TEXT NOT NULL,

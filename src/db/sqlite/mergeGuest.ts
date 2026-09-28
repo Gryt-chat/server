@@ -17,6 +17,7 @@ export interface GuestMerge {
     fails when a new column that can hold a server user id is not accounted for. */
 export const AUTHOR_COLUMNS: ReadonlyArray<readonly [table: string, column: string]> = [
   ["messages", "sender_server_id"],
+  ["messages", "mls_sender_server_id"],
   ["threads", "created_by"],
   ["conversations", "created_by_server_user_id"],
   ["files", "uploaded_by_server_user_id"],

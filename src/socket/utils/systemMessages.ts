@@ -5,7 +5,7 @@ import { getServerConfig, insertMessage, listServerChannels } from "../../db";
 import type { Clients } from "../../types";
 import { recipientClientIds } from "./recipients";
 
-const SYSTEM_SENDER_ID = "system";
+export const SYSTEM_SENDER_ID = "system";
 
 let cachedChannelId: string | null = null;
 let channelCacheFetchedAt = 0;
@@ -75,6 +75,12 @@ export async function postSystemMessage(
 
 export function formatJoinMessage(nickname: string, serverUserId: string): string {
   return `[@${nickname}](mention:${serverUserId}) joined the server`;
+}
+
+/** What an app from before MLS shows for an MLS message (GRYT-1508). Plain text there
+    would carry that app's "Not encrypted" mark, so it goes out as a system line. */
+export function formatMlsPlaceholder(nickname: string, serverUserId: string): string {
+  return `[@${nickname}](mention:${serverUserId}) sent an end-to-end encrypted message. Update Gryt to read it.`;
 }
 
 export function formatLeaveMessage(nickname: string, serverUserId: string): string {

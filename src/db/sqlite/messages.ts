@@ -21,6 +21,9 @@ function rowToMessage(r: Record<string, unknown>): MessageRecord {
     ...(r.text_fallback ? { text_fallback: true } : {}),
     ...(r.sender_display_name ? { sender_display_name: r.sender_display_name as string } : {}),
     ...(r.sender_avatar_file_id ? { sender_avatar_file_id: r.sender_avatar_file_id as string } : {}),
+    ...(r.mls_seq != null
+      ? { mls_placeholder: { seq: Number(r.mls_seq), sender_server_id: r.mls_sender_server_id as string } }
+      : {}),
   };
 }
 
@@ -32,7 +35,7 @@ export async function insertMessage(record: Omit<MessageRecord, "message_id" | "
   const message_id = record.message_id ?? randomUUID();
 
   db.prepare(
-    `INSERT INTO messages (conversation_id, message_id, sender_server_id, text, sealed, attachments, reactions, reply_to_message_id, thread_id, cards, text_fallback, sender_display_name, sender_avatar_file_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO messages (conversation_id, message_id, sender_server_id, text, sealed, attachments, reactions, reply_to_message_id, thread_id, cards, text_fallback, sender_display_name, sender_avatar_file_id, mls_seq, mls_sender_server_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     record.conversation_id,
     message_id,
@@ -47,6 +50,8 @@ export async function insertMessage(record: Omit<MessageRecord, "message_id" | "
     record.text_fallback ? 1 : 0,
     record.sender_display_name ?? null,
     record.sender_avatar_file_id ?? null,
+    record.mls_placeholder?.seq ?? null,
+    record.mls_placeholder?.sender_server_id ?? null,
     toIso(created_at),
   );
 

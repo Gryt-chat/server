@@ -14,6 +14,8 @@ import { setContactPrefs } from "../../db/sqlite/contactPrefs";
 import { createGroupConversation, openDirectConversation } from "../../db/sqlite/conversations";
 import { getMlsGroupForConversation } from "../../db/sqlite/mls";
 import { createServerConfigIfNotExists, setServerRole, updateServerConfig } from "../../db/sqlite/servers";
+import { hasWrittenTo } from "../../db/sqlite/contactPrefs";
+import { listMessages } from "../../db/sqlite/messages";
 import { setUserModerationState, upsertUser } from "../../db/sqlite/users";
 import { mlsRetentionDays, runMlsRetention } from "../../jobs/mlsRetention";
 import { parseGroupMessage, parseKeyPackage, parseWelcome } from "../../services/mlsWire";
@@ -21,6 +23,7 @@ import type { Clients } from "../../types";
 import { generateAccessToken } from "../../utils/jwt";
 import { resetChannelIdCache } from "../utils/conversationAccess";
 import { refreshClientPermissions } from "../utils/standing";
+import { registerChatHandlers } from "./chat";
 import { registerMlsHandlers } from "./mls";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
@@ -101,7 +104,7 @@ async function connect(nickname: string): Promise<Participant> {
     getClientIp: () => `10.9.0.${seq}`,
     clientAddressIsOwn: () => true,
   } as unknown as HandlerContext;
-  const handlers = registerMlsHandlers(ctx);
+  const handlers = { ...registerChatHandlers(ctx), ...registerMlsHandlers(ctx) };
   const accessToken = generateAccessToken({ grytUserId, serverUserId: user.server_user_id, nickname, serverHost: HOST, tokenVersion: 0 });
 
   return {
@@ -422,6 +425,18 @@ describe("a DM over MLS", () => {
     assert.equal(bob.received("dm:opened").length, 1, "the first message puts the conversation in Bob's list");
   });
 
+  it("leaves apps from before MLS a line saying there's a message, marked so newer ones hide it", async () => {
+    const [line] = bob.received("chat:new");
+    assert.equal(line.sender_server_id, "system", "a system line, since a plain one would carry the old app's Not encrypted mark");
+    assert.equal(line.text, `[@Alice](mention:${alice.serverUserId}) sent an end-to-end encrypted message. Update Gryt to read it.`);
+    assert.deepEqual(line.mls_placeholder, { seq: 2, sender_server_id: alice.serverUserId });
+    assert.deepEqual(alice.received("chat:new"), [], "not to the sender, whose own old apps find it in history");
+
+    const stored = (await listMessages(dm)).filter((m) => m.mls_placeholder);
+    assert.deepEqual(stored.map((m) => m.mls_placeholder?.seq), [2]);
+    assert.equal(await hasWrittenTo(alice.serverUserId, bob.serverUserId), true, "so contact settings see the MLS message");
+  });
+
   it("tells the other side about a new device, and lists devices by conversation", async () => {
     alice.clear();
     const b2 = await makeDevice("bob-laptop", 1);
@@ -520,6 +535,10 @@ describe("a DM over MLS", () => {
     a1.state = c.newState;
 
     assert.deepEqual(bob.received("mls:message").map((m) => m.kind), ["commit"]);
+    assert.deepEqual(bob.received("chat:new"), [], "nor the line for older apps");
+    await bob.handlers["chat:fetch"]({ conversationId: dm, limit: 50 });
+    const history = bob.received("chat:history")[0] as { items: { mls_placeholder?: { sender_server_id: string } }[] };
+    assert.ok(!history.items.some((m) => m.mls_placeholder), "and history leaves it out too");
     const fetched = await bob.call("mls:log:fetch", { conversationId: dm, after: head });
     assert.deepEqual((fetched.entries as { kind: string }[]).map((e) => e.kind), ["commit"]);
     assert.equal(fetched.nextCursor, head + 2, "the cursor still moves past what was held back");
@@ -537,6 +556,19 @@ describe("a DM over MLS", () => {
     const group = await createGroupConversation(alice.serverUserId, [bob.serverUserId, mallory.serverUserId]);
     const r = await alice.call("mls:group:create", { conversationId: group.conversation_id, groupId: "cd" });
     assert.equal(r.error, "not_supported");
+  });
+
+  it("leaves no line for what isn't a message", async () => {
+    bob.clear();
+    const before = (await listMessages(dm)).length;
+    const quiet = await alice.call("mls:send", { conversationId: dm, deviceId: a1.id, message: await applicationMessage(a1, "a reaction"), placeholder: false });
+    assert.equal(quiet.ok, true);
+    assert.equal(bob.received("mls:message").length, 1);
+    assert.deepEqual(bob.received("chat:new"), []);
+    assert.equal((await listMessages(dm)).length, before);
+
+    const odd = await alice.call("mls:send", { conversationId: dm, deviceId: a1.id, message: await applicationMessage(a1, "x"), placeholder: "no" });
+    assert.equal(odd.error, "invalid_payload");
   });
 });
 

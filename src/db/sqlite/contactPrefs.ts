@@ -47,11 +47,13 @@ export async function setContactPrefs(grytUserId: string, prefs: ContactPrefs): 
   ).run(grytUserId, prefs.messages, prefs.calls, toIso(new Date()));
 }
 
-/** Whether `author` has sent anything in their one-to-one with `other`. The
-    sender column is stored for sealed messages too, so this works on those. */
+/** Whether `author` has sent anything in their one-to-one with `other`. Sealed messages
+    keep their sender, and an MLS one counts through its placeholder. */
 export async function hasWrittenTo(authorServerUserId: string, otherServerUserId: string): Promise<boolean> {
   const row = getSqliteDb()
-    .prepare(`SELECT 1 FROM messages WHERE conversation_id = ? AND sender_server_id = ? LIMIT 1`)
-    .get(directConversationId(authorServerUserId, otherServerUserId), authorServerUserId);
+    .prepare(
+      `SELECT 1 FROM messages WHERE conversation_id = ? AND (sender_server_id = ? OR mls_sender_server_id = ?) LIMIT 1`,
+    )
+    .get(directConversationId(authorServerUserId, otherServerUserId), authorServerUserId, authorServerUserId);
   return !!row;
 }
