@@ -15,12 +15,15 @@ import { createGroupConversation, openDirectConversation } from "../../db/sqlite
 import { getMlsGroupForConversation } from "../../db/sqlite/mls";
 import { createServerConfigIfNotExists, setServerRole, updateServerConfig } from "../../db/sqlite/servers";
 import { hasWrittenTo } from "../../db/sqlite/contactPrefs";
-import { listMessages } from "../../db/sqlite/messages";
+import { insertFile, listMessages } from "../../db/sqlite/messages";
 import { setUserModerationState, upsertUser } from "../../db/sqlite/users";
+import { unreferencedAmong } from "../../jobs/mediaSweep";
 import { mlsRetentionDays, runMlsRetention } from "../../jobs/mlsRetention";
+import { fileReadVerdict, resetFileAccessCache } from "../../services/fileAccess";
 import { checkKeyPackageLifetime, parseGroupMessage, parseKeyPackage, parseWelcome } from "../../services/mlsWire";
 import type { Clients } from "../../types";
 import { generateAccessToken } from "../../utils/jwt";
+import { resetRateLimits } from "../../utils/rateLimiter";
 import { resetChannelIdCache } from "../utils/conversationAccess";
 import { refreshClientPermissions } from "../utils/standing";
 import { registerChatHandlers } from "./chat";
@@ -707,6 +710,34 @@ describe("a DM over MLS", () => {
     const odd = await alice.call("mls:send", { conversationId: dm, deviceId: a1.id, message: await applicationMessage(a1, "x"), placeholder: "no" });
     assert.equal(odd.error, "invalid_payload");
   });
+
+  it("carries files, and keeps them from the media sweep while the entry is there", async () => {
+    const upload = (id: string, by: string) => insertFile({
+      file_id: id, s3_key: `uploads/${id}`, mime: "application/octet-stream", size: 10, width: null, height: null,
+      thumbnail_key: null, original_name: `${id}.bin`, uploaded_by_server_user_id: by,
+    });
+    await upload("mls-file-alice", alice.serverUserId);
+    await upload("mls-file-bob", bob.serverUserId);
+    resetFileAccessCache();
+    resetRateLimits();
+    assert.equal(await fileReadVerdict("mls-file-alice", bob.serverUserId), "denied");
+    assert.deepEqual(await unreferencedAmong(["mls-file-alice"]), ["mls-file-alice"]);
+
+    const send = async (attachmentIds: unknown, placeholder = false) =>
+      alice.call("mls:send", { conversationId: dm, deviceId: a1.id, message: await applicationMessage(a1, "a file"), placeholder, attachmentIds });
+    const sent = await send(["mls-file-alice", "mls-file-alice"]);
+    assert.equal(sent.ok, true, "a message with no line for older apps can carry files too");
+
+    assert.deepEqual(await unreferencedAmong(["mls-file-alice"]), [], "the media sweep leaves it alone");
+    assert.equal(await fileReadVerdict("mls-file-alice", bob.serverUserId), "allowed", "and the other side can fetch it");
+    const refs = getSqliteDb().prepare(`SELECT seq FROM mls_attachments WHERE file_id = ?`).all("mls-file-alice") as { seq: number }[];
+    assert.deepEqual(refs.map((r) => r.seq), [sent.seq]);
+
+    assert.equal((await send(["mls-file-bob"])).error, "attachment_not_found", "only files the sender can read");
+    assert.equal((await send(["no-such-upload"])).error, "attachment_not_found");
+    assert.equal((await send(Array.from({ length: 11 }, (_, i) => `f${i}`))).error, "too_many_attachments");
+    assert.equal((await send("mls-file-alice")).error, "invalid_payload");
+  });
 });
 
 describe("retention", () => {
@@ -716,6 +747,18 @@ describe("retention", () => {
     assert.equal(mlsRetentionDays({ MLS_RETENTION_DAYS: "90" }), 30);
     assert.equal(mlsRetentionDays({ MLS_RETENTION_DAYS: "0" }), 30);
     assert.equal(mlsRetentionDays({ MLS_RETENTION_DAYS: "soon" }), 30);
+  });
+
+  it("lets an entry's files go when the entry is swept", async () => {
+    const group = getMlsGroupForConversation(dm)!;
+    const { seq } = getSqliteDb().prepare(`SELECT seq FROM mls_attachments WHERE file_id = ?`).get("mls-file-alice") as { seq: number };
+    const old = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString();
+    getSqliteDb().prepare(`UPDATE mls_log SET created_at = ? WHERE group_id = ? AND seq = ?`).run(old, group.groupId, seq);
+
+    assert.ok(runMlsRetention().fileIds.includes("mls-file-alice"));
+    assert.deepEqual(await unreferencedAmong(["mls-file-alice"]), ["mls-file-alice"], "the media sweep can have it now");
+    resetFileAccessCache();
+    assert.equal(await fileReadVerdict("mls-file-alice", bob.serverUserId), "denied");
   });
 
   it("sweeps old ciphertext, and a device behind it is told it has a gap", async () => {

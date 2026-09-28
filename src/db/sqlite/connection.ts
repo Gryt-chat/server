@@ -630,6 +630,17 @@ function createSchema(d: DatabaseSync): void {
     );
     CREATE INDEX IF NOT EXISTS idx_mls_log_created ON mls_log(created_at);
 
+    -- Uploads an MLS message carries (GRYT-1523). The keys are inside the message; this
+    -- only keeps the media sweep off them, and they go with the log entry.
+    CREATE TABLE IF NOT EXISTS mls_attachments (
+      file_id TEXT NOT NULL,
+      group_id TEXT NOT NULL,
+      seq INTEGER NOT NULL,
+      PRIMARY KEY (file_id, group_id, seq),
+      FOREIGN KEY (group_id, seq) REFERENCES mls_log(group_id, seq) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_mls_attachments_entry ON mls_attachments(group_id, seq);
+
     CREATE TABLE IF NOT EXISTS mls_welcomes (
       welcome_id TEXT PRIMARY KEY,
       server_user_id TEXT NOT NULL,

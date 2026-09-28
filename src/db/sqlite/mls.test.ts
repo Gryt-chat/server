@@ -333,6 +333,24 @@ describe("retention", () => {
     assert.equal(getMlsGroup("aa99")?.epoch, 1, "sweeping the log leaves the epoch where it was");
   });
 
+  it("hands back the files a dropped entry held, and forgets them with it", async () => {
+    const conv = await conversation();
+    createMlsGroup("ae01", conv, "u1");
+    const base = { groupId: "ae01", senderServerUserId: "u1", senderDeviceId: "d" };
+    appendMlsMessage("application", { ...base, epoch: 0, data: bytes(7), attachmentIds: ["held-old"] }, new Date(Date.now() - 40 * DAY));
+    appendMlsMessage("application", { ...base, epoch: 0, data: bytes(8), attachmentIds: ["held-new"] });
+    const held = () => (getSqliteDb().prepare(`SELECT file_id FROM mls_attachments WHERE group_id = 'ae01'`).all() as { file_id: string }[]).map((r) => r.file_id);
+
+    const swept = sweepMls(new Date(Date.now() - 30 * DAY));
+    assert.ok(swept.fileIds.includes("held-old"));
+    assert.ok(!swept.fileIds.includes("held-new"));
+    assert.deepEqual(held(), ["held-new"]);
+
+    getSqliteDb().prepare(`DELETE FROM conversations WHERE conversation_id = ?`).run(conv);
+    assert.ok(sweepMls(new Date(Date.now() - 30 * DAY)).fileIds.includes("held-new"), "a group dropped with its conversation too");
+    assert.deepEqual(held(), []);
+  });
+
   it("drops a group whose conversation is gone, with its log", async () => {
     const conv = await conversation();
     createMlsGroup("ab01", conv, "u1");

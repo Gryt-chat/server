@@ -6,12 +6,15 @@ import {
   appendMlsMessage,
   blockedServerIdsFor,
   blockersOfSender,
+  DEFAULT_MAX_ATTACHMENTS_PER_MESSAGE as MAX_ATTACHMENTS_PER_MESSAGE,
+  DEFAULT_UPLOAD_MAX_BYTES,
   claimMlsKeyPackage,
   countMlsKeyPackages,
   createMlsGroup,
   deleteMlsWelcomes,
   eitherHasBlocked,
   getConversation,
+  getFilesByIds,
   getMlsGroupForConversation,
   getServerConfig,
   getUserByServerId,
@@ -36,6 +39,7 @@ import { spamFilter } from "../../moderation/spamFilter";
 import { isSpamExempt, spamRefusal, timeOutSpammer } from "../../moderation/spamTimeout";
 import { textMuteError, textMuteFor } from "../../moderation/textMute";
 import { mayInChannel } from "../../services/channelPermissions";
+import { fileReadVerdict } from "../../services/fileAccess";
 import { asBytes, parseGroupMessage, parseKeyPackage, parseWelcome } from "../../services/mlsWire";
 import { SEALED_MAX_LENGTH } from "../../utils/messageLimits";
 import { appendCachedMessage } from "../utils/messageCache";
@@ -191,7 +195,7 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
   }
 
   /* Metadata only, as for sealed DMs: who, how often, how big. */
-  async function droppedAsSpam(auth: AuthResult, conversationId: string, memberIds: string[], size: number, newConversation: boolean): Promise<Reply | null> {
+  async function droppedAsSpam(auth: AuthResult, conversationId: string, memberIds: string[], size: number, newConversation: boolean, attachments: number): Promise<Reply | null> {
     const cfg = await getServerConfig().catch(() => null);
     if (cfg && cfg.spam_filter_enabled === false) return null;
     if (isSpamExempt({ isOwner: auth.isOwner, permissions: auth.permissions, grytUserId: auth.tokenPayload.grytUserId })) return null;
@@ -207,7 +211,7 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
         recipients: memberIds.filter((id) => id !== user.server_user_id),
         size,
         newConversation,
-        attachments: 0,
+        attachments,
       },
       sensitivity,
     );
@@ -216,6 +220,31 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
       io, clientsInfo, sfuClient, serverId, serverUserId: user.server_user_id, verdict, sensitivity, where: "dm",
     });
     return { ok: false, ...spamRefusal(until) };
+  }
+
+  /* chat:send's rules for a sealed DM's files (GRYT-1523): the permission, the count, and
+     each one a file the sender can already read and under the size cap. Null is yes. */
+  async function attachmentRefusal(auth: AuthResult, conversationId: string, ids: string[]): Promise<Reply | null> {
+    if (ids.length === 0) return null;
+    if (ids.length > MAX_ATTACHMENTS_PER_MESSAGE) {
+      return fail("too_many_attachments", `A message can carry at most ${MAX_ATTACHMENTS_PER_MESSAGE} files.`);
+    }
+    if (!(await mayInChannel(conversationId, auth.tokenPayload.serverUserId, "attach_files", auth.tokenPayload.grytUserId))) {
+      return fail("forbidden", "You do not have permission to attach files here.", { permission: "attach_files" });
+    }
+    const cfg = await getServerConfig().catch(() => null);
+    const maxBytes = typeof cfg?.upload_max_bytes === "number" ? cfg.upload_max_bytes : DEFAULT_UPLOAD_MAX_BYTES;
+    const files = await getFilesByIds(ids);
+    for (const id of ids) {
+      const f = files.get(id);
+      if (!f || (await fileReadVerdict(id, auth.tokenPayload.serverUserId, auth.tokenPayload.grytUserId)) !== "allowed") {
+        return fail("attachment_not_found", `Attachment not found: ${id}`);
+      }
+      if (typeof maxBytes === "number" && maxBytes > 0 && f.size != null && f.size > maxBytes) {
+        return fail("attachment_too_large", `File "${f.original_name || id}" is too large. Max ${(maxBytes / (1024 * 1024)).toFixed(1)}MB.`);
+      }
+    }
+    return null;
   }
 
   /* Every device of a member, or refused: a group can only grow by its own people. */
@@ -557,7 +586,7 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
 
     /** An application message (PrivateMessage) or a proposal (PublicMessage). */
     "mls:send": async (
-      payload: { accessToken: string; conversationId: string; deviceId: string; message: unknown; placeholder?: unknown },
+      payload: { accessToken: string; conversationId: string; deviceId: string; message: unknown; placeholder?: unknown; attachmentIds?: unknown },
       ack: Ack,
     ) => {
       ack = typeof ack === "function" ? ack : () => {};
@@ -568,6 +597,12 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
           ack(fail("invalid_payload", "placeholder has to be true or false."));
           return;
         }
+        const raw = payload.attachmentIds;
+        if (raw !== undefined && (!Array.isArray(raw) || !raw.every((id) => typeof id === "string" && id.length > 0 && id.length <= 128))) {
+          ack(fail("invalid_payload", "attachmentIds has to be a list of upload ids."));
+          return;
+        }
+        const attachmentIds = [...new Set((raw ?? []) as string[])];
         const self = auth.tokenPayload.serverUserId;
         const memberIds = await dmOf(payload.conversationId, self, ack);
         if (!memberIds) return;
@@ -601,15 +636,21 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
         }
 
         const application = parsed.kind === "application";
+        if (!application && attachmentIds.length > 0) {
+          ack(fail("invalid_payload", "Only an application message can carry files."));
+          return;
+        }
         let wasEmpty = false;
         if (application) {
-          const refusal = await sendRefusal(auth, payload.conversationId, memberIds);
+          const refusal =
+            (await sendRefusal(auth, payload.conversationId, memberIds)) ??
+            (await attachmentRefusal(auth, payload.conversationId, attachmentIds));
           if (refusal) {
             ack(refusal);
             return;
           }
           wasEmpty = !(await getConversation(payload.conversationId))?.last_message_at;
-          const spam = await droppedAsSpam(auth, payload.conversationId, memberIds, bytes.length, wasEmpty);
+          const spam = await droppedAsSpam(auth, payload.conversationId, memberIds, bytes.length, wasEmpty, attachmentIds.length);
           if (spam) {
             ack(spam);
             return;
@@ -618,6 +659,7 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
 
         const result = appendMlsMessage(parsed.kind, {
           groupId: group.groupId, epoch: parsed.epoch, senderServerUserId: self, senderDeviceId: payload.deviceId, data: bytes,
+          attachmentIds,
         });
         if (!result.accepted) {
           if (result.reason === "future_epoch") ack(fail("future_epoch", "That epoch hasn't happened yet.", { epoch: result.epoch }));
