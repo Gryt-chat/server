@@ -590,6 +590,15 @@ function createSchema(d: DatabaseSync): void {
       PRIMARY KEY (server_user_id, device_id)
     );
 
+    -- Devices their owner removed (GRYT-1555). Kept for good: a phone in a drawer can
+    -- come back after any window we'd pick, and a row is a few dozen bytes.
+    CREATE TABLE IF NOT EXISTS mls_removed_devices (
+      server_user_id TEXT NOT NULL,
+      device_id TEXT NOT NULL,
+      removed_at TEXT NOT NULL,
+      PRIMARY KEY (server_user_id, device_id)
+    );
+
     -- data goes to NULL when a package is handed out. The row stays until the
     -- retention sweep, so a Welcome naming the ref can still find its device.
     CREATE TABLE IF NOT EXISTS mls_key_packages (

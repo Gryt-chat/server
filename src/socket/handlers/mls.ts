@@ -20,6 +20,7 @@ import {
   getUserByServerId,
   insertMessage,
   isMlsDevice,
+  isRemovedMlsDevice,
   listConversationsForUser,
   listMlsDevices,
   listMlsGroupsForMember,
@@ -165,6 +166,10 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
   function ownDevice(auth: AuthResult, deviceId: unknown, ack: Ack, mustExist = true): deviceId is string {
     if (typeof deviceId !== "string" || !DEVICE_ID.test(deviceId)) {
       ack(fail("invalid_device", "deviceId has to be 1 to 64 letters, digits, - or _."));
+      return false;
+    }
+    if (isRemovedMlsDevice(auth.tokenPayload.serverUserId, deviceId)) {
+      ack(fail("device_removed", "You removed this device from encrypted messages here."));
       return false;
     }
     if (mustExist && !isMlsDevice(auth.tokenPayload.serverUserId, deviceId)) {
@@ -345,7 +350,12 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
         }
 
         const isNew = !isMlsDevice(self, payload.deviceId);
-        if (touchMlsDevice(self, payload.deviceId) === "too_many_devices") {
+        const touched = touchMlsDevice(self, payload.deviceId);
+        if (touched === "device_removed") {
+          ack(fail("device_removed", "You removed this device from encrypted messages here."));
+          return;
+        }
+        if (touched === "too_many_devices") {
           ack(fail("too_many_devices", "You have five devices using encrypted messages here. Remove one first."));
           return;
         }

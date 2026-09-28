@@ -437,6 +437,32 @@ describe("KeyPackages", () => {
     assert.equal((await publish(carol, await makeDevice("carol-5", 1))).ok, true, "removing one frees its slot");
   });
 
+  it("won't take a removed device back, though a new one is fine (GRYT-1555)", async () => {
+    const hana = await connect("Hana");
+    const ivar = await connect("Ivar");
+    const conv = (await openDirectConversation(hana.serverUserId, ivar.serverUserId)).conversation_id;
+    const laptop = await makeDevice("hana-laptop", 1);
+    const phone = await makeDevice("hana-phone", 2);
+    const ivarPhone = await makeDevice("ivar-phone", 1);
+    assert.equal((await publish(hana, laptop)).ok, true);
+    assert.equal((await publish(hana, phone)).ok, true);
+    assert.equal((await publish(ivar, ivarPhone)).ok, true);
+
+    assert.equal((await hana.call("mls:device:remove", { deviceId: phone.id })).ok, true);
+    // The phone is still signed in and does what the driver does on reconnect.
+    assert.equal((await hana.call("mls:sync", { deviceId: phone.id })).error, "device_removed");
+    assert.equal((await publish(hana, await makeDevice("hana-phone", 2))).error, "device_removed");
+    const own = await hana.call("mls:keypackages:claim", { conversationId: conv, deviceId: phone.id });
+    assert.equal(own.error, "device_removed");
+
+    const claimed = await ivar.call("mls:keypackages:claim", { conversationId: conv, deviceId: ivarPhone.id });
+    assert.deepEqual((claimed.keyPackages as { deviceId: string }[]).map((k) => k.deviceId), [laptop.id]);
+    const listed = await ivar.call("mls:devices", { conversationId: conv });
+    assert.equal((listed.devices as { deviceId: string }[]).some((d) => d.deviceId === phone.id), false);
+
+    assert.equal((await publish(hana, await makeDevice("hana-phone-again", 1))).ok, true, "setting it up again is a new device");
+  });
+
   it("are handed out once each, then the last-resort one", async () => {
     const eve = await connect("Eve");
     const frank = await connect("Frank");
