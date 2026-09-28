@@ -92,11 +92,11 @@ describe("server:info version disclosure", () => {
 });
 
 describe("server:info MLS capability", () => {
-  it("advertises the delivery service with its suite and retention", async () => {
+  it("advertises the delivery service with its suite, retention and reports", async () => {
     const emitted: Emitted[] = [];
     await sendInfo(fakeSocket(emitted), { [SOCKET_ID]: client({ serverUserId: "temp_1" }) }, "server-1");
 
-    assert.deepEqual(emitted[0].payload.mls, { version: 1, ciphersuites: [1], retentionDays: 30 },
+    assert.deepEqual(emitted[0].payload.mls, { version: 1, ciphersuites: [1], retentionDays: 30, reports: true },
       "a client only uses MLS on a server that says so");
   });
 });

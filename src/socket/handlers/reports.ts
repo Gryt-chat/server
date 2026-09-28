@@ -20,6 +20,8 @@ import {
   hasUserReportedUser,
   getAggregatedPendingUserReports,
   resolveUserReportsFor,
+  getConversation,
+  isConversationMember,
 } from "../../db";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 
@@ -30,6 +32,21 @@ const RL_REPORT_ADMIN: RateLimitRule = { limit: 30, windowMs: 60_000, scorePerAc
     go and look without saying where. */
 const REASON_MAX = 1000;
 
+/** The MLS content format's own limits, in @gryt/core: an id and a message's text. */
+const MLS_ID_MAX = 64;
+const MLS_TEXT_MAX = 32_000;
+
+type MlsCopy = { senderServerUserId: string; text: string };
+
+/** Null for anything off. The text is kept as sent, so a moderator reads what the reporter's app showed. */
+function readMlsCopy(value: unknown): MlsCopy | null {
+  if (!value || typeof value !== "object") return null;
+  const { senderServerUserId, text } = value as Record<string, unknown>;
+  if (typeof senderServerUserId !== "string" || !senderServerUserId) return null;
+  if (typeof text !== "string" || text.length > MLS_TEXT_MAX) return null;
+  return { senderServerUserId, text };
+}
+
 export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
   const { io, socket, clientId, serverId, clientsInfo, sfuClient } = ctx;
 
@@ -39,11 +56,64 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
     return checkRateLimit(event, userId, ip, rule);
   }
 
+  /**
+   * The server never had an MLS message, so it takes the reporter's copy and marks it unverified.
+   * Both have to be in the conversation, and it has to be somebody else's message.
+   */
+  async function reportMlsCopy(reporterId: string, conversationId: string, messageId: string, raw: unknown): Promise<void> {
+    const copy = readMlsCopy(raw);
+    if (!copy || typeof messageId !== "string" || messageId.length > MLS_ID_MAX) {
+      socket.emit("chat:error", "Invalid report payload");
+      return;
+    }
+    const conversation = await getConversation(conversationId);
+    const inIt =
+      !!conversation &&
+      (await isConversationMember(conversationId, reporterId)) &&
+      (await isConversationMember(conversationId, copy.senderServerUserId));
+    if (!inIt) {
+      // One answer for "no such DM" and "not yours", so this can't be used to probe either.
+      socket.emit("chat:error", "Message not found");
+      return;
+    }
+    if (copy.senderServerUserId === reporterId) {
+      socket.emit("chat:error", "You cannot report your own message");
+      return;
+    }
+    if (await hasUserReportedMessage(messageId, reporterId)) {
+      socket.emit("report:already_reported", { messageId });
+      return;
+    }
+
+    const senderUser = await getUserByServerId(copy.senderServerUserId);
+    await insertReport({
+      message_id: messageId,
+      conversation_id: conversationId,
+      reporter_server_user_id: reporterId,
+      message_text: copy.text,
+      message_attachments: null,
+      message_sender_server_id: copy.senderServerUserId,
+      message_sender_nickname: senderUser?.nickname ?? null,
+      unverified: true,
+    });
+
+    socket.emit("report:submitted", { messageId });
+
+    insertServerAudit({
+      actorServerUserId: reporterId,
+      action: "message_report",
+      target: messageId,
+      meta: { conversationId, unverified: true },
+    }).catch((e) => consola.warn("audit log write failed", e));
+  }
+
   return {
     "chat:report": async (payload: {
       accessToken: string;
       conversationId: string;
       messageId: string;
+      /** The reporter's decrypted copy of an MLS message (decision 11, GRYT-1557). */
+      mls?: unknown;
     }) => {
       try {
         const rl = rlCheck("chat:report", RL_REPORT);
@@ -72,6 +142,11 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
             message: "You do not have permission to report messages here.",
             permission: "report_messages",
           });
+          return;
+        }
+
+        if (payload.mls !== undefined) {
+          await reportMlsCopy(auth.tokenPayload.serverUserId, payload.conversationId, payload.messageId, payload.mls);
           return;
         }
 
@@ -267,6 +342,8 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
             }) ?? null,
             senderServerUserId: r.message_sender_server_id,
             senderNickname: r.message_sender_nickname,
+            // Only when true, so a card from before this reads the same as it did.
+            ...(r.unverified ? { unverified: true } : {}),
             reportCount: r.report_count,
             reporters: r.reporters,
             firstReportedAt: r.first_reported_at,
@@ -310,6 +387,7 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
             payload.messageId,
             "approved",
             auth.tokenPayload.serverUserId,
+            payload.conversationId || undefined,
           );
 
           insertServerAudit({
@@ -327,13 +405,16 @@ export function registerReportHandlers(ctx: HandlerContext): EventHandlerMap {
             payload.messageId,
             "deleted",
             auth.tokenPayload.serverUserId,
+            payload.conversationId || undefined,
           );
-          await deleteMessage(payload.conversationId, payload.messageId);
-
-          io.emit("chat:deleted", {
-            conversation_id: payload.conversationId,
-            message_id: payload.messageId,
-          });
+          // An MLS message was never here to delete, and announcing one would name the DM to everybody.
+          if (payload.conversationId && (await getMessageById(payload.conversationId, payload.messageId))) {
+            await deleteMessage(payload.conversationId, payload.messageId);
+            io.emit("chat:deleted", {
+              conversation_id: payload.conversationId,
+              message_id: payload.messageId,
+            });
+          }
 
           insertServerAudit({
             actorServerUserId: auth.tokenPayload.serverUserId,
