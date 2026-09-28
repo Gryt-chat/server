@@ -29,6 +29,7 @@ function rowToUser(r: Record<string, unknown>): UserRecord {
       : null,
     avatar_worn: (r.avatar_worn as string) || null,
     dm_key_binding: (r.dm_key_binding as string) || null,
+    person_key_binding: (r.person_key_binding as string) || null,
   };
 }
 
@@ -132,6 +133,7 @@ export async function upsertUser(
     // Sent after joining, if at all. A client older than GRYT-720 never sends
     // one, and a member with no binding simply has no encrypted messages.
     dm_key_binding: null,
+    person_key_binding: null,
   };
 }
 
@@ -143,6 +145,18 @@ export async function setUserDmKeyBinding(
 ): Promise<void> {
   const db = getSqliteDb();
   db.prepare(`UPDATE users SET dm_key_binding = ? WHERE server_user_id = ?`).run(
+    binding,
+    serverUserId,
+  );
+}
+
+/** Checked by the caller (`services/personKeyBinding.ts`), not here. Null withdraws it. */
+export async function setUserPersonKeyBinding(
+  serverUserId: string,
+  binding: string | null,
+): Promise<void> {
+  const db = getSqliteDb();
+  db.prepare(`UPDATE users SET person_key_binding = ? WHERE server_user_id = ?`).run(
     binding,
     serverUserId,
   );

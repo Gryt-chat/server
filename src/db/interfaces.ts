@@ -61,6 +61,8 @@ export interface UserRecord {
   /** Opaque on purpose: a server vouching for the binding would vouch for what a
       member has to check anyway. */
   dm_key_binding: string | null;
+  /** Signed by the same identity key as `dm_key_binding`, which is checked on the way in. */
+  person_key_binding: string | null;
   /** Null when they have no designed look. Stored and passed on without being
       read — see `utils/wornString.ts`. */
   avatar_worn: string | null;

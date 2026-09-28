@@ -887,6 +887,12 @@ function runMigrations(d: DatabaseSync): void {
     d.exec("ALTER TABLE users ADD COLUMN dm_key_binding TEXT");
   }
 
+  // The MLS person key binding (GRYT-1515). Checked against the DM key binding's
+  // signer when it's published, then stored whole like that one.
+  if (!hasColumn(d, "users", "person_key_binding")) {
+    d.exec("ALTER TABLE users ADD COLUMN person_key_binding TEXT");
+  }
+
   // The whole envelope, untouched. With it set `text` is null and there is
   // nothing to filter or moderate, so a channel cannot hold one.
   if (!hasColumn(d, "messages", "sealed")) {
