@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomBytes } from "node:crypto";
+import { createHash, generateKeyPairSync, randomBytes, type KeyObject } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,6 +31,8 @@ import type { EventHandlerMap, HandlerContext } from "./types";
     back is proven to still open, not just to be the same length. */
 
 /* eslint-disable @typescript-eslint/no-require-imports */
+const { signDeviceCertificate } =
+  require("@gryt/crypto/mls-device-certificate") as typeof import("@gryt/crypto/dist/mls-device-certificate");
 const mls = {
   ...(require("ts-mls/clientState.js") as typeof import("ts-mls/dist/src/clientState")),
   ...(require("ts-mls/createCommit.js") as typeof import("ts-mls/dist/src/createCommit")),
@@ -137,15 +139,38 @@ function lifetimeFrom(start = Math.floor(Date.now() / 1000) - 3600, days = 30) {
   return { notBefore: BigInt(start), notAfter: BigInt(start + days * 24 * 60 * 60) };
 }
 
-async function makeDevice(id: string, count: number, lifetime = lifetimeFrom()): Promise<Device> {
+/** A device id the way @gryt/crypto makes one: 16 bytes, unpadded base64url. */
+const deviceIdFor = (label: string) => createHash("sha256").update(label).digest().subarray(0, 16).toString("base64url");
+
+const rawKey = (k: KeyObject, part: "x" | "d") => new Uint8Array(Buffer.from(k.export({ format: "jwk" })[part] as string, "base64url"));
+
+/* Signed by @gryt/crypto, as a client signs it. The fixture below is a certificate from a
+   crypto build, so a change to the format shows up there too. */
+function certify(person: KeyObject, leafPublic: Uint8Array, deviceId: string): Uint8Array {
+  return signDeviceCertificate({
+    personPrivateKey: rawKey(person, "d"),
+    scope: "srv:mls-test" as Parameters<typeof signDeviceCertificate>[0]["scope"],
+    leafSignatureKey: leafPublic,
+    deviceId,
+    deviceName: "Test device",
+  });
+}
+
+async function makeDevice(label: string, count: number, lifetime = lifetimeFrom()): Promise<Device> {
+  const id = deviceIdFor(label);
+  const person = generateKeyPairSync("ed25519");
+  const leaf = generateKeyPairSync("ed25519");
+  const leafKeys = { signKey: rawKey(leaf.privateKey, "d"), publicKey: rawKey(leaf.publicKey, "x") };
+  const certificate = certify(person.privateKey, leafKeys.publicKey, id);
   const packages = [];
   for (let i = 0; i < count; i++) {
     packages.push(
-      await mls.generateKeyPackage(
-        { credentialType: "basic", identity: new TextEncoder().encode(id) },
+      await mls.generateKeyPackageWithKey(
+        { credentialType: "basic", identity: certificate },
         mls.defaultCapabilities(),
         lifetime,
         [],
+        leafKeys,
         impl,
       ),
     );
@@ -239,6 +264,16 @@ after(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+/* Made by @gryt/crypto at 272bb78 with createMlsDevice, from a fixed seed, scope
+   "srv:fixture" and device name "Kari's laptop". The leaf key is a throwaway. */
+const CRYPTO_FIXTURE = {
+  certificate:
+    "01000b7372763a66697874757265420251a7e0a7e9710c96e0f61565e130dc9448e0050aa0f201f749724aa77a3d273eb81ac2ad4863ee0f63b1c4981fdf49a262f59acf31545ce2bb02f4c979df000102030405060708090a0b0c0d0e0f0d4b6172692773206c6170746f70000000006aba15b6a051f73314187a2387d91bc1e7203c744845f35106d34f282731ec71d247c53dc871324a87f7bcdea676a7895623c4d0974ca055c889c2e8bb408534db0c2c02",
+  leafSignKey: "3dfa52a5808178ff13be55e2f3057b81f8f0618fe7715209e9da7925653eca0f",
+  leafPublicKey: "273eb81ac2ad4863ee0f63b1c4981fdf49a262f59acf31545ce2bb02f4c979df",
+  deviceId: "AAECAwQFBgcICQoLDA0ODw",
+};
+
 describe("the wire parser", () => {
   it("names a Welcome's recipient by the same ref as the KeyPackage it was built from", async () => {
     const a = await makeDevice("wire-a", 1);
@@ -264,6 +299,41 @@ describe("the wire parser", () => {
     suite2[7] = 2;
     const refused = await parseKeyPackage(suite2);
     assert.equal(!refused.ok && refused.error, "unsupported_ciphersuite");
+  });
+
+  it("reads a device certificate @gryt/crypto signed", async () => {
+    const f = CRYPTO_FIXTURE;
+    const hex = (h: string) => new Uint8Array(Buffer.from(h, "hex"));
+    const leafKeys = { signKey: hex(f.leafSignKey), publicKey: hex(f.leafPublicKey) };
+    const certificate = hex(f.certificate);
+    const make = async (identity: Uint8Array, keys = leafKeys) =>
+      encodeKp((await mls.generateKeyPackageWithKey(
+        { credentialType: "basic", identity }, mls.defaultCapabilities(), mls.defaultLifetime, [], keys, impl,
+      )).publicPackage);
+
+    const kp = await parseKeyPackage(await make(certificate));
+    assert.ok(kp.ok);
+    assert.equal(kp.deviceId, f.deviceId);
+    const asBuffer = await parseKeyPackage(Buffer.from(await make(certificate)));
+    assert.ok(asBuffer.ok, "a Buffer, as socket.io hands it over, reads the same (GRYT-1520)");
+
+    const tampered = certificate.slice();
+    tampered[tampered.length - 70] ^= 1;
+    assert.equal((await parseKeyPackage(await make(tampered))).ok, false, "a changed signedAt breaks the person key's signature");
+    assert.equal((await parseKeyPackage(await make(new TextEncoder().encode("just a name")))).ok, false);
+
+    const other = generateKeyPairSync("ed25519");
+    const otherLeaf = { signKey: rawKey(other.privateKey, "d"), publicKey: rawKey(other.publicKey, "x") };
+    const stolen = await parseKeyPackage(await make(certificate, otherLeaf));
+    assert.equal(!stolen.ok && stolen.message, "That KeyPackage's device certificate is for another leaf key.");
+  });
+
+  it("refuses a KeyPackage its leaf key didn't sign", async () => {
+    const good = encodeKp((await makeDevice("wire-e", 1)).packages[0].publicPackage);
+    const forged = new Uint8Array(good);
+    forged[forged.length - 1] ^= 1;
+    const r = await parseKeyPackage(forged);
+    assert.equal(!r.ok && r.error, "invalid_key_package");
   });
 
   it("refuses a commit sent as PrivateMessage, since its adds can't be checked", async () => {
@@ -342,6 +412,15 @@ describe("KeyPackages", () => {
     assert.equal((sync.keyPackages as { unclaimed: number }).unclaimed, 0, "so the phone knows to upload more");
   });
 
+  it("are refused under another device's id", async () => {
+    const d = await makeDevice("mine", 1);
+    const r = await alice.call("mls:keypackages:publish", {
+      deviceId: deviceIdFor("somebody-else"),
+      keyPackages: [encodeKp(d.packages[0].publicPackage)],
+    });
+    assert.equal(r.error, "device_mismatch");
+  });
+
   it("stop at five devices per member", async () => {
     const carol = await connect("Carol");
     for (let i = 0; i < 5; i++) {
@@ -350,7 +429,7 @@ describe("KeyPackages", () => {
     const sixth = await publish(carol, await makeDevice("carol-5", 1));
     assert.equal(sixth.error, "too_many_devices");
 
-    assert.equal((await carol.call("mls:device:remove", { deviceId: "carol-0" })).ok, true);
+    assert.equal((await carol.call("mls:device:remove", { deviceId: deviceIdFor("carol-0") })).ok, true);
     assert.equal((await publish(carol, await makeDevice("carol-5", 1))).ok, true, "removing one frees its slot");
   });
 
@@ -365,7 +444,7 @@ describe("KeyPackages", () => {
 
     const refs = [];
     for (let i = 0; i < 4; i++) {
-      const r = await eve.call("mls:keypackages:claim", { conversationId: conv, deviceId: "eve-laptop" });
+      const r = await eve.call("mls:keypackages:claim", { conversationId: conv, deviceId: deviceIdFor("eve-laptop") });
       assert.equal(r.ok, true);
       const [kp] = r.keyPackages as { keyPackage: Buffer; lastResort: boolean }[];
       const parsed = await parseKeyPackage(kp.keyPackage);
@@ -379,7 +458,7 @@ describe("KeyPackages", () => {
 
   it("are not handed to somebody outside the conversation", async () => {
     await publish(mallory, await makeDevice("mallory-1", 1));
-    const r = await mallory.call("mls:keypackages:claim", { conversationId: dm, deviceId: "mallory-1" });
+    const r = await mallory.call("mls:keypackages:claim", { conversationId: dm, deviceId: deviceIdFor("mallory-1") });
     assert.equal(r.error, "not_found", "the same answer as a conversation that doesn't exist");
   });
 
@@ -389,7 +468,7 @@ describe("KeyPackages", () => {
     const conv = (await openDirectConversation(g.serverUserId, h.serverUserId)).conversation_id;
     await publish(g, await makeDevice("gina-1", 1));
     await publish(h, await makeDevice("hal-1", 3));
-    const claim = () => g.call("mls:keypackages:claim", { conversationId: conv, deviceId: "gina-1" });
+    const claim = () => g.call("mls:keypackages:claim", { conversationId: conv, deviceId: deviceIdFor("gina-1") });
 
     await blockUser(h.grytUserId, g.grytUserId);
     assert.equal((await claim()).error, "unknown_member");
@@ -413,7 +492,7 @@ describe("KeyPackages", () => {
     await publish(i, await makeDevice("ida-1", 1));
     await publish(j, await makeDevice("jon-1", 1), true);
     const replies = [];
-    for (let n = 0; n < 25; n++) replies.push(await i.call("mls:keypackages:claim", { conversationId: conv, deviceId: "ida-1" }));
+    for (let n = 0; n < 25; n++) replies.push(await i.call("mls:keypackages:claim", { conversationId: conv, deviceId: deviceIdFor("ida-1") }));
     assert.ok(replies.some((r) => r.error === "rate_limited"));
   });
 });
@@ -503,14 +582,14 @@ describe("a DM over MLS", () => {
 
     const listed = await alice.call("mls:devices", { conversationId: dm });
     const ids = (listed.devices as { deviceId: string }[]).map((d) => d.deviceId).sort();
-    assert.deepEqual(ids, ["alice-laptop", "bob-laptop", "bob-phone"]);
+    assert.deepEqual(ids, ["alice-laptop", "bob-laptop", "bob-phone"].map(deviceIdFor).sort());
     const own = await bob.call("mls:devices");
     assert.equal((own.devices as unknown[]).length, 2);
 
-    const sync = await bob.call("mls:sync", { deviceId: "bob-laptop" });
+    const sync = await bob.call("mls:sync", { deviceId: deviceIdFor("bob-laptop") });
     assert.deepEqual(sync.keyPackages, { unclaimed: 1, lastResort: false, target: 20 });
     assert.deepEqual((sync.groups as { conversationId: string }[]).map((g) => g.conversationId), [dm]);
-    assert.equal((await bob.call("mls:device:remove", { deviceId: "bob-laptop" })).ok, true);
+    assert.equal((await bob.call("mls:device:remove", { deviceId: deviceIdFor("bob-laptop") })).ok, true);
   });
 
   it("orders two commits racing for one epoch", async () => {

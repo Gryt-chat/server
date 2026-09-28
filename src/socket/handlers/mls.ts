@@ -304,6 +304,10 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
             ack(fail(error, message, serverTime === undefined ? {} : { serverTime }));
             return;
           }
+          if (parsed.deviceId !== payload.deviceId) {
+            ack(fail("device_mismatch", "That KeyPackage's device certificate names another device."));
+            return;
+          }
           packages.push({ ref: parsed.ref, data: bytes, lastResort, notBefore: parsed.notBefore, notAfter: parsed.notAfter });
         }
 
