@@ -697,6 +697,11 @@ function runMigrations(d: DatabaseSync): void {
     d.exec("ALTER TABLE channels ADD COLUMN permission_scope_id TEXT");
   }
 
+  // 0 on every existing row: each of those was copied from the server's own message.
+  if (!hasColumn(d, "reports", "unverified")) {
+    d.exec("ALTER TABLE reports ADD COLUMN unverified INTEGER NOT NULL DEFAULT 0");
+  }
+
   // NULL is the top level, so an upgrade leaves the sidebar exactly as it was.
   if (!hasColumn(d, "sidebar_items", "parent_item_id")) {
     d.exec("ALTER TABLE sidebar_items ADD COLUMN parent_item_id TEXT");

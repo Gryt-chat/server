@@ -533,6 +533,8 @@ export interface ReportRecord {
   message_attachments: string[] | null;
   message_sender_server_id: string;
   message_sender_nickname: string | null;
+  /** The reporter's own copy of an MLS message, which the server never had (GRYT-1557). */
+  unverified: boolean;
   status: "pending" | "approved" | "deleted";
   resolved_by_server_user_id: string | null;
   created_at: Date;
