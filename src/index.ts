@@ -24,6 +24,8 @@ import { getAcceptedIdentityTiers } from "./auth/identity";
 import { logServerIdentity } from "./auth/serverIdentity";
 import type { JoinPolicy } from "./db/interfaces";
 import { verifyAccessToken } from "./utils/jwt";
+import { probeSqliteWrite } from "./db/sqlite/connection";
+import { createDatabaseHealth } from "./utils/databaseHealth";
 
 import { initStorage, ensureBucket, getObject } from "./storage";
 import { serverRouter } from "./routes/server";
@@ -78,14 +80,21 @@ app.use(jsonBodyExcept(parsesOwnJson, { limit: "2mb" }));
 // Records the metrics. Serving them is further down, on a port of their own.
 app.use(metricsMiddleware);
 
-// Basic health check (used by docker-compose healthcheck)
+const databaseHealth = createDatabaseHealth(probeSqliteWrite);
+
+// Used by the Docker healthcheck, so a database we can't write answers 503.
 app.get("/health", (_req, res) => {
-  res.status(200).json({
-    status: "healthy",
+  const common = {
     service: "signaling-server",
     serverName: process.env.SERVER_NAME || "unknown",
     timestamp: new Date().toISOString(),
-  });
+  };
+  const database = databaseHealth.check();
+  if (!database.healthy) {
+    res.status(503).json({ status: "unhealthy", reason: "database", detail: database.detail, ...common });
+    return;
+  }
+  res.status(200).json({ status: "healthy", ...common });
 });
 
 // Initialize storage and database
@@ -118,6 +127,13 @@ logServerIdentity();
 
 // Database initialization (SQLite)
 initSqlite()
+  .then(
+    () => databaseHealth.opened(),
+    (e) => {
+      databaseHealth.failed();
+      throw e;
+    },
+  )
   .then(async () => {
     consola.success("SQLite initialized");
     // First run only; after that the config owns them. The name has to land
