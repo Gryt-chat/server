@@ -360,6 +360,8 @@ export interface MlsAppend {
   senderServerUserId: string;
   senderDeviceId: string;
   data: Uint8Array;
+  /** Upload ids the entry holds, checked by the caller. Kept until the entry goes. */
+  attachmentIds?: string[];
 }
 
 export interface MlsWelcomeFor {
@@ -453,6 +455,8 @@ export function appendMlsMessage(
     const seq = group.headSeq + 1;
     insertEntry(kind, a, seq, at);
     getSqliteDb().prepare(`UPDATE mls_groups SET head_seq = ? WHERE group_id = ?`).run(seq, a.groupId);
+    const ref = getSqliteDb().prepare(`INSERT OR IGNORE INTO mls_attachments (file_id, group_id, seq) VALUES (?, ?, ?)`);
+    for (const fileId of a.attachmentIds ?? []) ref.run(fileId, a.groupId, seq);
     return { accepted: true as const, seq, createdAt: at, duplicate: false };
   });
 }
@@ -512,10 +516,22 @@ export function deleteMlsWelcomes(serverUserId: string, deviceId: string, welcom
 export function sweepMls(
   cutoff: Date,
   now = new Date(),
-): { log: number; welcomes: number; keyPackages: number; expired: number; groups: number } {
+): { log: number; welcomes: number; keyPackages: number; expired: number; groups: number; fileIds: string[] } {
   return inTransaction(() => {
     const db = getSqliteDb();
     const before = toIso(cutoff);
+    // What the dropped entries held, for the caller to delete once nothing else holds it.
+    const fileIds = (
+      db
+        .prepare(
+          `SELECT DISTINCT a.file_id FROM mls_attachments a
+             JOIN mls_log l ON l.group_id = a.group_id AND l.seq = a.seq
+             LEFT JOIN mls_groups g ON g.group_id = l.group_id
+             LEFT JOIN conversations c ON c.conversation_id = g.conversation_id
+            WHERE l.created_at < ? OR c.conversation_id IS NULL`,
+        )
+        .all(before) as { file_id: string }[]
+    ).map((r) => r.file_id);
     // Expired ones lose their bytes like a replaced last-resort one, so a Welcome still routes.
     const expired = db
       .prepare(
@@ -542,6 +558,7 @@ export function sweepMls(
       keyPackages: Number(keyPackages.changes),
       expired: Number(expired.changes),
       groups: orphans.length,
+      fileIds,
     };
   });
 }

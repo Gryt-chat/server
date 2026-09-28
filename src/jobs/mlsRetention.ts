@@ -1,6 +1,7 @@
 import consola from "consola";
 
 import { sweepMls } from "../db";
+import { deleteUnreferencedFiles } from "./mediaSweep";
 
 /** Decision 7 in docs/mls-design.md: 30 days, and a host can make it shorter but not longer. */
 export const MLS_MAX_RETENTION_DAYS = 30;
@@ -20,8 +21,13 @@ export function mlsRetentionDays(env: NodeJS.ProcessEnv = process.env): number {
 
 export function runMlsRetention(now = new Date()): ReturnType<typeof sweepMls> {
   const swept = sweepMls(new Date(now.getTime() - mlsRetentionDays() * DAY_MS), now);
+  const { fileIds, ...counts } = swept;
   if (swept.log || swept.welcomes || swept.keyPackages || swept.expired || swept.groups) {
-    consola.info("[mls-retention] swept", swept);
+    consola.info("[mls-retention] swept", { ...counts, files: fileIds.length });
+  }
+  // As a deleted message's files go: now if nothing else holds them, else the media sweep's.
+  if (fileIds.length > 0) {
+    void deleteUnreferencedFiles(fileIds).catch((err) => consola.warn("[mls-retention] file cleanup failed", err));
   }
   return swept;
 }

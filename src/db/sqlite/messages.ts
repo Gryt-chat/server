@@ -204,8 +204,11 @@ export async function getAllReferencedAttachmentIds(): Promise<Set<string>> {
     const attachments: string[] = JSON.parse(row.attachments);
     for (const id of attachments) ids.add(id);
   }
-  // A card's pictures and a webhook's per-message avatar are only in the reference table.
-  const refs = db.prepare(`SELECT DISTINCT file_id FROM message_attachments`).all() as { file_id: string }[];
+  // A card's pictures and a webhook's per-message avatar are only in the reference table,
+  // and an MLS message's files only in its own (GRYT-1523).
+  const refs = db
+    .prepare(`SELECT file_id FROM message_attachments UNION SELECT file_id FROM mls_attachments`)
+    .all() as { file_id: string }[];
   for (const row of refs) ids.add(row.file_id);
   return ids;
 }
@@ -213,7 +216,10 @@ export async function getAllReferencedAttachmentIds(): Promise<Set<string>> {
 /** Whether any message still points at a file, as an attachment or as something it shows. */
 export async function isFileReferencedByMessage(fileId: string): Promise<boolean> {
   const db = getSqliteDb();
-  return Boolean(db.prepare(`SELECT 1 FROM message_attachments WHERE file_id = ? LIMIT 1`).get(fileId));
+  return Boolean(
+    db.prepare(`SELECT 1 FROM message_attachments WHERE file_id = ? UNION ALL SELECT 1 FROM mls_attachments WHERE file_id = ? LIMIT 1`)
+      .get(fileId, fileId),
+  );
 }
 
 /** Everything that can make a file readable, in one indexed read. Null when
@@ -225,7 +231,10 @@ export async function getFileOwnership(fileId: string): Promise<FileOwnership | 
        f.uploaded_by_server_user_id AS uploader,
        EXISTS (SELECT 1 FROM users u WHERE u.avatar_file_id = f.file_id) AS user_avatar,
        EXISTS (SELECT 1 FROM webhooks w WHERE w.avatar_file_id = f.file_id) AS webhook_avatar,
-       (SELECT json_group_array(DISTINCT a.conversation_id) FROM message_attachments a WHERE a.file_id = f.file_id) AS attached_to,
+       (SELECT json_group_array(DISTINCT t.conversation_id) FROM (
+          SELECT a.conversation_id FROM message_attachments a WHERE a.file_id = f.file_id
+          UNION SELECT g.conversation_id FROM mls_attachments m JOIN mls_groups g ON g.group_id = m.group_id
+           WHERE m.file_id = f.file_id) t) AS attached_to,
        (SELECT json_group_array(c.conversation_id) FROM conversations c WHERE c.icon_file_id = f.file_id) AS icon_of
      FROM files f WHERE f.file_id = ?`,
   ).get(fileId) as Record<string, unknown> | undefined;
