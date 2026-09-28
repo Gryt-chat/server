@@ -1,7 +1,10 @@
 import { createHash, createHmac, timingSafeEqual } from "crypto";
 
+import type { Signature } from "ts-mls/dist/src/crypto/signature";
 import type { KeyPackage } from "ts-mls/dist/src/keyPackage";
 import type { MLSMessage } from "ts-mls/dist/src/message";
+
+import { readDeviceCertificate, verifyEd25519 } from "./mlsDeviceCertificate";
 
 /**
  * The few MLS header fields the delivery service reads (GRYT-1500). Decoding only:
@@ -13,7 +16,7 @@ import type { MLSMessage } from "ts-mls/dist/src/message";
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const { decodeMlsMessage } = require("ts-mls/message.js") as typeof import("ts-mls/dist/src/message");
-const { makeKeyPackageRef } = require("ts-mls/keyPackage.js") as typeof import("ts-mls/dist/src/keyPackage");
+const { makeKeyPackageRef, verifyKeyPackage } = require("ts-mls/keyPackage.js") as typeof import("ts-mls/dist/src/keyPackage");
 /* eslint-enable @typescript-eslint/no-require-imports */
 
 /** Suite 1, the only one Gryt uses (decision 1 in docs/mls-design.md). */
@@ -60,6 +63,17 @@ const sha256: Parameters<typeof makeKeyPackageRef>[1] = {
   },
 };
 
+/* Verifying only. ts-mls wants the whole interface, and the server never signs. */
+const ed25519: Signature = {
+  verify: async (publicKey, message, signature) => verifyEd25519(publicKey, message, signature),
+  sign: async () => {
+    throw new Error("the server doesn't sign MLS messages");
+  },
+  keygen: async () => {
+    throw new Error("the server doesn't make MLS keys");
+  },
+};
+
 export async function keyPackageRef(kp: KeyPackage): Promise<string> {
   return Buffer.from(await makeKeyPackageRef(kp, sha256)).toString("hex");
 }
@@ -92,18 +106,40 @@ export function checkKeyPackageLifetime(
   return { ok: true, notBefore: Number(notBefore), notAfter: Number(notAfter) };
 }
 
+/**
+ * What @gryt/crypto's `readMlsKeyPackage` checks, minus the scope: suite 1, a lifetime
+ * of 30 days, signed by its leaf, and a device certificate for that same leaf key.
+ */
 export async function parseKeyPackage(
   bytes: Uint8Array,
   now = new Date(),
-): Promise<({ ok: true; ref: string } & KeyPackageLifetime) | ({ ok: false } & WireRefusal)> {
+): Promise<({ ok: true; ref: string; deviceId: string } & KeyPackageLifetime) | ({ ok: false } & WireRefusal)> {
   const msg = decodeWhole(bytes);
   if (!msg || msg.wireformat !== "mls_key_package") return refuse("invalid_key_package", "That isn't an MLS KeyPackage.");
-  if (msg.keyPackage.cipherSuite !== MLS_CIPHERSUITE) {
+  const kp = msg.keyPackage;
+  if (kp.cipherSuite !== MLS_CIPHERSUITE) {
     return refuse("unsupported_ciphersuite", `Only ${MLS_CIPHERSUITE} is accepted here.`);
   }
-  const lifetime = checkKeyPackageLifetime(msg.keyPackage.leafNode.lifetime, now);
+  // Integers before signatures: the cheap refusal first, and a device with a bad clock
+  // hears about its clock rather than anything else.
+  const lifetime = checkKeyPackageLifetime(kp.leafNode.lifetime, now);
   if (!lifetime.ok) return lifetime;
-  return { ok: true, ref: await keyPackageRef(msg.keyPackage), notBefore: lifetime.notBefore, notAfter: lifetime.notAfter };
+  if (!(await verifyKeyPackage(kp, ed25519))) {
+    return refuse("invalid_key_package", "That KeyPackage isn't signed by its own leaf key.");
+  }
+  const credential = kp.leafNode.credential;
+  const certificate = credential.credentialType === "basic" ? readDeviceCertificate(credential.identity) : null;
+  if (!certificate) return refuse("invalid_device_certificate", "That KeyPackage doesn't carry a device certificate that checks out.");
+  if (!Buffer.from(certificate.leafSignatureKey).equals(Buffer.from(kp.leafNode.signaturePublicKey))) {
+    return refuse("invalid_device_certificate", "That KeyPackage's device certificate is for another leaf key.");
+  }
+  return {
+    ok: true,
+    ref: await keyPackageRef(kp),
+    deviceId: certificate.deviceId,
+    notBefore: lifetime.notBefore,
+    notAfter: lifetime.notAfter,
+  };
 }
 
 export interface ParsedHandshake {
