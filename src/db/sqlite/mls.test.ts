@@ -25,6 +25,7 @@ import {
   MLS_MAX_KEY_PACKAGES,
   mlsKeyPackageOwner,
   oldestMlsSeq,
+  isRemovedMlsDevice,
   removeMlsDevice,
   sweepMls,
   touchMlsDevice,
@@ -79,6 +80,20 @@ describe("devices", () => {
     assert.equal(removeMlsDevice(me, "phone"), true);
     assert.deepEqual(listMlsDevices([me]), []);
     assert.equal(mlsKeyPackageOwner("ref-removed"), null);
+  });
+
+  it("never lets a removed device id back in, and remembers it through a guest merge", async () => {
+    const guest = await upsertUser("mls-removed-guest", "Guest");
+    const account = await upsertUser("mls-removed-account", "Account");
+    touchMlsDevice(guest.server_user_id, "lost-phone");
+    removeMlsDevice(guest.server_user_id, "lost-phone");
+
+    assert.equal(isRemovedMlsDevice(guest.server_user_id, "lost-phone"), true);
+    assert.equal(touchMlsDevice(guest.server_user_id, "lost-phone"), "device_removed");
+    assert.equal(touchMlsDevice(guest.server_user_id, "new-phone"), "ok");
+
+    assert.ok(mergeGuestIntoAccount("mls-removed-guest", "mls-removed-account"));
+    assert.equal(touchMlsDevice(account.server_user_id, "lost-phone"), "device_removed");
   });
 });
 

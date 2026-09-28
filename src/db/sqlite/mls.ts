@@ -99,14 +99,15 @@ function rowToEntry(r: Record<string, unknown>): MlsLogEntry {
 
 // ── Devices ─────────────────────────────────────────────────────────────
 
-/** A new device past the cap is refused; a known one only has last_seen_at moved. */
+/** A new device past the cap is refused, and so is a removed one; a known one only has last_seen_at moved. */
 export function touchMlsDevice(
   serverUserId: string,
   deviceId: string,
   now = new Date(),
-): "ok" | "too_many_devices" {
+): "ok" | "too_many_devices" | "device_removed" {
   return inTransaction(() => {
     const db = getSqliteDb();
+    if (isRemovedMlsDevice(serverUserId, deviceId)) return "device_removed";
     const at = toIso(now);
     const known = db
       .prepare(`UPDATE mls_devices SET last_seen_at = ? WHERE server_user_id = ? AND device_id = ?`)
@@ -148,10 +149,19 @@ export function listMlsDevices(serverUserIds: string[]): MlsDevice[] {
   }));
 }
 
-/** Its KeyPackages and waiting Welcomes go with it, since nothing can use them now. */
-export function removeMlsDevice(serverUserId: string, deviceId: string): boolean {
+export function isRemovedMlsDevice(serverUserId: string, deviceId: string): boolean {
+  return !!getSqliteDb()
+    .prepare(`SELECT 1 FROM mls_removed_devices WHERE server_user_id = ? AND device_id = ?`)
+    .get(serverUserId, deviceId);
+}
+
+/** Its KeyPackages and waiting Welcomes go with it, and the id can never register again. */
+export function removeMlsDevice(serverUserId: string, deviceId: string, now = new Date()): boolean {
   return inTransaction(() => {
     const db = getSqliteDb();
+    db.prepare(
+      `INSERT OR IGNORE INTO mls_removed_devices (server_user_id, device_id, removed_at) VALUES (?, ?, ?)`,
+    ).run(serverUserId, deviceId, toIso(now));
     const gone = db
       .prepare(`DELETE FROM mls_devices WHERE server_user_id = ? AND device_id = ?`)
       .run(serverUserId, deviceId);
@@ -169,6 +179,8 @@ export function carryMlsDevicesForward(db: DatabaseSync, from: string, to: strin
         AND device_id IN (SELECT device_id FROM mls_devices WHERE server_user_id = ?)`,
   ).run(from, to);
   db.prepare(`UPDATE mls_devices SET server_user_id = ? WHERE server_user_id = ?`).run(to, from);
+  db.prepare(`UPDATE OR IGNORE mls_removed_devices SET server_user_id = ? WHERE server_user_id = ?`).run(to, from);
+  db.prepare(`DELETE FROM mls_removed_devices WHERE server_user_id = ?`).run(from);
   db.prepare(`UPDATE mls_key_packages SET server_user_id = ? WHERE server_user_id = ?`).run(to, from);
   db.prepare(`UPDATE mls_welcomes SET server_user_id = ? WHERE server_user_id = ?`).run(to, from);
 }
