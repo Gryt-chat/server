@@ -9,6 +9,7 @@ import { colors } from "../utils/colors";
 import { SFUClient } from "../sfu/client";
 import type { SFUPeerEvent, SFUSyncRoom } from "../sfu/client";
 import { verifyAccessToken } from "../utils/jwt";
+import { generateFileUrlKey } from "../utils/fileUrl";
 import { getServerConfig, effectiveModerationState } from "../db";
 import { checkSessionAllowed } from "../moderation/sessionGate";
 import { syncAllClients, verifyClient, broadcastMemberList, countOtherSessions } from "./utils/clients";
@@ -490,6 +491,13 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
           clientsInfo[clientId].grytUserId = tokenPayload.grytUserId;
           clientsInfo[clientId].serverUserId = tokenPayload.serverUserId;
           clientsInfo[clientId].nickname = tokenPayload.nickname;
+
+          // A restore gets no `token:refreshed`, so the key upload URLs are signed with comes alone.
+          socket.emit("file:key", generateFileUrlKey({
+            ...tokenPayload,
+            tokenVersion: currentVersion,
+            userTokenVersion: gate.user.token_version ?? 0,
+          }));
 
           // Mute and deafen belong to the user, not the socket, or a reconnect
           // clears them. `gate.user` is already read, so this costs no query.

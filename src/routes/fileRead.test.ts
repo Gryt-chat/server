@@ -14,7 +14,7 @@ import { ensureDefaultChannels } from "../db/sqlite/channels";
 import { openDirectConversation } from "../db/sqlite/conversations";
 import { insertFile, insertMessage, listMessages } from "../db/sqlite/messages";
 import { createServerConfigIfNotExists, setServerRole } from "../db/sqlite/servers";
-import { upsertUser } from "../db/sqlite/users";
+import { revokeUserSessions, upsertUser } from "../db/sqlite/users";
 import { initStorage, putObject } from "../storage";
 import { resetFileAccessCache } from "../services/fileAccess";
 import { resetChannelIdCache } from "../socket/utils/conversationAccess";
@@ -22,6 +22,7 @@ import { registerChatHandlers } from "../socket/handlers/chat";
 import type { HandlerContext } from "../socket/handlers/types";
 import type { Clients } from "../types";
 import { generateAccessToken, generateFileToken } from "../utils/jwt";
+import { generateFileUrlKey, signFileUrl } from "../utils/fileUrl";
 import { uploadsRouter } from "./uploads";
 
 /**
@@ -141,6 +142,76 @@ describe("GET /api/uploads/files/:fileId", () => {
   it("still asks for a token before anything else", async () => {
     const fileId = await storedFile(alice);
     assert.equal((await read(fileId, null)).status, 401);
+  });
+});
+
+/** A URL the way a client signs one, from the key it got over the socket. */
+function signedUrl(fileId: string, who: Member, opts: { thumb?: boolean; expiresIn?: number; nowMs?: number; tokenVersion?: number } = {}): string {
+  const nowMs = opts.nowMs ?? Date.now();
+  const fk = generateFileUrlKey({ ...who, serverHost: host, tokenVersion: 0, userTokenVersion: opts.tokenVersion ?? 0 }, nowMs);
+  const expires = Math.floor(nowMs / 1000) + (opts.expiresIn ?? 300);
+  const sig = signFileUrl(Buffer.from(fk.key, "base64url"), fileId, !!opts.thumb, expires);
+  const q = new URLSearchParams({ u: fk.user, k: String(fk.until), e: String(expires), s: sig });
+  if (opts.thumb) q.set("thumb", "1");
+  return `${base}/api/uploads/files/${fileId}?${q}`;
+}
+
+describe("signed file URLs (GRYT-1549)", () => {
+  it("reads the file it was signed for", async () => {
+    const fileId = await storedFile(alice);
+    const res = await fetch(signedUrl(fileId, alice));
+    assert.equal(res.status, 200);
+    assert.equal(await res.text(), BODY);
+  });
+
+  it("does not read another file, even one the signer may read", async () => {
+    const a = await storedFile(alice);
+    const b = await storedFile(alice);
+    const leaked = signedUrl(a, alice);
+    assert.equal((await fetch(leaked.replace(a, b))).status, 401);
+  });
+
+  it("does not turn a thumbnail link into the full file", async () => {
+    const fileId = await storedFile(alice);
+    const thumb = signedUrl(fileId, alice, { thumb: true });
+    assert.equal((await fetch(thumb.replace("&thumb=1", ""))).status, 401);
+  });
+
+  it("stops working once it expires", async () => {
+    const fileId = await storedFile(alice);
+    const tenMinutesAgo = Date.now() - 10 * 60 * 1000;
+    const stale = signedUrl(fileId, alice, { nowMs: tenMinutesAgo, expiresIn: 300 });
+    assert.equal((await fetch(stale)).status, 401);
+  });
+
+  it("refuses an expiry further out than a few minutes", async () => {
+    const fileId = await storedFile(alice);
+    assert.equal((await fetch(signedUrl(fileId, alice, { expiresIn: 60 * 60 }))).status, 401);
+  });
+
+  it("stops working when the member's sessions are ended", async () => {
+    const carol = await member("carol");
+    const fileId = await storedFile(carol);
+    const url = signedUrl(fileId, carol);
+    assert.equal((await fetch(url)).status, 200);
+    await revokeUserSessions(carol.grytUserId);
+    assert.equal((await fetch(url)).status, 401);
+    assert.equal((await fetch(signedUrl(fileId, carol, { tokenVersion: 1 }))).status, 200);
+  });
+
+  it("still checks the signer may read the file", async () => {
+    const { conversation_id } = await openDirectConversation(alice.serverUserId, bob.serverUserId);
+    const fileId = await storedFile(alice);
+    await insertMessage({ conversation_id, sender_server_id: alice.serverUserId, text: null, attachments: [fileId], reactions: null, reply_to_message_id: null });
+    assert.equal((await fetch(signedUrl(fileId, bob))).status, 200);
+    assert.equal((await fetch(signedUrl(fileId, mallory))).status, 404);
+  });
+
+  it("refuses a signature made for somebody else", async () => {
+    const fileId = await storedFile(alice);
+    const url = new URL(signedUrl(fileId, alice));
+    url.searchParams.set("u", bob.serverUserId);
+    assert.equal((await fetch(url)).status, 401);
   });
 });
 

@@ -3,6 +3,7 @@ import consola from "consola";
 import { createRefreshToken, getUserByServerId, revokeUserSessions } from "../../db";
 import { disconnectOtherSessions } from "../../moderation/evict";
 import { generateAccessToken, generateFileToken } from "../../utils/jwt";
+import { generateFileUrlKey } from "../../utils/fileUrl";
 import { requireAuth } from "../middleware/auth";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
@@ -58,6 +59,7 @@ export function registerSessionHandlers(ctx: HandlerContext): EventHandlerMap {
         socket.emit("token:refreshed", {
           accessToken,
           fileToken,
+          fileKey: generateFileUrlKey(renewed),
           refreshToken: refreshTokenRecord.token_id,
         });
 

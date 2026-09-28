@@ -16,6 +16,7 @@ import { initSqlite } from "../db/sqlite/connection";
 import { createServerConfigIfNotExists, setServerRole } from "../db/sqlite/servers";
 import { upsertUser } from "../db/sqlite/users";
 import { SFUClient } from "../sfu/client";
+import { checkSignedFileUrl, readSignedFileUrl, signFileUrl, type FileUrlKey } from "../utils/fileUrl";
 import { generateAccessToken } from "../utils/jwt";
 import { resetRateLimits } from "../utils/rateLimiter";
 import { getServerIdFromEnv } from "../utils/serverId";
@@ -546,5 +547,23 @@ describe("media that never comes back", () => {
     await waitFor(() => receivedSince(laptop, 0, "voice:room:leave").length > 0, "Alice taken out");
     await waitFor(() => receivedSince(watcher, mark, "voice:peer:left").length > 0, "the leave");
     await waitFor(() => shownIn(watcher, alice) === null, "Alice gone from voice");
+  });
+});
+
+// Here for the harness: a real restore over a real socket. GRYT-1549.
+describe("a restored session", () => {
+  it("gets the key its upload URLs are signed with, bound to this server", async () => {
+    const member = await connect(alice);
+    await waitFor(() => member.received.some((r) => r.event === "file:key"), "the file key");
+    const fk = member.received.find((r) => r.event === "file:key")?.payload as FileUrlKey;
+    assert.equal(fk.user, alice.serverUserId);
+
+    const expires = Math.floor(Date.now() / 1000) + 300;
+    const sig = signFileUrl(Buffer.from(fk.key, "base64url"), "file-a", false, expires);
+    const signed = readSignedFileUrl({ u: fk.user, k: String(fk.until), e: String(expires), s: sig });
+    assert.ok(signed);
+    const check = { fileId: "file-a", thumb: false, tokenVersion: 0, userTokenVersion: 0 };
+    assert.equal(checkSignedFileUrl(signed, { ...check, serverHost: h.host }), true);
+    assert.equal(checkSignedFileUrl(signed, { ...check, serverHost: "elsewhere.example" }), false);
   });
 });
