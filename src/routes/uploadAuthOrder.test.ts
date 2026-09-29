@@ -53,6 +53,7 @@ describe("multer never runs before authentication", () => {
         "POST /api/server/icon",
         "POST /api/uploads/",
         "POST /api/uploads/avatar",
+        "POST /api/uploads/banner",
         "POST /api/uploads/group-icon",
         "POST /api/uploads/webhook-avatar",
       ],

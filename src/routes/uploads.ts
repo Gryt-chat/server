@@ -6,7 +6,9 @@ import { v4 as uuidv4 } from "uuid";
 import mime from "mime-types";
 import { unlink, readFile } from "fs/promises";
 import { putObject, getObject } from "../storage";
-import { insertFile, insertImageJob, getFile, updateUserAvatar, setUserAvatar, getServerConfig, getUserByServerId, DEFAULT_AVATAR_MAX_BYTES, DEFAULT_UPLOAD_MAX_BYTES } from "../db";
+import { insertFile, insertImageJob, getFile, updateUserAvatar, setUserAvatar, setUserBanner, getServerConfig, getUserByServerId, DEFAULT_AVATAR_MAX_BYTES, DEFAULT_UPLOAD_MAX_BYTES } from "../db";
+import { BANNER_BOX } from "../constants/media";
+import { deleteUnreferencedFiles } from "../jobs/mediaSweep";
 import { isSealedUpload, storageForUpload } from "./uploadStorage";
 import { requireBearerToken } from "../middleware/requireBearerToken";
 import { verifyFileToken } from "../utils/jwt";
@@ -253,15 +255,15 @@ uploadsRouter.post(
   },
 );
 
-/** One pipeline for all three pictures. Only an avatar is put on the uploader's
-    own row; a group picture doing that was GRYT-1182. */
-const storeAvatarImage = (purpose: "avatar" | "group" | "webhook") =>
+/** One pipeline for every picture. Only an avatar or a banner is put on the
+    uploader's own row; a group picture doing that was GRYT-1182. */
+const storeAvatarImage = (purpose: "avatar" | "group" | "webhook" | "banner") =>
   (req: Request, res: Response, next: NextFunction): void => {
     const file = req.file;
     if (!file) { res.status(400).json({ error: "file_required", message: "file is required" }); return; }
     if (!(file.mimetype || "").startsWith("image/")) { res.status(400).json({ error: "invalid_file", message: "Only image files are allowed" }); return; }
 
-    const what = purpose === "avatar" ? "Avatar" : purpose === "group" ? "Group picture" : "Webhook avatar";
+    const what = { avatar: "Avatar", group: "Group picture", webhook: "Webhook avatar", banner: "Banner" }[purpose];
     const disableS3 = (process.env.DISABLE_S3 || "").toLowerCase() === "true";
     if (disableS3) { res.status(503).json({ error: "s3_disabled", message: `S3 is disabled (DISABLE_S3=true). ${what} upload is unavailable.` }); return; }
 
@@ -288,6 +290,11 @@ const storeAvatarImage = (purpose: "avatar" | "group" | "webhook") =>
         // SVG never reaches sharp. Stored as the sanitised vector; see
         // svgSanitize.ts for why that is enough.
         if ((file.mimetype || "").toLowerCase() === "image/svg+xml") {
+          // A vector is not cut to the 5:2 box, so a banner is always a raster.
+          if (purpose === "banner") {
+            res.status(400).json({ error: "invalid_file", message: "A banner can't be an SVG." });
+            return;
+          }
           const svg = sanitizeSvg(file.buffer);
           if (!svg.valid) {
             res.status(400).json({ error: "invalid_file", message: svg.reason });
@@ -326,6 +333,7 @@ const storeAvatarImage = (purpose: "avatar" | "group" | "webhook") =>
           uploadedBy: serverUserId,
           maxBytes,
           what,
+          ...(purpose === "banner" ? { box: BANNER_BOX, prefix: "banners" } : {}),
         });
         if (!stored.ok) {
           res.status(stored.status).json({ error: stored.error, message: stored.message });
@@ -335,6 +343,11 @@ const storeAvatarImage = (purpose: "avatar" | "group" | "webhook") =>
         if (purpose === "avatar") {
           await updateUserAvatar(serverUserId, stored.fileId);
           res.status(201).json({ avatarFileId: stored.fileId, processing: stored.processing });
+        } else if (purpose === "banner") {
+          const previous = (await getUserByServerId(serverUserId))?.banner_file_id ?? null;
+          await setUserBanner(serverUserId, stored.fileId);
+          if (previous && previous !== stored.fileId) await deleteUnreferencedFiles([previous]);
+          res.status(201).json({ bannerFileId: stored.fileId, processing: stored.processing });
         } else {
           res.status(201).json({ fileId: stored.fileId, processing: stored.processing });
         }
@@ -354,6 +367,38 @@ uploadsRouter.post(
   },
   uploadAvatarToMemory("file"),
   storeAvatarImage("avatar"),
+);
+
+/* The same trusted-only gate as an uploaded avatar: a banner is a stranger's
+   picture in front of everybody, and the file lives on this server. */
+uploadsRouter.post(
+  "/banner",
+  requireBearerToken,
+  (req: Request, res: Response, next: NextFunction): void => {
+    ensurePermission(req, res, "upload_avatar_image")
+      .then((ok) => { if (ok) next(); })
+      .catch(next);
+  },
+  uploadAvatarToMemory("file"),
+  storeAvatarImage("banner"),
+);
+
+// Ungated, unlike DELETE /avatar: losing the upload permission must not strand a banner.
+uploadsRouter.delete(
+  "/banner",
+  requireBearerToken,
+  (req: Request, res: Response, next: NextFunction): void => {
+    const serverUserId = req.tokenPayload?.serverUserId;
+    if (!serverUserId) { res.status(401).json({ error: "auth_required" }); return; }
+    Promise.resolve()
+      .then(async () => {
+        const previous = (await getUserByServerId(serverUserId))?.banner_file_id ?? null;
+        await setUserBanner(serverUserId, null);
+        if (previous) await deleteUnreferencedFiles([previous]);
+        res.status(200).json({ ok: true });
+      })
+      .catch(next);
+  },
 );
 
 uploadsRouter.post(

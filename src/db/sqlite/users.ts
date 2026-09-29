@@ -13,6 +13,7 @@ function rowToUser(r: Record<string, unknown>): UserRecord {
     server_user_id: r.server_user_id as string,
     nickname: r.nickname as string,
     avatar_file_id: (r.avatar_file_id as string) || undefined,
+    banner_file_id: (r.banner_file_id as string) || null,
     joined_with_invite_code: (r.joined_with_invite_code as string) || undefined,
     created_at: fromIso(r.created_at as string),
     last_seen: fromIso(r.last_seen as string),
@@ -119,6 +120,7 @@ export async function upsertUser(
     server_user_id: serverUserId,
     nickname,
     avatar_file_id: opts?.avatarFileId,
+    banner_file_id: null,
     joined_with_invite_code: opts?.inviteCode,
     created_at: now,
     last_seen: now,
@@ -263,6 +265,18 @@ export async function getUsersByServerIds(ids: string[]): Promise<Map<string, { 
     });
   }
   return result;
+}
+
+export async function setUserBanner(serverUserId: string, bannerFileId: string | null): Promise<void> {
+  const db = getSqliteDb();
+  db.prepare(`UPDATE users SET banner_file_id = ? WHERE server_user_id = ?`).run(bannerFileId, serverUserId);
+}
+
+/** For the media sweep, which deletes any file nothing points at. */
+export async function getAllBannerFileIds(): Promise<Set<string>> {
+  const db = getSqliteDb();
+  const rows = db.prepare(`SELECT banner_file_id FROM users WHERE banner_file_id IS NOT NULL`).all() as { banner_file_id: string }[];
+  return new Set(rows.map((r) => r.banner_file_id));
 }
 
 export async function getAllAvatarFileIds(): Promise<Set<string>> {

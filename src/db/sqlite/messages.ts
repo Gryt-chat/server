@@ -229,7 +229,7 @@ export async function getFileOwnership(fileId: string): Promise<FileOwnership | 
   const row = db.prepare(
     `SELECT
        f.uploaded_by_server_user_id AS uploader,
-       EXISTS (SELECT 1 FROM users u WHERE u.avatar_file_id = f.file_id) AS user_avatar,
+       EXISTS (SELECT 1 FROM users u WHERE u.avatar_file_id = f.file_id OR u.banner_file_id = f.file_id) AS user_avatar,
        EXISTS (SELECT 1 FROM webhooks w WHERE w.avatar_file_id = f.file_id) AS webhook_avatar,
        (SELECT json_group_array(DISTINCT t.conversation_id) FROM (
           SELECT a.conversation_id FROM message_attachments a WHERE a.file_id = f.file_id

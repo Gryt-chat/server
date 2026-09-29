@@ -12,7 +12,7 @@ import { clientMayReceive, refreshClientPermissions } from "./standing";
 import { isBotIdentity } from "../../auth/identity";
 import { memberIdentity } from "./memberIdentity";
 import { scopedChannelIds, visibleChannelIds } from "../../services/channelPermissions";
-import { listRolesByMember } from "../../services/permissions";
+import { hasPermission, listRolesByMember } from "../../services/permissions";
 import { cardFields } from "../../utils/memberCard";
 
 /** A member whose permissions were never cached receives no broadcasts, so all
@@ -209,6 +209,14 @@ export async function buildMemberList(clientsInfo: Clients) {
       .filter((id): id is string => Boolean(id)),
   );
 
+  // Checked now rather than at upload, so taking the permission away takes the banner down too.
+  const bannerShown = new Set<string>();
+  for (const u of registeredUsers) {
+    if (!u.banner_file_id || !u.is_active) continue;
+    const may = await hasPermission(u.server_user_id, "upload_avatar_image", u.gryt_user_id).catch(() => false);
+    if (may) bannerShown.add(u.server_user_id);
+  }
+
   type ClientInfo = Clients[string];
   const onlineUsers = new Map<string, ClientInfo>();
 
@@ -251,6 +259,7 @@ export async function buildMemberList(clientsInfo: Clients) {
         avatarColor: user.avatar_file_id
           ? avatarFiles.get(user.avatar_file_id)?.dominant_color ?? null
           : null,
+        bannerFileId: bannerShown.has(user.server_user_id) ? user.banner_file_id : null,
         // `avatarFileId` is still set, because saving a design uploads a PNG
         // that an older client shows. Passed through as stored.
         avatarWorn: user.avatar_worn,
@@ -311,6 +320,7 @@ export function memberStateHash(members: MemberListEntry[]): string {
       nicknameChangedAt: m.nicknameChangedAt,
       avatarFileId: m.avatarFileId,
       avatarColor: m.avatarColor,
+      bannerFileId: m.bannerFileId,
       // Designing a new owl changes nothing else about a member, so without
       // this line it would change nothing anybody sees.
       avatarWorn: m.avatarWorn,

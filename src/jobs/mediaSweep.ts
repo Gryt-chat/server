@@ -2,6 +2,7 @@ import consola from "consola";
 import {
   deleteFileRecord,
   getAllAvatarFileIds,
+  getAllBannerFileIds,
   getAllFileRecords,
   getAllGroupIconFileIds,
   getAllReferencedAttachmentIds,
@@ -63,6 +64,7 @@ async function referencedFileIds(): Promise<Set<string>> {
   const sources = await Promise.all([
     getAllReferencedAttachmentIds(),
     getAllAvatarFileIds(),
+    getAllBannerFileIds(),
     getAllGroupIconFileIds(),
     getAllWebhookAvatarFileIds(),
   ]);
