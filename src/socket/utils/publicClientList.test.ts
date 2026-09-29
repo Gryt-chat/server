@@ -43,6 +43,7 @@ const everything: Required<Clients[string]> = {
   isServerMuted: false,
   isServerDeafened: true,
   activity: "Playing something",
+  richActivity: { type: "playing", name: "Card game", state: "Round two" },
   status: "in_voice",
   lastSeen: new Date(0),
   accessToken: "eyJhbGciOiJIUzI1NiJ9.alice.token",
@@ -57,7 +58,7 @@ describe("publicClientRecord", () => {
 
   it("puts none of the rest on the wire", () => {
     const wire = JSON.stringify(publicClientRecord(everything, "lounge"));
-    for (const secret of [everything.accessToken, everything.grytUserId, "view_members", "opus", "Playing something"]) {
+    for (const secret of [everything.accessToken, everything.grytUserId, "view_members", "opus", "Playing something", "Round two"]) {
       assert.equal(wire.includes(secret), false, `${secret} reached the wire`);
     }
   });

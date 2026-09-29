@@ -328,6 +328,14 @@ describe("events that read the socket rather than a token", () => {
     assert.equal(clientsInfo[ctx.clientId].activity, undefined, "the status was set anyway");
   });
 
+  it("presence:activity refuses a game's card with the line", async () => {
+    const { ctx, emitted, clientsInfo } = makeContext();
+    await socketCaller([], clientsInfo, ctx.clientId);
+    await registerMemberHandlers(ctx)["presence:activity"]({ activity: "Factorio", rich: { name: "Factorio" } });
+    assert.equal(refusals(emitted).some((r) => r.permission === "set_activity"), true);
+    assert.equal(clientsInfo[ctx.clientId].richActivity, undefined, "the card was set anyway");
+  });
+
   it("presence:activity takes one from a role that has it", async () => {
     const { ctx, emitted, clientsInfo } = makeContext();
     await socketCaller(["set_activity"], clientsInfo, ctx.clientId);

@@ -7,6 +7,7 @@ import { socketMay } from "../utils/standing";
 import { looksLikeABotName } from "../../auth/identity";
 import { readWornUpdate } from "../../utils/wornString";
 import { normaliseActivity } from "../../utils/activityText";
+import { normaliseRichActivity, sameRichActivity } from "../../utils/richActivity";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 
 /* Every accepted change fans out to the whole server, so it is bounded like the
@@ -45,14 +46,18 @@ export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
 
     /** Held on the connection, not stored, so it stops being true when the app
         closes and the client re-sends it on join. Empty clears it. */
-    'presence:activity': async (data: { activity?: unknown }) => {
+    'presence:activity': async (data: { activity?: unknown; rich?: unknown }) => {
       const info = clientsInfo[clientId];
       if (!info) return;
       // `temp_` clients are filtered out of the member list, so this would be a
       // status nobody can see on nobody in particular.
       if (!info.serverUserId || info.serverUserId.startsWith("temp_")) return;
 
-      const activity = normaliseActivity(data?.activity);
+      const rich = normaliseRichActivity(data?.rich);
+      // The line is what every client reads. With no line sent, the card's name is it.
+      const activity =
+        data?.activity === undefined && rich ? normaliseActivity(rich.name) : normaliseActivity(data?.activity);
+      const card = activity === null ? undefined : rich ?? undefined;
 
       /* Setting one is what fans out, so only that is limited or scored. A clear
          always goes through, or a ban is a status you cannot take off. */
@@ -74,9 +79,10 @@ export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
         });
         return;
       }
-      if (info.activity === (activity ?? undefined)) return;
+      if (info.activity === (activity ?? undefined) && sameRichActivity(info.richActivity, card)) return;
 
       info.activity = activity ?? undefined;
+      info.richActivity = card;
       syncAllClients(io, clientsInfo);
       broadcastMemberList(io, clientsInfo, serverId);
     },
