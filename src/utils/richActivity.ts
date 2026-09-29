@@ -40,6 +40,8 @@ export interface RichActivity {
   startedAt?: number;
   party?: { size: number; max?: number };
   buttons?: RichActivityButton[];
+  /** The Discord application id, for an icon. Digits only; anything else is dropped. */
+  appId?: string;
 }
 
 
@@ -101,6 +103,11 @@ function readParty(value: unknown): RichActivity["party"] {
   return max === undefined ? { size } : { size, max };
 }
 
+/** A Discord snowflake is 17-20 digits. Anything else isn't an application id. */
+function readAppId(value: unknown): string | undefined {
+  return typeof value === "string" && /^\d{17,20}$/.test(value) ? value : undefined;
+}
+
 function readStartedAt(value: unknown, now: number): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
   const ms = Math.floor(value);
@@ -132,6 +139,8 @@ export function normaliseRichActivity(value: unknown, now: number = Date.now()):
   if (party) card.party = party;
   const buttons = readButtons(record.buttons);
   if (buttons) card.buttons = buttons;
+  const appId = readAppId(record.appId);
+  if (appId) card.appId = appId;
   return card;
 }
 

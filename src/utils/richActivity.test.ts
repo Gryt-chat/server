@@ -158,3 +158,22 @@ describe("a button link", () => {
     });
   }
 });
+
+describe("the application id", () => {
+  it("keeps a valid Discord snowflake", () => {
+    assert.equal(normaliseRichActivity({ name: "x", appId: "1137125502985961543" }, NOW)?.appId, "1137125502985961543");
+    // 17 digits is the shortest real snowflake still issued.
+    assert.equal(normaliseRichActivity({ name: "x", appId: "17777777777777777" }, NOW)?.appId, "17777777777777777");
+  });
+
+  it("drops anything that isn't 17-20 digits", () => {
+    for (const bad of ["123", "1".repeat(21), "abcdefghijklmnopq", "123456789012345.7", null, 42, ["1137125502985961543"]]) {
+      assert.equal(normaliseRichActivity({ name: "x", appId: bad }, NOW)?.appId, undefined, JSON.stringify(bad));
+    }
+  });
+
+  it("is absent, not empty, when nothing usable was sent", () => {
+    const card = normaliseRichActivity({ name: "x" }, NOW);
+    assert.ok(!("appId" in card!));
+  });
+});
