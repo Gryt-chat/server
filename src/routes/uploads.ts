@@ -9,7 +9,8 @@ import { putObject, getObject } from "../storage";
 import { insertFile, insertImageJob, getFile, updateUserAvatar, setUserAvatar, getServerConfig, getUserByServerId, DEFAULT_AVATAR_MAX_BYTES, DEFAULT_UPLOAD_MAX_BYTES } from "../db";
 import { isSealedUpload, storageForUpload } from "./uploadStorage";
 import { requireBearerToken } from "../middleware/requireBearerToken";
-import { verifyFileToken, type FileTokenPayload } from "../utils/jwt";
+import { verifyFileToken } from "../utils/jwt";
+import { checkSignedFileUrl, readSignedFileUrl, type SignedFileUrl } from "../utils/fileUrl";
 import { storeAvatarPicture } from "../services/avatarImage";
 import { fileReadVerdict } from "../services/fileAccess";
 import { RangeNotSatisfiableError } from "../utils/byteRange";
@@ -403,9 +404,16 @@ uploadsRouter.delete(
   }
 );
 
-/** In the query string because these URLs end up in `<img src>`. Says who is
-    asking; whether they may read this file is `fileReadVerdict`. */
-async function fileReader(req: Request): Promise<FileTokenPayload | null> {
+interface FileReader { serverUserId: string; grytUserId: string }
+
+/** Says who is asking, from a signed URL or the old `?t=` file token. Whether they
+    may read this file is `fileReadVerdict`. */
+async function fileReader(req: Request, fileId: string): Promise<FileReader | null> {
+  const host = req.headers.host || "unknown";
+  const signed = readSignedFileUrl(req.query as Record<string, unknown>);
+  if (signed) return signedFileReader(signed, fileId, req.query.thumb === "1", host);
+
+  // Old clients until GRYT-1586, which drops `?t=` once they have had a release to update.
   const raw = req.query.t;
   const token = typeof raw === "string" ? raw : null;
   if (!token) return null;
@@ -413,7 +421,6 @@ async function fileReader(req: Request): Promise<FileTokenPayload | null> {
   const payload = verifyFileToken(token);
   if (!payload) return null;
 
-  const host = req.headers.host || "unknown";
   if (payload.serverHost !== host) return null;
 
   try {
@@ -435,6 +442,24 @@ async function fileReader(req: Request): Promise<FileTokenPayload | null> {
   return payload;
 }
 
+async function signedFileReader(signed: SignedFileUrl, fileId: string, thumb: boolean, serverHost: string): Promise<FileReader | null> {
+  try {
+    const cfg = await getServerConfig();
+    const member = await getUserByServerId(signed.user);
+    if (!member) return null;
+    const valid = checkSignedFileUrl(signed, {
+      fileId,
+      thumb,
+      serverHost,
+      tokenVersion: cfg?.token_version ?? 0,
+      userTokenVersion: member.token_version ?? 0,
+    });
+    return valid ? { serverUserId: member.server_user_id, grytUserId: member.gryt_user_id } : null;
+  } catch {
+    return null;
+  }
+}
+
 uploadsRouter.get(
   "/files/:fileId",
   (req: Request, res: Response, next: NextFunction): void => {
@@ -451,9 +476,9 @@ uploadsRouter.get(
       .then(async () => {
         // Before the lookup, so an unauthenticated caller cannot use the 404 to
         // learn which file ids exist.
-        const reader = await fileReader(req);
+        const reader = await fileReader(req, fileId);
         if (!reader) {
-          res.status(401).json({ error: "auth_required", message: "A file token is required to read uploads." });
+          res.status(401).json({ error: "auth_required", message: "A signed link or file token is required to read uploads." });
           return;
         }
 
@@ -495,7 +520,7 @@ uploadsRouter.get(
           : (fileMeta.mime || undefined);
         if (contentType) res.setHeader("Content-Type", contentType);
         // `private`, not `public`: the URL carries a credential, and a shared
-        // cache would hand one person's token to whoever asked next.
+        // cache would hand one person's file to whoever asked next.
         res.setHeader("Cache-Control", "private, max-age=60");
         res.setHeader("Accept-Ranges", "bytes");
 

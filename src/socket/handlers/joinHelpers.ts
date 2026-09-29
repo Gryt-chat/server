@@ -6,6 +6,7 @@ import { syncAllClients, broadcastMemberList, verifyClient } from "../utils/clie
 import { sendServerDetails } from "../utils/server";
 import { postSystemMessage, formatLeaveMessage } from "../utils/systemMessages";
 import { generateAccessToken, generateFileToken, verifyAccessToken } from "../../utils/jwt";
+import { generateFileUrlKey } from "../../utils/fileUrl";
 import {
   getServerConfig,
   getUserByServerId,
@@ -286,7 +287,7 @@ export function registerJoinHelpers(ctx: HandlerContext): EventHandlerMap {
             syncAllClients(io, clientsInfo);
             broadcastMemberList(io, clientsInfo, serverId);
           }
-          socket.emit("token:refreshed", { accessToken: newAccessToken, fileToken: newFileToken });
+          socket.emit("token:refreshed", { accessToken: newAccessToken, fileToken: newFileToken, fileKey: generateFileUrlKey(refreshedPayload) });
         } else if (payload?.accessToken) {
           const decoded = verifyAccessToken(payload.accessToken);
           if (!decoded) {
@@ -347,7 +348,7 @@ export function registerJoinHelpers(ctx: HandlerContext): EventHandlerMap {
             syncAllClients(io, clientsInfo);
             broadcastMemberList(io, clientsInfo, serverId);
           }
-          socket.emit("token:refreshed", { accessToken: newToken, fileToken: newFileToken });
+          socket.emit("token:refreshed", { accessToken: newToken, fileToken: newFileToken, fileKey: generateFileUrlKey(renewed) });
         } else {
           socket.emit("token:error", "Invalid refresh payload");
         }

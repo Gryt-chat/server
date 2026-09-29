@@ -15,6 +15,7 @@ import { applyAutoRoles } from "../../services/autoRoles";
 import { pluginEvents } from "../../plugins";
 import { readServiceState, serviceStateVarName } from "../../config/serviceState";
 import { generateAccessToken, generateFileToken, TokenPayload } from "../../utils/jwt";
+import { generateFileUrlKey } from "../../utils/fileUrl";
 import {
   getServerConfig,
   createServerConfigIfNotExists,
@@ -683,6 +684,8 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
         // Reads uploads and nothing else. Deliberately the weaker token: it
         // rides in an `<img src>` query string, where a header cannot follow.
         const fileToken = generateFileToken(tokenPayload);
+        // What a current client signs file URLs with, so no token rides in one (GRYT-1549).
+        const fileKey = generateFileUrlKey(tokenPayload);
 
         const refreshTokenRecord = await createRefreshToken({
           grytUserId: user.gryt_user_id,
@@ -712,6 +715,7 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
         socket.emit("server:joined", {
           accessToken,
           fileToken,
+          fileKey,
           refreshToken: refreshTokenRecord.token_id,
           nickname: user.nickname,
           avatarFileId: user.avatar_file_id || null,
