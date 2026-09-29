@@ -1,0 +1,73 @@
+{
+  "guild": {
+    "id": "900",
+    "name": "Test Guild",
+    "iconUrl": "media/guild-00000.png"
+  },
+  "channel": {
+    "id": "400",
+    "type": "GuildPublicThread",
+    "categoryId": "500",
+    "category": "help-forum",
+    "name": "How do I export?",
+    "topic": null
+  },
+  "dateRange": {
+    "after": null,
+    "before": null
+  },
+  "exportedAt": "2026-09-01T00:00:00+00:00",
+  "messages": [
+    {
+      "id": "400",
+      "type": "Default",
+      "timestamp": "2021-02-01T09:00:00+00:00",
+      "timestampEdited": null,
+      "callEndedTimestamp": null,
+      "isPinned": false,
+      "content": "How do I export my server?",
+      "author": {
+        "id": "12",
+        "name": "kari",
+        "discriminator": "0000",
+        "nickname": "Kari",
+        "color": null,
+        "isBot": false,
+        "roles": [],
+        "avatarUrl": "media/avatar-kari-4C5D6.png"
+      },
+      "attachments": [],
+      "embeds": [],
+      "stickers": [],
+      "reactions": [],
+      "mentions": [],
+      "inlineEmojis": []
+    },
+    {
+      "id": "4001",
+      "type": "Default",
+      "timestamp": "2021-02-01T09:30:00+00:00",
+      "timestampEdited": null,
+      "callEndedTimestamp": null,
+      "isPinned": false,
+      "content": "Use DiscordChatExporter",
+      "author": {
+        "id": "11",
+        "name": "ola",
+        "discriminator": "0000",
+        "nickname": "Ola N",
+        "color": null,
+        "isBot": false,
+        "roles": [],
+        "avatarUrl": "media/avatar-ola-1A2B3.png"
+      },
+      "attachments": [],
+      "embeds": [],
+      "stickers": [],
+      "reactions": [],
+      "mentions": [],
+      "inlineEmojis": []
+    }
+  ],
+  "messageCount": 2
+}

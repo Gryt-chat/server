@@ -79,6 +79,7 @@ import {
   replaceCachedMessage,
   sweepMessageCache,
 } from "../utils/messageCache";
+import { DISCORD_SENDER_PREFIX } from "../../import/discord/ids";
 
 const RL_SEND: RateLimitRule = { limit: 20, windowMs: 10_000, banMs: 30_000, scorePerAction: 1, maxScore: 10, scoreDecayMs: 2000 };
 const RL_REACT: RateLimitRule = { limit: 60, windowMs: 60_000, scorePerAction: 0.5, maxScore: 15, scoreDecayMs: 3000 };
@@ -166,7 +167,7 @@ async function enrichMessages(messages: MessageRecord[]): Promise<MessageRecord[
   const webhookIds = senderIds
     .filter(id => id.startsWith(WEBHOOK_PREFIX))
     .map(id => id.slice(WEBHOOK_PREFIX.length));
-  const userIds = senderIds.filter(id => !id.startsWith(WEBHOOK_PREFIX));
+  const userIds = senderIds.filter(id => !id.startsWith(WEBHOOK_PREFIX) && !id.startsWith(DISCORD_SENDER_PREFIX));
 
   const [userMap, webhookMap] = await Promise.all([
     userIds.length > 0 ? getUsersByServerIds(userIds) : Promise.resolve(new Map()),
@@ -181,6 +182,15 @@ async function enrichMessages(messages: MessageRecord[]): Promise<MessageRecord[
         ...m,
         sender_nickname: m.sender_display_name ?? m.sender_nickname ?? wh?.display_name ?? "Webhook",
         sender_avatar_file_id: m.sender_avatar_file_id ?? wh?.avatar_file_id ?? undefined,
+      };
+    }
+    // Imported from Discord: the name and picture are on the row, as a webhook's are.
+    if (m.sender_server_id.startsWith(DISCORD_SENDER_PREFIX)) {
+      return {
+        ...m,
+        sender_nickname: m.sender_display_name ?? "Discord user",
+        sender_avatar_file_id: m.sender_avatar_file_id ?? undefined,
+        sender_imported_from: "discord" as const,
       };
     }
     const info = userMap.get(m.sender_server_id);

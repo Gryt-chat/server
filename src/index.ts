@@ -37,6 +37,9 @@ import { linkPreviewRouter } from "./routes/linkPreview";
 import { oEmbedRouter } from "./routes/oembed";
 import { mediaMetadataRouter } from "./routes/mediaMetadata";
 import { webhooksRouter } from "./routes/webhooks";
+import { discordImportRouter } from "./routes/discordImport";
+import { resumeDiscordImports } from "./import/discord/runner";
+import { noFileStorageMedia, uploadPathMedia } from "./import/discord/media";
 import { parsesOwnJson } from "./routes/ownJsonParsers";
 import { apiErrorHandler, jsonBodyExcept } from "./utils/httpErrors";
 import { sendStoredBody } from "./utils/sendStoredBody";
@@ -152,6 +155,7 @@ initSqlite()
   .then(() => {
     if (!disableS3) startMediaSweep();
     startMlsRetention();
+    resumeDiscordImports(disableS3 ? noFileStorageMedia : uploadPathMedia);
     if (!disableS3 && (process.env.S3_BUCKET || "").trim()) {
       startEmojiQueueWorker();
     }
@@ -356,6 +360,7 @@ app.use("/api/link-preview", linkPreviewRouter);
 app.use("/api/oembed", httpRateLimit("http:outbound", RL_HTTP_OUTBOUND), oEmbedRouter);
 app.use("/api/media/metadata", httpRateLimit("http:outbound", RL_HTTP_OUTBOUND), mediaMetadataRouter);
 app.use("/api/webhooks", webhooksRouter);
+app.use("/api/imports/discord", httpRateLimit("http:api", RL_HTTP_API), discordImportRouter);
 
 app.use(apiErrorHandler);
 
