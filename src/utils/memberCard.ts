@@ -27,9 +27,25 @@ export interface CardStyle {
   cover?: "card";
   fade?: "banner";
   colours?: "banner";
+  /** Pattern tuning. Scale and rotation leave out their defaults (100, 0). */
+  pScale?: number;
+  pRotate?: number;
+  /** No server default: absent means the client's. */
+  pOpacity?: number;
+  pFade?: Exclude<PatternFade, "none">;
+  /** For scatter patterns. Absent means one derived from the member id. */
+  pSeed?: number;
+  /** Pattern colour, `#rrggbb`. Absent means the ink derived from the card. */
+  pInk?: string;
+  /** A Phosphor icon name for the `icon` pattern. The client falls back on one it lacks. */
+  pIcon?: string;
 }
 
+export const PATTERN_FADES = ["none", "top", "bottom", "left", "right", "radial"] as const;
+export type PatternFade = (typeof PATTERN_FADES)[number];
+
 const PATTERN_ID = /^[a-z0-9-]{1,32}$/;
+const ICON_NAME = /^[a-z0-9-]{1,48}$/;
 
 function readHex(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
@@ -37,8 +53,12 @@ function readHex(value: unknown): string | undefined {
   return m ? `#${m[1].toLowerCase()}` : undefined;
 }
 
+function readInt(value: unknown, min: number, max: number): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= min && value <= max ? value : undefined;
+}
+
 function readAngle(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 360 ? value : undefined;
+  return readInt(value, 0, 360);
 }
 
 /** Null is the default card. Unknown keys are dropped, and so is any value that fails. */
@@ -67,6 +87,19 @@ export function normaliseCardStyle(value: unknown): CardStyle | null {
   if (raw.cover === "card") out.cover = "card";
   if (raw.fade === "banner") out.fade = "banner";
   if (raw.colours === "banner") out.colours = "banner";
+
+  const pScale = readInt(raw.pScale, 50, 300);
+  if (pScale !== undefined && pScale !== 100) out.pScale = pScale;
+  const pRotate = readInt(raw.pRotate, 0, 359);
+  if (pRotate) out.pRotate = pRotate;
+  const pOpacity = readInt(raw.pOpacity, 3, 40);
+  if (pOpacity !== undefined) out.pOpacity = pOpacity;
+  if (PATTERN_FADES.includes(raw.pFade as PatternFade) && raw.pFade !== "none") out.pFade = raw.pFade as Exclude<PatternFade, "none">;
+  const pSeed = readInt(raw.pSeed, 0, 65535);
+  if (pSeed !== undefined) out.pSeed = pSeed;
+  const pInk = readHex(raw.pInk);
+  if (pInk) out.pInk = pInk;
+  if (typeof raw.pIcon === "string" && ICON_NAME.test(raw.pIcon)) out.pIcon = raw.pIcon;
 
   return Object.keys(out).length ? out : null;
 }

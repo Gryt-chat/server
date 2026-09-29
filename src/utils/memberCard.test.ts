@@ -104,6 +104,58 @@ describe("a card style", () => {
   });
 });
 
+describe("pattern tuning", () => {
+  const all = { pScale: 150, pRotate: 45, pOpacity: 12, pFade: "radial", pSeed: 4242, pInk: "#AABBCC" };
+
+  it("keeps every tuning value in range", () => {
+    assert.deepEqual(normaliseCardStyle({ pattern: "dots", ...all }), {
+      pattern: "dots",
+      ...all,
+      pInk: "#aabbcc",
+    });
+  });
+
+  it("leaves out the defaults it has", () => {
+    assert.equal(normaliseCardStyle({ pScale: 100, pRotate: 0, pFade: "none" }), null);
+  });
+
+  it("keeps values that have no server default, at the edges of their range", () => {
+    assert.deepEqual(normaliseCardStyle({ pOpacity: 3, pSeed: 0, pScale: 50, pRotate: 359 }), {
+      pOpacity: 3,
+      pSeed: 0,
+      pScale: 50,
+      pRotate: 359,
+    });
+    assert.deepEqual(normaliseCardStyle({ pOpacity: 40, pSeed: 65535, pScale: 300 }), {
+      pOpacity: 40,
+      pSeed: 65535,
+      pScale: 300,
+    });
+  });
+
+  it("drops each bad value and keeps the rest", () => {
+    const bad: Array<[string, unknown]> = [
+      ["pScale", 49], ["pScale", 301], ["pScale", 120.5], ["pScale", "150"],
+      ["pRotate", -1], ["pRotate", 360], ["pRotate", 1.5],
+      ["pOpacity", 2], ["pOpacity", 41], ["pOpacity", null],
+      ["pFade", "diagonal"], ["pFade", "Top"], ["pFade", 1],
+      ["pSeed", -1], ["pSeed", 65536], ["pSeed", 3.3],
+      ["pInk", "#abc"], ["pInk", "ink"], ["pInk", 0xaabbcc],
+      ["pIcon", "Heart"], ["pIcon", "heart fill"], ["pIcon", "a".repeat(49)], ["pIcon", ""], ["pIcon", 7],
+    ];
+    for (const [key, value] of bad) {
+      assert.deepEqual(normaliseCardStyle({ pattern: "dots", [key]: value }), { pattern: "dots" }, `${key}=${String(value)}`);
+    }
+  });
+});
+
+describe("an icon for the icon pattern", () => {
+  it("keeps any Phosphor-shaped name, known or not", () => {
+    assert.deepEqual(normaliseCardStyle({ pattern: "icon", pIcon: "game-controller" }), { pattern: "icon", pIcon: "game-controller" });
+    assert.equal(normaliseCardStyle({ pIcon: "a".repeat(48) })?.pIcon, "a".repeat(48));
+  });
+});
+
 describe("a stored card style", () => {
   it("reads back what was stored", () => {
     const style = normaliseCardStyle({ fill: "solid", c1: "#ffd400", pattern: "dusk" });
