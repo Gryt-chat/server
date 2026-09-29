@@ -53,6 +53,10 @@ describe("a card from a game", () => {
     assert.equal(normaliseRichActivity({ name: "x", type: "streaming" }, NOW)?.type, "playing");
     assert.equal(normaliseRichActivity({ name: "x", type: "listening" }, NOW)?.type, "listening");
   });
+
+  it("keeps using, for an app like Figma rather than a game", () => {
+    assert.equal(normaliseRichActivity({ name: "Figma", type: "using" }, NOW)?.type, "using");
+  });
 });
 
 describe("text on the card", () => {

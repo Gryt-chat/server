@@ -8,7 +8,7 @@ import { isIP } from "node:net";
 import { CONTROL_AND_TRICKS } from "./activityText";
 import { isBlockedPreviewHost } from "./previewUrlSafety";
 
-export const RICH_ACTIVITY_TYPES = ["playing", "listening", "watching", "competing"] as const;
+export const RICH_ACTIVITY_TYPES = ["playing", "listening", "watching", "competing", "using"] as const;
 export type RichActivityType = (typeof RICH_ACTIVITY_TYPES)[number];
 
 export const RICH_LIMITS = {
