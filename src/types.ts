@@ -23,6 +23,8 @@ export interface Clients {
     /** On the connection rather than in `users`, like `isAFK`: a stored one would
         still claim they are listening to something a week later. */
     activity?: string;
+    /** The Rich Presence card, checked by `normaliseRichActivity`. Never set without `activity`. */
+    richActivity?: import("./utils/richActivity").RichActivity;
     status?: UserStatus;
     lastSeen?: Date;
     accessToken?: string; // JWT access token for this server

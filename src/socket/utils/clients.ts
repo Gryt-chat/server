@@ -270,6 +270,8 @@ export async function buildMemberList(clientsInfo: Clients) {
         /* Undefined rather than null when unset or offline: it lives on the
            connection, so somebody who is not here is not doing anything. */
         activity: onlineClient?.activity,
+        /** What a game said about itself. An older client ignores it and reads `activity`. */
+        richActivity: onlineClient?.richActivity,
         isMuted: onlineClient?.isMuted || false,
         isDeafened: onlineClient?.isDeafened || false,
         isServerMuted: onlineClient?.isServerMuted || false,
@@ -315,6 +317,8 @@ export function memberStateHash(members: MemberListEntry[]): string {
       // Changes on its own schedule, so without it here the new one sits unsent
       // until something unrelated moves.
       activity: m.activity,
+      // A new round or a new party size leaves the line above as it was.
+      richActivity: m.richActivity,
       isConnectedToVoice: m.isConnectedToVoice,
       hasJoinedChannel: m.hasJoinedChannel,
       voiceChannelId: m.voiceChannelId,

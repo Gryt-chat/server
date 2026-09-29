@@ -9,7 +9,7 @@ export const MAX_ACTIVITY_LENGTH = 96;
 
 /** Newlines and tabs, plus the invisible and direction-changing characters that
     let a short string cover somebody else's row. */
-const CONTROL_AND_TRICKS =
+export const CONTROL_AND_TRICKS =
   // eslint-disable-next-line no-control-regex
   /[\u0000-\u001F\u007F\u200B-\u200F\u2028\u2029\u202A-\u202E\u2066-\u2069\uFEFF]/g;
 

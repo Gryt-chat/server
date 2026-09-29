@@ -70,6 +70,8 @@ describe("the member list dedupe", () => {
     ["deafening", { isDeafened: true }],
     ["a server mute", { isServerMuted: true }],
     ["a server deafen", { isServerDeafened: true }],
+    ["a status", { activity: "Playing Factorio" }],
+    ["a game's card", { richActivity: { type: "playing", name: "Factorio" } }],
   ];
 
   for (const [what, over] of changes) {
@@ -89,6 +91,12 @@ describe("the member list dedupe", () => {
       memberStateHash([member({ avatarWorn: "aiac----adab" })]),
       memberStateHash([member({ avatarWorn: null })]),
     );
+  });
+
+  it("sees the card change while the status line stays put", () => {
+    const at = (state: string) =>
+      member({ activity: "Factorio", richActivity: { type: "playing", name: "Factorio", state } });
+    assert.notEqual(memberStateHash([at("Nauvis")]), memberStateHash([at("Vulcanus")]));
   });
 
   it("ignores a moving lastSeen", () => {
