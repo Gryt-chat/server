@@ -1018,6 +1018,21 @@ function runMigrations(d: DatabaseSync): void {
     file_id TEXT NOT NULL,
     PRIMARY KEY (webhook_id, sha256)
   )`);
+  // One row per Discord import run (GRYT-1613). The rows it writes carry ids
+  // derived from Discord's, so this only tracks progress, never what exists.
+  d.exec(`CREATE TABLE IF NOT EXISTS discord_imports (
+    import_id TEXT PRIMARY KEY,
+    folder TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued',
+    started_by_server_user_id TEXT NOT NULL,
+    progress TEXT,
+    warnings TEXT,
+    error_message TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    finished_at TEXT
+  )`);
+  d.exec("CREATE INDEX IF NOT EXISTS idx_discord_imports_status ON discord_imports(status, created_at)");
 
   migrateFileOwnership(d);
   clearHiddenConversations(d);
