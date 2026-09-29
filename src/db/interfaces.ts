@@ -66,6 +66,11 @@ export interface UserRecord {
   /** Null when they have no designed look. Stored and passed on without being
       read — see `utils/wornString.ts`. */
   avatar_worn: string | null;
+  /** JSON from `normaliseCardStyle`, never parsed here. Null is the default card. */
+  card_style: string | null;
+  bio: string | null;
+  pronouns: string | null;
+  status_line: string | null;
 }
 
 // ── Conversation types ───────────────────────────────────────────

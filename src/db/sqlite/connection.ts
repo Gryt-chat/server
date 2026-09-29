@@ -902,6 +902,11 @@ function runMigrations(d: DatabaseSync): void {
     d.exec("ALTER TABLE users ADD COLUMN avatar_worn TEXT");
   }
 
+  // The member card. Null is the default, and the style is JSON checked by utils/memberCard.
+  for (const column of ["card_style", "bio", "pronouns", "status_line"]) {
+    if (!hasColumn(d, "users", column)) d.exec(`ALTER TABLE users ADD COLUMN ${column} TEXT`);
+  }
+
   // Off stops conversations being opened or posted in and keeps the rows. The
   // name is groups only: a copy of a person's name would go stale.
   if (!hasColumn(d, "conversations", "name")) {

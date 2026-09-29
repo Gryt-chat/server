@@ -44,6 +44,7 @@ import type { BotRecord } from "../../db";
 import { isPrivateIp } from "../../utils/isPrivateIp";
 import { checkIdentityAllowed } from "../../moderation/sessionGate";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
+import { cardFields } from "../../utils/memberCard";
 import {
   registerJoinHelpers,
   applyInviteFailure,
@@ -722,6 +723,7 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           // Sent on the way in, so a client does not have to wait for the first
           // member list to know whether they have a look here.
           avatarWorn: user.avatar_worn ?? null,
+          ...cardFields(user),
           isOwner,
           setupRequired,
           // Only when a link was presented, so a client knows what its yes did.

@@ -1,6 +1,6 @@
 import consola from "consola";
 import type { HandlerContext, EventHandlerMap } from "./types";
-import { getUserByServerId, setUserWorn, updateUserNickname } from "../../db";
+import { getUserByServerId, setUserCard, setUserWorn, updateUserNickname } from "../../db";
 import { hasPermission } from "../../services/permissions";
 import { buildMemberList, syncAllClients, broadcastMemberList } from "../utils/clients";
 import { socketMay } from "../utils/standing";
@@ -9,6 +9,7 @@ import { readWornUpdate } from "../../utils/wornString";
 import { normaliseActivity } from "../../utils/activityText";
 import { normaliseRichActivity, sameRichActivity } from "../../utils/richActivity";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
+import { cardFields, readCardUpdate, setsCardText } from "../../utils/memberCard";
 
 /* Every accepted change fans out to the whole server, so it is bounded like the
    chat events. Ten in ten seconds is well past anything done by hand. */
@@ -87,7 +88,14 @@ export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
       broadcastMemberList(io, clientsInfo, serverId);
     },
 
-    'profile:update': async (data: { nickname?: string; avatarWorn?: string | null }) => {
+    'profile:update': async (data: {
+      nickname?: string;
+      avatarWorn?: string | null;
+      cardStyle?: unknown;
+      bio?: string | null;
+      pronouns?: string | null;
+      statusLine?: string | null;
+    }) => {
       if (!clientsInfo[clientId]) return;
       const serverUserId = clientsInfo[clientId].serverUserId;
       if (!serverUserId || serverUserId.startsWith("temp_")) {
@@ -96,6 +104,21 @@ export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
       }
 
       try {
+        // Checked before anything is written, so a refusal leaves the whole update unapplied.
+        const card = readCardUpdate(data as Record<string, unknown>);
+        if (Object.keys(card).length > 0) {
+          const rl = checkRateLimit("profile:card", serverUserId, getClientIp(), RL_ACTIVITY);
+          if (!rl.allowed) {
+            socket.emit("server:error", { error: "rate_limited", retryAfterMs: rl.retryAfterMs });
+            return;
+          }
+          // Free text everybody reads, so the status permission. Clearing never needs it.
+          if (setsCardText(card) && !(await socketMay(clientsInfo, clientId, "set_activity"))) {
+            socket.emit("profile:error", "You cannot set a bio, pronouns or a status line on this server.");
+            return;
+          }
+        }
+
         const nickname = typeof data?.nickname === "string"
           ? data.nickname.trim().substring(0, 20)
           : undefined;
@@ -131,11 +154,21 @@ export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
         if (wornUpdate.kind === "set") await setUserWorn(serverUserId, wornUpdate.worn);
         if (wornUpdate.kind === "clear") await setUserWorn(serverUserId, null);
 
+        if (Object.keys(card).length > 0) {
+          await setUserCard(serverUserId, {
+            card_style: card.cardStyle,
+            bio: card.bio,
+            pronouns: card.pronouns,
+            status_line: card.statusLine,
+          });
+        }
+
         const user = await getUserByServerId(serverUserId);
         socket.emit("profile:updated", {
           nickname: user?.nickname ?? clientsInfo[clientId].nickname,
           avatarFileId: user?.avatar_file_id ?? null,
           avatarWorn: user?.avatar_worn ?? null,
+          ...(user ? cardFields(user) : {}),
         });
 
         syncAllClients(io, clientsInfo);
@@ -155,6 +188,7 @@ export function registerMemberHandlers(ctx: HandlerContext): EventHandlerMap {
             nickname: user?.nickname ?? clientsInfo[clientId]?.nickname,
             avatarFileId: user?.avatar_file_id ?? null,
             avatarWorn: user?.avatar_worn ?? null,
+            ...(user ? cardFields(user) : {}),
           });
         }
         broadcastMemberList(io, clientsInfo, serverId);
