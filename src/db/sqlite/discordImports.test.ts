@@ -87,9 +87,13 @@ describe("discord import rows", () => {
     assert.deepEqual(refs.map((r) => r.file_id), ["avatar1", "f1", "f2"]);
   });
 
+  it("fails loudly on a broken row instead of dropping it", () => {
+    const broken = row("m-broken", { sender_server_id: null as unknown as string });
+    assert.throws(() => insertImportedMessages([broken]), /NOT NULL/);
+  });
+
   it("rolls the whole batch back when one row fails", () => {
-    // OR IGNORE swallows constraint errors, so the failure has to come from outside SQLite.
-    const bad = row("m-bad", { created_at: new Date(Number.NaN) });
+    const bad = row("m-bad", { conversation_id: null as unknown as string });
     assert.throws(() => insertImportedMessages([row("m-rolled-back"), bad]));
     assert.equal(importedMessageExists("chan-a", "m-rolled-back"), false);
   });

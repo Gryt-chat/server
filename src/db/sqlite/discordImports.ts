@@ -152,14 +152,16 @@ export interface ImportedMessageRow {
   media_file_ids: string[];
 }
 
-/** INSERT OR IGNORE in one transaction, so a rerun skips what is there and a crash
-    leaves whole batches. Returns how many rows were new. */
+/** One transaction that skips rows already there, so a rerun adds nothing and a crash
+    leaves whole batches. Any other constraint failure throws. Returns how many were new. */
 export function insertImportedMessages(rows: ImportedMessageRow[]): number {
   if (rows.length === 0) return 0;
   const db = getSqliteDb();
   const insert = db.prepare(
-    `INSERT OR IGNORE INTO messages (conversation_id, message_id, sender_server_id, text, attachments, reactions, reply_to_message_id, thread_id, cards, sender_display_name, sender_avatar_file_id, edited_at, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    // Not OR IGNORE, which would also swallow a NOT NULL failure and lose the row silently.
+    `INSERT INTO messages (conversation_id, message_id, sender_server_id, text, attachments, reactions, reply_to_message_id, thread_id, cards, sender_display_name, sender_avatar_file_id, edited_at, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(conversation_id, message_id) DO NOTHING`,
   );
   const ref = db.prepare(
     `INSERT OR IGNORE INTO message_attachments (file_id, conversation_id, message_id) VALUES (?, ?, ?)`,
@@ -218,8 +220,9 @@ export function ensureImportedThread(input: {
   const db = getSqliteDb();
   const at = toIso(input.created_at);
   db.prepare(
-    `INSERT OR IGNORE INTO threads (thread_id, conversation_id, root_message_id, title, created_by, status, reply_count, locked, created_at, last_message_at)
-     VALUES (?, ?, ?, ?, ?, 'open', 0, 0, ?, ?)`,
+    `INSERT INTO threads (thread_id, conversation_id, root_message_id, title, created_by, status, reply_count, locked, created_at, last_message_at)
+     VALUES (?, ?, ?, ?, ?, 'open', 0, 0, ?, ?)
+     ON CONFLICT DO NOTHING`,
   ).run(input.thread_id, input.conversation_id, input.root_message_id, input.title, input.created_by, at, at);
   const row = db
     .prepare(`SELECT thread_id FROM threads WHERE root_message_id = ?`)
