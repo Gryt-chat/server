@@ -3,6 +3,10 @@ import sharp from "sharp";
 import { v4 as uuidv4 } from "uuid";
 
 import { AVATAR_MAX_PX, AVATAR_THUMB_PX } from "../constants/media";
+
+/** The box a picture is cut to, and its thumbnail's. Avatars are square. */
+export interface PictureBox { width: number; height: number; thumbWidth: number; thumbHeight: number }
+const AVATAR_BOX: PictureBox = { width: AVATAR_MAX_PX, height: AVATAR_MAX_PX, thumbWidth: AVATAR_THUMB_PX, thumbHeight: AVATAR_THUMB_PX };
 import { insertFile, updateFileRecord } from "../db";
 import { deleteObject, putObject } from "../storage";
 import { findDominantColor, validateImage, MAX_INPUT_PIXELS } from "../utils/imageValidation";
@@ -11,7 +15,7 @@ export type StoredAvatarPicture =
   | { ok: true; fileId: string; processing: boolean }
   | { ok: false; status: 400 | 502; error: "invalid_file" | "s3_error"; message: string };
 
-/** Every raster avatar is stored through here, cut down to AVATAR_MAX_PX with a
+/** Every raster avatar and banner is stored through here, cut to its box with a
     thumbnail. SVG must not reach it: sharp renders SVG through librsvg. */
 export async function storeAvatarPicture(input: {
   bucket: string;
@@ -24,8 +28,13 @@ export async function storeAvatarPicture(input: {
   maxBytes: number;
   /** Names the picture in a storage error, e.g. "Avatar". */
   what: string;
+  /** A square avatar unless given. `prefix` is the storage folder. */
+  box?: PictureBox;
+  prefix?: string;
 }): Promise<StoredAvatarPicture> {
   const { bucket, bytes, originalName, uploadedBy, maxBytes, what } = input;
+  const box = input.box ?? AVATAR_BOX;
+  const prefix = input.prefix ?? "avatars";
   const fileId = uuidv4();
   const inputMime = input.mime.toLowerCase();
   const isAnimated = inputMime === "image/gif" || inputMime === "image/webp";
@@ -51,34 +60,34 @@ export async function storeAvatarPicture(input: {
   // avatar with large dimensions.
   const withinBounds =
     bytes.length <= maxBytes &&
-    (width ?? 0) <= AVATAR_MAX_PX &&
-    (height ?? 0) <= AVATAR_MAX_PX;
+    (width ?? 0) <= box.width &&
+    (height ?? 0) <= box.height;
 
   if (isAnimated && withinBounds) {
-    key = `avatars/${fileId}.${animExt}`;
+    key = `${prefix}/${fileId}.${animExt}`;
     storedBody = bytes;
     storedMime = inputMime;
     storedSize = bytes.length;
 
     const thumb = await sharp(bytes, { pages: 1, failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
-      .resize({ width: AVATAR_THUMB_PX, height: AVATAR_THUMB_PX, fit: "cover" })
+      .resize({ width: box.thumbWidth, height: box.thumbHeight, fit: "cover" })
       .avif({ quality: 50 })
       .toBuffer()
       .catch(() => null);
 
     if (thumb) {
-      thumbKey = `avatars/thumb_${fileId}.avif`;
+      thumbKey = `${prefix}/thumb_${fileId}.avif`;
       await putObject({ bucket, key: thumbKey, body: thumb, contentType: "image/avif" }).catch((e) => {
         console.error("avatar_thumb_s3_error", { bucket, key: thumbKey, message: (e instanceof Error ? e.message : "S3 upload failed.") });
         thumbKey = null;
       });
     }
   } else if (isAnimated) {
-    key = `avatars/${fileId}.avif`;
+    key = `${prefix}/${fileId}.avif`;
     processing = true;
     try {
       storedBody = await sharp(bytes, { pages: 1, failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
-        .resize({ width: AVATAR_MAX_PX, height: AVATAR_MAX_PX, fit: "cover" })
+        .resize({ width: box.width, height: box.height, fit: "cover" })
         .avif()
         .toBuffer();
     } catch {
@@ -88,13 +97,13 @@ export async function storeAvatarPicture(input: {
     storedSize = storedBody.length;
     // What was stored, not what was uploaded: `cover` crops to exactly
     // this box, so the original describes a file that is gone.
-    width = AVATAR_MAX_PX;
-    height = AVATAR_MAX_PX;
+    width = box.width;
+    height = box.height;
   } else {
-    key = `avatars/${fileId}.avif`;
+    key = `${prefix}/${fileId}.avif`;
     try {
       storedBody = await sharp(bytes, { failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
-        .resize({ width: AVATAR_MAX_PX, height: AVATAR_MAX_PX, fit: "cover" })
+        .resize({ width: box.width, height: box.height, fit: "cover" })
         .avif()
         .toBuffer();
     } catch {
@@ -102,17 +111,17 @@ export async function storeAvatarPicture(input: {
     }
     storedMime = "image/avif";
     storedSize = storedBody.length;
-    width = AVATAR_MAX_PX;
-    height = AVATAR_MAX_PX;
+    width = box.width;
+    height = box.height;
 
     const thumb = await sharp(bytes, { failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
-      .resize({ width: AVATAR_THUMB_PX, height: AVATAR_THUMB_PX, fit: "cover" })
+      .resize({ width: box.thumbWidth, height: box.thumbHeight, fit: "cover" })
       .avif({ quality: 50 })
       .toBuffer()
       .catch(() => null);
 
     if (thumb) {
-      thumbKey = `avatars/thumb_${fileId}.avif`;
+      thumbKey = `${prefix}/thumb_${fileId}.avif`;
       await putObject({ bucket, key: thumbKey, body: thumb, contentType: "image/avif" }).catch((e) => {
         console.error("avatar_thumb_s3_error", { bucket, key: thumbKey, message: (e instanceof Error ? e.message : "S3 upload failed.") });
         thumbKey = null;
@@ -148,7 +157,7 @@ export async function storeAvatarPicture(input: {
     width,
     height,
     thumbnail_key: thumbKey,
-    thumbnail_px: thumbKey ? AVATAR_THUMB_PX : null,
+    thumbnail_px: thumbKey ? box.thumbWidth : null,
     original_name: originalName,
     dominant_color: dominantColor,
     uploaded_by_server_user_id: uploadedBy,
@@ -166,25 +175,25 @@ export async function storeAvatarPicture(input: {
           // Every frame is decoded here, unlike the single-page check
           // that let this buffer through, so the ceiling comes with it.
           const pipeline = sharp(animBuf, { animated: true, failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
-            .resize({ width: AVATAR_MAX_PX, height: AVATAR_MAX_PX, fit: "cover" });
+            .resize({ width: box.width, height: box.height, fit: "cover" });
           const resized = outputFormat === "gif"
             ? await pipeline.gif().toBuffer()
             : await pipeline.webp().toBuffer();
 
-          const animKey = `avatars/${fileId}.${outputFormat}`;
+          const animKey = `${prefix}/${fileId}.${outputFormat}`;
           await putObject({ bucket, key: animKey, body: resized, contentType: outputMime });
 
           const thumbBuf = await sharp(resized, { pages: 1, failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
-            .resize({ width: AVATAR_THUMB_PX, height: AVATAR_THUMB_PX, fit: "cover" })
+            .resize({ width: box.thumbWidth, height: box.thumbHeight, fit: "cover" })
             .avif({ quality: 50 })
             .toBuffer()
             .catch(() => null);
-          const newThumbKey = thumbBuf ? `avatars/thumb_${fileId}.avif` : null;
+          const newThumbKey = thumbBuf ? `${prefix}/thumb_${fileId}.avif` : null;
           if (thumbBuf && newThumbKey) {
             await putObject({ bucket, key: newThumbKey, body: thumbBuf, contentType: "image/avif" }).catch(() => {});
           }
 
-          await updateFileRecord(fileId, { s3_key: animKey, mime: outputMime, size: resized.length, thumbnail_key: newThumbKey, thumbnail_px: newThumbKey ? AVATAR_THUMB_PX : null });
+          await updateFileRecord(fileId, { s3_key: animKey, mime: outputMime, size: resized.length, thumbnail_key: newThumbKey, thumbnail_px: newThumbKey ? box.thumbWidth : null });
 
           if (animKey !== key) {
             await deleteObject({ bucket, key }).catch(() => {});

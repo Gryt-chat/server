@@ -41,6 +41,8 @@ export interface UserRecord {
   server_user_id: string;
   nickname: string;
   avatar_file_id?: string;
+  /** The member card banner. Only sent while they may upload; see `buildMemberList`. */
+  banner_file_id: string | null;
   joined_with_invite_code?: string;
   created_at: Date;
   last_seen: Date;
@@ -212,7 +214,7 @@ export interface FileRecord {
 /** What {@link FileRecord} is owned by, for deciding who may read it. */
 export interface FileOwnership {
   uploadedBy: string | null;
-  /** A member's or a webhook's avatar, which every member sees. */
+  /** A member's avatar or banner, or a webhook's avatar, which every member sees. */
   isAvatar: boolean;
   /** Conversations with a message carrying it: channel ids and DM ids alike. */
   attachedTo: string[];

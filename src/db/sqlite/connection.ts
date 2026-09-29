@@ -919,6 +919,11 @@ function runMigrations(d: DatabaseSync): void {
     d.exec("ALTER TABLE conversations ADD COLUMN icon_file_id TEXT");
   }
 
+  // The member card banner, an upload like `avatar_file_id`.
+  if (!hasColumn(d, "users", "banner_file_id")) {
+    d.exec("ALTER TABLE users ADD COLUMN banner_file_id TEXT");
+  }
+
   // Unused since GRYT-1379: hiding a conversation is a client-side, per-device
   // thing now. Kept so an older binary rolling back still finds the column.
   if (!hasColumn(d, "conversation_members", "hidden_at")) {
