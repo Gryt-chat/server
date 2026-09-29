@@ -33,6 +33,7 @@ import { messagesRouter } from "./routes/messages";
 import { uploadsRouter } from "./routes/uploads";
 import { membersRouter } from "./routes/members";
 import { emojisRouter } from "./routes/emojis";
+import { gameArtRouter } from "./routes/gameArt";
 import { linkPreviewRouter } from "./routes/linkPreview";
 import { oEmbedRouter } from "./routes/oembed";
 import { mediaMetadataRouter } from "./routes/mediaMetadata";
@@ -357,6 +358,7 @@ app.use(
 );
 // Limited inside the router, where it can tell a cache hit from an outbound fetch.
 app.use("/api/link-preview", linkPreviewRouter);
+app.use("/api/game-art", gameArtRouter);
 app.use("/api/oembed", httpRateLimit("http:outbound", RL_HTTP_OUTBOUND), oEmbedRouter);
 app.use("/api/media/metadata", httpRateLimit("http:outbound", RL_HTTP_OUTBOUND), mediaMetadataRouter);
 app.use("/api/webhooks", webhooksRouter);
