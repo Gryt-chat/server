@@ -18,6 +18,10 @@ function member(over: Partial<Member> = {}): Member {
     avatarFileId: null,
     avatarColor: null,
     avatarWorn: null,
+    cardStyle: null,
+    bio: null,
+    pronouns: null,
+    statusLine: null,
     dmKeyBinding: null,
     personKeyBinding: null,
     role: "member",
@@ -72,6 +76,10 @@ describe("the member list dedupe", () => {
     ["a server deafen", { isServerDeafened: true }],
     ["a status", { activity: "Playing Factorio" }],
     ["a game's card", { richActivity: { type: "playing", name: "Factorio" } }],
+    ["a card style", { cardStyle: { pattern: "dots" } }],
+    ["a bio", { bio: "Plays bass badly" }],
+    ["pronouns", { pronouns: "she/her" }],
+    ["a status line", { statusLine: "back at six" }],
   ];
 
   for (const [what, over] of changes) {
@@ -90,6 +98,14 @@ describe("the member list dedupe", () => {
     assert.notEqual(
       memberStateHash([member({ avatarWorn: "aiac----adab" })]),
       memberStateHash([member({ avatarWorn: null })]),
+    );
+  });
+
+  it("sees a card style change inside the object", () => {
+    // Only a colour moves, so a hash comparing by reference or by key would miss it.
+    assert.notEqual(
+      memberStateHash([member({ cardStyle: { fill: "solid", c1: "#111111" } })]),
+      memberStateHash([member({ cardStyle: { fill: "solid", c1: "#222222" } })]),
     );
   });
 

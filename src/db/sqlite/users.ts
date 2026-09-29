@@ -28,6 +28,10 @@ function rowToUser(r: Record<string, unknown>): UserRecord {
       ? fromIso(r.nickname_changed_at as string)
       : null,
     avatar_worn: (r.avatar_worn as string) || null,
+    card_style: (r.card_style as string) || null,
+    bio: (r.bio as string) || null,
+    pronouns: (r.pronouns as string) || null,
+    status_line: (r.status_line as string) || null,
     dm_key_binding: (r.dm_key_binding as string) || null,
     person_key_binding: (r.person_key_binding as string) || null,
   };
@@ -130,6 +134,10 @@ export async function upsertUser(
     // A new member has not designed anything yet, so their owl is whatever
     // their name draws.
     avatar_worn: null,
+    card_style: null,
+    bio: null,
+    pronouns: null,
+    status_line: null,
     // Sent after joining, if at all. A client older than GRYT-720 never sends
     // one, and a member with no binding simply has no encrypted messages.
     dm_key_binding: null,
@@ -221,6 +229,18 @@ export async function setUserAvatar(serverUserId: string, avatarFileId: string |
 export async function setUserWorn(serverUserId: string, worn: string | null): Promise<void> {
   const db = getSqliteDb();
   db.prepare(`UPDATE users SET avatar_worn = ? WHERE server_user_id = ?`).run(worn, serverUserId);
+}
+
+/** Only the fields passed are written. Callers clean the values first; see utils/memberCard. */
+export async function setUserCard(
+  serverUserId: string,
+  card: { card_style?: string | null; bio?: string | null; pronouns?: string | null; status_line?: string | null },
+): Promise<void> {
+  const columns = (["card_style", "bio", "pronouns", "status_line"] as const).filter((c) => card[c] !== undefined);
+  if (columns.length === 0) return;
+  const db = getSqliteDb();
+  db.prepare(`UPDATE users SET ${columns.map((c) => `${c} = ?`).join(", ")} WHERE server_user_id = ?`)
+    .run(...columns.map((c) => card[c] ?? null), serverUserId);
 }
 
 /** Carries `gryt_user_id` only so a caller can read the bot prefix off it. The

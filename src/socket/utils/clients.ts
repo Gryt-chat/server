@@ -13,6 +13,7 @@ import { isBotIdentity } from "../../auth/identity";
 import { memberIdentity } from "./memberIdentity";
 import { scopedChannelIds, visibleChannelIds } from "../../services/channelPermissions";
 import { listRolesByMember } from "../../services/permissions";
+import { cardFields } from "../../utils/memberCard";
 
 /** A member whose permissions were never cached receives no broadcasts, so all
     three admission paths call this and all three await it. */
@@ -253,6 +254,8 @@ export async function buildMemberList(clientsInfo: Clients) {
         // `avatarFileId` is still set, because saving a design uploads a PNG
         // that an older client shows. Passed through as stored.
         avatarWorn: user.avatar_worn,
+        // cardStyle, bio, pronouns, statusLine. Stored, so they show while offline too.
+        ...cardFields(user),
         // The one their name is coloured by. A single string because every
         // client reads this field; `roles` beside it is the whole set.
         role: rolesByMember.get(user.server_user_id)?.[0] || 'member',
@@ -311,6 +314,10 @@ export function memberStateHash(members: MemberListEntry[]): string {
       // Designing a new owl changes nothing else about a member, so without
       // this line it would change nothing anybody sees.
       avatarWorn: m.avatarWorn,
+      cardStyle: m.cardStyle,
+      bio: m.bio,
+      pronouns: m.pronouns,
+      statusLine: m.statusLine,
       role: m.role,
       isBot: m.isBot,
       status: m.status,
