@@ -1,0 +1,482 @@
+{
+  "guild": {
+    "id": "900",
+    "name": "Test Guild",
+    "iconUrl": "media/guild-00000.png"
+  },
+  "channel": {
+    "id": "100",
+    "type": "GuildTextChat",
+    "categoryId": "50",
+    "category": "Text Channels",
+    "name": "general",
+    "topic": "Talk about anything"
+  },
+  "dateRange": {
+    "after": null,
+    "before": null
+  },
+  "exportedAt": "2026-09-01T00:00:00+00:00",
+  "messages": [
+    {
+      "id": "1001",
+      "type": "Default",
+      "timestamp": "2021-01-01T10:00:00+00:00",
+      "timestampEdited": "2021-01-01T10:05:00+00:00",
+      "callEndedTimestamp": null,
+      "isPinned": true,
+      "content": "Hello <@12>, see <#100> <:pepe:77>",
+      "author": {
+        "id": "11",
+        "name": "ola",
+        "discriminator": "0000",
+        "nickname": "Ola N",
+        "color": null,
+        "isBot": false,
+        "roles": [],
+        "avatarUrl": "media/avatar-ola-1A2B3.png"
+      },
+      "attachments": [
+        {
+          "id": "5001",
+          "url": "media/cat-7E8F9.png",
+          "fileName": "cat.png",
+          "fileSizeBytes": 94
+        },
+        {
+          "id": "5002",
+          "url": "media/notes-44444.txt",
+          "fileName": "notes.txt",
+          "fileSizeBytes": 14
+        }
+      ],
+      "embeds": [],
+      "stickers": [],
+      "reactions": [
+        {
+          "emoji": {
+            "id": "",
+            "name": "👍",
+            "code": "thumbsup",
+            "isAnimated": false,
+            "imageUrl": "media/1f44d.svg"
+          },
+          "count": 2,
+          "users": [
+            {
+              "id": "12",
+              "name": "kari",
+              "discriminator": "0000",
+              "nickname": "Kari",
+              "color": null,
+              "isBot": false,
+              "roles": [],
+              "avatarUrl": "media/avatar-kari-4C5D6.png"
+            },
+            {
+              "id": "11",
+              "name": "ola",
+              "discriminator": "0000",
+              "nickname": "Ola N",
+              "color": null,
+              "isBot": false,
+              "roles": [],
+              "avatarUrl": "media/avatar-ola-1A2B3.png"
+            }
+          ]
+        },
+        {
+          "emoji": {
+            "id": "77",
+            "name": "pepe",
+            "code": "pepe",
+            "isAnimated": false,
+            "imageUrl": "media/pepe-11111.png"
+          },
+          "count": 1,
+          "users": [
+            {
+              "id": "12",
+              "name": "kari",
+              "discriminator": "0000",
+              "nickname": "Kari",
+              "color": null,
+              "isBot": false,
+              "roles": [],
+              "avatarUrl": "media/avatar-kari-4C5D6.png"
+            }
+          ]
+        }
+      ],
+      "mentions": [
+        {
+          "id": "12",
+          "name": "kari",
+          "discriminator": "0000",
+          "nickname": "Kari",
+          "color": null,
+          "isBot": false,
+          "roles": [],
+          "avatarUrl": "media/avatar-kari-4C5D6.png"
+        }
+      ],
+      "inlineEmojis": [
+        {
+          "id": "77",
+          "name": "pepe",
+          "code": "pepe",
+          "isAnimated": false,
+          "imageUrl": "media/pepe-11111.png"
+        }
+      ]
+    },
+    {
+      "id": "1002",
+      "type": "Reply",
+      "timestamp": "2021-01-01T10:01:00+00:00",
+      "timestampEdited": null,
+      "callEndedTimestamp": null,
+      "isPinned": false,
+      "content": "Nice cat",
+      "author": {
+        "id": "12",
+        "name": "kari",
+        "discriminator": "0000",
+        "nickname": "Kari",
+        "color": null,
+        "isBot": false,
+        "roles": [],
+        "avatarUrl": "media/avatar-kari-4C5D6.png"
+      },
+      "attachments": [],
+      "embeds": [],
+      "stickers": [],
+      "reactions": [],
+      "mentions": [],
+      "reference": {
+        "type": "Default",
+        "messageId": "1001",
+        "channelId": "100",
+        "guildId": "900"
+      },
+      "inlineEmojis": []
+    },
+    {
+      "id": "1003",
+      "type": "GuildMemberJoin",
+      "timestamp": "2021-01-01T10:02:00+00:00",
+      "timestampEdited": null,
+      "callEndedTimestamp": null,
+      "isPinned": false,
+      "content": "Ola joined the server.",
+      "author": {
+        "id": "11",
+        "name": "ola",
+        "discriminator": "0000",
+        "nickname": "Ola N",
+        "color": null,
+        "isBot": false,
+        "roles": [],
+        "avatarUrl": "media/avatar-ola-1A2B3.png"
+      },
+      "attachments": [],
+      "embeds": [],
+      "stickers": [],
+      "reactions": [],
+      "mentions": [],
+      "inlineEmojis": []
+    },
+    {
+      "id": "1004",
+      "type": "ChannelPinnedMessage",
+      "timestamp": "2021-01-01T10:03:00+00:00",
+      "timestampEdited": null,
+      "callEndedTimestamp": null,
+      "isPinned": false,
+      "content": "Ola pinned a message to this channel.",
+      "author": {
+        "id": "11",
+        "name": "ola",
+        "discriminator": "0000",
+        "nickname": "Ola N",
+        "color": null,
+        "isBot": false,
+        "roles": [],
+        "avatarUrl": "media/avatar-ola-1A2B3.png"
+      },
+      "attachments": [],
+      "embeds": [],
+      "stickers": [],
+      "reactions": [],
+      "mentions": [],
+      "reference": {
+        "type": "Default",
+        "messageId": "1001",
+        "channelId": "100",
+        "guildId": "900"
+      },
+      "inlineEmojis": []
+    },
+    {
+      "id": "200",
+      "type": "Default",
+      "timestamp": "2021-01-01T10:04:00+00:00",
+      "timestampEdited": null,
+      "callEndedTimestamp": null,
+      "isPinned": false,
+      "content": "Who's in for Friday?",
+      "author": {
+        "id": "12",
+        "name": "kari",
+        "discriminator": "0000",
+        "nickname": "Kari",
+        "color": null,
+        "isBot": false,
+        "roles": [],
+        "avatarUrl": "media/avatar-kari-4C5D6.png"
+      },
+      "attachments": [],
+      "embeds": [],
+      "stickers": [],
+      "reactions": [],
+      "mentions": [],
+      "inlineEmojis": []
+    },
+    {
+      "id": "1005",
+      "type": "ThreadCreated",
+      "timestamp": "2021-01-01T10:06:00+00:00",
+      "timestampEdited": null,
+      "callEndedTimestamp": null,
+      "isPinned": false,
+      "content": "side-thread",
+      "author": {
+        "id": "11",
+        "name": "ola",
+        "discriminator": "0000",
+        "nickname": "Ola N",
+        "color": null,
+        "isBot": false,
+        "roles": [],
+        "avatarUrl": "media/avatar-ola-1A2B3.png"
+      },
+      "attachments": [],
+      "embeds": [],
+      "stickers": [],
+      "reactions": [],
+      "mentions": [],
+      "reference": {
+        "type": "Default",
+        "messageId": null,
+        "channelId": "300",
+        "guildId": "900"
+      },
+      "inlineEmojis": []
+    },
+    {
+      "id": "1006",
+      "type": "Default",
+      "timestamp": "2021-01-01T10:07:00+00:00",
+      "timestampEdited": null,
+      "callEndedTimestamp": null,
+      "isPinned": false,
+      "content": "Read https://example.com/post",
+      "author": {
+        "id": "11",
+        "name": "ola",
+        "discriminator": "0000",
+        "nickname": "Ola N",
+        "color": null,
+        "isBot": false,
+        "roles": [],
+        "avatarUrl": "media/avatar-ola-1A2B3.png"
+      },
+      "attachments": [],
+      "embeds": [
+        {
+          "title": "Example post",
+          "url": "https://example.com/post",
+          "timestamp": null,
+          "description": "A preview",
+          "color": null,
+          "images": [],
+          "fields": [],
+          "inlineEmojis": []
+        },
+        {
+          "title": "Build passed",
+          "url": null,
+          "timestamp": "2021-01-01T10:07:00+00:00",
+          "description": "All green",
+          "color": "#57F287",
+          "author": {
+            "name": "CI",
+            "url": "https://ci.example.com",
+            "iconUrl": "media/avatar-ola-1A2B3.png"
+          },
+          "image": {
+            "url": "media/embed-image-22222.png",
+            "canonicalUrl": "https://cdn.example.com/x.png",
+            "width": 8,
+            "height": 8
+          },
+          "images": [],
+          "fields": [
+            {
+              "name": "Branch",
+              "value": "main",
+              "isInline": true
+            }
+          ],
+          "footer": {
+            "text": "ci bot",
+            "iconUrl": null
+          },
+          "inlineEmojis": []
+        }
+      ],
+      "stickers": [],
+      "reactions": [],
+      "mentions": [],
+      "inlineEmojis": []
+    },
+    {
+      "id": "1007",
+      "type": "Default",
+      "timestamp": "2021-01-01T10:08:00+00:00",
+      "timestampEdited": null,
+      "callEndedTimestamp": null,
+      "isPinned": false,
+      "content": "",
+      "author": {
+        "id": "12",
+        "name": "kari",
+        "discriminator": "0000",
+        "nickname": "Kari",
+        "color": null,
+        "isBot": false,
+        "roles": [],
+        "avatarUrl": "media/avatar-kari-4C5D6.png"
+      },
+      "attachments": [],
+      "embeds": [],
+      "stickers": [
+        {
+          "id": "8001",
+          "name": "wave",
+          "format": "PngImage",
+          "sourceUrl": "media/sticker-wave-33333.png"
+        },
+        {
+          "id": "8002",
+          "name": "dance",
+          "format": "Lottie",
+          "sourceUrl": "media/dance-55555.json"
+        }
+      ],
+      "reactions": [],
+      "mentions": [],
+      "inlineEmojis": []
+    },
+    {
+      "id": "1008",
+      "type": "Default",
+      "timestamp": "2021-01-01T10:09:00+00:00",
+      "timestampEdited": null,
+      "callEndedTimestamp": null,
+      "isPinned": false,
+      "content": "",
+      "author": {
+        "id": "11",
+        "name": "ola",
+        "discriminator": "0000",
+        "nickname": "Ola N",
+        "color": null,
+        "isBot": false,
+        "roles": [],
+        "avatarUrl": "media/avatar-ola-1A2B3.png"
+      },
+      "attachments": [
+        {
+          "id": "5003",
+          "url": "../../../../../../etc/hosts",
+          "fileName": "hosts",
+          "fileSizeBytes": 10
+        },
+        {
+          "id": "5004",
+          "url": "https://cdn.discordapp.com/attachments/1/2/gone.png",
+          "fileName": "gone.png",
+          "fileSizeBytes": 10
+        }
+      ],
+      "embeds": [],
+      "stickers": [],
+      "reactions": [],
+      "mentions": [],
+      "inlineEmojis": []
+    },
+    {
+      "id": "1009",
+      "type": "Default",
+      "timestamp": "2021-01-01T10:10:00+00:00",
+      "timestampEdited": null,
+      "callEndedTimestamp": null,
+      "isPinned": false,
+      "content": "",
+      "author": {
+        "id": "12",
+        "name": "kari",
+        "discriminator": "0000",
+        "nickname": "Kari",
+        "color": null,
+        "isBot": false,
+        "roles": [],
+        "avatarUrl": "media/avatar-kari-4C5D6.png"
+      },
+      "attachments": [
+        {
+          "id": "5005",
+          "url": "/home/someone/exports/Test Guild_media/cat-7E8F9.png",
+          "fileName": "cat-again.png",
+          "fileSizeBytes": 94
+        }
+      ],
+      "embeds": [],
+      "stickers": [],
+      "reactions": [],
+      "mentions": [],
+      "inlineEmojis": []
+    },
+    {
+      "id": "1010",
+      "type": "Default",
+      "timestamp": "2021-01-01T10:11:00+00:00",
+      "timestampEdited": null,
+      "callEndedTimestamp": null,
+      "isPinned": false,
+      "content": "",
+      "author": {
+        "id": "11",
+        "name": "ola",
+        "discriminator": "0000",
+        "nickname": "Ola N",
+        "color": null,
+        "isBot": false,
+        "roles": [],
+        "avatarUrl": "media/avatar-ola-1A2B3.png"
+      },
+      "attachments": [],
+      "embeds": [],
+      "stickers": [],
+      "reactions": [],
+      "mentions": [],
+      "forwardedMessage": {
+        "content": "forwarded words",
+        "attachments": []
+      },
+      "inlineEmojis": []
+    }
+  ],
+  "messageCount": 11
+}

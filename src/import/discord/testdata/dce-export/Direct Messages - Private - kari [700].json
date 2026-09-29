@@ -1,0 +1,48 @@
+{
+  "guild": {
+    "id": "0",
+    "name": "Direct Messages",
+    "iconUrl": ""
+  },
+  "channel": {
+    "id": "700",
+    "type": "DirectTextChat",
+    "categoryId": null,
+    "category": "Private",
+    "name": "kari",
+    "topic": null
+  },
+  "dateRange": {
+    "after": null,
+    "before": null
+  },
+  "exportedAt": "2026-09-01T00:00:00+00:00",
+  "messages": [
+    {
+      "id": "7001",
+      "type": "Default",
+      "timestamp": "2021-01-01T00:00:00+00:00",
+      "timestampEdited": null,
+      "callEndedTimestamp": null,
+      "isPinned": false,
+      "content": "secret",
+      "author": {
+        "id": "12",
+        "name": "kari",
+        "discriminator": "0000",
+        "nickname": "Kari",
+        "color": null,
+        "isBot": false,
+        "roles": [],
+        "avatarUrl": "media/avatar-kari-4C5D6.png"
+      },
+      "attachments": [],
+      "embeds": [],
+      "stickers": [],
+      "reactions": [],
+      "mentions": [],
+      "inlineEmojis": []
+    }
+  ],
+  "messageCount": 1
+}

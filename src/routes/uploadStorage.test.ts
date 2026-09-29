@@ -129,11 +129,18 @@ describe("the route uses it", () => {
   const routeStart = file.indexOf("uploadsRouter.post(");
   // The route's own closing line: the avatar pipeline now sits between routes.
   const routeEnd = file.indexOf("\n);\n", routeStart);
-  const source = file.slice(routeStart, routeEnd);
+  const route = file.slice(routeStart, routeEnd);
+
+  // The route hands the file to `storeUploadedFile`, which the importer shares,
+  // so the checks below read the callee rather than the route.
+  const service = readFileSync(join(__dirname, "..", "services", "storeUploadedFile.ts"), "utf8");
+  const source = service.slice(service.indexOf("export async function storeUploadedFile("));
 
   it("asks for the decision rather than working it out again", () => {
-    assert.match(source, /storageForUpload\(\{/, "the route no longer calls storageForUpload");
-    assert.match(source, /sealed: isSealedUpload\(req\.body\)/, "the flag is not read off the request");
+    assert.match(route, /storeUploadedFile\(\{/, "the route no longer stores through storeUploadedFile");
+    assert.match(route, /sealed: isSealedUpload\(req\.body\)/, "the flag is not read off the request");
+    assert.match(source, /storageForUpload\(\{/, "storeUploadedFile no longer calls storageForUpload");
+    assert.match(source, /sealed: input\.sealed/, "storeUploadedFile drops the sealed flag");
   });
 
   it("stores what the decision said, not what the client sent", () => {
@@ -147,8 +154,8 @@ describe("the route uses it", () => {
     assert.equal(rows.length, 2, "an insertFile was added or removed; check it too");
 
     for (const row of rows) {
-      assert.doesNotMatch(row, /file\.mimetype/, "the client's content type reached a row");
-      assert.doesNotMatch(row, /file\.originalname/, "the client's filename reached a row");
+      assert.doesNotMatch(row, /mimetype/, "the client's content type reached a row");
+      assert.doesNotMatch(row, /originalName: input|input\.originalName/, "the client's filename reached a row");
       assert.match(row, /original_name: storage\.originalName/);
     }
 
@@ -177,9 +184,10 @@ describe("the route uses it", () => {
     // Posters are the sandboxed image worker's job (GRYT-1423). This was an
     // unconfined ffmpeg on PATH, run inside the upload.
     assert.doesNotMatch(file, /ffmpeg|child_process|execFile|spawn\(/);
+    assert.doesNotMatch(service, /ffmpeg|child_process|execFile|spawn\(/);
   });
 
   it("answers the uploader the same whether or not a poster ever comes", () => {
-    assert.match(source, /res\.status\(201\)\.json\(\{ fileId, key, thumbnailKey: null \}\)/);
+    assert.match(route, /res\.status\(201\)\.json\(\{ fileId: stored\.fileId, key: stored\.key, thumbnailKey: null \}\)/);
   });
 });

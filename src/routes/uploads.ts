@@ -4,12 +4,12 @@ import type { Request, Response, NextFunction } from "express";
 import multer from "multer";
 import { v4 as uuidv4 } from "uuid";
 import mime from "mime-types";
-import { unlink, readFile } from "fs/promises";
+import { unlink } from "fs/promises";
 import { putObject, getObject } from "../storage";
-import { insertFile, insertImageJob, getFile, updateUserAvatar, setUserAvatar, setUserBanner, getServerConfig, getUserByServerId, DEFAULT_AVATAR_MAX_BYTES, DEFAULT_UPLOAD_MAX_BYTES } from "../db";
+import { insertFile, getFile, updateUserAvatar, setUserAvatar, setUserBanner, getServerConfig, getUserByServerId, DEFAULT_AVATAR_MAX_BYTES, DEFAULT_UPLOAD_MAX_BYTES } from "../db";
 import { BANNER_BOX } from "../constants/media";
 import { deleteUnreferencedFiles } from "../jobs/mediaSweep";
-import { isSealedUpload, storageForUpload } from "./uploadStorage";
+import { isSealedUpload } from "./uploadStorage";
 import { requireBearerToken } from "../middleware/requireBearerToken";
 import { verifyFileToken } from "../utils/jwt";
 import { checkSignedFileUrl, readSignedFileUrl, type SignedFileUrl } from "../utils/fileUrl";
@@ -18,9 +18,8 @@ import { fileReadVerdict } from "../services/fileAccess";
 import { RangeNotSatisfiableError } from "../utils/byteRange";
 import { sendStoredBody } from "../utils/sendStoredBody";
 import { ensurePermission } from "../middleware/requirePermission";
-import { validateImage } from "../utils/imageValidation";
 import { sanitizeSvg } from "../utils/svgSanitize";
-import { PARSE_LIMITS, readVideoDimensionsFromFile } from "../utils/videoDimensions";
+import { storeUploadedFile } from "../services/storeUploadedFile";
 
 /** SVG is on this list only because it has been through sanitizeSvg(), is drawn
     through `<img>`, and is sandboxed by the CSP below. That header is required. */
@@ -36,10 +35,6 @@ function isInlineSafe(contentType: string | undefined): boolean {
 
 // Avatars and emoji stay in memory: both are re-encoded through sharp at once
 // and carry their own ceilings, so a temp file would be written and deleted.
-
-/** A validation ceiling, not an upload one: decoding an image means holding it.
-    Files and videos are not subject to this. */
-const IMAGE_VALIDATION_MAX_BYTES = 64 * 1024 * 1024;
 
 /** One ceiling, the operator's, refused as it streams rather than after the
     file has landed. Zero means unlimited. */
@@ -113,140 +108,29 @@ uploadsRouter.post(
       return;
     }
 
-    const fileId = uuidv4();
-
-    // In its own file because nothing in here loads in a test, and because
-    // sealing is the part with a security answer. See `uploadStorage.ts`.
-    const storage = storageForUpload({
-      sealed: isSealedUpload(req.body),
-      fileId,
-      mimetype: file.mimetype,
-      originalName: file.originalname,
-    });
-
     Promise.resolve()
       .then(async () => {
         const cfg = await getServerConfig().catch(() => null);
         const maxBytes = (typeof cfg?.upload_max_bytes === "number" ? cfg.upload_max_bytes : DEFAULT_UPLOAD_MAX_BYTES);
-        const hasLimit = typeof maxBytes === "number" && maxBytes > 0;
 
-        // Images too: the worker runs after the original is written, and a
-        // desktop-hosted server has none. Multer already refused as it streamed.
-        if (hasLimit && file.size > maxBytes) {
-          res.status(413).json({
-            error: "file_too_large",
-            message: `File too large. Max ${(maxBytes / (1024 * 1024)).toFixed(1)}MB.`,
-          });
-          return;
-        }
-
-        const { key, storedMime } = storage;
-        let width: number | null = null;
-        let height: number | null = null;
-
-        // Stored as the sanitised vector and never queued as an image job: the
-        // worker would hand it to sharp, which renders SVG through librsvg.
-        if (storage.treatAsSvg) {
-          const svg = sanitizeSvg(await readFile(file.path));
-          if (!svg.valid) {
-            res.status(400).json({ error: "invalid_file", message: svg.reason });
-            return;
-          }
-
-          const body = Buffer.from(svg.svg, "utf8");
-          const svgKey = `uploads/${fileId}.svg`;
-          await putObject({ bucket, key: svgKey, body, contentType: "image/svg+xml" });
-
-          await insertFile({
-            file_id: fileId,
-            s3_key: svgKey,
-            mime: "image/svg+xml",
-            size: body.length,
-            width: svg.width,
-            height: svg.height,
-            thumbnail_key: null,
-            // Through the decision rather than off the request, so there is
-            // one place the client's filename can reach a row.
-            original_name: storage.originalName,
-            uploaded_by_server_user_id: req.tokenPayload?.serverUserId ?? null,
-            created_at: new Date(),
-          });
-
-          res.status(201).json({ fileId, key: svgKey, thumbnailKey: null });
-          return;
-        }
-
-        if (storage.validateAsImage) {
-          // The mime off the request is a claim, and taking it meant an SVG
-          // carrying <script> was served back inline.
-          if (file.size > IMAGE_VALIDATION_MAX_BYTES) {
-            res.status(413).json({
-              error: "file_too_large",
-              message: `Images are capped at ${(IMAGE_VALIDATION_MAX_BYTES / (1024 * 1024)).toFixed(0)}MB so they can be checked before they are stored.`,
-            });
-            return;
-          }
-
-          const imageBytes = await readFile(file.path);
-          const validation = await validateImage(imageBytes, { animated: true });
-          if (!validation.valid) {
-            res.status(400).json({ error: "invalid_file", message: validation.reason });
-            return;
-          }
-
-          width = parseDimField(req.body?.width);
-          height = parseDimField(req.body?.height);
-
-          // `validateImage` already read the dimensions off the same decode.
-          // The second library was `image-size`, whose advisory has no fix.
-          if (!width || !height) {
-            width = validation.width;
-            height = validation.height;
-          }
-        }
-
-        // The whole point of the exercise: the bytes go from multer's temp file
-        // to storage without the process ever holding them.
-        await putObject({ bucket, key, sourcePath: file.path, contentType: storedMime });
-
-        // Headers only, never a decode. The client's claim is the fallback, as it
-        // is for images, and only counts when it gives both sides.
-        if (storage.measureAsVideo) {
-          const claimed = { width: parseDimField(req.body?.width), height: parseDimField(req.body?.height) };
-          const measured = (await readVideoDimensionsFromFile(file.path)) ?? claimed;
-          const fits = (n: number | null) => n !== null && n <= PARSE_LIMITS.maxSide;
-          if (fits(measured.width) && fits(measured.height)) {
-            width = measured.width;
-            height = measured.height;
-          }
-        }
-
-        await insertFile({
-          file_id: fileId,
-          s3_key: key,
-          mime: storedMime,
+        // Shared with the Discord importer, so both store a file the same way.
+        const stored = await storeUploadedFile({
+          bucket,
+          path: file.path,
           size: file.size,
-          width,
-          height,
-          // A video's poster, like an image's thumbnail, is the worker's to fill in.
-          thumbnail_key: null,
-          original_name: storage.originalName,
-          uploaded_by_server_user_id: req.tokenPayload?.serverUserId ?? null,
-          created_at: new Date(),
+          mimetype: file.mimetype,
+          originalName: file.originalname,
+          sealed: isSealedUpload(req.body),
+          uploadedBy: req.tokenPayload?.serverUserId ?? null,
+          maxBytes,
+          claimedWidth: parseDimField(req.body?.width),
+          claimedHeight: parseDimField(req.body?.height),
         });
-
-        if (storage.queueImageJob) {
-          const jobId = uuidv4();
-          await insertImageJob({
-            job_id: jobId,
-            file_id: fileId,
-            raw_s3_key: key,
-            raw_content_type: storedMime,
-            raw_bytes: file.size,
-          }).catch((e: unknown) => consola.warn("Failed to queue image job", e));
+        if (!stored.ok) {
+          res.status(stored.status).json({ error: stored.error, message: stored.message });
+          return;
         }
-
-        res.status(201).json({ fileId, key, thumbnailKey: null });
+        res.status(201).json({ fileId: stored.fileId, key: stored.key, thumbnailKey: null });
       })
       // Every exit path, including the early returns and anything that threw:
       // multer's temp file is ours and nothing else removes it.
