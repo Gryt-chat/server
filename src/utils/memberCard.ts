@@ -25,7 +25,7 @@ export interface CardStyle {
   /** A registry id the client looks up. An id it does not know draws as `none`. */
   pattern?: string;
   cover?: "card";
-  fade?: "banner";
+  fade?: "banner" | "none";
   colours?: "banner";
   /** Pattern tuning. Scale and rotation leave out their defaults (100, 0). */
   pScale?: number;
@@ -93,7 +93,7 @@ export function normaliseCardStyle(value: unknown): CardStyle | null {
     out.pattern = raw.pattern;
   }
   if (raw.cover === "card") out.cover = "card";
-  if (raw.fade === "banner") out.fade = "banner";
+  if (raw.fade === "banner" || raw.fade === "none") out.fade = raw.fade;
   if (raw.colours === "banner") out.colours = "banner";
 
   const pScale = readInt(raw.pScale, 50, 300);

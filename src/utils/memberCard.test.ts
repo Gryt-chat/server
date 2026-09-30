@@ -174,6 +174,15 @@ describe("line weight, the pattern's layer and the outline", () => {
   });
 });
 
+describe("the banner's fade", () => {
+  it("keeps the whole-banner fade and no fade, and leaves out the bottom one", () => {
+    assert.deepEqual(normaliseCardStyle({ fade: "banner" }), { fade: "banner" });
+    assert.deepEqual(normaliseCardStyle({ fade: "none" }), { fade: "none" });
+    assert.equal(normaliseCardStyle({ fade: "bottom" }), null);
+    assert.equal(normaliseCardStyle({ fade: "sideways" }), null);
+  });
+});
+
 describe("the plain card as a choice", () => {
   it("is kept when it is the whole style, so it isn't read as no card", () => {
     assert.deepEqual(normaliseCardStyle({ plain: true }), { plain: true });
