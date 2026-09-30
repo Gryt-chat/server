@@ -174,6 +174,19 @@ describe("line weight, the pattern's layer and the outline", () => {
   });
 });
 
+describe("the plain card as a choice", () => {
+  it("is kept when it is the whole style, so it isn't read as no card", () => {
+    assert.deepEqual(normaliseCardStyle({ plain: true }), { plain: true });
+    assert.deepEqual(readStoredCardStyle(JSON.stringify({ plain: true })), { plain: true });
+  });
+
+  it("is dropped next to a colour or a pattern, and for anything but true", () => {
+    assert.deepEqual(normaliseCardStyle({ plain: true, pattern: "dots" }), { pattern: "dots" });
+    assert.equal(normaliseCardStyle({ plain: "yes" }), null);
+    assert.equal(normaliseCardStyle({ plain: false }), null);
+  });
+});
+
 describe("an icon for the icon pattern", () => {
   it("keeps any Phosphor-shaped name, known or not", () => {
     assert.deepEqual(normaliseCardStyle({ pattern: "icon", pIcon: "game-controller" }), { pattern: "icon", pIcon: "game-controller" });
