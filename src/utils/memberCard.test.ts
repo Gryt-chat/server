@@ -149,6 +149,31 @@ describe("pattern tuning", () => {
   });
 });
 
+describe("line weight, the pattern's layer and the outline", () => {
+  it("keeps each in range and leaves out the defaults", () => {
+    assert.deepEqual(normaliseCardStyle({ pattern: "waves-1", pStroke: 220, pLayer: "front", edge: 3 }), {
+      pattern: "waves-1",
+      pStroke: 220,
+      pLayer: "front",
+      edge: 3,
+    });
+    assert.deepEqual(normaliseCardStyle({ pStroke: 40, edge: 0 }), { pStroke: 40, edge: 0 });
+    assert.deepEqual(normaliseCardStyle({ pStroke: 300, edge: 6 }), { pStroke: 300, edge: 6 });
+    assert.equal(normaliseCardStyle({ pStroke: 100, edge: 1, pLayer: "behind" }), null);
+  });
+
+  it("drops each bad value and keeps the rest", () => {
+    const bad: Array<[string, unknown]> = [
+      ["pStroke", 39], ["pStroke", 301], ["pStroke", 120.5], ["pStroke", "150"],
+      ["pLayer", "top"], ["pLayer", true],
+      ["edge", -1], ["edge", 7], ["edge", 1.5], ["edge", "2"],
+    ];
+    for (const [key, value] of bad) {
+      assert.deepEqual(normaliseCardStyle({ pattern: "dots", [key]: value }), { pattern: "dots" }, `${key}=${String(value)}`);
+    }
+  });
+});
+
 describe("an icon for the icon pattern", () => {
   it("keeps any Phosphor-shaped name, known or not", () => {
     assert.deepEqual(normaliseCardStyle({ pattern: "icon", pIcon: "game-controller" }), { pattern: "icon", pIcon: "game-controller" });

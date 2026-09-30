@@ -39,6 +39,12 @@ export interface CardStyle {
   pInk?: string;
   /** A Phosphor icon name for the `icon` pattern. The client falls back on one it lacks. */
   pIcon?: string;
+  /** A line pattern's weight, percent. Leaves out its default (100). */
+  pStroke?: number;
+  /** The pattern drawn over a banner picture. Absent, the picture covers it. */
+  pLayer?: "front";
+  /** The card's outline in pixels. Leaves out its default (1). */
+  edge?: number;
 }
 
 export const PATTERN_FADES = ["none", "top", "bottom", "left", "right", "radial"] as const;
@@ -100,6 +106,11 @@ export function normaliseCardStyle(value: unknown): CardStyle | null {
   const pInk = readHex(raw.pInk);
   if (pInk) out.pInk = pInk;
   if (typeof raw.pIcon === "string" && ICON_NAME.test(raw.pIcon)) out.pIcon = raw.pIcon;
+  const pStroke = readInt(raw.pStroke, 40, 300);
+  if (pStroke !== undefined && pStroke !== 100) out.pStroke = pStroke;
+  if (raw.pLayer === "front") out.pLayer = "front";
+  const edge = readInt(raw.edge, 0, 6);
+  if (edge !== undefined && edge !== 1) out.edge = edge;
 
   return Object.keys(out).length ? out : null;
 }
