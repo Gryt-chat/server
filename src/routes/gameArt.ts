@@ -1,6 +1,6 @@
 /**
- * A game's cover art, fetched once from Discord's or Steam's image servers, cached on disk
- * and served from here, so a member's viewers never show their address to either (GRYT-1602).
+ * A game's art, fetched once from Steam's image server, cached on disk and served from
+ * here (GRYT-1602). Gryt never contacts Discord, so there's no fallback to its covers.
  */
 
 import { existsSync, mkdirSync } from "fs";
@@ -23,7 +23,6 @@ const MAX_UPSTREAM_BYTES = 5 * 1024 * 1024;
 const MAX_IN_FLIGHT = 4;
 
 interface ArtSource {
-  cover?: string;
   steam?: string;
 }
 
@@ -35,7 +34,7 @@ const inFlight = new Map<string, Promise<Buffer | null>>();
 let running = 0;
 const queue: (() => void)[] = [];
 
-/** Only fields shaped like a hash and a Steam app id are kept, so no other URL can be built. */
+/** Only a numeric Steam app id is kept, so no other URL can be built. */
 export function readArtList(value: unknown): Map<string, ArtSource> {
   const out = new Map<string, ArtSource>();
   if (!Array.isArray(value)) return out;
@@ -44,19 +43,15 @@ export function readArtList(value: unknown): Map<string, ArtSource> {
     const id = typeof e?.id === "string" && /^\d{1,32}$/.test(e.id) ? e.id : "";
     if (!id) continue;
     const src: ArtSource = {};
-    if (typeof e?.cover_hash === "string" && /^[a-f0-9]{32}$/.test(e.cover_hash)) src.cover = e.cover_hash;
     if (typeof e?.steam === "string" && /^\d{1,12}$/.test(e.steam)) src.steam = e.steam;
-    if (src.cover || src.steam) out.set(id, src);
+    if (src.steam) out.set(id, src);
   }
   return out;
 }
 
-/** Steam's header first, since it's already wide; Discord's cover, which is tall, if there's none. */
-export function artUrls(appId: string, src: ArtSource): string[] {
-  const urls: string[] = [];
-  if (src.steam) urls.push(`https://cdn.cloudflare.steamstatic.com/steam/apps/${src.steam}/header.jpg`);
-  if (src.cover) urls.push(`https://cdn.discordapp.com/app-icons/${appId}/${src.cover}.png?size=1024`);
-  return urls;
+/** Steam's header, the only source: already wide, and not Discord. */
+export function artUrls(src: ArtSource): string[] {
+  return src.steam ? [`https://cdn.cloudflare.steamstatic.com/steam/apps/${src.steam}/header.jpg`] : [];
 }
 
 async function loadList(): Promise<Map<string, ArtSource>> {
@@ -125,7 +120,7 @@ export async function gameArt(appId: string): Promise<Buffer | null> {
   if (!pending) {
     pending = slot(async () => {
       const src = (await loadList()).get(appId);
-      for (const url of src ? artUrls(appId, src) : []) {
+      for (const url of src ? artUrls(src) : []) {
         try {
           const art = await fetchImage(url);
           if (art) {
