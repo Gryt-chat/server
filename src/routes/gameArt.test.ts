@@ -15,6 +15,10 @@ describe("the game art list", () => {
     assert.deepEqual([...list.keys()], [CS2]);
   });
 
+  it("reads games.json's { games: [...] }", () => {
+    assert.deepEqual([...readArtList({ version: 1, games: [{ id: CS2, name: "Counter-Strike 2", steam: "730" }] }).keys()], [CS2]);
+  });
+
   it("is empty for anything that isn't a list", () => {
     assert.equal(readArtList({ id: CS2 }).size, 0);
     assert.equal(readArtList(null).size, 0);

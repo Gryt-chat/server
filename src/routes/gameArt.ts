@@ -13,7 +13,7 @@ import sharp from "sharp";
 
 import { httpRateLimit, RL_HTTP_FILE } from "../middleware/rateLimitHttp";
 
-const LIST_URL = "https://cdn.jsdelivr.net/gh/Gryt-chat/rich-presence@main/detectable.json";
+const LIST_URL = "https://cdn.jsdelivr.net/gh/Gryt-chat/rich-presence@main/games.json";
 const LIST_TTL_MS = 24 * 60 * 60 * 1000;
 /** A game with no art, or an upstream that failed, is not asked again for this long. */
 const MISS_TTL_MS = 60 * 60 * 1000;
@@ -37,8 +37,9 @@ const queue: (() => void)[] = [];
 /** Only a numeric Steam app id is kept, so no other URL can be built. */
 export function readArtList(value: unknown): Map<string, ArtSource> {
   const out = new Map<string, ArtSource>();
-  if (!Array.isArray(value)) return out;
-  for (const raw of value.slice(0, 50_000)) {
+  const list = Array.isArray(value) ? value : (value as { games?: unknown } | null)?.games;
+  if (!Array.isArray(list)) return out;
+  for (const raw of list.slice(0, 50_000)) {
     const e = raw as Record<string, unknown> | null;
     const id = typeof e?.id === "string" && /^\d{1,32}$/.test(e.id) ? e.id : "";
     if (!id) continue;
