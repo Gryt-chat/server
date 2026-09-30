@@ -183,6 +183,11 @@ describe("what the backfill will and will not do", () => {
     assert.deepEqual(withoutAvatar, []);
   });
 
+  it("keeps banner uploads where avatar image uploads allowed them before", () => {
+    assert.deepEqual(backfillFor(["upload_avatar_image"], 9, 10), ["upload_banner_image"]);
+    assert.deepEqual(backfillFor(["change_avatar"], 9, 10), []);
+  });
+
   /** Groups needed `send_direct_messages` alone before GRYT-1342, so a server
       upgraded past it lets the same people make them. */
   it("hands group creation to whoever could already send direct messages", () => {

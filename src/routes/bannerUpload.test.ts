@@ -21,8 +21,7 @@ import { initStorage } from "../storage";
 import { generateAccessToken } from "../utils/jwt";
 import { uploadsRouter } from "./uploads";
 
-/** The member card banner: the avatar pipeline cut to 5:2, behind the same
-    trusted-only gate as an uploaded avatar. */
+/** The member card banner: the avatar pipeline cut to 5:2. */
 
 let dir: string;
 let server: Server;
@@ -69,7 +68,7 @@ before(async () => {
   initStorage();
   await createServerConfigIfNotExists();
   // A newcomer on the community server: may talk, may not upload pictures.
-  await createRoleDefinition("newcomer", { name: "Newcomer", rank: 5, permissions: ["send_messages", "change_avatar"] });
+  await createRoleDefinition("newcomer", { name: "Newcomer", rank: 5, permissions: ["send_messages", "change_avatar", "upload_avatar_image"] });
 
   const app = express();
   app.use("/api/uploads", uploadsRouter);

@@ -213,7 +213,7 @@ export async function buildMemberList(clientsInfo: Clients) {
   const bannerShown = new Set<string>();
   for (const u of registeredUsers) {
     if (!u.banner_file_id || !u.is_active) continue;
-    const may = await hasPermission(u.server_user_id, "upload_avatar_image", u.gryt_user_id).catch(() => false);
+    const may = await hasPermission(u.server_user_id, "upload_banner_image", u.gryt_user_id).catch(() => false);
     if (may) bannerShown.add(u.server_user_id);
   }
 

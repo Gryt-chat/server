@@ -253,13 +253,11 @@ uploadsRouter.post(
   storeAvatarImage("avatar"),
 );
 
-/* The same trusted-only gate as an uploaded avatar: a banner is a stranger's
-   picture in front of everybody, and the file lives on this server. */
 uploadsRouter.post(
   "/banner",
   requireBearerToken,
   (req: Request, res: Response, next: NextFunction): void => {
-    ensurePermission(req, res, "upload_avatar_image")
+    ensurePermission(req, res, "upload_banner_image")
       .then((ok) => { if (ok) next(); })
       .catch(next);
   },
