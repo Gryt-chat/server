@@ -46,6 +46,8 @@ export const PERMISSIONS = [
   /** Split from `change_avatar`: this one puts a stranger's file in front of
       everybody. */
   "upload_avatar_image",
+  /** Put a banner image across their member card. */
+  "upload_banner_image",
   /** See who else is here. */
   "view_members",
   /** Mint an invite code. */
@@ -187,6 +189,7 @@ const MEMBER_PERMISSIONS = [
   "set_activity",
   "change_avatar",
   "upload_avatar_image",
+  "upload_banner_image",
 ] as const satisfies readonly Permission[];
 
 /** Shorter than the name suggests: `mod` gated exactly kick, mute and deafen.
@@ -267,7 +270,7 @@ export interface PermissionBackfill {
 }
 
 /** Bump this when adding a batch, and give the new entries the new number. */
-export const PERMISSION_SCHEMA_VERSION = 9;
+export const PERMISSION_SCHEMA_VERSION = 10;
 
 export const PERMISSION_BACKFILLS: readonly PermissionBackfill[] = [
   // Had no gate before: anybody admitted to the server could do all four.
@@ -307,6 +310,9 @@ export const PERMISSION_BACKFILLS: readonly PermissionBackfill[] = [
 
   // GRYT-1455. A new gate, so admin-level roles only; members never get it here.
   { version: 9, permission: "mention_everyone", grantedWith: "manage_channels" },
+
+  // Banners used the avatar-image gate before this was split out.
+  { version: 10, permission: "upload_banner_image", grantedWith: "upload_avatar_image" },
 ];
 
 /** Pure: getting this wrong is a silent privilege change in either direction. */
