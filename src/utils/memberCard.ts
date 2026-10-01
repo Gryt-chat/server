@@ -39,6 +39,8 @@ export interface CardStyle {
   pInk?: string;
   /** A Phosphor icon name for the `icon` pattern. The client falls back on one it lacks. */
   pIcon?: string;
+  /** A Unicode emoji or current-server custom emoji id for the `emoji` pattern. */
+  pEmoji?: string;
   /** A line pattern's weight, percent. Leaves out its default (100). */
   pStroke?: number;
   /** The pattern drawn over a banner picture. Absent, the picture covers it. */
@@ -54,6 +56,14 @@ export type PatternFade = (typeof PATTERN_FADES)[number];
 
 const PATTERN_ID = /^[a-z0-9-]{1,32}$/;
 const ICON_NAME = /^[a-z0-9-]{1,48}$/;
+const validEmojiId = (value: unknown): value is string =>
+  typeof value === "string" &&
+  [...value].length >= 1 &&
+  [...value].length <= 96 &&
+  [...value].every((character) => {
+    const code = character.codePointAt(0) ?? 0;
+    return code > 0x1f && (code < 0x7f || code > 0x9f);
+  });
 
 function readHex(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
@@ -108,6 +118,7 @@ export function normaliseCardStyle(value: unknown): CardStyle | null {
   const pInk = readHex(raw.pInk);
   if (pInk) out.pInk = pInk;
   if (typeof raw.pIcon === "string" && ICON_NAME.test(raw.pIcon)) out.pIcon = raw.pIcon;
+  if (validEmojiId(raw.pEmoji)) out.pEmoji = raw.pEmoji;
   const pStroke = readInt(raw.pStroke, 40, 300);
   if (pStroke !== undefined && pStroke !== 100) out.pStroke = pStroke;
   if (raw.pLayer === "front") out.pLayer = "front";
