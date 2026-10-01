@@ -142,6 +142,7 @@ describe("pattern tuning", () => {
       ["pSeed", -1], ["pSeed", 65536], ["pSeed", 3.3],
       ["pInk", "#abc"], ["pInk", "ink"], ["pInk", 0xaabbcc],
       ["pIcon", "Heart"], ["pIcon", "heart fill"], ["pIcon", "a".repeat(49)], ["pIcon", ""], ["pIcon", 7],
+      ["pEmoji", ""], ["pEmoji", "line\nbreak"], ["pEmoji", "a".repeat(97)], ["pEmoji", 7],
     ];
     for (const [key, value] of bad) {
       assert.deepEqual(normaliseCardStyle({ pattern: "dots", [key]: value }), { pattern: "dots" }, `${key}=${String(value)}`);
@@ -200,6 +201,13 @@ describe("an icon for the icon pattern", () => {
   it("keeps any Phosphor-shaped name, known or not", () => {
     assert.deepEqual(normaliseCardStyle({ pattern: "icon", pIcon: "game-controller" }), { pattern: "icon", pIcon: "game-controller" });
     assert.equal(normaliseCardStyle({ pIcon: "a".repeat(48) })?.pIcon, "a".repeat(48));
+  });
+});
+
+describe("an emoji for the emoji pattern", () => {
+  it("keeps Unicode and current-server custom emoji ids", () => {
+    assert.deepEqual(normaliseCardStyle({ pattern: "emoji", pEmoji: "unicode:✨" }), { pattern: "emoji", pEmoji: "unicode:✨" });
+    assert.deepEqual(normaliseCardStyle({ pattern: "emoji", pEmoji: "server:party-parrot" }), { pattern: "emoji", pEmoji: "server:party-parrot" });
   });
 });
 
