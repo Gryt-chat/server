@@ -18,6 +18,8 @@ import { getUserByServerId, upsertUser } from "../db/sqlite/users";
 import { unreferencedAmong } from "../jobs/mediaSweep";
 import { fileReadVerdict } from "../services/fileAccess";
 import { realMediaDeps } from "../services/webhookMedia";
+import { waitForRaster } from "../services/rasterUpload";
+import { startTestImageWorker } from "../testSupport/imageWorker";
 import { getObject, initStorage } from "../storage";
 import { generateAccessToken } from "../utils/jwt";
 import { uploadsRouter } from "./uploads";
@@ -32,6 +34,7 @@ let dir: string;
 let server: Server;
 let base = "";
 let host = "";
+let stopWorker: () => Promise<void>;
 let owner: Member;
 let big: Buffer;
 
@@ -103,6 +106,7 @@ before(async () => {
   await initSqlite();
   initStorage();
   await createServerConfigIfNotExists();
+  stopWorker = await startTestImageWorker();
   big = await sharp({ create: { width: 1600, height: 1200, channels: 3, background: { r: 40, g: 90, b: 200 } } })
     .png()
     .toBuffer();
@@ -125,6 +129,7 @@ before(async () => {
 });
 
 after(async () => {
+  await stopWorker?.();
   setWebhookMediaDepsForTests(null);
   await new Promise<void>((resolve) => server.close(() => resolve()));
   delete process.env.DATA_DIR;
@@ -240,7 +245,7 @@ describe("a webhook post's avatar_url", () => {
     assert.ok(avatar.thumbnail_key, "no thumbnail");
 
     const image = await getFile(message.cards![0].image_file_id!);
-    assert.equal(image?.mime, "image/png");
+    assert.equal(image?.mime, "image/webp");
     assert.deepEqual([image?.width, image?.height], [1600, 1200]);
 
     // The rules GRYT-1186 gave every picture a webhook sends still hold for this one.
@@ -259,7 +264,8 @@ describe("a webhook post's avatar_url", () => {
     assert.ok(first.sender_avatar_file_id);
     assert.equal(first.sender_avatar_file_id, second.sender_avatar_file_id);
     // The same bytes as a card picture are a different file, and stay one on the second post.
-    const image = await getFile(second.cards![0].image_file_id!);
-    assert.equal(image?.mime, "image/png", "the second post's card picture is the resized avatar");
+    const image = await waitForRaster(second.cards![0].image_file_id!);
+    assert.equal(image.mime, "image/webp");
+    assert.deepEqual([image.width, image.height], [1600, 1200], "the card picture must not use the avatar's crop");
   });
 });

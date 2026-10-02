@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 import { after, before, describe, it } from "node:test";
 
 import sharp from "sharp";
+import { validateImage } from "../utils/imageValidation";
 
 import { webhookMessageSchema } from "../routes/webhookSchemas";
 import { fallbackText, realMediaDeps, resolveWebhookMedia, sniffImageFormat, type FetchOutcome, type MediaDeps } from "./webhookMedia";
@@ -15,7 +16,10 @@ function fakeDeps(respond: (url: string, max: number, signal: AbortSignal) => Pr
   const stored: ("picture" | "avatar")[] = [];
   const deps: MediaDeps = {
     fetchBytes: async (url, signal, max) => { fetched.push(url); return respond(url, max, signal); },
-    storeImage: async () => { stored.push("picture"); return `file-${stored.length}`; },
+    storeImage: async (_id, bytes) => {
+      if (!(await validateImage(bytes, { animated: true })).valid) throw new Error("Fixture worker rejected image");
+      stored.push("picture"); return `file-${stored.length}`;
+    },
     storeAvatar: async () => { stored.push("avatar"); return `avatar-${stored.length}`; },
   };
   return { deps, fetched, stored };
@@ -85,7 +89,7 @@ describe("resolveWebhookMedia", () => {
         ["cards[0].image_url", "blocked"],
         ["cards[1].thumbnail_url", "unsupported_type"],
         ["cards[1].image_url", "too_large"],
-        ["cards[2].thumbnail_url", "invalid_image"],
+        ["cards[2].thumbnail_url", "store_failed"],
         ["cards[2].image_url", "unsupported_type"],
       ],
     );

@@ -39,7 +39,8 @@ describe("imported media", () => {
     const [picture, notes] = m!.attachments!;
     const file = await getFile(picture);
     assert.equal(file?.mime, "image/png");
-    assert.equal(file?.width, 8);
+    assert.equal(file?.width, null, "dimensions stay untrusted until worker processing");
+    assert.ok(file?.s3_key.startsWith("quarantine/"));
     assert.equal(file?.original_name, "cat.png");
     const owner = getSqliteDb().prepare(`SELECT uploaded_by_server_user_id AS by FROM files WHERE file_id = ?`).get(picture) as { by: string };
     assert.equal(owner.by, "discord:11");

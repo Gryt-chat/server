@@ -18,6 +18,7 @@ import { generateAccessToken } from "../utils/jwt";
 import { emojisRouter } from "./emojis";
 import { OWN_JSON_PARSERS, parsesOwnJson } from "./ownJsonParsers";
 import { webhooksRouter } from "./webhooks";
+import { startTestImageWorker } from "../testSupport/imageWorker";
 
 /** GRYT-1200: the app-wide 2 MB parser read these bodies first, so the routes' own 100 KB limit never applied. */
 
@@ -27,6 +28,7 @@ let dir: string;
 let server: Server;
 let base = "";
 let token = "";
+let stopWorker: () => Promise<void>;
 
 async function call(method: string, path: string, body: string | FormData) {
   const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
@@ -63,6 +65,7 @@ before(async () => {
   await initSqlite();
   initStorage();
   await createServerConfigIfNotExists();
+  stopWorker = await startTestImageWorker();
 
   const user = await upsertUser("acct-owner", "owner");
   await setServerRole(user.server_user_id, "owner");
@@ -80,6 +83,7 @@ before(async () => {
 });
 
 after(async () => {
+  await stopWorker?.();
   await new Promise<void>((resolve) => server.close(() => resolve()));
   delete process.env.DATA_DIR;
   delete process.env.S3_BUCKET;

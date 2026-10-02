@@ -19,6 +19,7 @@ import { getMessagesCached } from "../socket/utils/messageCache";
 import { initStorage } from "../storage";
 import { generateAccessToken } from "../utils/jwt";
 import { setWebhookMediaDepsForTests, webhooksRouter } from "./webhooks";
+import { startTestImageWorker } from "../testSupport/imageWorker";
 
 /** GRYT-1186: cards, their pictures fetched once and stored, and a name that survives a reload. */
 
@@ -28,6 +29,7 @@ let base = "";
 let token = "";
 let picture: Buffer;
 let fetches: string[] = [];
+let stopWorker: () => Promise<void>;
 
 const respond = async (url: string): Promise<FetchOutcome> => {
   fetches.push(url);
@@ -58,6 +60,7 @@ before(async () => {
   await initSqlite();
   initStorage();
   await createServerConfigIfNotExists();
+  stopWorker = await startTestImageWorker();
   picture = await sharp({ create: { width: 32, height: 32, channels: 3, background: { r: 60, g: 110, b: 140 } } }).png().toBuffer();
 
   const user = await upsertUser("acct-owner", "owner");
@@ -76,6 +79,7 @@ before(async () => {
 beforeEach(() => { fetches = []; });
 
 after(async () => {
+  await stopWorker?.();
   setWebhookMediaDepsForTests(null);
   await new Promise<void>((resolve) => server.close(() => resolve()));
   delete process.env.DATA_DIR;

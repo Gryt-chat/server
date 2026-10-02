@@ -4,7 +4,6 @@ import { v4 as uuidv4 } from "uuid";
 import { insertFile, insertImageJob } from "../db";
 import { storageForUpload } from "../routes/uploadStorage";
 import { deleteObject, putObject } from "../storage";
-import { validateImage } from "../utils/imageValidation";
 import { mediaMimeFromFile } from "../utils/mediaSignature";
 import { sanitizeSvg } from "../utils/svgSanitize";
 import { PARSE_LIMITS, readVideoDimensionsFromFile } from "../utils/videoDimensions";
@@ -110,19 +109,9 @@ export async function storeUploadedFile(input: {
       };
     }
 
-    const imageBytes = await readFile(path);
-    const validation = await validateImage(imageBytes, { animated: true });
-    if (!validation.valid) return { ok: false, status: 400, error: "invalid_file", message: validation.reason };
-
-    width = positiveInt(input.claimedWidth);
-    height = positiveInt(input.claimedHeight);
-
-    // `validateImage` already read the dimensions off the same decode.
-    // The second library was `image-size`, whose advisory has no fix.
-    if (!width || !height) {
-      width = validation.width;
-      height = validation.height;
-    }
+    // Dimensions and validity come from the worker; do not decode here.
+    width = null;
+    height = null;
   }
 
   // The whole point of the exercise: the bytes go from the temp file
