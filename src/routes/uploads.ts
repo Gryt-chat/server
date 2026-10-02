@@ -7,7 +7,6 @@ import mime from "mime-types";
 import { unlink } from "fs/promises";
 import { putObject, getObject } from "../storage";
 import { insertFile, getFile, updateUserAvatar, setUserAvatar, setUserBanner, getServerConfig, getUserByServerId, DEFAULT_AVATAR_MAX_BYTES, DEFAULT_UPLOAD_MAX_BYTES } from "../db";
-import { BANNER_BOX } from "../constants/media";
 import { deleteUnreferencedFiles } from "../jobs/mediaSweep";
 import { isSealedUpload } from "./uploadStorage";
 import { requireBearerToken } from "../middleware/requireBearerToken";
@@ -20,6 +19,8 @@ import { sendStoredBody } from "../utils/sendStoredBody";
 import { ensurePermission } from "../middleware/requirePermission";
 import { sanitizeSvg } from "../utils/svgSanitize";
 import { storeUploadedFile } from "../services/storeUploadedFile";
+import { storeBannerUpload } from "../services/storeBannerUpload";
+import { getImageJob } from "../db";
 
 /** SVG is on this list only because it has been through sanitizeSvg(), is drawn
     through `<img>`, and is sandboxed by the CSP below. That header is required. */
@@ -130,7 +131,7 @@ uploadsRouter.post(
           res.status(stored.status).json({ error: stored.error, message: stored.message });
           return;
         }
-        res.status(201).json({ fileId: stored.fileId, key: stored.key, thumbnailKey: null });
+        res.status(201).json({ fileId: stored.fileId, key: stored.key, thumbnailKey: null, processing: stored.processing });
       })
       // Every exit path, including the early returns and anything that threw:
       // multer's temp file is ours and nothing else removes it.
@@ -139,15 +140,15 @@ uploadsRouter.post(
   },
 );
 
-/** One pipeline for every picture. Only an avatar or a banner is put on the
+/** One pipeline for avatar-shaped pictures. Only an avatar is put on the
     uploader's own row; a group picture doing that was GRYT-1182. */
-const storeAvatarImage = (purpose: "avatar" | "group" | "webhook" | "banner") =>
+const storeAvatarImage = (purpose: "avatar" | "group" | "webhook") =>
   (req: Request, res: Response, next: NextFunction): void => {
     const file = req.file;
     if (!file) { res.status(400).json({ error: "file_required", message: "file is required" }); return; }
     if (!(file.mimetype || "").startsWith("image/")) { res.status(400).json({ error: "invalid_file", message: "Only image files are allowed" }); return; }
 
-    const what = { avatar: "Avatar", group: "Group picture", webhook: "Webhook avatar", banner: "Banner" }[purpose];
+    const what = { avatar: "Avatar", group: "Group picture", webhook: "Webhook avatar" }[purpose];
     const disableS3 = (process.env.DISABLE_S3 || "").toLowerCase() === "true";
     if (disableS3) { res.status(503).json({ error: "s3_disabled", message: `S3 is disabled (DISABLE_S3=true). ${what} upload is unavailable.` }); return; }
 
@@ -174,11 +175,6 @@ const storeAvatarImage = (purpose: "avatar" | "group" | "webhook" | "banner") =>
         // SVG never reaches sharp. Stored as the sanitised vector; see
         // svgSanitize.ts for why that is enough.
         if ((file.mimetype || "").toLowerCase() === "image/svg+xml") {
-          // A vector is not cut to the 5:2 box, so a banner is always a raster.
-          if (purpose === "banner") {
-            res.status(400).json({ error: "invalid_file", message: "A banner can't be an SVG." });
-            return;
-          }
           const svg = sanitizeSvg(file.buffer);
           if (!svg.valid) {
             res.status(400).json({ error: "invalid_file", message: svg.reason });
@@ -217,7 +213,6 @@ const storeAvatarImage = (purpose: "avatar" | "group" | "webhook" | "banner") =>
           uploadedBy: serverUserId,
           maxBytes,
           what,
-          ...(purpose === "banner" ? { box: BANNER_BOX, prefix: "banners" } : {}),
         });
         if (!stored.ok) {
           res.status(stored.status).json({ error: stored.error, message: stored.message });
@@ -227,17 +222,48 @@ const storeAvatarImage = (purpose: "avatar" | "group" | "webhook" | "banner") =>
         if (purpose === "avatar") {
           await updateUserAvatar(serverUserId, stored.fileId);
           res.status(201).json({ avatarFileId: stored.fileId, processing: stored.processing });
-        } else if (purpose === "banner") {
-          const previous = (await getUserByServerId(serverUserId))?.banner_file_id ?? null;
-          await setUserBanner(serverUserId, stored.fileId);
-          if (previous && previous !== stored.fileId) await deleteUnreferencedFiles([previous]);
-          res.status(201).json({ bannerFileId: stored.fileId, processing: stored.processing });
         } else {
           res.status(201).json({ fileId: stored.fileId, processing: stored.processing });
         }
       })
       .catch(next);
   };
+
+const storeBannerMedia = (req: Request, res: Response, next: NextFunction): void => {
+  const file = req.file;
+  if (!file) { res.status(400).json({ error: "file_required", message: "file is required" }); return; }
+  const type = (file.mimetype || "").toLowerCase();
+  if (!type.startsWith("image/") && type !== "video/mp4") {
+    void discardTemp(file);
+    res.status(400).json({ error: "invalid_file", message: "Only images and MP4 videos are allowed" });
+    return;
+  }
+
+  const bucket = process.env.S3_BUCKET as string;
+  const serverUserId = req.tokenPayload?.serverUserId;
+  const disableS3 = (process.env.DISABLE_S3 || "").toLowerCase() === "true";
+  if (disableS3) { void discardTemp(file); res.status(503).json({ error: "s3_disabled", message: "S3 is disabled (DISABLE_S3=true). Banner upload is unavailable." }); return; }
+  if (!bucket) { void discardTemp(file); res.status(500).json({ error: "s3_not_configured", message: "S3_BUCKET not configured" }); return; }
+  if (!serverUserId) { void discardTemp(file); res.status(401).json({ error: "auth_required" }); return; }
+
+  Promise.resolve()
+    .then(async () => {
+      const cfg = await getServerConfig().catch(() => null);
+      const maxBytes = typeof cfg?.upload_max_bytes === "number" ? cfg.upload_max_bytes : DEFAULT_UPLOAD_MAX_BYTES;
+      const stored = await storeBannerUpload({ bucket, file, uploadedBy: serverUserId, maxBytes });
+
+      if (!stored.ok) {
+        res.status(stored.status).json({ error: stored.error, message: stored.message });
+        return;
+      }
+      const previous = (await getUserByServerId(serverUserId))?.banner_file_id ?? null;
+      await setUserBanner(serverUserId, stored.fileId);
+      if (previous && previous !== stored.fileId) await deleteUnreferencedFiles([previous]);
+      res.status(201).json({ bannerFileId: stored.fileId, processing: stored.processing, mime: type });
+    })
+    .finally(() => discardTemp(file))
+    .catch(next);
+};
 
 uploadsRouter.post(
   "/avatar",
@@ -261,8 +287,8 @@ uploadsRouter.post(
       .then((ok) => { if (ok) next(); })
       .catch(next);
   },
-  uploadAvatarToMemory("file"),
-  storeAvatarImage("banner"),
+  uploadToDisk("file"),
+  storeBannerMedia,
 );
 
 // Ungated, unlike DELETE /avatar: losing the upload permission must not strand a banner.
@@ -417,6 +443,20 @@ uploadsRouter.get(
         }
         const fileMeta = verdict === "allowed" ? await getFile(fileId) : null;
         if (!fileMeta) { res.status(404).json({ error: "File not found" }); return; }
+
+        // New media stays unreadable when the worker is absent or fails.
+        const job = await getImageJob(fileId);
+        if (job || fileMeta.s3_key.startsWith("quarantine/") || fileMeta.s3_key.startsWith("banners/verified/")) {
+          if (job?.status !== "done") {
+            res.setHeader("Cache-Control", "no-store");
+            res.status(job?.status === "error" ? 422 : 503).json({ error: "media_not_ready" });
+            return;
+          }
+          if (fileMeta.mime?.startsWith("video/") && !fileMeta.thumbnail_key) {
+            res.status(422).json({ error: "media_not_validated" });
+            return;
+          }
+        }
 
         const useThumb = req.query.thumb === "1" && fileMeta.thumbnail_key;
         const s3Key = useThumb ? fileMeta.thumbnail_key! : fileMeta.s3_key;

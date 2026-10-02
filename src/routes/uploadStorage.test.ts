@@ -172,7 +172,7 @@ describe("the route uses it", () => {
     // sharp, the worker and the SVG sanitiser would each be handed it.
     for (const [what, gate] of [
       ["the SVG sanitiser", "if (storage.treatAsSvg)"],
-      ["image validation", "if (storage.validateAsImage)"],
+      ["image validation", "if (storage.validateAsImage && input.purpose !== \"banner\")"],
       ["the video container parser", "if (storage.measureAsVideo)"],
       ["the image worker", "if (storage.queueImageJob)"],
     ]) {
@@ -187,7 +187,7 @@ describe("the route uses it", () => {
     assert.doesNotMatch(service, /ffmpeg|child_process|execFile|spawn\(/);
   });
 
-  it("answers the uploader the same whether or not a poster ever comes", () => {
-    assert.match(route, /res\.status\(201\)\.json\(\{ fileId: stored\.fileId, key: stored\.key, thumbnailKey: null \}\)/);
+  it("reports whether the shared worker must finish before media can be read", () => {
+    assert.match(route, /res\.status\(201\)\.json\(\{ fileId: stored\.fileId, key: stored\.key, thumbnailKey: null, processing: stored\.processing \}\)/);
   });
 });
