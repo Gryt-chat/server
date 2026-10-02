@@ -1,5 +1,4 @@
 import consola from "consola";
-import sharp from "sharp";
 import { v4 as uuidv4 } from "uuid";
 
 import { deleteObject, getObjectAsBuffer, putObject } from "../storage";
@@ -33,7 +32,6 @@ export function startEmojiQueueWorker(): void {
 
   const concurrency = clampInt(process.env.EMOJI_QUEUE_CONCURRENCY, 1, 1, 4);
   const pollMs = clampInt(process.env.EMOJI_QUEUE_POLL_MS, 750, 250, 5000);
-  sharp.concurrency(Math.max(1, Math.min(2, concurrency)));
 
   consola.info(`[EmojiQueue] Worker starting (concurrency=${concurrency}, pollMs=${pollMs})`);
 
@@ -57,7 +55,7 @@ export function startEmojiQueueWorker(): void {
 
       const rawBuffer = await getObjectAsBuffer({ bucket, key: job.raw_s3_key });
 
-      const { processed, ext, contentType } = await processEmojiToOptimizedImage(rawBuffer, job.raw_content_type.toLowerCase());
+      const { processed, ext, contentType } = await processEmojiToOptimizedImage(rawBuffer, job.raw_content_type.toLowerCase(), job.uploaded_by_server_user_id);
 
       const latestAfterProcess = await getLatestEmojiJobIdByName(job.name);
       if (latestAfterProcess && latestAfterProcess !== jobId) {
@@ -67,15 +65,13 @@ export function startEmojiQueueWorker(): void {
         return;
       }
 
-      const outKey = `emojis/${job.name}.${ext}`;
       const existing = await getEmoji(job.name);
-      if (existing) {
-        await deleteObject({ bucket, key: existing.s3_key }).catch((e) => consola.warn("S3 cleanup failed", e));
-      }
 
       const fileId = uuidv4();
+      const outKey = `emojis/${fileId}.${ext}`;
       await putObject({ bucket, key: outKey, body: processed, contentType });
       await insertEmoji({ name: job.name, file_id: fileId, s3_key: outKey, uploaded_by_server_user_id: job.uploaded_by_server_user_id });
+      if (existing) await deleteObject({ bucket, key: existing.s3_key }).catch((e) => consola.warn("S3 cleanup failed", e));
 
       await updateEmojiJobStatus({
         job_id: jobId,
@@ -118,4 +114,3 @@ export function startEmojiQueueWorker(): void {
     tick().catch((e) => consola.warn("emoji queue tick failed", e));
   }, pollMs);
 }
-

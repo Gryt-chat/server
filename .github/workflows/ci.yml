@@ -17,6 +17,13 @@ jobs:
           node-version: "22"
           cache: yarn
       - run: yarn install --frozen-lockfile
+      - uses: actions/checkout@v4
+        with:
+          repository: Gryt-chat/image-worker
+          ref: e5c11d88ac75f32995dd06f90566c32e44a3bb04
+          path: .worker-tests
+      - run: yarn install --frozen-lockfile && yarn build
+        working-directory: .worker-tests
 
       # The reason this workflow exists: ten test files and 87 tests that
       # nothing ran on a pull request.

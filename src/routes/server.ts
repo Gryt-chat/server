@@ -2,7 +2,6 @@ import consola from "consola";
 import express from "express";
 import type { Request, Response, NextFunction } from "express";
 import multer from "multer";
-import sharp from "sharp";
 import { v4 as uuidv4 } from "uuid";
 
 import { deleteObject, putObject } from "../storage";
@@ -13,7 +12,7 @@ import {
   updateServerConfig,
 } from "../db";
 import { broadcastServerUiUpdate } from "../socket";
-import { MAX_INPUT_PIXELS, validateImage } from "../utils/imageValidation";
+import { consumeRasterUpload, RasterProcessingError } from "../services/rasterUpload";
 import { sanitizeSvg } from "../utils/svgSanitize";
 import { verifyAccessToken } from "../utils/jwt";
 import { requireBearerToken } from "../middleware/requireBearerToken";
@@ -203,76 +202,18 @@ serverRouter.post(
         return;
       }
 
-      const isAnimated =
-        iconMime === "image/gif" ||
-        iconMime === "image/webp" ||
-        iconMime === "image/avif";
-
-      const validation = await validateImage(file.buffer, {
-        animated: isAnimated,
-      });
-      if (!validation.valid) {
-        res
-          .status(400)
-          .json({ error: "invalid_file", message: validation.reason });
-        return;
-      }
-
-      // Drawn at 38 pixels on every server somebody joined, so an uncapped GIF
-      // is hundreds of kilobytes each. Refused, not truncated.
-      const frames = validation.pages ?? 1;
-      if (isAnimated && frames > MAX_ICON_FRAMES) {
-        res.status(400).json({
-          error: "too_many_frames",
-          message:
-            `This icon has ${frames} frames and the limit is ${MAX_ICON_FRAMES}` +
-            ` — about ${MAX_ICON_FRAMES / 60} seconds at 60fps. Shorten it or` +
-            ` lower its frame rate and upload it again.`,
-        });
-        return;
-      }
-
-      // AVIF holds one frame and sharp stacks an animation into a tall strip, so
-      // a 95-frame GIF became a 256x9728 still. Same branch as emojiProcessing.
-      const outMime = isAnimated ? "image/webp" : "image/avif";
-      const outExt = isAnimated ? "webp" : "avif";
-
-      let out: Buffer;
+      let key: string;
       try {
-        const pipeline = sharp(file.buffer, {
-          animated: isAnimated,
-          failOn: "error",
-          // validateImage pixel-checks one page; this decodes every frame, and a
-          // modest frame is under the ceiling where two hundred are not.
-          limitInputPixels: MAX_INPUT_PIXELS,
-        }).resize(256, 256, { fit: "cover" });
-
-        out = isAnimated
-          ? await pipeline.webp().toBuffer()
-          : await pipeline.avif().toBuffer();
-      } catch {
-        res.status(400).json({
-          error: "invalid_file",
-          message:
-            "Could not process image. Please upload a valid PNG/JPEG/WebP/GIF/AVIF under the size limit.",
+        const { processed, ext, contentType } = await consumeRasterUpload({
+          bucket, bytes: file.buffer, uploadedBy: decoded.serverUserId, originalName: file.originalname || null,
+          profile: "icon", width: 256, height: 256, thumbWidth: 128, thumbHeight: 128,
+          maxFrames: MAX_ICON_FRAMES, maxBytes: iconMaxBytes,
         });
-        return;
-      }
-
-      const key = `server-icons/${safeHost}/${uuidv4()}.${outExt}`;
-      try {
-        await putObject({ bucket, key, body: out, contentType: outMime });
-      } catch (e) {
-        const raw = e instanceof Error ? e.message : "";
-        consola.error("icon upload s3 error", { bucket, key, message: raw });
-        const friendly = /InvalidBucketName|NoSuchBucket|bucket/i.test(raw)
-          ? "File storage is misconfigured on this server. Please contact the server administrator."
-          : /AccessDenied|Forbidden/i.test(raw)
-          ? "File storage access denied. Please contact the server administrator."
-          : raw.trim().length > 0
-          ? `Icon upload failed: ${raw}`
-          : "Icon upload failed due to a storage error.";
-        res.status(502).json({ error: "s3_error", message: friendly });
+        key = `server-icons/${safeHost}/${uuidv4()}.${ext}`;
+        await putObject({ bucket, key, body: processed, contentType });
+      } catch (error) {
+        const status = error instanceof RasterProcessingError ? error.status : 502;
+        res.status(status).json({ error: "image_processing_failed", message: "The server icon could not be processed." });
         return;
       }
 

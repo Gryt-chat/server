@@ -1,7 +1,5 @@
 import consola from "consola";
-import sharp from "sharp";
-
-import { MAX_INPUT_PIXELS } from "./imageValidation";
+import { rasterHeaderDimensions } from "./rasterHeaderDimensions";
 import { fetchFollowingSafely, type FetchGuard } from "./safePreviewFetch";
 
 export type RemoteImageMetadata = {
@@ -25,7 +23,7 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000).unref();
 
-async function readUpToBytes(res: Response, maxBytes: number): Promise<Buffer | null> {
+export async function readUpToBytes(res: Response, maxBytes: number): Promise<Buffer | null> {
   const reader = res.body?.getReader();
   if (!reader) return null;
   const chunks: Uint8Array[] = [];
@@ -35,8 +33,9 @@ async function readUpToBytes(res: Response, maxBytes: number): Promise<Buffer | 
       const { done, value } = await reader.read();
       if (done) break;
       if (value && value.length > 0) {
-        chunks.push(value);
-        bytesRead += value.length;
+        const chunk = Uint8Array.from(value.subarray(0, maxBytes - bytesRead));
+        chunks.push(chunk);
+        bytesRead += chunk.length;
       }
     }
   } finally {
@@ -68,7 +67,7 @@ export async function fetchRemoteImageMetadata(url: string, guard?: FetchGuard):
     const buf = await readUpToBytes(res, 450_000);
     if (buf === null) return empty;
 
-    const meta = await sharp(buf, { animated: true, failOn: "error", limitInputPixels: MAX_INPUT_PIXELS }).metadata().catch(() => null);
+    const meta = rasterHeaderDimensions(buf);
     const data: RemoteImageMetadata = {
       url,
       mime: contentType || null,
@@ -89,4 +88,3 @@ export async function fetchRemoteImageMetadata(url: string, guard?: FetchGuard):
     clearTimeout(timeout);
   }
 }
-

@@ -163,20 +163,20 @@ emojisRouter.post(
             const existingEmoji = usedNames.has(entry.name) ? await getEmoji(entry.name) : null;
             if (existingEmoji) {
               consola.debug("[EmojiUpload] Replacing existing emoji:", entry.name);
-              await deleteObject({ bucket, key: existingEmoji.s3_key }).catch((e) => consola.warn("S3 delete failed", e));
             }
             consola.debug("[EmojiUpload] Processing image:", { name: entry.name, mime: entry.mime, bufferSize: entry.buffer.length });
-            const { processed, ext, contentType } = await processEmojiToOptimizedImage(entry.buffer, entry.mime.toLowerCase());
-            consola.debug("[EmojiUpload] Sharp resize done:", { name: entry.name, ext, processedSize: processed.length });
+            const { processed, ext, contentType } = await processEmojiToOptimizedImage(entry.buffer, entry.mime.toLowerCase(), serverUserId);
+            consola.debug("[EmojiUpload] Worker processing done:", { name: entry.name, ext, processedSize: processed.length });
 
             const fileId = uuidv4();
-            const key = `emojis/${entry.name}.${ext}`;
+            const key = `emojis/${fileId}.${ext}`;
             consola.debug("[EmojiUpload] Uploading to S3:", { key, bucket, contentType, size: processed.length });
             await putObject({ bucket, key, body: processed, contentType });
             consola.debug("[EmojiUpload] S3 upload done:", key);
 
             consola.debug("[EmojiUpload] Inserting into DB:", { name: entry.name, fileId, key, serverUserId });
             await insertEmoji({ name: entry.name, file_id: fileId, s3_key: key, uploaded_by_server_user_id: serverUserId });
+            if (existingEmoji) await deleteObject({ bucket, key: existingEmoji.s3_key }).catch((e) => consola.warn("S3 delete failed", e));
             consola.debug("[EmojiUpload] DB insert done:", entry.name);
 
             usedNames.add(entry.name);

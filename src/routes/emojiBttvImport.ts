@@ -206,7 +206,6 @@ export function registerBttvRoutes(router: Router): void {
               const existingEmoji = usedNames.has(name) ? await getEmoji(name) : null;
               if (existingEmoji) {
                 consola.debug("[BttvImport] Replacing existing emoji:", name);
-                await deleteObject({ bucket, key: existingEmoji.s3_key }).catch((e) => consola.warn("S3 delete failed", e));
               }
 
               const cdnResp = await fetch(`${BTTV_CDN}/${emote.id}/3x`);
@@ -220,12 +219,13 @@ export function registerBttvRoutes(router: Router): void {
               const sourceMime = emote.imageType === "gif" ? "image/gif"
                 : emote.imageType === "webp" ? "image/webp"
                 : "image/png";
-              const { processed, ext, contentType } = await processEmojiToOptimizedImage(imgBuffer, sourceMime);
+              const { processed, ext, contentType } = await processEmojiToOptimizedImage(imgBuffer, sourceMime, serverUserId);
 
               const fileId = uuidv4();
-              const key = `emojis/${name}.${ext}`;
+              const key = `emojis/${fileId}.${ext}`;
               await putObject({ bucket, key, body: processed, contentType });
               await insertEmoji({ name, file_id: fileId, s3_key: key, uploaded_by_server_user_id: serverUserId });
+              if (existingEmoji) await deleteObject({ bucket, key: existingEmoji.s3_key }).catch((e) => consola.warn("S3 delete failed", e));
 
               usedNames.add(name);
               results.push({ name, file_id: fileId, ok: true });

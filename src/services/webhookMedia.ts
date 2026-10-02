@@ -15,10 +15,10 @@ import type { StoredWebhookCard } from "../db";
 import type { PayloadWarning, WebhookCardInput, WebhookMessageInput } from "../routes/webhookSchemas";
 import { colorToHex } from "../routes/webhookSchemas";
 import { storageForUpload } from "../routes/uploadStorage";
-import { putObject } from "../storage";
-import { validateImage } from "../utils/imageValidation";
+import { deleteObject, putObject } from "../storage";
 import { fetchFollowingSafely } from "../utils/safePreviewFetch";
 import { storeAvatarPicture } from "./avatarImage";
+import { waitForRaster } from "./rasterUpload";
 
 /** The whole request's picture fetching, so a slow host can't hold a webhook call open. */
 export const MEDIA_DEADLINE_MS = 12_000;
@@ -123,10 +123,11 @@ async function storeWebhookImage(webhookId: string, bytes: Buffer, format: Image
   const bucket = process.env.S3_BUCKET as string;
   const fileId = uuidv4();
   const storage = storageForUpload({ sealed: false, fileId, mimetype: MIME[format], originalName: `webhook.${format}` });
-  await putObject({ bucket, key: storage.key, body: bytes, contentType: storage.storedMime });
+  const key = `quarantine/${storage.key}`;
+  await putObject({ bucket, key, body: bytes, contentType: storage.storedMime });
   await insertFile({
     file_id: fileId,
-    s3_key: storage.key,
+    s3_key: key,
     mime: storage.storedMime,
     size: bytes.length,
     width,
@@ -138,9 +139,14 @@ async function storeWebhookImage(webhookId: string, bytes: Buffer, format: Image
     created_at: new Date(),
   });
   if (storage.queueImageJob) {
-    await insertImageJob({ file_id: fileId, raw_s3_key: storage.key, raw_content_type: storage.storedMime, raw_bytes: bytes.length })
-      .catch((e: unknown) => consola.warn("Failed to queue webhook image job", e));
+    try {
+      await insertImageJob({ job_id: fileId, file_id: fileId, raw_s3_key: key, raw_content_type: storage.storedMime, raw_bytes: bytes.length });
+    } catch (error) {
+      await deleteObject({ bucket, key }).catch(() => undefined);
+      throw error;
+    }
   }
+  await waitForRaster(fileId, MEDIA_DEADLINE_MS);
   await setWebhookMediaFileId(webhookId, sha256, fileId);
   return fileId;
 }
@@ -240,8 +246,6 @@ export async function resolveWebhookMedia(
       if (!format) { entry.code = "unsupported_type"; return; }
       if (fetched.bytes.length > budget) { entry.code = "media_budget"; return; }
       budget -= fetched.bytes.length;
-      const checked = await validateImage(fetched.bytes, { animated: true });
-      if (!checked.valid) { entry.code = "invalid_image"; return; }
       const store = async (save: () => Promise<string>): Promise<string | undefined> => {
         try {
           return await save();
@@ -252,7 +256,7 @@ export async function resolveWebhookMedia(
         }
       };
       // Downloaded once, but the avatar and a card picture from the same URL are two files.
-      if (entry.asPicture) entry.fileId = await store(() => deps.storeImage(webhookId, fetched.bytes, format, checked.width, checked.height));
+      if (entry.asPicture) entry.fileId = await store(() => deps.storeImage(webhookId, fetched.bytes, format, 0, 0));
       if (entry.asAvatar) entry.avatarFileId = await store(() => deps.storeAvatar(webhookId, fetched.bytes, format));
     });
   } finally {

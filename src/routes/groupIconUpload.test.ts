@@ -16,9 +16,12 @@ import { createServerConfigIfNotExists, setServerRole } from "../db/sqlite/serve
 import { getUserByServerId, upsertUser } from "../db/sqlite/users";
 import { unreferencedAmong } from "../jobs/mediaSweep";
 import { fileReadVerdict } from "../services/fileAccess";
-import { initStorage } from "../storage";
+import { getObjectAsBuffer, initStorage } from "../storage";
+import { getEmoji } from "../db";
+import { emojisRouter } from "./emojis";
 import { generateAccessToken } from "../utils/jwt";
 import { uploadsRouter } from "./uploads";
+import { startTestImageWorker } from "../testSupport/imageWorker";
 
 /**
  * Choosing a group's picture went through the avatar route, which also made it
@@ -29,6 +32,7 @@ let dir: string;
 let server: Server;
 let base = "";
 let host = "";
+let stopWorker: () => Promise<void>;
 
 interface Member { serverUserId: string; grytUserId: string; nickname: string }
 
@@ -64,9 +68,11 @@ before(async () => {
   await initSqlite();
   initStorage();
   await createServerConfigIfNotExists();
+  stopWorker = await startTestImageWorker();
 
   const app = express();
   app.use("/api/uploads", uploadsRouter);
+  app.use("/api/emojis", emojisRouter);
   server = app.listen(0, "127.0.0.1");
   await new Promise<void>((resolve) => server.once("listening", () => resolve()));
   const { port } = server.address() as AddressInfo;
@@ -74,7 +80,34 @@ before(async () => {
   base = `http://${host}`;
 });
 
+describe("worker-backed emoji replacements", () => {
+  it("keeps the existing emoji when the worker rejects a replacement", async () => {
+    const owner = await member("emoji-owner");
+    await setServerRole(owner.serverUserId, "owner");
+    const token = generateAccessToken({ ...owner, serverHost: host, tokenVersion: 0 });
+    const send = async (bytes: Buffer) => {
+      const form = new FormData();
+      form.append("name", "test_emoji");
+      form.append("file", new Blob([new Uint8Array(bytes)], { type: "image/png" }), "emoji.png");
+      return fetch(`${base}/api/emojis`, { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: form });
+    };
+    assert.equal((await send(await png())).status, 201);
+    const original = (await getEmoji("test_emoji"))!;
+    const originalBytes = await getObjectAsBuffer({ bucket: "gryt-test", key: original.s3_key });
+    assert.equal((await sharp(originalBytes).metadata()).width, 64);
+    const broken = (await png()).subarray(0, 32);
+    assert.equal((await send(broken)).status, 400);
+    assert.deepEqual(await getEmoji("test_emoji"), original);
+    assert.deepEqual(await getObjectAsBuffer({ bucket: "gryt-test", key: original.s3_key }), originalBytes);
+    assert.equal((await send(await png())).status, 201);
+    const replacement = (await getEmoji("test_emoji"))!;
+    assert.notEqual(replacement.s3_key, original.s3_key);
+    await assert.rejects(getObjectAsBuffer({ bucket: "gryt-test", key: original.s3_key }));
+  });
+});
+
 after(async () => {
+  await stopWorker?.();
   await new Promise<void>((resolve) => server.close(() => resolve()));
   delete process.env.DATA_DIR;
   delete process.env.S3_BUCKET;
