@@ -12,13 +12,15 @@ import sharp from "sharp";
 import { initSqlite } from "../db/sqlite/connection";
 import { getFile } from "../db/sqlite/messages";
 import { createRoleDefinition } from "../db/sqlite/roleDefinitions";
-import { createServerConfigIfNotExists, setServerRole } from "../db/sqlite/servers";
+import { createServerConfigIfNotExists, setServerRole, updateServerConfig } from "../db/sqlite/servers";
 import { getUserByServerId, upsertUser } from "../db/sqlite/users";
 import { unreferencedAmong } from "../jobs/mediaSweep";
 import { fileReadVerdict } from "../services/fileAccess";
 import { buildMemberList } from "../socket/utils/clients";
 import { initStorage } from "../storage";
-import { generateAccessToken } from "../utils/jwt";
+import { generateAccessToken, generateFileToken } from "../utils/jwt";
+import { getImageJob, updateImageJobStatus } from "../db/sqlite/imageJobs";
+import { apiErrorHandler } from "../utils/httpErrors";
 import { uploadsRouter } from "./uploads";
 
 /** The member card banner: the avatar pipeline cut to 5:2. */
@@ -73,6 +75,7 @@ before(async () => {
 
   const app = express();
   app.use("/api/uploads", uploadsRouter);
+  app.use(apiErrorHandler);
   server = app.listen(0, "127.0.0.1");
   await new Promise<void>((resolve) => server.once("listening", () => resolve()));
   const { port } = server.address() as AddressInfo;
@@ -89,7 +92,7 @@ after(async () => {
 });
 
 describe("POST /api/uploads/banner", () => {
-  it("stores the picture cut to the banner box, beside the avatar", async () => {
+  it("quarantines the picture for the worker, beside the avatar", async () => {
     const alice = await member("alice");
     const res = await upload(alice, await png());
 
@@ -100,10 +103,11 @@ describe("POST /api/uploads/banner", () => {
     assert.equal((await getUserByServerId(alice.serverUserId))?.avatar_file_id ?? null, null, "it became the avatar");
 
     const file = await getFile(fileId);
-    assert.equal(file?.mime, "image/avif");
-    assert.equal(file?.width, 960);
-    assert.equal(file?.height, 384);
-    assert.ok(file?.s3_key.startsWith("banners/"));
+    assert.equal(file?.mime, "image/png");
+    assert.equal(file?.width, null);
+    assert.equal(file?.height, null);
+    assert.ok(file?.s3_key.startsWith("quarantine/banners/"));
+    assert.equal((await getImageJob(fileId))?.status, "queued");
   });
 
   it("is refused to a member who may not upload, and nothing is stored", async () => {
@@ -128,15 +132,52 @@ describe("POST /api/uploads/banner", () => {
 
     const file = await getFile(res.body.bannerFileId as string);
     assert.equal(file?.mime, "video/mp4");
-    assert.equal(file?.width, 160);
-    assert.equal(file?.height, 90);
+    assert.equal(file?.width, null);
+    assert.equal(file?.height, null);
+    assert.equal((await getImageJob(res.body.bannerFileId as string))?.status, "queued");
   });
 
-  it("refuses bytes merely labelled as MP4", async () => {
+  it("keeps bytes merely labelled as MP4 unreadable until the worker checks them", async () => {
     const poser = await member("poser");
     const res = await upload(poser, Buffer.from("not a video"), "video/mp4", "fake.mp4");
-    assert.equal(res.status, 400);
-    assert.equal(await bannerOf(poser), null);
+    assert.equal(res.status, 201);
+    const fileId = res.body.bannerFileId as string;
+    const token = generateFileToken({ ...poser, serverHost: host, tokenVersion: 0 });
+    const url = `${base}/api/uploads/files/${fileId}?t=${encodeURIComponent(token)}`;
+    const pending = await fetch(url);
+    assert.equal(pending.status, 503);
+    assert.equal(pending.headers.get("cache-control"), "no-store");
+    await updateImageJobStatus({ job_id: fileId, status: "error", error_message: "invalid video" });
+    assert.equal((await fetch(url)).status, 422);
+  });
+
+  it("serves a video only after a successful worker verdict, including range reads", async () => {
+    const verified = await member("verified");
+    const res = await upload(verified, mp4(), "video/mp4", "loop.mp4");
+    const fileId = res.body.bannerFileId as string;
+    const token = generateFileToken({ ...verified, serverHost: host, tokenVersion: 0 });
+    const url = `${base}/api/uploads/files/${fileId}?t=${encodeURIComponent(token)}`;
+    assert.equal((await fetch(url, { method: "HEAD" })).status, 503);
+    assert.equal((await fetch(`${url}&thumb=1`)).status, 503);
+    await updateImageJobStatus({ job_id: fileId, status: "done" });
+    const ready = await fetch(url, { headers: { Range: "bytes=0-15" } });
+    assert.equal(ready.status, 206);
+    assert.equal((await ready.arrayBuffer()).byteLength, 16);
+  });
+
+  it("enforces the configured upload limit on both pictures and videos", async () => {
+    const limited = await member("limited");
+    await updateServerConfig({ uploadMaxBytes: 512 });
+    try {
+      for (const [bytes, type] of [[await png(), "image/png"], [mp4(), "video/mp4"]] as const) {
+        const res = await upload(limited, bytes, type);
+        assert.equal(res.status, 413, JSON.stringify(res.body));
+        assert.equal(res.body.error, "file_too_large");
+        assert.equal(await bannerOf(limited), null);
+      }
+    } finally {
+      await updateServerConfig({ uploadMaxBytes: null });
+    }
   });
 
   it("deletes the old banner when it is replaced", async () => {

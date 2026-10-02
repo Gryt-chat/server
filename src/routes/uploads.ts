@@ -4,10 +4,9 @@ import type { Request, Response, NextFunction } from "express";
 import multer from "multer";
 import { v4 as uuidv4 } from "uuid";
 import mime from "mime-types";
-import { readFile, unlink } from "fs/promises";
+import { unlink } from "fs/promises";
 import { putObject, getObject } from "../storage";
 import { insertFile, getFile, updateUserAvatar, setUserAvatar, setUserBanner, getServerConfig, getUserByServerId, DEFAULT_AVATAR_MAX_BYTES, DEFAULT_UPLOAD_MAX_BYTES } from "../db";
-import { BANNER_BOX } from "../constants/media";
 import { deleteUnreferencedFiles } from "../jobs/mediaSweep";
 import { isSealedUpload } from "./uploadStorage";
 import { requireBearerToken } from "../middleware/requireBearerToken";
@@ -20,7 +19,8 @@ import { sendStoredBody } from "../utils/sendStoredBody";
 import { ensurePermission } from "../middleware/requirePermission";
 import { sanitizeSvg } from "../utils/svgSanitize";
 import { storeUploadedFile } from "../services/storeUploadedFile";
-import { readVideoDimensionsFromFile } from "../utils/videoDimensions";
+import { storeBannerUpload } from "../services/storeBannerUpload";
+import { getImageJob } from "../db";
 
 /** SVG is on this list only because it has been through sanitizeSvg(), is drawn
     through `<img>`, and is sandboxed by the CSP below. That header is required. */
@@ -250,44 +250,7 @@ const storeBannerMedia = (req: Request, res: Response, next: NextFunction): void
     .then(async () => {
       const cfg = await getServerConfig().catch(() => null);
       const maxBytes = typeof cfg?.upload_max_bytes === "number" ? cfg.upload_max_bytes : DEFAULT_UPLOAD_MAX_BYTES;
-      let stored: { ok: true; fileId: string; processing: boolean } | { ok: false; status: number; error: string; message: string };
-
-      if (type === "video/mp4") {
-        const dimensions = await readVideoDimensionsFromFile(file.path);
-        if (!dimensions) {
-          res.status(400).json({ error: "invalid_file", message: "The MP4 could not be read" });
-          return;
-        }
-        const video = await storeUploadedFile({
-          bucket,
-          path: file.path,
-          size: file.size,
-          mimetype: type,
-          originalName: file.originalname,
-          sealed: false,
-          uploadedBy: serverUserId,
-          maxBytes,
-          claimedWidth: dimensions.width,
-          claimedHeight: dimensions.height,
-        });
-        stored = video.ok ? { ...video, processing: true } : video;
-      } else {
-        if (type === "image/svg+xml") {
-          res.status(400).json({ error: "invalid_file", message: "A banner can't be an SVG." });
-          return;
-        }
-        stored = await storeAvatarPicture({
-          bucket,
-          bytes: await readFile(file.path),
-          mime: type,
-          originalName: file.originalname || null,
-          uploadedBy: serverUserId,
-          maxBytes,
-          what: "Banner",
-          box: BANNER_BOX,
-          prefix: "banners",
-        });
-      }
+      const stored = await storeBannerUpload({ bucket, file, uploadedBy: serverUserId, maxBytes });
 
       if (!stored.ok) {
         res.status(stored.status).json({ error: stored.error, message: stored.message });
@@ -480,6 +443,16 @@ uploadsRouter.get(
         }
         const fileMeta = verdict === "allowed" ? await getFile(fileId) : null;
         if (!fileMeta) { res.status(404).json({ error: "File not found" }); return; }
+
+        // Quarantined banners stay unreadable when the worker is absent or fails.
+        if (fileMeta.s3_key.startsWith("quarantine/banners/") || fileMeta.s3_key.startsWith("banners/verified/")) {
+          const job = await getImageJob(fileId);
+          if (job?.status !== "done") {
+            res.setHeader("Cache-Control", "no-store");
+            res.status(job?.status === "error" ? 422 : 503).json({ error: "banner_not_ready" });
+            return;
+          }
+        }
 
         const useThumb = req.query.thumb === "1" && fileMeta.thumbnail_key;
         const s3Key = useThumb ? fileMeta.thumbnail_key! : fileMeta.s3_key;
