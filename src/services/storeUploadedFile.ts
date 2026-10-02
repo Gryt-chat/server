@@ -1,10 +1,9 @@
-import consola from "consola";
 import { readFile } from "fs/promises";
 import { v4 as uuidv4 } from "uuid";
 
 import { insertFile, insertImageJob } from "../db";
 import { storageForUpload } from "../routes/uploadStorage";
-import { putObject } from "../storage";
+import { deleteObject, putObject } from "../storage";
 import { validateImage } from "../utils/imageValidation";
 import { sanitizeSvg } from "../utils/svgSanitize";
 import { PARSE_LIMITS, readVideoDimensionsFromFile } from "../utils/videoDimensions";
@@ -14,7 +13,7 @@ import { PARSE_LIMITS, readVideoDimensionsFromFile } from "../utils/videoDimensi
 export const IMAGE_VALIDATION_MAX_BYTES = 64 * 1024 * 1024;
 
 export type StoreUploadedFileResult =
-  | { ok: true; fileId: string; key: string }
+  | { ok: true; fileId: string; key: string; processing: boolean }
   | { ok: false; status: 400 | 413; error: "invalid_file" | "file_too_large"; message: string };
 
 function positiveInt(n: number | null | undefined): number | null {
@@ -39,6 +38,7 @@ export async function storeUploadedFile(input: {
   claimedHeight?: number | null;
   /** A caller that needs the same id on every run passes its own. */
   fileId?: string;
+  purpose?: "banner";
 }): Promise<StoreUploadedFileResult> {
   const fileId = input.fileId ?? uuidv4();
   const { bucket, path, size } = input;
@@ -63,7 +63,10 @@ export async function storeUploadedFile(input: {
     };
   }
 
-  const { key, storedMime } = storage;
+  const { storedMime } = storage;
+  const key = input.purpose === "banner"
+    ? `quarantine/banners/${fileId}`
+    : storage.queueImageJob ? `quarantine/${storage.key}` : storage.key;
   let width: number | null = null;
   let height: number | null = null;
 
@@ -91,10 +94,10 @@ export async function storeUploadedFile(input: {
       uploaded_by_server_user_id: input.uploadedBy,
       created_at: new Date(),
     });
-    return { ok: true, fileId, key: svgKey };
+    return { ok: true, fileId, key: svgKey, processing: false };
   }
 
-  if (storage.validateAsImage) {
+  if (storage.validateAsImage && input.purpose !== "banner") {
     // The mime off the request is a claim, and taking it meant an SVG
     // carrying <script> was served back inline.
     if (size > IMAGE_VALIDATION_MAX_BYTES) {
@@ -152,14 +155,19 @@ export async function storeUploadedFile(input: {
   });
 
   if (storage.queueImageJob) {
-    await insertImageJob({
-      job_id: uuidv4(),
+    try {
+      await insertImageJob({
+      job_id: fileId,
       file_id: fileId,
       raw_s3_key: key,
       raw_content_type: storedMime,
       raw_bytes: size,
-    }).catch((e: unknown) => consola.warn("Failed to queue image job", e));
+      });
+    } catch (error) {
+      await deleteObject({ bucket, key }).catch(() => undefined);
+      throw error;
+    }
   }
 
-  return { ok: true, fileId, key };
+  return { ok: true, fileId, key, processing: storage.queueImageJob };
 }

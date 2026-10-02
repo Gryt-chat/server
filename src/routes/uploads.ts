@@ -131,7 +131,7 @@ uploadsRouter.post(
           res.status(stored.status).json({ error: stored.error, message: stored.message });
           return;
         }
-        res.status(201).json({ fileId: stored.fileId, key: stored.key, thumbnailKey: null });
+        res.status(201).json({ fileId: stored.fileId, key: stored.key, thumbnailKey: null, processing: stored.processing });
       })
       // Every exit path, including the early returns and anything that threw:
       // multer's temp file is ours and nothing else removes it.
@@ -444,12 +444,16 @@ uploadsRouter.get(
         const fileMeta = verdict === "allowed" ? await getFile(fileId) : null;
         if (!fileMeta) { res.status(404).json({ error: "File not found" }); return; }
 
-        // Quarantined banners stay unreadable when the worker is absent or fails.
-        if (fileMeta.s3_key.startsWith("quarantine/banners/") || fileMeta.s3_key.startsWith("banners/verified/")) {
-          const job = await getImageJob(fileId);
+        // New media stays unreadable when the worker is absent or fails.
+        const job = await getImageJob(fileId);
+        if (job || fileMeta.s3_key.startsWith("quarantine/") || fileMeta.s3_key.startsWith("banners/verified/")) {
           if (job?.status !== "done") {
             res.setHeader("Cache-Control", "no-store");
-            res.status(job?.status === "error" ? 422 : 503).json({ error: "banner_not_ready" });
+            res.status(job?.status === "error" ? 422 : 503).json({ error: "media_not_ready" });
+            return;
+          }
+          if (fileMeta.mime?.startsWith("video/") && !fileMeta.thumbnail_key) {
+            res.status(422).json({ error: "media_not_validated" });
             return;
           }
         }

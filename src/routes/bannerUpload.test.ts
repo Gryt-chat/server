@@ -10,7 +10,7 @@ import express from "express";
 import sharp from "sharp";
 
 import { initSqlite } from "../db/sqlite/connection";
-import { getFile } from "../db/sqlite/messages";
+import { getFile, updateFileRecord } from "../db/sqlite/messages";
 import { createRoleDefinition } from "../db/sqlite/roleDefinitions";
 import { createServerConfigIfNotExists, setServerRole, updateServerConfig } from "../db/sqlite/servers";
 import { getUserByServerId, upsertUser } from "../db/sqlite/users";
@@ -43,10 +43,11 @@ function auth(who: Member) {
   return { Authorization: `Bearer ${generateAccessToken({ ...who, serverHost: host, tokenVersion: 0 })}` };
 }
 
-async function upload(who: Member, body: Buffer, type = "image/png", name = "banner.png") {
+async function upload(who: Member, body: Buffer, type = "image/png", name = "banner.png", endpoint = "/banner", sealed = false) {
   const form = new FormData();
   form.append("file", new Blob([new Uint8Array(body)], { type }), name);
-  const res = await fetch(`${base}/api/uploads/banner`, { method: "POST", headers: auth(who), body: form });
+  if (sealed) form.append("sealed", "1");
+  const res = await fetch(`${base}/api/uploads${endpoint}`, { method: "POST", headers: auth(who), body: form });
   return { status: res.status, body: (await res.json()) as Record<string, unknown> };
 }
 
@@ -81,6 +82,42 @@ before(async () => {
   const { port } = server.address() as AddressInfo;
   host = `127.0.0.1:${port}`;
   base = `http://${host}`;
+});
+
+describe("shared chat upload processing", () => {
+  it("blocks new unencrypted pictures until the worker approves them", async () => {
+    const who = await member("chat-picture");
+    const bytes = await png(16, 16);
+    const response = await upload(who, bytes, "image/png", "chat.png", "");
+    assert.equal(response.status, 201, JSON.stringify(response.body));
+    const fileId = response.body.fileId as string;
+    assert.equal(response.body.processing, true);
+    assert.ok((await getFile(fileId))?.s3_key.startsWith("quarantine/uploads/"));
+    assert.equal((await getImageJob(fileId))?.status, "queued");
+    const token = generateFileToken({ ...who, serverHost: host, tokenVersion: 0 });
+    const url = `${base}/api/uploads/files/${fileId}?t=${encodeURIComponent(token)}`;
+    assert.equal((await fetch(url)).status, 503);
+    await updateImageJobStatus({ job_id: fileId, status: "done" });
+    const ready = await fetch(url);
+    assert.equal(ready.status, 200);
+    assert.deepEqual(Buffer.from(await ready.arrayBuffer()), bytes);
+  });
+
+  it("keeps encrypted attachments opaque and does not pass ciphertext to a decoder", async () => {
+    const who = await member("sealed-chat");
+    const bytes = Buffer.from("opaque encrypted bytes");
+    const response = await upload(who, bytes, "image/png", "private.png", "", true);
+    assert.equal(response.status, 201, JSON.stringify(response.body));
+    const fileId = response.body.fileId as string;
+    assert.equal(response.body.processing, false);
+    assert.equal(await getImageJob(fileId), null);
+    assert.equal((await getFile(fileId))?.mime, "application/octet-stream");
+    const token = generateFileToken({ ...who, serverHost: host, tokenVersion: 0 });
+    const ready = await fetch(`${base}/api/uploads/files/${fileId}?t=${encodeURIComponent(token)}`);
+    assert.equal(ready.status, 200);
+    assert.match(ready.headers.get("content-disposition") ?? "", /^attachment;/);
+    assert.deepEqual(Buffer.from(await ready.arrayBuffer()), bytes);
+  });
 });
 
 after(async () => {
@@ -132,8 +169,8 @@ describe("POST /api/uploads/banner", () => {
 
     const file = await getFile(res.body.bannerFileId as string);
     assert.equal(file?.mime, "video/mp4");
-    assert.equal(file?.width, null);
-    assert.equal(file?.height, null);
+    assert.equal(file?.width, 160);
+    assert.equal(file?.height, 90);
     assert.equal((await getImageJob(res.body.bannerFileId as string))?.status, "queued");
   });
 
@@ -160,6 +197,8 @@ describe("POST /api/uploads/banner", () => {
     assert.equal((await fetch(url, { method: "HEAD" })).status, 503);
     assert.equal((await fetch(`${url}&thumb=1`)).status, 503);
     await updateImageJobStatus({ job_id: fileId, status: "done" });
+    assert.equal((await fetch(url)).status, 422, "a done job without a decoded poster must remain blocked");
+    await updateFileRecord(fileId, { thumbnail_key: `thumbnails/${fileId}.jpg` });
     const ready = await fetch(url, { headers: { Range: "bytes=0-15" } });
     assert.equal(ready.status, 206);
     assert.equal((await ready.arrayBuffer()).byteLength, 16);
