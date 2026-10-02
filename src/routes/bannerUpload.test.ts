@@ -21,6 +21,7 @@ import { initStorage } from "../storage";
 import { generateAccessToken, generateFileToken } from "../utils/jwt";
 import { getImageJob, updateImageJobStatus } from "../db/sqlite/imageJobs";
 import { apiErrorHandler } from "../utils/httpErrors";
+import { realMediaDeps } from "../services/webhookMedia";
 import { uploadsRouter } from "./uploads";
 
 /** The member card banner: the avatar pipeline cut to 5:2. */
@@ -85,6 +86,25 @@ before(async () => {
 });
 
 describe("shared chat upload processing", () => {
+  it("keeps webhook pictures quarantined behind a file-id worker verdict", async () => {
+    const bytes = await png(20, 20);
+    const fileId = await realMediaDeps.storeImage("hook-quarantine", bytes, "png", 20, 20);
+    assert.ok((await getFile(fileId))?.s3_key.startsWith("quarantine/uploads/"));
+    assert.equal((await getImageJob(fileId))?.status, "queued");
+  });
+  it("quarantines media even when the upload claims to be an ordinary attachment", async () => {
+    const who = await member("mislabelled-chat");
+    for (const [bytes, expected] of [[await png(20, 20), "image/png"], [mp4(), "video/mp4"]] as const) {
+      const response = await upload(who, bytes, "application/octet-stream", "attachment.bin", "");
+      assert.equal(response.status, 201, JSON.stringify(response.body));
+      const fileId = response.body.fileId as string;
+      assert.equal(response.body.processing, true);
+      assert.equal((await getFile(fileId))?.mime, expected);
+      assert.equal((await getImageJob(fileId))?.status, "queued");
+      const token = generateFileToken({ ...who, serverHost: host, tokenVersion: 0 });
+      assert.equal((await fetch(`${base}/api/uploads/files/${fileId}?t=${encodeURIComponent(token)}`)).status, 503);
+    }
+  });
   it("blocks new unencrypted pictures until the worker approves them", async () => {
     const who = await member("chat-picture");
     const bytes = await png(16, 16);

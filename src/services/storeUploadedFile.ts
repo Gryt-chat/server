@@ -5,6 +5,7 @@ import { insertFile, insertImageJob } from "../db";
 import { storageForUpload } from "../routes/uploadStorage";
 import { deleteObject, putObject } from "../storage";
 import { validateImage } from "../utils/imageValidation";
+import { mediaMimeFromFile } from "../utils/mediaSignature";
 import { sanitizeSvg } from "../utils/svgSanitize";
 import { PARSE_LIMITS, readVideoDimensionsFromFile } from "../utils/videoDimensions";
 
@@ -48,7 +49,7 @@ export async function storeUploadedFile(input: {
   const storage = storageForUpload({
     sealed: input.sealed,
     fileId,
-    mimetype: input.mimetype,
+    mimetype: input.sealed ? input.mimetype : (await mediaMimeFromFile(path)) ?? input.mimetype,
     originalName: input.originalName,
   });
 

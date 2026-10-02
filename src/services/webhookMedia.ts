@@ -15,7 +15,7 @@ import type { StoredWebhookCard } from "../db";
 import type { PayloadWarning, WebhookCardInput, WebhookMessageInput } from "../routes/webhookSchemas";
 import { colorToHex } from "../routes/webhookSchemas";
 import { storageForUpload } from "../routes/uploadStorage";
-import { putObject } from "../storage";
+import { deleteObject, putObject } from "../storage";
 import { validateImage } from "../utils/imageValidation";
 import { fetchFollowingSafely } from "../utils/safePreviewFetch";
 import { storeAvatarPicture } from "./avatarImage";
@@ -123,10 +123,11 @@ async function storeWebhookImage(webhookId: string, bytes: Buffer, format: Image
   const bucket = process.env.S3_BUCKET as string;
   const fileId = uuidv4();
   const storage = storageForUpload({ sealed: false, fileId, mimetype: MIME[format], originalName: `webhook.${format}` });
-  await putObject({ bucket, key: storage.key, body: bytes, contentType: storage.storedMime });
+  const key = `quarantine/${storage.key}`;
+  await putObject({ bucket, key, body: bytes, contentType: storage.storedMime });
   await insertFile({
     file_id: fileId,
-    s3_key: storage.key,
+    s3_key: key,
     mime: storage.storedMime,
     size: bytes.length,
     width,
@@ -138,8 +139,12 @@ async function storeWebhookImage(webhookId: string, bytes: Buffer, format: Image
     created_at: new Date(),
   });
   if (storage.queueImageJob) {
-    await insertImageJob({ file_id: fileId, raw_s3_key: storage.key, raw_content_type: storage.storedMime, raw_bytes: bytes.length })
-      .catch((e: unknown) => consola.warn("Failed to queue webhook image job", e));
+    try {
+      await insertImageJob({ job_id: fileId, file_id: fileId, raw_s3_key: key, raw_content_type: storage.storedMime, raw_bytes: bytes.length });
+    } catch (error) {
+      await deleteObject({ bucket, key }).catch(() => undefined);
+      throw error;
+    }
   }
   await setWebhookMediaFileId(webhookId, sha256, fileId);
   return fileId;
