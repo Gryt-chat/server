@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { tmpdir } from "node:os";
@@ -55,6 +55,7 @@ async function remove(who: Member) {
 
 const png = (width = 1600, height = 900) =>
   sharp({ create: { width, height, channels: 3, background: { r: 200, g: 60, b: 90 } } }).png().toBuffer();
+const mp4 = () => readFileSync(join(__dirname, "../utils/testdata/landscape.mp4"));
 
 const bannerOf = async (m: Member) => (await getUserByServerId(m.serverUserId))?.banner_file_id ?? null;
 const rowOf = async (m: Member) => (await buildMemberList({})).find((r) => r.serverUserId === m.serverUserId);
@@ -118,6 +119,24 @@ describe("POST /api/uploads/banner", () => {
     assert.equal((await upload(bob, svg, "image/svg+xml", "b.svg")).status, 400);
     assert.equal((await upload(bob, Buffer.from("not a picture"), "text/plain", "b.txt")).status, 400);
     assert.equal(await bannerOf(bob), null);
+  });
+
+  it("stores a readable MP4 without flattening its animation", async () => {
+    const player = await member("player");
+    const res = await upload(player, mp4(), "video/mp4", "loop.mp4");
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+
+    const file = await getFile(res.body.bannerFileId as string);
+    assert.equal(file?.mime, "video/mp4");
+    assert.equal(file?.width, 160);
+    assert.equal(file?.height, 90);
+  });
+
+  it("refuses bytes merely labelled as MP4", async () => {
+    const poser = await member("poser");
+    const res = await upload(poser, Buffer.from("not a video"), "video/mp4", "fake.mp4");
+    assert.equal(res.status, 400);
+    assert.equal(await bannerOf(poser), null);
   });
 
   it("deletes the old banner when it is replaced", async () => {

@@ -4,7 +4,7 @@ import type { Request, Response, NextFunction } from "express";
 import multer from "multer";
 import { v4 as uuidv4 } from "uuid";
 import mime from "mime-types";
-import { unlink } from "fs/promises";
+import { readFile, unlink } from "fs/promises";
 import { putObject, getObject } from "../storage";
 import { insertFile, getFile, updateUserAvatar, setUserAvatar, setUserBanner, getServerConfig, getUserByServerId, DEFAULT_AVATAR_MAX_BYTES, DEFAULT_UPLOAD_MAX_BYTES } from "../db";
 import { BANNER_BOX } from "../constants/media";
@@ -20,6 +20,7 @@ import { sendStoredBody } from "../utils/sendStoredBody";
 import { ensurePermission } from "../middleware/requirePermission";
 import { sanitizeSvg } from "../utils/svgSanitize";
 import { storeUploadedFile } from "../services/storeUploadedFile";
+import { readVideoDimensionsFromFile } from "../utils/videoDimensions";
 
 /** SVG is on this list only because it has been through sanitizeSvg(), is drawn
     through `<img>`, and is sandboxed by the CSP below. That header is required. */
@@ -139,15 +140,15 @@ uploadsRouter.post(
   },
 );
 
-/** One pipeline for every picture. Only an avatar or a banner is put on the
+/** One pipeline for avatar-shaped pictures. Only an avatar is put on the
     uploader's own row; a group picture doing that was GRYT-1182. */
-const storeAvatarImage = (purpose: "avatar" | "group" | "webhook" | "banner") =>
+const storeAvatarImage = (purpose: "avatar" | "group" | "webhook") =>
   (req: Request, res: Response, next: NextFunction): void => {
     const file = req.file;
     if (!file) { res.status(400).json({ error: "file_required", message: "file is required" }); return; }
     if (!(file.mimetype || "").startsWith("image/")) { res.status(400).json({ error: "invalid_file", message: "Only image files are allowed" }); return; }
 
-    const what = { avatar: "Avatar", group: "Group picture", webhook: "Webhook avatar", banner: "Banner" }[purpose];
+    const what = { avatar: "Avatar", group: "Group picture", webhook: "Webhook avatar" }[purpose];
     const disableS3 = (process.env.DISABLE_S3 || "").toLowerCase() === "true";
     if (disableS3) { res.status(503).json({ error: "s3_disabled", message: `S3 is disabled (DISABLE_S3=true). ${what} upload is unavailable.` }); return; }
 
@@ -174,11 +175,6 @@ const storeAvatarImage = (purpose: "avatar" | "group" | "webhook" | "banner") =>
         // SVG never reaches sharp. Stored as the sanitised vector; see
         // svgSanitize.ts for why that is enough.
         if ((file.mimetype || "").toLowerCase() === "image/svg+xml") {
-          // A vector is not cut to the 5:2 box, so a banner is always a raster.
-          if (purpose === "banner") {
-            res.status(400).json({ error: "invalid_file", message: "A banner can't be an SVG." });
-            return;
-          }
           const svg = sanitizeSvg(file.buffer);
           if (!svg.valid) {
             res.status(400).json({ error: "invalid_file", message: svg.reason });
@@ -217,7 +213,6 @@ const storeAvatarImage = (purpose: "avatar" | "group" | "webhook" | "banner") =>
           uploadedBy: serverUserId,
           maxBytes,
           what,
-          ...(purpose === "banner" ? { box: BANNER_BOX, prefix: "banners" } : {}),
         });
         if (!stored.ok) {
           res.status(stored.status).json({ error: stored.error, message: stored.message });
@@ -227,17 +222,85 @@ const storeAvatarImage = (purpose: "avatar" | "group" | "webhook" | "banner") =>
         if (purpose === "avatar") {
           await updateUserAvatar(serverUserId, stored.fileId);
           res.status(201).json({ avatarFileId: stored.fileId, processing: stored.processing });
-        } else if (purpose === "banner") {
-          const previous = (await getUserByServerId(serverUserId))?.banner_file_id ?? null;
-          await setUserBanner(serverUserId, stored.fileId);
-          if (previous && previous !== stored.fileId) await deleteUnreferencedFiles([previous]);
-          res.status(201).json({ bannerFileId: stored.fileId, processing: stored.processing });
         } else {
           res.status(201).json({ fileId: stored.fileId, processing: stored.processing });
         }
       })
       .catch(next);
   };
+
+const storeBannerMedia = (req: Request, res: Response, next: NextFunction): void => {
+  const file = req.file;
+  if (!file) { res.status(400).json({ error: "file_required", message: "file is required" }); return; }
+  const type = (file.mimetype || "").toLowerCase();
+  if (!type.startsWith("image/") && type !== "video/mp4") {
+    void discardTemp(file);
+    res.status(400).json({ error: "invalid_file", message: "Only images and MP4 videos are allowed" });
+    return;
+  }
+
+  const bucket = process.env.S3_BUCKET as string;
+  const serverUserId = req.tokenPayload?.serverUserId;
+  const disableS3 = (process.env.DISABLE_S3 || "").toLowerCase() === "true";
+  if (disableS3) { void discardTemp(file); res.status(503).json({ error: "s3_disabled", message: "S3 is disabled (DISABLE_S3=true). Banner upload is unavailable." }); return; }
+  if (!bucket) { void discardTemp(file); res.status(500).json({ error: "s3_not_configured", message: "S3_BUCKET not configured" }); return; }
+  if (!serverUserId) { void discardTemp(file); res.status(401).json({ error: "auth_required" }); return; }
+
+  Promise.resolve()
+    .then(async () => {
+      const cfg = await getServerConfig().catch(() => null);
+      const maxBytes = typeof cfg?.upload_max_bytes === "number" ? cfg.upload_max_bytes : DEFAULT_UPLOAD_MAX_BYTES;
+      let stored: { ok: true; fileId: string; processing: boolean } | { ok: false; status: number; error: string; message: string };
+
+      if (type === "video/mp4") {
+        const dimensions = await readVideoDimensionsFromFile(file.path);
+        if (!dimensions) {
+          res.status(400).json({ error: "invalid_file", message: "The MP4 could not be read" });
+          return;
+        }
+        const video = await storeUploadedFile({
+          bucket,
+          path: file.path,
+          size: file.size,
+          mimetype: type,
+          originalName: file.originalname,
+          sealed: false,
+          uploadedBy: serverUserId,
+          maxBytes,
+          claimedWidth: dimensions.width,
+          claimedHeight: dimensions.height,
+        });
+        stored = video.ok ? { ...video, processing: true } : video;
+      } else {
+        if (type === "image/svg+xml") {
+          res.status(400).json({ error: "invalid_file", message: "A banner can't be an SVG." });
+          return;
+        }
+        stored = await storeAvatarPicture({
+          bucket,
+          bytes: await readFile(file.path),
+          mime: type,
+          originalName: file.originalname || null,
+          uploadedBy: serverUserId,
+          maxBytes,
+          what: "Banner",
+          box: BANNER_BOX,
+          prefix: "banners",
+        });
+      }
+
+      if (!stored.ok) {
+        res.status(stored.status).json({ error: stored.error, message: stored.message });
+        return;
+      }
+      const previous = (await getUserByServerId(serverUserId))?.banner_file_id ?? null;
+      await setUserBanner(serverUserId, stored.fileId);
+      if (previous && previous !== stored.fileId) await deleteUnreferencedFiles([previous]);
+      res.status(201).json({ bannerFileId: stored.fileId, processing: stored.processing, mime: type });
+    })
+    .finally(() => discardTemp(file))
+    .catch(next);
+};
 
 uploadsRouter.post(
   "/avatar",
@@ -261,8 +324,8 @@ uploadsRouter.post(
       .then((ok) => { if (ok) next(); })
       .catch(next);
   },
-  uploadAvatarToMemory("file"),
-  storeAvatarImage("banner"),
+  uploadToDisk("file"),
+  storeBannerMedia,
 );
 
 // Ungated, unlike DELETE /avatar: losing the upload permission must not strand a banner.
