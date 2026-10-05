@@ -9,6 +9,7 @@ import { after, before, describe, it } from "node:test";
 import express from "express";
 import sharp from "sharp";
 
+import { BANNER_BOX } from "../constants/media";
 import { initSqlite } from "../db/sqlite/connection";
 import { getFile } from "../db/sqlite/messages";
 import { createRoleDefinition } from "../db/sqlite/roleDefinitions";
@@ -100,8 +101,8 @@ describe("POST /api/uploads/banner", () => {
 
     const file = await getFile(fileId);
     assert.equal(file?.mime, "image/avif");
-    assert.equal(file?.width, 960);
-    assert.equal(file?.height, 384);
+    assert.equal(file?.width, BANNER_BOX.width);
+    assert.equal(file?.height, BANNER_BOX.height);
     assert.ok(file?.s3_key.startsWith("banners/"));
   });
 
