@@ -19,6 +19,9 @@ import { putObject } from "../storage";
 import { validateImage } from "../utils/imageValidation";
 import { fetchFollowingSafely } from "../utils/safePreviewFetch";
 import { storeAvatarPicture } from "./avatarImage";
+import { QUARANTINE_PREFIX, quarantineUpload } from "./quarantineUpload";
+import { workerClearsQuarantine } from "./workerCapabilities";
+import { settleChatAttachment } from "./chatAttachmentSettle";
 
 /** The whole request's picture fetching, so a slow host can't hold a webhook call open. */
 export const MEDIA_DEADLINE_MS = 12_000;
@@ -43,7 +46,7 @@ export type FetchOutcome =
 
 export interface MediaDeps {
   fetchBytes(url: string, signal: AbortSignal, maxBytes: number): Promise<FetchOutcome>;
-  storeImage(webhookId: string, bytes: Buffer, format: ImageFormat, width: number, height: number): Promise<string>;
+  storeImage(webhookId: string, bytes: Buffer, format: ImageFormat, width: number | null, height: number | null): Promise<string>;
   storeAvatar(webhookId: string, bytes: Buffer, format: ImageFormat): Promise<string>;
 }
 
@@ -115,7 +118,7 @@ async function fetchBytesSafely(url: string, signal: AbortSignal, maxBytes: numb
 
 /** One stored file per distinct picture a webhook sends. Only reused while a message still points at it,
     since an unreferenced file may be swept at any moment. */
-async function storeWebhookImage(webhookId: string, bytes: Buffer, format: ImageFormat, width: number, height: number): Promise<string> {
+async function storeWebhookImage(webhookId: string, bytes: Buffer, format: ImageFormat, width: number | null, height: number | null): Promise<string> {
   const sha256 = createHash("sha256").update(bytes).digest("hex");
   const known = await getWebhookMediaFileId(webhookId, sha256);
   if (known && (await getFile(known)) && (await isFileReferencedByMessage(known))) return known;
@@ -123,10 +126,12 @@ async function storeWebhookImage(webhookId: string, bytes: Buffer, format: Image
   const bucket = process.env.S3_BUCKET as string;
   const fileId = uuidv4();
   const storage = storageForUpload({ sealed: false, fileId, mimetype: MIME[format], originalName: `webhook.${format}` });
-  await putObject({ bucket, key: storage.key, body: bytes, contentType: storage.storedMime });
+  // Fetched from anywhere, so written out again in the worker's jail where there is one.
+  const key = workerClearsQuarantine() ? `${QUARANTINE_PREFIX}${storage.key}` : storage.key;
+  await putObject({ bucket, key, body: bytes, contentType: storage.storedMime });
   await insertFile({
     file_id: fileId,
-    s3_key: storage.key,
+    s3_key: key,
     mime: storage.storedMime,
     size: bytes.length,
     width,
@@ -138,10 +143,11 @@ async function storeWebhookImage(webhookId: string, bytes: Buffer, format: Image
     created_at: new Date(),
   });
   if (storage.queueImageJob) {
-    await insertImageJob({ file_id: fileId, raw_s3_key: storage.key, raw_content_type: storage.storedMime, raw_bytes: bytes.length })
+    await insertImageJob({ file_id: fileId, raw_s3_key: key, raw_content_type: storage.storedMime, raw_bytes: bytes.length })
       .catch((e: unknown) => consola.warn("Failed to queue webhook image job", e));
   }
   await setWebhookMediaFileId(webhookId, sha256, fileId);
+  if (key !== storage.key) void settleChatAttachment(fileId);
   return fileId;
 }
 
@@ -152,7 +158,16 @@ async function storeWebhookAvatar(webhookId: string, bytes: Buffer, format: Imag
   const known = await getWebhookMediaFileId(webhookId, mediaKey);
   if (known && (await getFile(known)) && (await isFileReferencedByMessage(known))) return known;
 
-  const stored = await storeAvatarPicture({
+  const stored = workerClearsQuarantine()
+    ? { ok: true as const, ...(await quarantineUpload({
+        bucket: process.env.S3_BUCKET as string,
+        use: "avatars",
+        bytes,
+        mime: MIME[format],
+        originalName: `webhook.${format}`,
+        uploadedBy: `webhook:${webhookId}`,
+      })) }
+    : await storeAvatarPicture({
     bucket: process.env.S3_BUCKET as string,
     bytes,
     mime: MIME[format],
@@ -240,7 +255,10 @@ export async function resolveWebhookMedia(
       if (!format) { entry.code = "unsupported_type"; return; }
       if (fetched.bytes.length > budget) { entry.code = "media_budget"; return; }
       budget -= fetched.bytes.length;
-      const checked = await validateImage(fetched.bytes, { animated: true });
+      // The worker decodes it where there is one; a picture it refuses is never served.
+      const checked = workerClearsQuarantine()
+        ? { valid: true as const, width: null, height: null }
+        : await validateImage(fetched.bytes, { animated: true });
       if (!checked.valid) { entry.code = "invalid_image"; return; }
       const store = async (save: () => Promise<string>): Promise<string | undefined> => {
         try {

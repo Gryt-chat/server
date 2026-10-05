@@ -1,4 +1,6 @@
 import consola from "consola";
+import { reencodeThroughWorker } from "../services/workerReencode";
+import { workerClearsQuarantine } from "../services/workerCapabilities";
 import express from "express";
 import type { Request, Response, NextFunction } from "express";
 import multer from "multer";
@@ -208,9 +210,18 @@ serverRouter.post(
         iconMime === "image/webp" ||
         iconMime === "image/avif";
 
-      const validation = await validateImage(file.buffer, {
-        animated: isAnimated,
-      });
+      // Written out in the worker's jail where there is one, at the same 256px square.
+      const fromWorker = workerClearsQuarantine()
+        ? await reencodeThroughWorker(file.buffer, iconMime, "avatars").catch(() => null)
+        : undefined;
+      if (fromWorker === null) {
+        res.status(400).json({ error: "invalid_file", message: "Could not process image. Please upload a valid PNG/JPEG/WebP/GIF/AVIF under the size limit." });
+        return;
+      }
+
+      const validation = fromWorker
+        ? { valid: true as const, pages: 1 }
+        : await validateImage(file.buffer, { animated: isAnimated });
       if (!validation.valid) {
         res
           .status(400)
@@ -238,7 +249,9 @@ serverRouter.post(
       const outExt = isAnimated ? "webp" : "avif";
 
       let out: Buffer;
-      try {
+      if (fromWorker) {
+        out = fromWorker.body;
+      } else try {
         const pipeline = sharp(file.buffer, {
           animated: isAnimated,
           failOn: "error",
@@ -259,9 +272,9 @@ serverRouter.post(
         return;
       }
 
-      const key = `server-icons/${safeHost}/${uuidv4()}.${outExt}`;
+      const key = `server-icons/${safeHost}/${uuidv4()}.${fromWorker ? fromWorker.ext : outExt}`;
       try {
-        await putObject({ bucket, key, body: out, contentType: outMime });
+        await putObject({ bucket, key, body: out, contentType: fromWorker ? fromWorker.mime : outMime });
       } catch (e) {
         const raw = e instanceof Error ? e.message : "";
         consola.error("icon upload s3 error", { bucket, key, message: raw });

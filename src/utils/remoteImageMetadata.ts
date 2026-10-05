@@ -1,7 +1,6 @@
 import consola from "consola";
-import sharp from "sharp";
 
-import { MAX_INPUT_PIXELS } from "./imageValidation";
+import { imageHeaderSize } from "./imageHeaderSize";
 import { fetchFollowingSafely, type FetchGuard } from "./safePreviewFetch";
 
 export type RemoteImageMetadata = {
@@ -68,7 +67,7 @@ export async function fetchRemoteImageMetadata(url: string, guard?: FetchGuard):
     const buf = await readUpToBytes(res, 450_000);
     if (buf === null) return empty;
 
-    const meta = await sharp(buf, { animated: true, failOn: "error", limitInputPixels: MAX_INPUT_PIXELS }).metadata().catch(() => null);
+    const meta = imageHeaderSize(buf);
     const data: RemoteImageMetadata = {
       url,
       mime: contentType || null,
