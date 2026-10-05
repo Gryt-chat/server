@@ -51,6 +51,21 @@ async function upload(who: Member, path: "banner" | "avatar") {
   return { status: res.status, body: (await res.json()) as Record<string, unknown> };
 }
 
+/** What the worker does when it finishes: the row moves out of quarantine, or the job is marked failed. */
+const workerWritesOut = (fileId: string, key: string, mimeType: string) => {
+  getSqliteDb().prepare("UPDATE files SET s3_key = ?, mime = ? WHERE file_id = ?").run(key, mimeType, fileId);
+  getSqliteDb().prepare("UPDATE image_jobs SET status = 'done' WHERE file_id = ?").run(fileId);
+};
+const workerRefuses = (fileId: string) =>
+  getSqliteDb().prepare("UPDATE image_jobs SET status = 'error', error_message = 'could not be decoded' WHERE file_id = ?").run(fileId);
+const until = async (check: () => Promise<boolean>, ms = 4000) => {
+  const end = Date.now() + ms;
+  while (!(await check())) {
+    if (Date.now() > end) throw new Error("timed out waiting");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+};
+
 const read = (who: Member, fileId: string) =>
   fetch(`${base}/api/uploads/files/${fileId}?t=${encodeURIComponent(generateFileToken({ ...who, serverHost: host, tokenVersion: 0 }))}`);
 
@@ -83,11 +98,43 @@ describe("uploads with a worker that clears quarantine", () => {
     assert.equal(res.status, 201, JSON.stringify(res.body));
     const fileId = res.body.bannerFileId as string;
     assert.equal(res.body.processing, true);
-    assert.equal((await getUserByServerId(alice.serverUserId))?.banner_file_id, fileId);
+    assert.equal((await getUserByServerId(alice.serverUserId))?.banner_file_id ?? null, null, "not theirs until written out");
     const file = await getFile(fileId);
     assert.ok(file?.s3_key.startsWith("quarantine/banners/"), file?.s3_key);
     const job = getSqliteDb().prepare("SELECT raw_s3_key, status FROM image_jobs WHERE file_id = ?").get(fileId) as { raw_s3_key: string; status: string };
     assert.deepEqual({ ...job }, { raw_s3_key: file!.s3_key, status: "queued" });
+
+    workerWritesOut(fileId, `banners/${fileId}.avif`, "image/avif");
+    await until(async () => (await getUserByServerId(alice.serverUserId))?.banner_file_id === fileId);
+  });
+
+  it("keeps the working avatar when the worker refuses the new one, and drops the refused file", async () => {
+    await workerSays(["quarantine-v1"]);
+    const erin = await member("erin");
+    const first = (await upload(erin, "avatar")).body.avatarFileId as string;
+    workerWritesOut(first, `avatars/${first}.avif`, "image/avif");
+    await until(async () => (await getUserByServerId(erin.serverUserId))?.avatar_file_id === first);
+
+    const second = (await upload(erin, "avatar")).body.avatarFileId as string;
+    workerRefuses(second);
+    const started = Date.now();
+    const refused = await read(erin, second);
+    assert.ok(refused.status === 404 || refused.status === 401, String(refused.status));
+    assert.ok(Date.now() - started < 1000, "a refused file is answered at once, not after the wait");
+    await until(async () => (await getFile(second)) === null);
+    assert.equal((await getUserByServerId(erin.serverUserId))?.avatar_file_id, first);
+  });
+
+  it("applies only the newest of two uploads, whichever the worker finishes first", async () => {
+    await workerSays(["quarantine-v1"]);
+    const finn = await member("finn");
+    const older = (await upload(finn, "banner")).body.bannerFileId as string;
+    const newer = (await upload(finn, "banner")).body.bannerFileId as string;
+    workerWritesOut(newer, `banners/${newer}.avif`, "image/avif");
+    await until(async () => (await getUserByServerId(finn.serverUserId))?.banner_file_id === newer);
+    workerWritesOut(older, `banners/${older}.avif`, "image/avif");
+    await until(async () => (await getFile(older)) === null);
+    assert.equal((await getUserByServerId(finn.serverUserId))?.banner_file_id, newer);
   });
 
   it("never serves the original: a read waits for the worker's copy, and says not ready if it never comes", async () => {
@@ -136,9 +183,12 @@ describe("uploads with a worker that clears quarantine", () => {
     await workerSays(["quarantine-v1", "video-v1"]);
     const taken = await sendVideo();
     assert.equal(taken.status, 201, JSON.stringify(taken.body));
-    const file = await getFile(taken.body.bannerFileId as string);
+    const videoId = taken.body.bannerFileId as string;
+    const file = await getFile(videoId);
     assert.ok(file?.s3_key.startsWith("quarantine/banners/"));
     assert.equal(file?.mime, "video/mp4");
+    workerWritesOut(videoId, `banners/${videoId}.mp4`, "video/mp4");
+    await until(async () => (await getUserByServerId(dave.serverUserId))?.banner_file_id === videoId);
     const row = (await buildMemberList({})).find((m) => m.serverUserId === dave.serverUserId);
     assert.equal(row?.bannerVideo, true, "the member list says it plays");
     assert.equal(row?.avatarVideo, false);
