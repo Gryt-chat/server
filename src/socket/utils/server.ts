@@ -66,6 +66,14 @@ export function broadcastServerUiUpdate(reason: "settings" | "icon" | "other" = 
   void pushVoiceCapabilities();
 }
 
+/** To every socket one member has open, from a REST route that has no socket of its own. */
+export function emitToMember(serverUserId: string, event: string, payload: unknown): void {
+  if (!_io || !_clientsInfo) return;
+  for (const [clientId, ci] of Object.entries(_clientsInfo)) {
+    if (ci.serverUserId === serverUserId) _io.sockets.sockets.get(clientId)?.emit(event, payload);
+  }
+}
+
 /** For a REST route that changed a member, such as an avatar the worker has just cleared. */
 export function broadcastMembersUpdate(): void {
   if (!_io || !_serverId || !_clientsInfo) return;

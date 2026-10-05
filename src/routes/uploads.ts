@@ -20,7 +20,7 @@ import { sendStoredBody } from "../utils/sendStoredBody";
 import { ensurePermission } from "../middleware/requirePermission";
 import { sanitizeSvg } from "../utils/svgSanitize";
 import { quarantineUpload, settleQuarantine, waitOutOfQuarantine } from "../services/quarantineUpload";
-import { broadcastMembersUpdate } from "../socket/utils/server";
+import { broadcastMembersUpdate, emitToMember } from "../socket/utils/server";
 
 /** How long a read waits for the worker to write a fresh upload out; a test sets it short. */
 const QUARANTINE_WAIT_MS = Number(process.env.GRYT_QUARANTINE_WAIT_MS) || 15_000;
@@ -41,7 +41,11 @@ async function applyWhenSettled(purpose: "avatar" | "banner", serverUserId: stri
     pendingMedia.delete(slot);
     if (verdict !== "ready") {
       // A timeout leaves it in quarantine for the worker to finish; a refusal goes now.
-      if (verdict === "refused") await deleteUnreferencedFiles([fileId]);
+      if (verdict === "refused") {
+        await deleteUnreferencedFiles([fileId]);
+        // Without this the uploader sees nothing happen (GRYT-1667). The words live in the client.
+        emitToMember(serverUserId, "profile:media-refused", { purpose, fileId });
+      }
       consola.info(`[uploads] ${purpose} ${fileId} not applied: ${verdict}`);
       return;
     }
