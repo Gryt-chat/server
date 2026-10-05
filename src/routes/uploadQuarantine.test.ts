@@ -14,6 +14,7 @@ import { getFile } from "../db/sqlite/messages";
 import { createServerConfigIfNotExists, setServerRole } from "../db/sqlite/servers";
 import { getUserByServerId, upsertUser } from "../db/sqlite/users";
 import { refreshWorkerCapabilities } from "../services/workerCapabilities";
+import { buildMemberList } from "../socket/utils/clients";
 import { initStorage, putObject } from "../storage";
 import { generateAccessToken, generateFileToken } from "../utils/jwt";
 
@@ -138,5 +139,8 @@ describe("uploads with a worker that clears quarantine", () => {
     const file = await getFile(taken.body.bannerFileId as string);
     assert.ok(file?.s3_key.startsWith("quarantine/banners/"));
     assert.equal(file?.mime, "video/mp4");
+    const row = (await buildMemberList({})).find((m) => m.serverUserId === dave.serverUserId);
+    assert.equal(row?.bannerVideo, true, "the member list says it plays");
+    assert.equal(row?.avatarVideo, false);
   });
 });

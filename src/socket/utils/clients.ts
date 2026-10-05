@@ -201,13 +201,14 @@ export async function buildMemberList(clientsInfo: Clients) {
   // list carries all of them so a client can draw the rest as chips.
   const rolesByMember = await listRolesByMember();
 
-  // Avatar colours, so a voice tile can match the person rather than a hash of
-  // their id. Null until the image worker has been round; the client falls back.
+  // Avatar colours for voice tiles, and each avatar and banner's type, so a client
+  // knows whether it plays (GRYT-1664). Colours are null until the worker has been round.
   const avatarFiles = await getFilesByIds(
     registeredUsers
-      .map((u) => u.avatar_file_id)
+      .flatMap((u) => [u.avatar_file_id, u.banner_file_id])
       .filter((id): id is string => Boolean(id)),
   );
+  const isVideo = (fileId: string | null | undefined) => !!fileId && !!avatarFiles.get(fileId)?.mime?.startsWith("video/");
 
   // Checked now rather than at upload, so taking the permission away takes the banner down too.
   const bannerShown = new Set<string>();
@@ -260,6 +261,9 @@ export async function buildMemberList(clientsInfo: Clients) {
           ? avatarFiles.get(user.avatar_file_id)?.dominant_color ?? null
           : null,
         bannerFileId: bannerShown.has(user.server_user_id) ? user.banner_file_id : null,
+        // True when the file plays rather than shows; its thumbnail is the still poster.
+        avatarVideo: isVideo(user.avatar_file_id),
+        bannerVideo: bannerShown.has(user.server_user_id) && isVideo(user.banner_file_id),
         // `avatarFileId` is still set, because saving a design uploads a PNG
         // that an older client shows. Passed through as stored.
         avatarWorn: user.avatar_worn,
@@ -321,6 +325,8 @@ export function memberStateHash(members: MemberListEntry[]): string {
       avatarFileId: m.avatarFileId,
       avatarColor: m.avatarColor,
       bannerFileId: m.bannerFileId,
+      avatarVideo: m.avatarVideo,
+      bannerVideo: m.bannerVideo,
       // Designing a new owl changes nothing else about a member, so without
       // this line it would change nothing anybody sees.
       avatarWorn: m.avatarWorn,
