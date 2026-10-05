@@ -213,6 +213,10 @@ const storeAvatarImage = (purpose: "avatar" | "group" | "webhook" | "banner") =>
     Promise.resolve()
       .then(async () => {
         const cfg = await getServerConfig().catch(() => null);
+        if (isVideo && cfg?.video_profiles_enabled === false) {
+          res.status(415).json({ error: "video_disabled", message: "This server's owner has turned off video avatars and banners. Use a picture instead." });
+          return;
+        }
         const maxBytes = isVideo
           ? (typeof cfg?.upload_max_bytes === "number" ? cfg.upload_max_bytes : DEFAULT_UPLOAD_MAX_BYTES)
           : (typeof cfg?.avatar_max_bytes === "number" ? cfg.avatar_max_bytes : DEFAULT_AVATAR_MAX_BYTES);

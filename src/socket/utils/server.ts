@@ -32,6 +32,7 @@ import {
 } from "../../db";
 
 import { pushVoiceCapabilities } from "./voiceCapabilities";
+import { workerClearsQuarantine, workerTranscodesVideo } from "../../services/workerCapabilities";
 import { MLS_CIPHERSUITE_ID } from "../../services/mlsWire";
 import { mlsRetentionDays } from "../../jobs/mlsRetention";
 
@@ -374,6 +375,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
   let cfgIconUrl: string | null = null;
   let cfgAvatarMaxBytes: number = DEFAULT_AVATAR_MAX_BYTES;
   let cfgUploadMaxBytes: number = DEFAULT_UPLOAD_MAX_BYTES;
+  let cfgVideoProfiles = true;
   let isOwner = false;
   let role = FALLBACK_ROLE_ID;
   let roleIds: string[] = [];
@@ -388,6 +390,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
     if (cfg?.icon_url) cfgIconUrl = cfg.icon_url;
     if (typeof cfg?.avatar_max_bytes === "number") cfgAvatarMaxBytes = cfg.avatar_max_bytes;
     if (typeof cfg?.upload_max_bytes === "number") cfgUploadMaxBytes = cfg.upload_max_bytes;
+    cfgVideoProfiles = cfg?.video_profiles_enabled !== false;
     isOwner = !!(cfg?.owner_gryt_user_id && cfg.owner_gryt_user_id === client.grytUserId);
     if (client.serverUserId && !client.serverUserId.startsWith("temp_")) {
       const standing = await getEffectiveStanding(client.serverUserId, client.grytUserId);
@@ -439,6 +442,9 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
       voice_enabled: !!sfuHost,
       avatar_max_bytes: cfgAvatarMaxBytes,
       upload_max_bytes: cfgUploadMaxBytes,
+      /** Uploads go through the worker's sandbox first, and whether a video avatar or banner is taken. */
+      uploads_checked: workerClearsQuarantine(),
+      video_profiles: workerTranscodesVideo() && cfgVideoProfiles,
       version: process.env.SERVER_VERSION || "1.0.0",
       /** What code sits between a member and the people they talk to, so it is
           not configurable. No version: that names which known problem applies. */

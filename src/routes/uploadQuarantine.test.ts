@@ -11,7 +11,7 @@ import sharp from "sharp";
 
 import { getSqliteDb, initSqlite } from "../db/sqlite/connection";
 import { getFile } from "../db/sqlite/messages";
-import { createServerConfigIfNotExists, setServerRole } from "../db/sqlite/servers";
+import { createServerConfigIfNotExists, setServerRole, updateServerConfig } from "../db/sqlite/servers";
 import { getUserByServerId, upsertUser } from "../db/sqlite/users";
 import { refreshWorkerCapabilities } from "../services/workerCapabilities";
 import { buildMemberList } from "../socket/utils/clients";
@@ -189,6 +189,12 @@ describe("uploads with a worker that clears quarantine", () => {
     assert.equal(file?.mime, "video/mp4");
     workerWritesOut(videoId, `banners/${videoId}.mp4`, "video/mp4");
     await until(async () => (await getUserByServerId(dave.serverUserId))?.banner_file_id === videoId);
+    await updateServerConfig({ videoProfiles: false });
+    const off = await sendVideo();
+    assert.equal(off.status, 415, "the owner turned video off");
+    assert.equal(off.body.error, "video_disabled");
+    await updateServerConfig({ videoProfiles: true });
+
     const row = (await buildMemberList({})).find((m) => m.serverUserId === dave.serverUserId);
     assert.equal(row?.bannerVideo, true, "the member list says it plays");
     assert.equal(row?.avatarVideo, false);

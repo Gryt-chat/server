@@ -13,6 +13,7 @@ import { broadcastServerUiUpdate } from "../socket/utils/server";
 import { syncMdnsAdvertising } from "../mdns";
 import { VALID_CENSOR_STYLES, type CensorStyle } from "../utils/profanityFilter";
 import { SPAM_SENSITIVITIES, type SpamSensitivity } from "../moderation/spamFilter";
+import { workerClearsQuarantine, workerTranscodesVideo } from "../services/workerCapabilities";
 
 /**
  * One place, for the side effects rather than the validation: a caller that only
@@ -34,6 +35,7 @@ export interface SettingsPatch {
   discoverable?: boolean;
   spamFilter?: boolean;
   spamSensitivity?: string;
+  videoProfiles?: boolean;
 }
 
 /** Who asked for the change, for the audit trail. */
@@ -103,6 +105,8 @@ export async function applyServerSettings(
     ? patch.spamSensitivity as SpamSensitivity
     : undefined;
 
+  const videoProfiles: boolean | undefined = typeof patch.videoProfiles === "boolean" ? patch.videoProfiles : undefined;
+
   const updated = await updateServerConfig({
     displayName: displayName === undefined ? undefined : (displayName.length > 0 ? displayName : null),
     description: description === undefined ? undefined : (description.length > 0 ? description : null),
@@ -119,6 +123,7 @@ export async function applyServerSettings(
     discoverable,
     spamFilter,
     spamSensitivity,
+    videoProfiles,
   });
 
   if (systemChannelId !== undefined) invalidateSystemChannelCache();
@@ -169,5 +174,8 @@ export function settingsView(cfg: ServerConfigRecord, serverId: string, isOwner:
     discoverable: cfg.discoverable !== false,
     spamFilter: cfg.spam_filter_enabled !== false,
     spamSensitivity: cfg.spam_filter_sensitivity ?? "normal",
+    videoProfiles: cfg.video_profiles_enabled !== false,
+    // What this host can do, so settings can say why a switch is off rather than hide it.
+    media: { checked: workerClearsQuarantine(), video: workerTranscodesVideo() },
   };
 }
