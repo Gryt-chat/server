@@ -5,6 +5,8 @@ import { v4 as uuidv4 } from "uuid";
 import { insertFile, insertImageJob } from "../db";
 import { storageForUpload } from "../routes/uploadStorage";
 import { putObject } from "../storage";
+import { QUARANTINE_PREFIX } from "./quarantineUpload";
+import { workerClearsQuarantine } from "./workerCapabilities";
 import { validateImage } from "../utils/imageValidation";
 import { sanitizeSvg } from "../utils/svgSanitize";
 import { PARSE_LIMITS, readVideoDimensionsFromFile } from "../utils/videoDimensions";
@@ -63,7 +65,10 @@ export async function storeUploadedFile(input: {
     };
   }
 
-  const { key, storedMime } = storage;
+  const { storedMime } = storage;
+  // A plain image goes to quarantine when the worker clears it; videos keep today's path for now.
+  const quarantined = storage.queueImageJob && storage.validateAsImage && workerClearsQuarantine();
+  const key = quarantined ? `${QUARANTINE_PREFIX}${storage.key}` : storage.key;
   let width: number | null = null;
   let height: number | null = null;
 
@@ -94,7 +99,8 @@ export async function storeUploadedFile(input: {
     return { ok: true, fileId, key: svgKey };
   }
 
-  if (storage.validateAsImage) {
+  // A quarantined image is decoded by the worker in its jail, never here.
+  if (storage.validateAsImage && !quarantined) {
     // The mime off the request is a claim, and taking it meant an SVG
     // carrying <script> was served back inline.
     if (size > IMAGE_VALIDATION_MAX_BYTES) {
