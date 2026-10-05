@@ -269,12 +269,12 @@ const storeAvatarImage = (purpose: "avatar" | "group" | "webhook" | "banner") =>
           return;
         }
 
-        // With a worker that clears quarantine, the server never decodes the file itself.
+        // With a worker that clears quarantine the server never decodes it, whatever the picture is for.
         // A video only ever gets here with a worker that transcodes it.
-        const stored = (purpose === "avatar" || purpose === "banner") && (isVideo || workerClearsQuarantine())
+        const stored = isVideo || workerClearsQuarantine()
           ? { ok: true as const, processing: true, ...(await quarantineUpload({
               bucket,
-              use: purpose === "avatar" ? "avatars" : "banners",
+              use: purpose === "banner" ? "banners" : "avatars",
               bytes: file.buffer,
               mime: (file.mimetype || "application/octet-stream").toLowerCase(),
               originalName: file.originalname || null,

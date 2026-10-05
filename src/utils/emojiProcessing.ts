@@ -1,5 +1,7 @@
 import sharp from "sharp";
 
+import { reencodeThroughWorker } from "../services/workerReencode";
+import { workerClearsQuarantine } from "../services/workerCapabilities";
 import { MAX_INPUT_PIXELS, validateImage } from "./imageValidation";
 
 const ANIMATED_MIME_SET = new Set(["image/gif", "image/webp", "image/avif"]);
@@ -8,6 +10,12 @@ export async function processEmojiToOptimizedImage(
   buffer: Buffer,
   mime: string,
 ): Promise<{ processed: Buffer; ext: string; contentType: string }> {
+  // Decoded in the worker's jail where there is one; every emoji path comes through here (GRYT-1664).
+  if (workerClearsQuarantine()) {
+    const copy = await reencodeThroughWorker(buffer, mime, "emojis");
+    return { processed: copy.body, ext: copy.ext, contentType: copy.mime };
+  }
+
   const animated = ANIMATED_MIME_SET.has(mime);
   const startedAt = Date.now();
   console.log("[EmojiProcess] start", { mime, animated, bytes: buffer.length });

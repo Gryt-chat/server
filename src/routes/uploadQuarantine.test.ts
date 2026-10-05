@@ -250,4 +250,37 @@ describe("uploads with a worker that clears quarantine", () => {
     const after = (await enrichAttachments([message]))[0].enriched_attachments?.[0];
     assert.deepEqual([after?.processing, after?.refused], [false, true]);
   });
+
+  it("takes a group picture through quarantine too", async () => {
+    await workerSays(["quarantine-v1"]);
+    const jo = await member("jo");
+    const form = new FormData();
+    form.append("file", new Blob([new Uint8Array(await png())], { type: "image/png" }), "group.png");
+    const raw = await fetch(`${base}/api/uploads/group-icon`, { method: "POST", headers: auth(jo), body: form });
+    const res = { status: raw.status, body: (await raw.json()) as Record<string, unknown> };
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    const id = (res.body.fileId ?? res.body.avatarFileId) as string;
+    assert.ok((await getFile(id))?.s3_key.startsWith("quarantine/avatars/"));
+  });
+
+  it("hands an emoji to the worker and takes back only its copy", async () => {
+    await workerSays(["quarantine-v1"]);
+    // A stand-in worker: writes its own bytes for whatever lands in quarantine/emojis/.
+    const fake = setInterval(() => {
+      const row = getSqliteDb().prepare("SELECT file_id FROM files WHERE s3_key LIKE 'quarantine/emojis/%' LIMIT 1").get() as { file_id: string } | undefined;
+      if (!row) return;
+      void putObject({ bucket: "gryt-test", key: `emojis/${row.file_id}.avif`, body: Buffer.from("worker copy"), contentType: "image/avif" }).then(() =>
+        workerWritesOut(row.file_id, `emojis/${row.file_id}.avif`, "image/avif"));
+    }, 50);
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { processEmojiToOptimizedImage } = require("../utils/emojiProcessing") as typeof import("../utils/emojiProcessing");
+      const out = await processEmojiToOptimizedImage(await png(), "image/png");
+      assert.deepEqual([out.processed.toString(), out.ext, out.contentType], ["worker copy", "avif", "image/avif"]);
+      const left = getSqliteDb().prepare("SELECT COUNT(*) AS n FROM files WHERE s3_key LIKE '%emojis/%'").get() as { n: number };
+      assert.equal(left.n, 0, "the temporary file is gone; the caller stores its own");
+    } finally {
+      clearInterval(fake);
+    }
+  });
 });
