@@ -47,6 +47,8 @@ export interface CardStyle {
   pLayer?: "front";
   /** The card's outline in pixels. Leaves out its default (1). */
   edge?: number;
+  /** "short" draws the banner at its low height. Absent is tall; the stored banner box doesn't change. */
+  bannerSize?: "short";
   /** The plain card as a choice. With no style at all, apps draw one worked out from the member's name. */
   plain?: true;
 }
@@ -124,6 +126,7 @@ export function normaliseCardStyle(value: unknown): CardStyle | null {
   if (raw.pLayer === "front") out.pLayer = "front";
   const edge = readInt(raw.edge, 0, 6);
   if (edge !== undefined && edge !== 1) out.edge = edge;
+  if (raw.bannerSize === "short") out.bannerSize = "short";
 
   // Only when nothing else is set: with a colour or a pattern the card isn't plain.
   if (raw.plain === true && Object.keys(out).length === 0) out.plain = true;
