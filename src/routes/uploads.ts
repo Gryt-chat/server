@@ -19,10 +19,44 @@ import { RangeNotSatisfiableError } from "../utils/byteRange";
 import { sendStoredBody } from "../utils/sendStoredBody";
 import { ensurePermission } from "../middleware/requirePermission";
 import { sanitizeSvg } from "../utils/svgSanitize";
-import { quarantineUpload, waitOutOfQuarantine } from "../services/quarantineUpload";
+import { quarantineUpload, settleQuarantine, waitOutOfQuarantine } from "../services/quarantineUpload";
+import { broadcastMembersUpdate } from "../socket/utils/server";
 
 /** How long a read waits for the worker to write a fresh upload out; a test sets it short. */
 const QUARANTINE_WAIT_MS = Number(process.env.GRYT_QUARANTINE_WAIT_MS) || 15_000;
+
+/* The newest pending avatar and banner per member. An older upload that settles after a
+   newer one is dropped rather than applied over it. */
+const pendingMedia = new Map<string, string>();
+
+async function applyWhenSettled(purpose: "avatar" | "banner", serverUserId: string, fileId: string): Promise<void> {
+  const slot = `${purpose}:${serverUserId}`;
+  pendingMedia.set(slot, fileId);
+  try {
+    const verdict = await settleQuarantine(fileId);
+    if (pendingMedia.get(slot) !== fileId) {
+      await deleteUnreferencedFiles([fileId]);
+      return;
+    }
+    pendingMedia.delete(slot);
+    if (verdict !== "ready") {
+      // A timeout leaves it in quarantine for the worker to finish; a refusal goes now.
+      if (verdict === "refused") await deleteUnreferencedFiles([fileId]);
+      consola.info(`[uploads] ${purpose} ${fileId} not applied: ${verdict}`);
+      return;
+    }
+    if (purpose === "avatar") {
+      await updateUserAvatar(serverUserId, fileId);
+    } else {
+      const previous = (await getUserByServerId(serverUserId))?.banner_file_id ?? null;
+      await setUserBanner(serverUserId, fileId);
+      if (previous && previous !== fileId) await deleteUnreferencedFiles([previous]);
+    }
+    broadcastMembersUpdate();
+  } catch (err) {
+    consola.warn(`[uploads] Could not apply ${purpose} ${fileId}`, err);
+  }
+}
 import { storeUploadedFile } from "../services/storeUploadedFile";
 import { workerClearsQuarantine, workerTranscodesVideo } from "../services/workerCapabilities";
 
@@ -253,7 +287,11 @@ const storeAvatarImage = (purpose: "avatar" | "group" | "webhook" | "banner") =>
           return;
         }
 
-        if (purpose === "avatar") {
+        if ((purpose === "avatar" || purpose === "banner") && stored.processing) {
+          // Not theirs until the worker has written it out, so a refused file never replaces a working one.
+          void applyWhenSettled(purpose, serverUserId, stored.fileId);
+          res.status(201).json({ [purpose === "avatar" ? "avatarFileId" : "bannerFileId"]: stored.fileId, processing: true });
+        } else if (purpose === "avatar") {
           await updateUserAvatar(serverUserId, stored.fileId);
           res.status(201).json({ avatarFileId: stored.fileId, processing: stored.processing });
         } else if (purpose === "banner") {
@@ -448,6 +486,11 @@ uploadsRouter.get(
         if (!found) { res.status(404).json({ error: "File not found" }); return; }
         // Never the quarantined original: wait for the worker's copy, or say it isn't ready.
         const fileMeta = await waitOutOfQuarantine(fileId, found, undefined, QUARANTINE_WAIT_MS);
+        if (fileMeta === "refused") {
+          res.setHeader("Cache-Control", "no-store");
+          res.status(404).json({ error: "media_refused", message: "This file could not be processed." });
+          return;
+        }
         if (!fileMeta) {
           res.setHeader("Cache-Control", "no-store");
           res.status(503).json({ error: "media_not_ready", message: "This file is still being processed." });

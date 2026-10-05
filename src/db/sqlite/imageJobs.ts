@@ -40,6 +40,13 @@ export async function getImageJob(jobId: string): Promise<ImageJobRecord | null>
   return mapRow(row);
 }
 
+/** The newest job's status for a file, or null when it never had one. */
+export async function getImageJobStatusForFile(fileId: string): Promise<ImageJobStatus | null> {
+  const db = getSqliteDb();
+  const row = db.prepare("SELECT status FROM image_jobs WHERE file_id = ? ORDER BY created_at DESC LIMIT 1").get(fileId) as { status: ImageJobStatus } | undefined;
+  return row?.status ?? null;
+}
+
 export async function updateImageJobStatus(input: {
   job_id: string;
   status: ImageJobStatus;

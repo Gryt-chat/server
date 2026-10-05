@@ -66,6 +66,12 @@ export function broadcastServerUiUpdate(reason: "settings" | "icon" | "other" = 
   void pushVoiceCapabilities();
 }
 
+/** For a REST route that changed a member, such as an avatar the worker has just cleared. */
+export function broadcastMembersUpdate(): void {
+  if (!_io || !_serverId || !_clientsInfo) return;
+  broadcastMemberList(_io, _clientsInfo, _serverId);
+}
+
 export function broadcastChatNew(message: Record<string, unknown>): void {
   if (!_io || !_clientsInfo) return;
   const io = _io;
