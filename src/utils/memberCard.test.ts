@@ -184,6 +184,14 @@ describe("the banner's fade", () => {
   });
 });
 
+describe("the banner's height", () => {
+  it("keeps the short banner and leaves out the tall one", () => {
+    assert.deepEqual(normaliseCardStyle({ bannerSize: "short" }), { bannerSize: "short" });
+    assert.equal(normaliseCardStyle({ bannerSize: "tall" }), null);
+    assert.equal(normaliseCardStyle({ bannerSize: true }), null);
+  });
+});
+
 describe("the plain card as a choice", () => {
   it("is kept when it is the whole style, so it isn't read as no card", () => {
     assert.deepEqual(normaliseCardStyle({ plain: true }), { plain: true });
