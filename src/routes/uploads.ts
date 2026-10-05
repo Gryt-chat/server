@@ -24,7 +24,10 @@ import { quarantineUpload, waitOutOfQuarantine } from "../services/quarantineUpl
 /** How long a read waits for the worker to write a fresh upload out; a test sets it short. */
 const QUARANTINE_WAIT_MS = Number(process.env.GRYT_QUARANTINE_WAIT_MS) || 15_000;
 import { storeUploadedFile } from "../services/storeUploadedFile";
-import { workerClearsQuarantine } from "../services/workerCapabilities";
+import { workerClearsQuarantine, workerTranscodesVideo } from "../services/workerCapabilities";
+
+/** What a banner or avatar video may be sent as; the worker writes all of them out as AV1 MP4. */
+const VIDEO_TYPES = new Set(["video/mp4", "video/webm", "video/quicktime"]);
 
 /** SVG is on this list only because it has been through sanitizeSvg(), is drawn
     through `<img>`, and is sandboxed by the CSP below. That header is required. */
@@ -63,7 +66,10 @@ function uploadAvatarToMemory(field: string) {
     Promise.resolve()
       .then(async () => {
         const cfg = await getServerConfig().catch(() => null);
-        const maxBytes = typeof cfg?.avatar_max_bytes === "number" ? cfg.avatar_max_bytes : DEFAULT_AVATAR_MAX_BYTES;
+        const avatarMax = typeof cfg?.avatar_max_bytes === "number" ? cfg.avatar_max_bytes : DEFAULT_AVATAR_MAX_BYTES;
+        const uploadMax = typeof cfg?.upload_max_bytes === "number" ? cfg.upload_max_bytes : DEFAULT_UPLOAD_MAX_BYTES;
+        // A video banner or avatar follows the upload limit; a picture is held to the avatar one below.
+        const maxBytes = workerTranscodesVideo() && avatarMax > 0 && uploadMax > 0 ? Math.max(avatarMax, uploadMax) : avatarMax;
         const limits = typeof maxBytes === "number" && maxBytes > 0 ? { fileSize: maxBytes } : undefined;
         multer({ storage: multer.memoryStorage(), limits }).single(field)(req, res, next);
       })
@@ -150,7 +156,12 @@ const storeAvatarImage = (purpose: "avatar" | "group" | "webhook" | "banner") =>
   (req: Request, res: Response, next: NextFunction): void => {
     const file = req.file;
     if (!file) { res.status(400).json({ error: "file_required", message: "file is required" }); return; }
-    if (!(file.mimetype || "").startsWith("image/")) { res.status(400).json({ error: "invalid_file", message: "Only image files are allowed" }); return; }
+    const isVideo = VIDEO_TYPES.has((file.mimetype || "").toLowerCase()) && (purpose === "avatar" || purpose === "banner");
+    if (isVideo && !workerTranscodesVideo()) {
+      res.status(415).json({ error: "video_unsupported", message: "This server can't take a video here. Use a picture instead." });
+      return;
+    }
+    if (!isVideo && !(file.mimetype || "").startsWith("image/")) { res.status(400).json({ error: "invalid_file", message: "Only image files are allowed" }); return; }
 
     const what = { avatar: "Avatar", group: "Group picture", webhook: "Webhook avatar", banner: "Banner" }[purpose];
     const disableS3 = (process.env.DISABLE_S3 || "").toLowerCase() === "true";
@@ -164,7 +175,9 @@ const storeAvatarImage = (purpose: "avatar" | "group" | "webhook" | "banner") =>
     Promise.resolve()
       .then(async () => {
         const cfg = await getServerConfig().catch(() => null);
-        const maxBytes = (typeof cfg?.avatar_max_bytes === "number" ? cfg.avatar_max_bytes : DEFAULT_AVATAR_MAX_BYTES);
+        const maxBytes = isVideo
+          ? (typeof cfg?.upload_max_bytes === "number" ? cfg.upload_max_bytes : DEFAULT_UPLOAD_MAX_BYTES)
+          : (typeof cfg?.avatar_max_bytes === "number" ? cfg.avatar_max_bytes : DEFAULT_AVATAR_MAX_BYTES);
 
         // No exemption for animated files: a file over the limit is refused
         // whatever is in it.
@@ -215,7 +228,8 @@ const storeAvatarImage = (purpose: "avatar" | "group" | "webhook" | "banner") =>
         }
 
         // With a worker that clears quarantine, the server never decodes the file itself.
-        const stored = (purpose === "avatar" || purpose === "banner") && workerClearsQuarantine()
+        // A video only ever gets here with a worker that transcodes it.
+        const stored = (purpose === "avatar" || purpose === "banner") && (isVideo || workerClearsQuarantine())
           ? { ok: true as const, processing: true, ...(await quarantineUpload({
               bucket,
               use: purpose === "avatar" ? "avatars" : "banners",
