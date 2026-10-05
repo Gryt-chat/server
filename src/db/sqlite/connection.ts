@@ -92,6 +92,7 @@ function createSchema(d: DatabaseSync): void {
       allow_dms INTEGER NOT NULL DEFAULT 1,
       spam_filter INTEGER NOT NULL DEFAULT 1,
       spam_sensitivity TEXT NOT NULL DEFAULT 'normal',
+      video_profiles INTEGER NOT NULL DEFAULT 1,
       is_configured INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -940,6 +941,10 @@ function runMigrations(d: DatabaseSync): void {
   }
   if (!hasColumn(d, "server_config", "spam_sensitivity")) {
     d.exec("ALTER TABLE server_config ADD COLUMN spam_sensitivity TEXT NOT NULL DEFAULT 'normal'");
+  }
+  // On by default: it only takes effect where the worker can transcode video (GRYT-1664).
+  if (!hasColumn(d, "server_config", "video_profiles")) {
+    d.exec("ALTER TABLE server_config ADD COLUMN video_profiles INTEGER NOT NULL DEFAULT 1");
   }
 
   // Stored and handed back whole, and never read here. One column rather than a

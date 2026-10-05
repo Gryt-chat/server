@@ -263,6 +263,8 @@ export interface ServerConfigRecord {
   /** On unless the owner turns it off. */
   spam_filter_enabled: boolean;
   spam_filter_sensitivity: SpamSensitivity;
+  /** Whether members may use a video avatar or banner, where the worker can transcode one. */
+  video_profiles_enabled: boolean;
   is_configured: boolean;
   created_at: Date;
   updated_at: Date;
