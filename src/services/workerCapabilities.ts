@@ -5,21 +5,33 @@ import consola from "consola";
 const REFRESH_MS = 60_000;
 
 let clears = false;
+let video = false;
 let timer: NodeJS.Timeout | null = null;
 
 export function workerClearsQuarantine(): boolean {
   return clears;
 }
 
+/** The worker transcodes banner and avatar videos in its jail; without it, video is refused. */
+export function workerTranscodesVideo(): boolean {
+  return video;
+}
+
 export async function refreshWorkerCapabilities(url = process.env.IMAGE_WORKER_URL, fetchImpl: typeof fetch = fetch): Promise<boolean> {
-  if (!url) return (clears = false);
+  if (!url) {
+    video = false;
+    return (clears = false);
+  }
   try {
     const res = await fetchImpl(`${url.replace(/\/$/, "")}/health`, { signal: AbortSignal.timeout(5_000) });
     const body = res.ok ? ((await res.json()) as { capabilities?: unknown }) : null;
-    const next = Array.isArray(body?.capabilities) && body.capabilities.includes("quarantine-v1");
+    const caps: unknown[] = Array.isArray(body?.capabilities) ? body.capabilities : [];
+    const next = caps.includes("quarantine-v1");
+    video = next && caps.includes("video-v1");
     if (next !== clears) consola.info(`[uploads] Quarantine through the image worker ${next ? "on" : "off"}`);
     return (clears = next);
   } catch {
+    video = false;
     return (clears = false);
   }
 }

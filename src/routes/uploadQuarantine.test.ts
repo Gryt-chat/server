@@ -14,6 +14,7 @@ import { getFile } from "../db/sqlite/messages";
 import { createServerConfigIfNotExists, setServerRole } from "../db/sqlite/servers";
 import { getUserByServerId, upsertUser } from "../db/sqlite/users";
 import { refreshWorkerCapabilities } from "../services/workerCapabilities";
+import { buildMemberList } from "../socket/utils/clients";
 import { initStorage, putObject } from "../storage";
 import { generateAccessToken, generateFileToken } from "../utils/jwt";
 
@@ -116,5 +117,30 @@ describe("uploads with a worker that clears quarantine", () => {
     const carol = await member("carol");
     const fileId = (await upload(carol, "banner")).body.bannerFileId as string;
     assert.ok((await getFile(fileId))?.s3_key.startsWith("banners/"));
+  });
+
+  it("takes a banner video only from a worker that transcodes, and never decodes it here", async () => {
+    const dave = await member("dave");
+    const sendVideo = async () => {
+      const form = new FormData();
+      form.append("file", new Blob([new Uint8Array(Buffer.from("not decoded by the server"))], { type: "video/mp4" }), "clip.mp4");
+      const res = await fetch(`${base}/api/uploads/banner`, { method: "POST", headers: auth(dave), body: form });
+      return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+    };
+
+    await workerSays(["quarantine-v1"]);
+    const refused = await sendVideo();
+    assert.equal(refused.status, 415);
+    assert.equal(refused.body.error, "video_unsupported");
+
+    await workerSays(["quarantine-v1", "video-v1"]);
+    const taken = await sendVideo();
+    assert.equal(taken.status, 201, JSON.stringify(taken.body));
+    const file = await getFile(taken.body.bannerFileId as string);
+    assert.ok(file?.s3_key.startsWith("quarantine/banners/"));
+    assert.equal(file?.mime, "video/mp4");
+    const row = (await buildMemberList({})).find((m) => m.serverUserId === dave.serverUserId);
+    assert.equal(row?.bannerVideo, true, "the member list says it plays");
+    assert.equal(row?.avatarVideo, false);
   });
 });
