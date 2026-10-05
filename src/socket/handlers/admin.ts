@@ -299,6 +299,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       spamFilter?: boolean;
       spamSensitivity?: string;
       videoProfiles?: boolean;
+      externalEmojis?: boolean;
     }) => {
       try {
         const rl = rlCheck("server:settings:update", ctx, RL_SETTINGS);

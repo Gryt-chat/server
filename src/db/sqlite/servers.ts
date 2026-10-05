@@ -78,6 +78,7 @@ function rowToConfig(r: Record<string, unknown>): ServerConfigRecord {
     spam_filter_enabled: (r.spam_filter as number) !== 0,
     spam_filter_sensitivity: normalizeSpamSensitivity(r.spam_sensitivity),
     video_profiles_enabled: (r.video_profiles as number) !== 0,
+    external_emojis_enabled: (r.external_emojis as number) === 1,
     is_configured: (r.is_configured as number) === 1,
     created_at: fromIso(r.created_at as string),
     updated_at: fromIso(r.updated_at as string),
@@ -243,6 +244,7 @@ export async function updateServerConfig(patch: {
   spamFilter?: boolean;
   spamSensitivity?: SpamSensitivity;
   videoProfiles?: boolean;
+  externalEmojis?: boolean;
   isConfigured?: boolean;
 }): Promise<ServerConfigRecord> {
   const db = getSqliteDb();
@@ -273,6 +275,7 @@ export async function updateServerConfig(patch: {
     spamFilter: { col: "spam_filter", transform: (v) => v ? 1 : 0 },
     spamSensitivity: { col: "spam_sensitivity", transform: (v) => normalizeSpamSensitivity(v) },
     videoProfiles: { col: "video_profiles", transform: (v) => v ? 1 : 0 },
+    externalEmojis: { col: "external_emojis", transform: (v) => v ? 1 : 0 },
     isConfigured: { col: "is_configured", transform: (v) => v ? 1 : 0 },
   };
 
