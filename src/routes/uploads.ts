@@ -179,7 +179,7 @@ uploadsRouter.post(
           res.status(stored.status).json({ error: stored.error, message: stored.message });
           return;
         }
-        res.status(201).json({ fileId: stored.fileId, key: stored.key, thumbnailKey: null });
+        res.status(201).json({ fileId: stored.fileId, key: stored.key, thumbnailKey: null, processing: !!stored.processing });
       })
       // Every exit path, including the early returns and anything that threw:
       // multer's temp file is ours and nothing else removes it.

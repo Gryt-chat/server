@@ -189,6 +189,7 @@ describe("the route uses it", () => {
   });
 
   it("answers the uploader the same whether or not a poster ever comes", () => {
-    assert.match(route, /res\.status\(201\)\.json\(\{ fileId: stored\.fileId, key: stored\.key, thumbnailKey: null \}\)/);
+    // `processing` says it is in quarantine, which is known at upload; nothing waits on a poster.
+    assert.match(route, /res\.status\(201\)\.json\(\{ fileId: stored\.fileId, key: stored\.key, thumbnailKey: null, processing: !!stored\.processing \}\)/);
   });
 });

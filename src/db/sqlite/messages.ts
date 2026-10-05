@@ -196,6 +196,14 @@ export async function getAllFileRecords(): Promise<FileRecord[]> {
   }));
 }
 
+/** The messages that carry a file, for telling their readers it has finished processing. */
+export async function listMessagesWithFile(fileId: string): Promise<Array<{ conversation_id: string; message_id: string }>> {
+  const db = getSqliteDb();
+  return db
+    .prepare(`SELECT conversation_id, message_id FROM message_attachments WHERE file_id = ?`)
+    .all(fileId) as Array<{ conversation_id: string; message_id: string }>;
+}
+
 export async function getAllReferencedAttachmentIds(): Promise<Set<string>> {
   const db = getSqliteDb();
   const ids = new Set<string>();
