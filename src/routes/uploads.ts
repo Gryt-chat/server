@@ -19,7 +19,12 @@ import { RangeNotSatisfiableError } from "../utils/byteRange";
 import { sendStoredBody } from "../utils/sendStoredBody";
 import { ensurePermission } from "../middleware/requirePermission";
 import { sanitizeSvg } from "../utils/svgSanitize";
+import { quarantineUpload, waitOutOfQuarantine } from "../services/quarantineUpload";
+
+/** How long a read waits for the worker to write a fresh upload out; a test sets it short. */
+const QUARANTINE_WAIT_MS = Number(process.env.GRYT_QUARANTINE_WAIT_MS) || 15_000;
 import { storeUploadedFile } from "../services/storeUploadedFile";
+import { workerClearsQuarantine } from "../services/workerCapabilities";
 
 /** SVG is on this list only because it has been through sanitizeSvg(), is drawn
     through `<img>`, and is sandboxed by the CSP below. That header is required. */
@@ -209,7 +214,17 @@ const storeAvatarImage = (purpose: "avatar" | "group" | "webhook" | "banner") =>
           return;
         }
 
-        const stored = await storeAvatarPicture({
+        // With a worker that clears quarantine, the server never decodes the file itself.
+        const stored = (purpose === "avatar" || purpose === "banner") && workerClearsQuarantine()
+          ? { ok: true as const, processing: true, ...(await quarantineUpload({
+              bucket,
+              use: purpose === "avatar" ? "avatars" : "banners",
+              bytes: file.buffer,
+              mime: (file.mimetype || "application/octet-stream").toLowerCase(),
+              originalName: file.originalname || null,
+              uploadedBy: serverUserId,
+            })) }
+          : await storeAvatarPicture({
           bucket,
           bytes: file.buffer,
           mime: file.mimetype || "",
@@ -415,8 +430,15 @@ uploadsRouter.get(
           res.status(503).json({ error: "unavailable", message: "Could not check that just now. Try again in a moment." });
           return;
         }
-        const fileMeta = verdict === "allowed" ? await getFile(fileId) : null;
-        if (!fileMeta) { res.status(404).json({ error: "File not found" }); return; }
+        const found = verdict === "allowed" ? await getFile(fileId) : null;
+        if (!found) { res.status(404).json({ error: "File not found" }); return; }
+        // Never the quarantined original: wait for the worker's copy, or say it isn't ready.
+        const fileMeta = await waitOutOfQuarantine(fileId, found, undefined, QUARANTINE_WAIT_MS);
+        if (!fileMeta) {
+          res.setHeader("Cache-Control", "no-store");
+          res.status(503).json({ error: "media_not_ready", message: "This file is still being processed." });
+          return;
+        }
 
         const useThumb = req.query.thumb === "1" && fileMeta.thumbnail_key;
         const s3Key = useThumb ? fileMeta.thumbnail_key! : fileMeta.s3_key;

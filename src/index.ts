@@ -1,4 +1,5 @@
 import { rm } from "fs/promises";
+import { startWorkerCapabilityPolling } from "./services/workerCapabilities";
 import { join } from "path";
 import { config } from "dotenv";
 import { applyCors, isOriginAllowed, readAllowedOrigins } from "./config/cors";
@@ -486,6 +487,7 @@ function reachableAddresses(port: number, host: string): string[] {
 }
 
 httpServer.listen(PORT, HOST, () => {
+  startWorkerCapabilityPolling();
   consola.box(`Gryt Server v${VERSION}`);
   consola.start(`Starting ${process.env.SERVER_NAME}...`);
   if (process.env.SFU_WS_HOST)
