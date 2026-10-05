@@ -191,6 +191,10 @@ export interface EnrichedAttachment {
   width: number | null;
   height: number | null;
   has_thumbnail: boolean;
+  /** Still with the image worker: the client shows a loader instead of fetching it (GRYT-1669). */
+  processing?: boolean;
+  /** The worker could not write it out, so it is never served. */
+  refused?: boolean;
 }
 
 export interface FileRecord {

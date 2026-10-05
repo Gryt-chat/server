@@ -6,6 +6,7 @@ const REFRESH_MS = 60_000;
 
 let clears = false;
 let video = false;
+let chatVideo = false;
 let timer: NodeJS.Timeout | null = null;
 
 export function workerClearsQuarantine(): boolean {
@@ -17,9 +18,15 @@ export function workerTranscodesVideo(): boolean {
   return video;
 }
 
+/** The worker transcodes chat videos too, keeping their sound (GRYT-1669). */
+export function workerTranscodesChatVideo(): boolean {
+  return chatVideo;
+}
+
 export async function refreshWorkerCapabilities(url = process.env.IMAGE_WORKER_URL, fetchImpl: typeof fetch = fetch): Promise<boolean> {
   if (!url) {
     video = false;
+    chatVideo = false;
     return (clears = false);
   }
   try {
@@ -28,10 +35,12 @@ export async function refreshWorkerCapabilities(url = process.env.IMAGE_WORKER_U
     const caps: unknown[] = Array.isArray(body?.capabilities) ? body.capabilities : [];
     const next = caps.includes("quarantine-v1");
     video = next && caps.includes("video-v1");
+    chatVideo = next && caps.includes("chatvideo-v1");
     if (next !== clears) consola.info(`[uploads] Quarantine through the image worker ${next ? "on" : "off"}`);
     return (clears = next);
   } catch {
     video = false;
+    chatVideo = false;
     return (clears = false);
   }
 }

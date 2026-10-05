@@ -21,6 +21,7 @@ import {
   getMessageById,
   updateMessageText,
   getFilesByIds,
+  getImageJobStatusForFile,
   getServerConfig,
   getWebhooksByIds,
   getConversation,
@@ -45,6 +46,7 @@ import {
   setThreadTags,
   type ThreadRecord,
 } from "../../db";
+import { isQuarantined } from "../../services/quarantineUpload";
 import { processProfanity, type CensorStyle, type ProfanityMode } from "../../utils/profanityFilter";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 import { textMuteError, textMuteFor } from "../../moderation/textMute";
@@ -205,13 +207,18 @@ async function enrichMessages(messages: MessageRecord[]): Promise<MessageRecord[
   });
 }
 
-async function enrichAttachments(messages: MessageRecord[]): Promise<MessageRecord[]> {
+export async function enrichAttachments(messages: MessageRecord[]): Promise<MessageRecord[]> {
   const allFileIds = new Set<string>();
   for (const m of messages) {
     if (m.attachments) m.attachments.forEach(id => allFileIds.add(id));
   }
   if (allFileIds.size === 0) return messages;
   const fileMap = await getFilesByIds([...allFileIds]);
+  // Only files still in quarantine need their job's status, which is usually none of them.
+  const refusedIds = new Set<string>();
+  for (const f of fileMap.values()) {
+    if (isQuarantined(f.s3_key) && (await getImageJobStatusForFile(f.file_id)) === "error") refusedIds.add(f.file_id);
+  }
 
   const result: MessageRecord[] = [];
   for (const m of messages) {
@@ -220,7 +227,9 @@ async function enrichAttachments(messages: MessageRecord[]): Promise<MessageReco
     const enriched = m.attachments.map(id => {
       const f = fileMap.get(id);
       if (!f) return { file_id: id, mime: null, size: null, original_name: null, width: null, height: null, has_thumbnail: false };
+      const inQuarantine = isQuarantined(f.s3_key);
       return {
+        ...(inQuarantine ? { processing: !refusedIds.has(f.file_id), refused: refusedIds.has(f.file_id) } : {}),
         file_id: f.file_id,
         mime: f.mime,
         size: f.size,

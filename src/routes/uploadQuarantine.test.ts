@@ -199,4 +199,55 @@ describe("uploads with a worker that clears quarantine", () => {
     assert.equal(row?.bannerVideo, true, "the member list says it plays");
     assert.equal(row?.avatarVideo, false);
   });
+
+  it("sends a chat picture labelled as anything else to the worker, by its bytes", async () => {
+    await workerSays(["quarantine-v1"]);
+    const gina = await member("gina");
+    const form = new FormData();
+    form.append("file", new Blob([new Uint8Array(await png())], { type: "application/octet-stream" }), "picture.bin");
+    const res = await fetch(`${base}/api/uploads`, { method: "POST", headers: auth(gina), body: form });
+    const body = (await res.json()) as Record<string, unknown>;
+    assert.equal(res.status, 201, JSON.stringify(body));
+    assert.equal(body.processing, true);
+    const file = await getFile(body.fileId as string);
+    assert.ok(file?.s3_key.startsWith("quarantine/uploads/"), file?.s3_key);
+    assert.equal(file?.mime, "image/png");
+  });
+
+  it("quarantines a chat video only where the worker transcodes chat videos", async () => {
+    const hal = await member("hal");
+    const mp4 = Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from("ftypisom"), Buffer.alloc(16)]);
+    const sendVideo = async () => {
+      const form = new FormData();
+      form.append("file", new Blob([new Uint8Array(mp4)], { type: "video/mp4" }), "clip.mp4");
+      const res = await fetch(`${base}/api/uploads`, { method: "POST", headers: auth(hal), body: form });
+      return (await res.json()) as Record<string, unknown>;
+    };
+
+    await workerSays(["quarantine-v1", "video-v1"]);
+    const raw = await sendVideo();
+    assert.equal(raw.processing, false);
+    assert.ok((await getFile(raw.fileId as string))?.s3_key.startsWith("uploads/"));
+
+    await workerSays(["quarantine-v1", "video-v1", "chatvideo-v1"]);
+    const held = await sendVideo();
+    assert.equal(held.processing, true);
+    assert.ok((await getFile(held.fileId as string))?.s3_key.startsWith("quarantine/uploads/"));
+  });
+
+  it("marks a quarantined attachment as processing, then refused once the worker gives up", async () => {
+    await workerSays(["quarantine-v1"]);
+    const ivy = await member("ivy");
+    const form = new FormData();
+    form.append("file", new Blob([new Uint8Array(await png())], { type: "image/png" }), "picture.png");
+    const fileId = ((await (await fetch(`${base}/api/uploads`, { method: "POST", headers: auth(ivy), body: form })).json()) as { fileId: string }).fileId;
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { enrichAttachments } = require("../socket/handlers/chat") as typeof import("../socket/handlers/chat");
+    const message = { conversation_id: "general", message_id: "m1", sender_server_id: ivy.serverUserId, text: "look", created_at: new Date(), attachments: [fileId], reactions: null };
+    const first = (await enrichAttachments([message]))[0].enriched_attachments?.[0];
+    assert.deepEqual([first?.processing, first?.refused], [true, false]);
+    workerRefuses(fileId);
+    const after = (await enrichAttachments([message]))[0].enriched_attachments?.[0];
+    assert.deepEqual([after?.processing, after?.refused], [false, true]);
+  });
 });

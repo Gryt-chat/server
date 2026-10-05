@@ -1,12 +1,14 @@
 import consola from "consola";
-import { readFile } from "fs/promises";
+import { open, readFile } from "fs/promises";
 import { v4 as uuidv4 } from "uuid";
 
 import { insertFile, insertImageJob } from "../db";
 import { storageForUpload } from "../routes/uploadStorage";
 import { putObject } from "../storage";
 import { QUARANTINE_PREFIX } from "./quarantineUpload";
-import { workerClearsQuarantine } from "./workerCapabilities";
+import { workerClearsQuarantine, workerTranscodesChatVideo } from "./workerCapabilities";
+import { settleChatAttachment } from "./chatAttachmentSettle";
+import { sniffMedia } from "../utils/sniffMedia";
 import { validateImage } from "../utils/imageValidation";
 import { sanitizeSvg } from "../utils/svgSanitize";
 import { PARSE_LIMITS, readVideoDimensionsFromFile } from "../utils/videoDimensions";
@@ -16,8 +18,19 @@ import { PARSE_LIMITS, readVideoDimensionsFromFile } from "../utils/videoDimensi
 export const IMAGE_VALIDATION_MAX_BYTES = 64 * 1024 * 1024;
 
 export type StoreUploadedFileResult =
-  | { ok: true; fileId: string; key: string }
+  | { ok: true; fileId: string; key: string; processing?: boolean }
   | { ok: false; status: 400 | 413; error: "invalid_file" | "file_too_large"; message: string };
+
+async function readHead(path: string): Promise<Uint8Array> {
+  const handle = await open(path, "r");
+  try {
+    const head = Buffer.alloc(16);
+    const { bytesRead } = await handle.read(head, 0, 16, 0);
+    return head.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+}
 
 function positiveInt(n: number | null | undefined): number | null {
   return typeof n === "number" && Number.isFinite(n) && n > 0 ? Math.round(n) : null;
@@ -45,12 +58,15 @@ export async function storeUploadedFile(input: {
   const fileId = input.fileId ?? uuidv4();
   const { bucket, path, size } = input;
 
+  // The bytes over the label: a picture or video sent as anything else still goes to the worker.
+  const sniffed = input.sealed ? null : sniffMedia(await readHead(path));
+
   // In its own file because nothing in here loads in a test, and because
   // sealing is the part with a security answer. See `uploadStorage.ts`.
   const storage = storageForUpload({
     sealed: input.sealed,
     fileId,
-    mimetype: input.mimetype,
+    mimetype: sniffed ?? input.mimetype,
     originalName: input.originalName,
   });
 
@@ -66,8 +82,9 @@ export async function storeUploadedFile(input: {
   }
 
   const { storedMime } = storage;
-  // A plain image goes to quarantine when the worker clears it; videos keep today's path for now.
-  const quarantined = storage.queueImageJob && storage.validateAsImage && workerClearsQuarantine();
+  // Pictures and videos both go to quarantine when the worker can write them out again (GRYT-1669).
+  const quarantined = storage.queueImageJob && workerClearsQuarantine()
+    && (storage.validateAsImage || (storage.measureAsVideo && workerTranscodesChatVideo()));
   const key = quarantined ? `${QUARANTINE_PREFIX}${storage.key}` : storage.key;
   let width: number | null = null;
   let height: number | null = null;
@@ -167,5 +184,6 @@ export async function storeUploadedFile(input: {
     }).catch((e: unknown) => consola.warn("Failed to queue image job", e));
   }
 
-  return { ok: true, fileId, key };
+  if (quarantined) void settleChatAttachment(fileId);
+  return { ok: true, fileId, key, processing: quarantined };
 }
