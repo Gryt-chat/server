@@ -172,7 +172,8 @@ describe("the route uses it", () => {
     // sharp, the worker and the SVG sanitiser would each be handed it.
     for (const [what, gate] of [
       ["the SVG sanitiser", "if (storage.treatAsSvg)"],
-      ["image validation", "if (storage.validateAsImage)"],
+      // Skipped too for a quarantined image, which the worker decodes in its jail (GRYT-1664).
+      ["image validation", "if (storage.validateAsImage && !quarantined)"],
       ["the video container parser", "if (storage.measureAsVideo)"],
       ["the image worker", "if (storage.queueImageJob)"],
     ]) {
