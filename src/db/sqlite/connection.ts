@@ -93,6 +93,7 @@ function createSchema(d: DatabaseSync): void {
       spam_filter INTEGER NOT NULL DEFAULT 1,
       spam_sensitivity TEXT NOT NULL DEFAULT 'normal',
       video_profiles INTEGER NOT NULL DEFAULT 1,
+      external_emojis INTEGER NOT NULL DEFAULT 0,
       is_configured INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -945,6 +946,10 @@ function runMigrations(d: DatabaseSync): void {
   // On by default: it only takes effect where the worker can transcode video (GRYT-1664).
   if (!hasColumn(d, "server_config", "video_profiles")) {
     d.exec("ALTER TABLE server_config ADD COLUMN video_profiles INTEGER NOT NULL DEFAULT 1");
+  }
+  // Off by default: another server's emoji loads from that host, which then sees who read it (GRYT-1660).
+  if (!hasColumn(d, "server_config", "external_emojis")) {
+    d.exec("ALTER TABLE server_config ADD COLUMN external_emojis INTEGER NOT NULL DEFAULT 0");
   }
 
   // Stored and handed back whole, and never read here. One column rather than a
