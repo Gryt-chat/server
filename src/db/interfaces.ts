@@ -156,6 +156,9 @@ export interface MessageRecord {
   text_fallback?: boolean;
   /** What a webhook posted under. Enrichment turns it into sender_nickname. */
   sender_display_name?: string | null;
+  /** When it was pinned and by whom (GRYT-1619). Absent on a message that isn't. */
+  pinned_at?: Date | null;
+  pinned_by?: string | null;
   /** Set on the notice the server writes for apps from before MLS, sent as "system".
       Apps that read MLS hide these rows (GRYT-1508). */
   mls_placeholder?: MlsPlaceholder;

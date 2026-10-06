@@ -20,6 +20,9 @@ import {
   deleteMessage,
   getMessageById,
   updateMessageText,
+  setMessagePinned,
+  listPinnedMessages,
+  countPinnedMessages,
   getFilesByIds,
   getImageJobStatusForFile,
   getServerConfig,
@@ -86,6 +89,8 @@ import { DISCORD_SENDER_PREFIX } from "../../import/discord/ids";
 const RL_SEND: RateLimitRule = { limit: 20, windowMs: 10_000, banMs: 30_000, scorePerAction: 1, maxScore: 10, scoreDecayMs: 2000 };
 const RL_REACT: RateLimitRule = { limit: 60, windowMs: 60_000, scorePerAction: 0.5, maxScore: 15, scoreDecayMs: 3000 };
 const RL_DELETE: RateLimitRule = { limit: 30, windowMs: 60_000, scorePerAction: 1, maxScore: 15, scoreDecayMs: 3000 };
+/** Pins per conversation. Past this a pin list stops being the short list it's for. */
+const MAX_PINS = 50;
 const RL_EDIT: RateLimitRule = { limit: 20, windowMs: 60_000, scorePerAction: 1, maxScore: 10, scoreDecayMs: 2000 };
 const RL_FETCH: RateLimitRule = { limit: 15, windowMs: 10_000, scorePerAction: 0.3, maxScore: 8, scoreDecayMs: 1500 };
 
@@ -1496,6 +1501,94 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
       } catch (err) {
         consola.error("chat:edit failed", err);
         socket.emit("chat:error", "Failed to edit message");
+      }
+    },
+
+    // Pin or unpin a message (GRYT-1619). In a channel that takes manage_messages, as it did on
+    // Discord; in a DM or group either side may, since there is nobody else to ask.
+    'chat:pin': async (payload: { conversationId: string; messageId: string; pinned: boolean; accessToken: string }) => {
+      try {
+        const ip = getClientIp();
+        const userId = clientsInfo[clientId]?.serverUserId;
+        const rl = checkRateLimit("chat:pin", userId, ip, RL_EDIT);
+        if (!rl.allowed) {
+          socket.emit("chat:error", { error: "rate_limited", retryAfterMs: rl.retryAfterMs, message: `Too fast. Wait ${Math.ceil((rl.retryAfterMs || 0) / 1000)}s.` });
+          return;
+        }
+        if (!payload || !payload.conversationId || !payload.messageId || typeof payload.pinned !== "boolean" || !payload.accessToken) {
+          socket.emit("chat:error", "Invalid pin payload");
+          return;
+        }
+
+        const auth = await requireAuth(socket, payload);
+        if (!auth) return;
+        const access = await requireConversationAccess(payload.conversationId, auth.tokenPayload.serverUserId);
+        if (!access) return;
+
+        if (access.kind !== "dm" && !(await mayHere(auth, payload.conversationId, "manage_messages"))) {
+          socket.emit("chat:error", {
+            error: "forbidden",
+            message: "You do not have permission to pin messages here.",
+            permission: "manage_messages",
+          });
+          return;
+        }
+
+        const message = await getMessageById(payload.conversationId, payload.messageId);
+        if (!message) { socket.emit("chat:error", "Message not found"); return; }
+        // Already as asked: answer with the state anyway, so a second click isn't an error.
+        const already = Boolean(message.pinned_at) === payload.pinned;
+        if (!already && payload.pinned && (await countPinnedMessages(payload.conversationId)) >= MAX_PINS) {
+          socket.emit("chat:error", { error: "too_many_pins", message: `A conversation can have ${MAX_PINS} pins. Unpin one first.` });
+          return;
+        }
+
+        const updated = already
+          ? message
+          : await setMessagePinned(payload.conversationId, payload.messageId, payload.pinned ? auth.tokenPayload.serverUserId : null);
+        if (!updated) { socket.emit("chat:error", "Failed to pin message"); return; }
+        replaceCachedMessage(payload.conversationId, updated);
+
+        const event = {
+          conversation_id: payload.conversationId,
+          message_id: payload.messageId,
+          pinned_at: updated.pinned_at ?? null,
+          pinned_by: updated.pinned_by ?? null,
+        };
+        const connectedClients = await recipientClientIds(payload.conversationId, access);
+        connectedClients.forEach((cid) => {
+          io.sockets.sockets.get(cid)?.emit("chat:pinned", event);
+        });
+      } catch (err) {
+        consola.error("chat:pin failed", err);
+        socket.emit("chat:error", "Failed to pin message");
+      }
+    },
+
+    // The pinned messages of a conversation, newest pin first, for the pins list.
+    'chat:pins': async (payload: { conversationId: string }) => {
+      try {
+        const ip = getClientIp();
+        const userId = clientsInfo[clientId]?.serverUserId;
+        if (!(await socketMay(clientsInfo, clientId, "read_messages"))) {
+          socket.emit("chat:error", { error: "forbidden", message: "You do not have permission to read this channel.", permission: "read_messages" });
+          return;
+        }
+        const rl = checkRateLimit("chat:fetch", userId, ip, RL_FETCH);
+        if (!rl.allowed) {
+          socket.emit("chat:error", { error: "rate_limited", retryAfterMs: rl.retryAfterMs, message: `Too fast. Wait ${Math.ceil((rl.retryAfterMs || 0) / 1000)}s.` });
+          return;
+        }
+        if (!payload || typeof payload.conversationId !== "string") { socket.emit("chat:error", "Invalid pins payload"); return; }
+        if (!(await requireConversationAccess(payload.conversationId, userId))) return;
+
+        const hidden = await blockedServerIdsFor(userId ?? "");
+        const pinned = (await listPinnedMessages(payload.conversationId, MAX_PINS)).filter((m) => !hidden.has(m.sender_server_id));
+        const items = await enrichAttachments(await enrichMessages(pinned));
+        socket.emit("chat:pins", { conversation_id: payload.conversationId, items });
+      } catch (err) {
+        consola.error("chat:pins failed", err);
+        socket.emit("chat:error", "Failed to fetch pins");
       }
     },
   };

@@ -21,6 +21,7 @@ function rowToMessage(r: Record<string, unknown>): MessageRecord {
     ...(r.text_fallback ? { text_fallback: true } : {}),
     ...(r.sender_display_name ? { sender_display_name: r.sender_display_name as string } : {}),
     ...(r.sender_avatar_file_id ? { sender_avatar_file_id: r.sender_avatar_file_id as string } : {}),
+    ...(r.pinned_at ? { pinned_at: fromIso(r.pinned_at as string), pinned_by: (r.pinned_by as string) ?? null } : {}),
     ...(r.mls_seq != null
       ? { mls_placeholder: { seq: Number(r.mls_seq), sender_server_id: r.mls_sender_server_id as string } }
       : {}),
@@ -114,6 +115,32 @@ export async function updateMessageText(conversationId: string, messageId: strin
   const result = db.prepare(`UPDATE messages SET text = ?, edited_at = ? WHERE conversation_id = ? AND message_id = ?`).run(newText, toIso(editedAt), conversationId, messageId);
   if (result.changes === 0) return null;
   return getMessageById(conversationId, messageId);
+}
+
+/** Pins a message, or unpins it with `by` null. Returns the message as it now is, or null if it's gone. */
+export async function setMessagePinned(conversationId: string, messageId: string, by: string | null): Promise<MessageRecord | null> {
+  const db = getSqliteDb();
+  const result = db
+    .prepare(`UPDATE messages SET pinned_at = ?, pinned_by = ? WHERE conversation_id = ? AND message_id = ?`)
+    .run(by ? toIso(new Date()) : null, by, conversationId, messageId);
+  if (result.changes === 0) return null;
+  return getMessageById(conversationId, messageId);
+}
+
+/** A conversation's pinned messages, newest pin first. */
+export async function listPinnedMessages(conversationId: string, limit = 50): Promise<MessageRecord[]> {
+  const db = getSqliteDb();
+  const rows = db
+    .prepare(`SELECT * FROM messages WHERE conversation_id = ? AND pinned_at IS NOT NULL ORDER BY pinned_at DESC LIMIT ?`)
+    .all(conversationId, limit) as Record<string, unknown>[];
+  return rows.map(rowToMessage);
+}
+
+/** How many a conversation has pinned, for the cap. */
+export async function countPinnedMessages(conversationId: string): Promise<number> {
+  const db = getSqliteDb();
+  const row = db.prepare(`SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ? AND pinned_at IS NOT NULL`).get(conversationId) as { n: number };
+  return row.n;
 }
 
 export async function insertFile(
