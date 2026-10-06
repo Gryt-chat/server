@@ -10,6 +10,7 @@ import { socketMay } from "../utils/standing";
 import {
   insertMessage,
   listMessages,
+  listMessagesAfter,
   listServerChannels,
   getServerChannel,
   MessageRecord,
@@ -863,7 +864,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    'chat:fetch': async (payload: { conversationId: string; limit?: number; before?: string }) => {
+    'chat:fetch': async (payload: { conversationId: string; limit?: number; before?: string; after?: string; around?: string }) => {
       try {
         const ip = getClientIp();
         const userId = clientsInfo[clientId]?.serverUserId;
@@ -899,12 +900,46 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           }
         }
 
-        const limit = typeof payload.limit === "number" ? payload.limit : 50;
-        const before = typeof payload.before === "string" ? new Date(payload.before) : undefined;
-        consola.info("[chat:fetch]", { conversationId: payload.conversationId, limit, before: before?.toISOString(), hasBefore: !!before });
-        const items = before
-          ? await listMessages(payload.conversationId, limit, before)
-          : await getMessagesCached(payload.conversationId, limit);
+        // Capped: one request could otherwise ask for a whole channel's history in a page.
+        const limit = Math.min(Math.max(typeof payload.limit === "number" ? Math.floor(payload.limit) : 50, 1), 100);
+        const dateOf = (v: unknown) => {
+          const d = typeof v === "string" ? new Date(v) : undefined;
+          return d && !Number.isNaN(d.getTime()) ? d : undefined;
+        };
+        const before = dateOf(payload.before);
+        const after = dateOf(payload.after);
+        const around = typeof payload.around === "string" ? payload.around : undefined;
+        consola.info("[chat:fetch]", { conversationId: payload.conversationId, limit, before: before?.toISOString(), after: after?.toISOString(), around });
+
+        /* `around` opens history at one message, half a page each side; `after` pages towards
+           the present from there. Both say whether newer pages remain (GRYT-1686). */
+        let items: MessageRecord[];
+        let hasNewer: boolean | undefined;
+        let hasOlder: boolean | undefined;
+        let anchorFound: boolean | undefined;
+        if (around) {
+          const anchor = await getMessageById(payload.conversationId, around);
+          anchorFound = !!anchor && !anchor.thread_id;
+          if (anchor && anchorFound) {
+            const half = Math.max(1, Math.floor(limit / 2));
+            const older = await listMessages(payload.conversationId, half, anchor.created_at);
+            const newer = await listMessagesAfter(payload.conversationId, half, anchor.created_at);
+            items = [...older, anchor, ...newer];
+            hasOlder = older.length >= half;
+            hasNewer = newer.length >= half;
+          } else {
+            items = [];
+            hasOlder = false;
+            hasNewer = false;
+          }
+        } else if (after) {
+          items = await listMessagesAfter(payload.conversationId, limit, after);
+          hasNewer = items.length >= limit;
+        } else {
+          items = before
+            ? await listMessages(payload.conversationId, limit, before)
+            : await getMessagesCached(payload.conversationId, limit);
+        }
         /* Before enrichment, so nothing is spent on an avatar nobody sees.
            `hasMore` counts what is left, so a page may come back short. */
         const hidden = await blockedServerIdsFor(clientsInfo[clientId]?.serverUserId ?? "");
@@ -928,12 +963,21 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           threads: typeof threads;
           hasMore: boolean;
           before?: string;
+          after?: string;
+          around?: string;
+          anchorFound?: boolean;
+          hasNewer?: boolean;
         } = {
           conversation_id: payload.conversationId,
           items: enrichedItems,
           threads,
-          hasMore: enrichedItems.length >= limit,
+          // An `after` page sits above the present, so older ones are known to exist.
+          hasMore: hasOlder ?? (after ? true : enrichedItems.length >= limit),
         };
+        // Only on the new requests, so an older client sees the shape it always did.
+        if (around) { response.around = around; response.anchorFound = anchorFound; }
+        if (after) response.after = payload.after;
+        if (hasNewer !== undefined) response.hasNewer = hasNewer;
         consola.info("[chat:fetch] response", { itemCount: enrichedItems.length, hasMore: response.hasMore, before: response.before });
         if (before) response.before = payload.before;
         socket.emit("chat:history", response);
