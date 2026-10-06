@@ -79,6 +79,14 @@ export async function listMessages(conversationId: string, limit = 50, before?: 
   return messages;
 }
 
+/** Oldest-first from a point onwards: the newer half of a jump to an old message, and the pages
+    below it until the window reaches the present (GRYT-1686). */
+export async function listMessagesAfter(conversationId: string, limit: number, after: Date): Promise<MessageRecord[]> {
+  const db = getSqliteDb();
+  const rows = db.prepare(`SELECT * FROM messages WHERE conversation_id = ? AND thread_id IS NULL AND created_at > ? ORDER BY created_at ASC, message_id ASC LIMIT ?`).all(conversationId, toIso(after), limit);
+  return (rows as Record<string, unknown>[]).map(rowToMessage);
+}
+
 /**
  * Newest-first, reversed on the way out: ascending with a limit took the oldest
  * N, so a thread past its page hid the new replies.
