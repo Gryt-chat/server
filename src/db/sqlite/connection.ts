@@ -1021,6 +1021,12 @@ function runMigrations(d: DatabaseSync): void {
     d.exec("ALTER TABLE messages ADD COLUMN mls_seq INTEGER");
     d.exec("ALTER TABLE messages ADD COLUMN mls_sender_server_id TEXT");
   }
+  // Pinned messages (GRYT-1619): when and by whom. NULL on a message that isn't pinned.
+  if (!hasColumn(d, "messages", "pinned_at")) {
+    d.exec("ALTER TABLE messages ADD COLUMN pinned_at TEXT");
+    d.exec("ALTER TABLE messages ADD COLUMN pinned_by TEXT");
+  }
+  d.exec("CREATE INDEX IF NOT EXISTS idx_messages_pinned ON messages(conversation_id, pinned_at) WHERE pinned_at IS NOT NULL");
   // One stored file per picture a webhook sends, however often it sends it.
   d.exec(`CREATE TABLE IF NOT EXISTS webhook_media (
     webhook_id TEXT NOT NULL,
