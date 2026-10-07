@@ -288,6 +288,8 @@ export async function getAllAvatarFileIds(): Promise<Set<string>> {
 export async function setUserInactive(serverUserId: string): Promise<void> {
   const db = getSqliteDb();
   db.prepare(`UPDATE users SET is_active = 0 WHERE server_user_id = ?`).run(serverUserId);
+  // Leaving, a kick and a ban all land here. A phone that comes back registers again.
+  db.prepare(`DELETE FROM push_devices WHERE server_user_id = ?`).run(serverUserId);
 }
 
 /** `carried` hands the guest's row to the account; `merged` folds it into the row

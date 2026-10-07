@@ -84,6 +84,7 @@ export function createPusher(deps: PusherDeps) {
         continue;
       }
       for (const device of devices) {
+        if (device.muted.has(conversationId)) continue;
         const key = `${device.capability}:${conversationId}`;
         if (now - (lastSent.get(key) ?? 0) < QUIET_MS) continue;
         lastSent.set(key, now);
@@ -116,6 +117,12 @@ export function pushNotify(clientsInfo: Clients, serverUserIds: Iterable<string>
     now: Date.now,
   });
   shared.notify(clientsInfo, serverUserIds, kind, conversationId);
+}
+
+/** Tests only: forget the throttle and read the relay setting again. */
+export function resetPushState(): void {
+  shared = null;
+  relay = undefined;
 }
 
 export function pushEnabled(): boolean {
