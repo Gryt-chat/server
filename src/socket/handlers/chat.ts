@@ -59,6 +59,7 @@ import { MESSAGE_MAX_LENGTH, MESSAGE_TOO_LONG, SEALED_MAX_LENGTH } from "../../u
 import { applyAutoRoles } from "../../services/autoRoles";
 import { findMentions, type MentionableMember } from "../../services/mentions";
 import { pushNotify } from "../../services/push";
+import { messagePreview, previewText } from "../../services/pushPreview";
 import { canonicalizeMentions, type CanonicalMentions, type MentionRights } from "../../services/mentionSyntax";
 import { massMentionAudience } from "../../services/massMentions";
 import { mayInChannel, mayViewChannel, visibleChannelIds } from "../../services/channelPermissions";
@@ -739,11 +740,18 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
            It still sent this, and without the echo its row never settles. */
         if (nonce && !recipients.includes(clientId)) socket.emit("chat:new", { ...enriched, nonce });
 
+        // What a phone shows for this message, built only if one is about to be pushed (GRYT-1688).
+        const pushPreview = () => messagePreview({
+          sender: user.nickname,
+          channelId: access.kind === "dm" ? undefined : created.conversation_id,
+          body: sealed ? "New direct message" : previewText(created.text, created.attachments?.length ?? 0),
+        });
+
         if (access.kind === "dm") {
           try {
             const blockers = await blockersOfSender(auth.tokenPayload.serverUserId);
             const others = access.memberIds.filter((id) => id !== auth.tokenPayload.serverUserId && !blockers.has(id));
-            pushNotify(clientsInfo, others, "dm", created.conversation_id);
+            pushNotify(clientsInfo, others, "dm", created.conversation_id, { preview: pushPreview });
           } catch (err) {
             consola.warn("dm push failed", created.message_id, err);
           }
@@ -834,8 +842,11 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
                 if (kind === "user" && !(await mayViewChannel(created.conversation_id, id))) continue;
                 (kind === "user" || kind === "role" ? woken : crowd).push(id);
               }
-              pushNotify(clientsInfo, woken, "mention", created.conversation_id);
-              pushNotify(clientsInfo, crowd, "mention", created.conversation_id, (device) => device.everyone);
+              pushNotify(clientsInfo, woken, "mention", created.conversation_id, { preview: pushPreview });
+              pushNotify(clientsInfo, crowd, "mention", created.conversation_id, {
+                accept: (device) => device.everyone,
+                preview: pushPreview,
+              });
             }
           } catch (err) {
             consola.warn("recording mentions failed", created.message_id, err);
@@ -855,7 +866,10 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
               loud.push(id);
             }
             const conversationId = created.conversation_id;
-            pushNotify(clientsInfo, loud, "message", conversationId, (device) => device.loud.has(conversationId));
+            pushNotify(clientsInfo, loud, "message", conversationId, {
+              accept: (device) => device.loud.has(conversationId),
+              preview: pushPreview,
+            });
           } catch (err) {
             consola.warn("message push failed", created.message_id, err);
           }

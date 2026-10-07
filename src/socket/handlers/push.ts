@@ -2,6 +2,7 @@ import consola from "consola";
 
 import { removePushDevice, savePushDevice } from "../../db";
 import { CAPABILITY_SHAPE, pushEnabled } from "../../services/push";
+import { PREVIEW_KEY_SHAPE } from "../../services/pushPreview";
 import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 import { requireAuth } from "../middleware/auth";
 import type { EventHandlerMap, HandlerContext } from "./types";
@@ -35,7 +36,7 @@ export function registerPushHandlers(ctx: HandlerContext): EventHandlerMap {
 
   return {
     "push:register": async (
-      payload: { accessToken: string; installId?: unknown; capability?: unknown; muted?: unknown; all?: unknown; everyone?: unknown },
+      payload: { accessToken: string; installId?: unknown; capability?: unknown; muted?: unknown; all?: unknown; everyone?: unknown; previewKey?: unknown },
       ack: Ack,
     ) => {
       ack = typeof ack === "function" ? ack : () => {};
@@ -48,7 +49,9 @@ export function registerPushHandlers(ctx: HandlerContext): EventHandlerMap {
         }
         const muted = idsFrom(payload.muted);
         const loud = idsFrom(payload.all);
-        if (!muted || !loud || (payload.everyone !== undefined && typeof payload.everyone !== "boolean")) {
+        const previewKey = payload.previewKey;
+        if (!muted || !loud || (payload.everyone !== undefined && typeof payload.everyone !== "boolean")
+          || (previewKey !== undefined && (typeof previewKey !== "string" || !PREVIEW_KEY_SHAPE.test(previewKey)))) {
           return ack({ ok: false, error: "invalid_payload" });
         }
         const auth = await requireAuth(socket, payload);
@@ -59,6 +62,7 @@ export function registerPushHandlers(ctx: HandlerContext): EventHandlerMap {
           muted,
           loud: loud.filter((id) => !quiet.has(id)),
           everyone: payload.everyone === true,
+          previewKey: typeof previewKey === "string" ? previewKey : null,
         });
         ack({ ok: true });
       } catch (err) {

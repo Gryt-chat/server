@@ -43,6 +43,7 @@ import { mayInChannel } from "../../services/channelPermissions";
 import { fileReadVerdict } from "../../services/fileAccess";
 import { asBytes, parseGroupMessage, parseKeyPackage, parseWelcome } from "../../services/mlsWire";
 import { pushNotify } from "../../services/push";
+import { messagePreview } from "../../services/pushPreview";
 import { SEALED_MAX_LENGTH } from "../../utils/messageLimits";
 import { appendCachedMessage } from "../utils/messageCache";
 import { formatMlsPlaceholder, SYSTEM_SENDER_ID } from "../utils/systemMessages";
@@ -709,7 +710,9 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
         if (application && payload.placeholder !== false) {
           try {
             const blockers = await blockersOfSender(self);
-            pushNotify(clientsInfo, memberIds.filter((id) => id !== self && !blockers.has(id)), "dm", payload.conversationId);
+            // Who and which server, never what: the server can't read an MLS message (GRYT-1688).
+            const preview = async () => messagePreview({ sender: (await getUserByServerId(self))?.nickname, body: "New direct message" });
+            pushNotify(clientsInfo, memberIds.filter((id) => id !== self && !blockers.has(id)), "dm", payload.conversationId, { preview });
           } catch (err) {
             consola.warn("mls push failed", payload.conversationId, err);
           }

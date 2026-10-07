@@ -2,6 +2,7 @@ import consola from "consola";
 
 import { listPushDevices, removePushCapability, type PushDevice } from "../db";
 import type { Clients } from "../types";
+import { sealPreview, type PushPreview } from "./pushPreview";
 
 /**
  * Waking phones through the push relay (GRYT-1656). The relay gets a capability and
@@ -12,6 +13,12 @@ export type PushKind = "mention" | "dm" | "message";
 
 /** Which of an account's phones want this push, by their own settings. Muted is checked on top. */
 export type PushAccept = (device: PushDevice) => boolean;
+
+export interface PushOptions {
+  accept?: PushAccept;
+  /** Asked once, and only when a phone with a preview key is about to be pushed (GRYT-1688). */
+  preview?: () => Promise<PushPreview | null>;
+}
 
 export const DEFAULT_PUSH_RELAY = "https://push.gryt.chat";
 
@@ -58,12 +65,15 @@ export function createPusher(deps: PusherDeps) {
   const lastSent = new Map<string, number>();
   const inFlight = new Set<Promise<void>>();
 
-  async function send(device: PushDevice, kind: PushKind): Promise<void> {
+  async function send(device: PushDevice, kind: PushKind, preview: (() => Promise<PushPreview | null>) | null): Promise<void> {
     try {
+      const shown = device.previewKey && preview ? await preview() : null;
+      // Sealed to this phone's key, so the relay forwards it unread. Without one the relay's own text shows.
+      const sealed = shown && device.previewKey ? sealPreview(device.previewKey, device.capability, shown) : undefined;
       const res = await deps.fetch(`${deps.relay}/v1/push`, {
         method: "POST",
         headers: { authorization: `Bearer ${device.capability}`, "content-type": "application/json" },
-        body: JSON.stringify({ kind }),
+        body: JSON.stringify(sealed ? { kind, preview: sealed } : { kind }),
         signal: AbortSignal.timeout(TIMEOUT_MS),
       });
       // 404: the relay forgot it. 410: Apple or Google said the phone is gone.
@@ -80,10 +90,16 @@ export function createPusher(deps: PusherDeps) {
     serverUserIds: Iterable<string>,
     kind: PushKind,
     conversationId: string,
-    accept: PushAccept = () => true,
+    options: PushOptions = {},
   ): void {
     if (!deps.relay) return;
     const now = deps.now();
+    const accept = options.accept ?? (() => true);
+    let preview: Promise<PushPreview | null> | null = null;
+    const previewOnce = () => (preview ??= (options.preview?.() ?? Promise.resolve(null)).catch((err) => {
+      consola.debug("push preview failed", (err as Error).message);
+      return null;
+    }));
     for (const serverUserId of new Set(serverUserIds)) {
       if (isPresent(clientsInfo, serverUserId)) continue;
       let devices: PushDevice[];
@@ -98,7 +114,7 @@ export function createPusher(deps: PusherDeps) {
         const key = `${device.capability}:${conversationId}`;
         if (now - (lastSent.get(key) ?? 0) < QUIET_MS) continue;
         lastSent.set(key, now);
-        const sending = send(device, kind).finally(() => inFlight.delete(sending));
+        const sending = send(device, kind, options.preview ? previewOnce : null).finally(() => inFlight.delete(sending));
         inFlight.add(sending);
       }
     }
@@ -129,7 +145,7 @@ export function pushNotify(
   serverUserIds: Iterable<string>,
   kind: PushKind,
   conversationId: string,
-  accept?: PushAccept,
+  options?: PushOptions,
 ): void {
   shared ??= createPusher({
     relay: configuredRelay(),
@@ -138,7 +154,7 @@ export function pushNotify(
     fetch,
     now: Date.now,
   });
-  shared.notify(clientsInfo, serverUserIds, kind, conversationId, accept);
+  shared.notify(clientsInfo, serverUserIds, kind, conversationId, options);
 }
 
 /** Tests only: every push so far has reached the relay and been answered. */

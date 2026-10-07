@@ -20,7 +20,7 @@ describe("push devices", () => {
   it("keeps one row per install and replaces its capability", () => {
     savePushDevice("u1", "install-1", cap("a"));
     savePushDevice("u1", "install-1", cap("b"));
-    assert.deepEqual(listPushDevices("u1"), [{ installId: "install-1", capability: cap("b"), muted: new Set(), loud: new Set(), everyone: false }]);
+    assert.deepEqual(listPushDevices("u1"), [{ installId: "install-1", capability: cap("b"), muted: new Set(), loud: new Set(), everyone: false, previewKey: null }]);
     removePushDevice("u1", "install-1");
     assert.deepEqual(listPushDevices("u1"), []);
   });
