@@ -57,14 +57,14 @@ describe("who is at a screen", () => {
 
 describe("pushing", () => {
   it("sends the capability in the header and only the kind in the body", async () => {
-    const h = harness({ u1: [{ installId: "phone-1234", capability: CAP_A }] });
+    const h = harness({ u1: [{ installId: "phone-1234", capability: CAP_A, muted: new Set<string>() }] });
     h.pusher.notify({}, ["u1"], "dm", "conv");
     await flush();
     assert.deepEqual(h.calls, [{ url: "https://push.test/v1/push", auth: `Bearer ${CAP_A}`, body: JSON.stringify({ kind: "dm" }) }]);
   });
 
   it("skips somebody who is at a screen, and wakes them once they put the phone away", async () => {
-    const h = harness({ u1: [{ installId: "phone-1234", capability: CAP_A }] });
+    const h = harness({ u1: [{ installId: "phone-1234", capability: CAP_A, muted: new Set<string>() }] });
     h.pusher.notify({ s: client("u1") }, ["u1"], "mention", "conv");
     await flush();
     assert.equal(h.calls.length, 0);
@@ -74,7 +74,7 @@ describe("pushing", () => {
   });
 
   it("buzzes once per phone per conversation in fifteen seconds", async () => {
-    const h = harness({ u1: [{ installId: "phone-1234", capability: CAP_A }, { installId: "tablet-12", capability: CAP_B }] });
+    const h = harness({ u1: [{ installId: "phone-1234", capability: CAP_A, muted: new Set<string>() }, { installId: "tablet-12", capability: CAP_B, muted: new Set<string>() }] });
     h.pusher.notify({}, ["u1"], "dm", "conv");
     h.pusher.notify({}, ["u1", "u1"], "dm", "conv");
     h.pusher.notify({}, ["u1"], "dm", "other");
@@ -86,7 +86,7 @@ describe("pushing", () => {
 
   it("forgets a capability the relay calls gone or unknown", async () => {
     for (const status of [404, 410]) {
-      const h = harness({ u1: [{ installId: "phone-1234", capability: CAP_A }] }, status);
+      const h = harness({ u1: [{ installId: "phone-1234", capability: CAP_A, muted: new Set<string>() }] }, status);
       h.pusher.notify({}, ["u1"], "dm", "conv");
       await flush();
       await flush();
@@ -95,7 +95,7 @@ describe("pushing", () => {
   });
 
   it("keeps it when the relay is only busy", async () => {
-    const h = harness({ u1: [{ installId: "phone-1234", capability: CAP_A }] }, 502);
+    const h = harness({ u1: [{ installId: "phone-1234", capability: CAP_A, muted: new Set<string>() }] }, 502);
     h.pusher.notify({}, ["u1"], "dm", "conv");
     await flush();
     await flush();

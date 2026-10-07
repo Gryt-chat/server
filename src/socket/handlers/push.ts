@@ -15,6 +15,15 @@ type Reply = { ok: true } | { ok: false; error: string };
 type Ack = (reply: Reply) => void;
 
 const INSTALL_ID = /^[A-Za-z0-9_-]{8,64}$/;
+const MAX_MUTED = 1000;
+
+/** Conversation ids the phone muted. Null when it is not a short list of short strings. */
+function mutedFrom(raw: unknown): string[] | null {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw) || raw.length > MAX_MUTED) return null;
+  if (!raw.every((id) => typeof id === "string" && id.length > 0 && id.length <= 128)) return null;
+  return [...new Set(raw as string[])];
+}
 const RL_REGISTER: RateLimitRule = { limit: 20, windowMs: 60_000, scorePerAction: 1, maxScore: 12, scoreDecayMs: 3_000 };
 
 export function registerPushHandlers(ctx: HandlerContext): EventHandlerMap {
@@ -25,7 +34,10 @@ export function registerPushHandlers(ctx: HandlerContext): EventHandlerMap {
   }
 
   return {
-    "push:register": async (payload: { accessToken: string; installId?: unknown; capability?: unknown }, ack: Ack) => {
+    "push:register": async (
+      payload: { accessToken: string; installId?: unknown; capability?: unknown; muted?: unknown },
+      ack: Ack,
+    ) => {
       ack = typeof ack === "function" ? ack : () => {};
       try {
         if (!pushEnabled()) return ack({ ok: false, error: "push_off" });
@@ -34,9 +46,11 @@ export function registerPushHandlers(ctx: HandlerContext): EventHandlerMap {
           || typeof payload.capability !== "string" || !CAPABILITY_SHAPE.test(payload.capability)) {
           return ack({ ok: false, error: "invalid_payload" });
         }
+        const muted = mutedFrom(payload.muted);
+        if (!muted) return ack({ ok: false, error: "invalid_payload" });
         const auth = await requireAuth(socket, payload);
         if (!auth) return ack({ ok: false, error: "unauthorized" });
-        savePushDevice(auth.tokenPayload.serverUserId, payload.installId, payload.capability);
+        savePushDevice(auth.tokenPayload.serverUserId, payload.installId, payload.capability, muted);
         ack({ ok: true });
       } catch (err) {
         consola.error("push:register failed", err);
