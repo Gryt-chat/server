@@ -10,6 +10,8 @@ export interface PushDevice {
   loud: ReadonlySet<string>;
   /** Whether @everyone and @here wake it, which "Suppress @everyone" turns off. */
   everyone: boolean;
+  /** What its previews are sealed to, so only that phone can read who wrote what (GRYT-1688). */
+  previewKey: string | null;
 }
 
 /** What the phone said about its notification settings when it last checked in. */
@@ -17,6 +19,7 @@ export interface PushSettings {
   muted?: readonly string[];
   loud?: readonly string[];
   everyone?: boolean;
+  previewKey?: string | null;
 }
 
 /** More than this and the oldest goes. Nobody has ten phones; a reinstall loop might. */
@@ -46,12 +49,14 @@ export function savePushDevice(
   const db = getSqliteDb();
   const at = toIso(now);
   db.prepare(
-    `INSERT INTO push_devices (server_user_id, install_id, capability, muted, loud, everyone, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO push_devices (server_user_id, install_id, capability, muted, loud, everyone, preview_key, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(server_user_id, install_id) DO UPDATE SET capability = excluded.capability, muted = excluded.muted,
-       loud = excluded.loud, everyone = excluded.everyone, updated_at = excluded.updated_at`,
+       loud = excluded.loud, everyone = excluded.everyone, preview_key = excluded.preview_key, updated_at = excluded.updated_at`,
   ).run(
     serverUserId, installId, capability,
     JSON.stringify(settings.muted ?? []), JSON.stringify(settings.loud ?? []), settings.everyone ? 1 : 0,
+    settings.previewKey ?? null,
     at, at,
   );
   db.prepare(
@@ -66,14 +71,15 @@ export function listPushDevices(serverUserId: string, now = new Date()): PushDev
   const cutoff = toIso(new Date(now.getTime() - PUSH_DEVICE_STALE_DAYS * DAY_MS));
   db.prepare(`DELETE FROM push_devices WHERE server_user_id = ? AND updated_at < ?`).run(serverUserId, cutoff);
   const rows = db
-    .prepare(`SELECT install_id, capability, muted, loud, everyone FROM push_devices WHERE server_user_id = ?`)
-    .all(serverUserId) as { install_id: string; capability: string; muted: string; loud: string; everyone: number }[];
+    .prepare(`SELECT install_id, capability, muted, loud, everyone, preview_key FROM push_devices WHERE server_user_id = ?`)
+    .all(serverUserId) as { install_id: string; capability: string; muted: string; loud: string; everyone: number; preview_key: string | null }[];
   return rows.map((r) => ({
     installId: r.install_id,
     capability: r.capability,
     muted: parseIds(r.muted),
     loud: parseIds(r.loud),
     everyone: r.everyone === 1,
+    previewKey: r.preview_key ?? null,
   }));
 }
 

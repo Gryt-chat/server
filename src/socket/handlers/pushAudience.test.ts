@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -107,11 +108,16 @@ async function member(name: string, roleId: string): Promise<Member> {
 }
 
 /** Through the handler, as the phone does it. A bare list is what it mutes. */
-async function register(m: Member, settings: string[] | { muted?: string[]; all?: string[]; everyone?: boolean } = {}): Promise<void> {
-  const { muted, all, everyone } = Array.isArray(settings) ? { muted: settings, all: undefined, everyone: undefined } : settings;
+async function register(
+  m: Member,
+  settings: string[] | { muted?: string[]; all?: string[]; everyone?: boolean; previewKey?: string } = {},
+): Promise<void> {
+  const { muted, all, everyone, previewKey } = Array.isArray(settings)
+    ? { muted: settings, all: undefined, everyone: undefined, previewKey: undefined }
+    : settings;
   const reply = await new Promise((resolve) =>
     m.handlers["push:register"](
-      { accessToken: m.accessToken, installId: `install-${m.name}`, capability: m.capability, muted, all, everyone },
+      { accessToken: m.accessToken, installId: `install-${m.name}`, capability: m.capability, muted, all, everyone, previewKey },
       resolve,
     ),
   );
@@ -355,6 +361,58 @@ describe("every message, for a phone at All", () => {
     const reply = await new Promise((resolve) =>
       carol.handlers["push:register"](
         { accessToken: carol.accessToken, installId: "install-Carol", capability: carol.capability, all: "general", everyone: "yes" },
+        resolve,
+      ),
+    );
+    assert.deepEqual(reply, { ok: false, error: "invalid_payload" });
+  });
+});
+
+/** What the phone's extension does with a preview, written from the format. */
+function openPreview(previewKey: string, capability: string, blob: string): unknown {
+  const raw = Buffer.from(blob, "base64url");
+  const decipher = createDecipheriv("aes-256-gcm", Buffer.from(previewKey, "base64url"), raw.subarray(1, 13));
+  decipher.setAAD(Buffer.from(`gryt-push-1|${createHash("sha256").update(capability).digest("hex").slice(0, 16)}`));
+  decipher.setAuthTag(raw.subarray(raw.length - 16));
+  return JSON.parse(Buffer.concat([decipher.update(raw.subarray(13, raw.length - 16)), decipher.final()]).toString("utf8"));
+}
+
+describe("previews sealed to the phone (GRYT-1688)", () => {
+  const key = randomBytes(32).toString("base64url");
+
+  it("a mention shows who, where, and the line, and only the phone's key opens it", async () => {
+    await register(carol, { previewKey: key });
+    away(carol);
+    await send(alice, OPEN, "@Carol the build is green");
+    assert.deepEqual(await woken(), ["Carol:mention"]);
+    const body = JSON.parse(hits[0].body) as { kind: string; preview: string };
+    assert.ok(!hits[0].body.includes("green"), "the relay could read the message");
+    assert.deepEqual(openPreview(key, carol.capability, body.preview), {
+      t: "Alice", s: "#General · Gryt", b: "@Carol the build is green",
+    });
+  });
+
+  it("a direct message leaves the channel out", async () => {
+    await register(dave, { previewKey: key });
+    const dm = await openDm(erin, dave);
+    away(dave);
+    await send(erin, dm, "lunch?");
+    assert.deepEqual(await woken(), ["Dave:dm"]);
+    const body = JSON.parse(hits[0].body) as { preview: string };
+    assert.deepEqual(openPreview(key, dave.capability, body.preview), { t: "Erin", s: "Gryt", b: "lunch?" });
+  });
+
+  it("a phone without a key gets the relay's fixed text, as before", async () => {
+    away(carol);
+    await send(alice, OPEN, line("@Carol no key"));
+    assert.deepEqual(await woken(), ["Carol:mention"]);
+    assert.deepEqual(JSON.parse(hits[0].body), { kind: "mention" });
+  });
+
+  it("refuses a key that isn't 32 bytes of base64url", async () => {
+    const reply = await new Promise((resolve) =>
+      carol.handlers["push:register"](
+        { accessToken: carol.accessToken, installId: "install-Carol", capability: carol.capability, previewKey: "short" },
         resolve,
       ),
     );

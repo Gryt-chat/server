@@ -256,6 +256,7 @@ function createSchema(d: DatabaseSync): void {
       muted TEXT NOT NULL DEFAULT '[]',
       loud TEXT NOT NULL DEFAULT '[]',
       everyone INTEGER NOT NULL DEFAULT 0,
+      preview_key TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       PRIMARY KEY (server_user_id, install_id)
@@ -723,6 +724,10 @@ function runMigrations(d: DatabaseSync): void {
   }
   if (!hasColumn(d, "push_devices", "everyone")) {
     d.exec("ALTER TABLE push_devices ADD COLUMN everyone INTEGER NOT NULL DEFAULT 0");
+  }
+  // The key a phone's previews are sealed to (GRYT-1688). Null for an app that sends none: it gets the fixed text.
+  if (!hasColumn(d, "push_devices", "preview_key")) {
+    d.exec("ALTER TABLE push_devices ADD COLUMN preview_key TEXT");
   }
 
   const cols = d.prepare("PRAGMA table_info(users)").all() as { name: string }[];
