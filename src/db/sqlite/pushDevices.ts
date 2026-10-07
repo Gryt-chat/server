@@ -6,6 +6,17 @@ export interface PushDevice {
   capability: string;
   /** Conversations muted on that phone, which never reach the relay (GRYT-1689). */
   muted: ReadonlySet<string>;
+  /** Conversations at "All messages" on that phone: every message there wakes it (GRYT-1696). */
+  loud: ReadonlySet<string>;
+  /** Whether @everyone and @here wake it, which "Suppress @everyone" turns off. */
+  everyone: boolean;
+}
+
+/** What the phone said about its notification settings when it last checked in. */
+export interface PushSettings {
+  muted?: readonly string[];
+  loud?: readonly string[];
+  everyone?: boolean;
 }
 
 /** More than this and the oldest goes. Nobody has ten phones; a reinstall loop might. */
@@ -16,7 +27,7 @@ export const PUSH_DEVICE_STALE_DAYS = 30;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-function parseMuted(raw: string): ReadonlySet<string> {
+function parseIds(raw: string): ReadonlySet<string> {
   try {
     const value = JSON.parse(raw) as unknown;
     return new Set(Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : []);
@@ -29,15 +40,20 @@ export function savePushDevice(
   serverUserId: string,
   installId: string,
   capability: string,
-  muted: readonly string[] = [],
+  settings: PushSettings = {},
   now = new Date(),
 ): void {
   const db = getSqliteDb();
   const at = toIso(now);
   db.prepare(
-    `INSERT INTO push_devices (server_user_id, install_id, capability, muted, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)
-     ON CONFLICT(server_user_id, install_id) DO UPDATE SET capability = excluded.capability, muted = excluded.muted, updated_at = excluded.updated_at`,
-  ).run(serverUserId, installId, capability, JSON.stringify(muted), at, at);
+    `INSERT INTO push_devices (server_user_id, install_id, capability, muted, loud, everyone, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(server_user_id, install_id) DO UPDATE SET capability = excluded.capability, muted = excluded.muted,
+       loud = excluded.loud, everyone = excluded.everyone, updated_at = excluded.updated_at`,
+  ).run(
+    serverUserId, installId, capability,
+    JSON.stringify(settings.muted ?? []), JSON.stringify(settings.loud ?? []), settings.everyone ? 1 : 0,
+    at, at,
+  );
   db.prepare(
     `DELETE FROM push_devices WHERE server_user_id = ? AND install_id NOT IN (
        SELECT install_id FROM push_devices WHERE server_user_id = ? ORDER BY updated_at DESC, install_id LIMIT ?)`,
@@ -50,9 +66,23 @@ export function listPushDevices(serverUserId: string, now = new Date()): PushDev
   const cutoff = toIso(new Date(now.getTime() - PUSH_DEVICE_STALE_DAYS * DAY_MS));
   db.prepare(`DELETE FROM push_devices WHERE server_user_id = ? AND updated_at < ?`).run(serverUserId, cutoff);
   const rows = db
-    .prepare(`SELECT install_id, capability, muted FROM push_devices WHERE server_user_id = ?`)
-    .all(serverUserId) as { install_id: string; capability: string; muted: string }[];
-  return rows.map((r) => ({ installId: r.install_id, capability: r.capability, muted: parseMuted(r.muted) }));
+    .prepare(`SELECT install_id, capability, muted, loud, everyone FROM push_devices WHERE server_user_id = ?`)
+    .all(serverUserId) as { install_id: string; capability: string; muted: string; loud: string; everyone: number }[];
+  return rows.map((r) => ({
+    installId: r.install_id,
+    capability: r.capability,
+    muted: parseIds(r.muted),
+    loud: parseIds(r.loud),
+    everyone: r.everyone === 1,
+  }));
+}
+
+/** Accounts with a phone that wants every message in this conversation. Stale ones are dropped later, per account. */
+export function loudPushAccounts(conversationId: string): string[] {
+  const rows = getSqliteDb()
+    .prepare(`SELECT DISTINCT p.server_user_id AS id FROM push_devices p, json_each(p.loud) j WHERE j.value = ?`)
+    .all(conversationId) as { id: string }[];
+  return rows.map((r) => r.id);
 }
 
 export function removePushDevice(serverUserId: string, installId: string): void {
