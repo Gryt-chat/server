@@ -44,6 +44,7 @@ const everything: Required<Clients[string]> = {
   isServerDeafened: true,
   activity: "Playing something",
   richActivity: { type: "playing", name: "Card game", state: "Round two" },
+  appInBackground: true,
   status: "in_voice",
   lastSeen: new Date(0),
   accessToken: "eyJhbGciOiJIUzI1NiJ9.alice.token",

@@ -57,9 +57,10 @@ import { textMuteError, textMuteFor } from "../../moderation/textMute";
 import { MESSAGE_MAX_LENGTH, MESSAGE_TOO_LONG, SEALED_MAX_LENGTH } from "../../utils/messageLimits";
 import { applyAutoRoles } from "../../services/autoRoles";
 import { findMentions, type MentionableMember } from "../../services/mentions";
+import { pushNotify } from "../../services/push";
 import { canonicalizeMentions, type CanonicalMentions, type MentionRights } from "../../services/mentionSyntax";
 import { massMentionAudience } from "../../services/massMentions";
-import { mayInChannel, visibleChannelIds } from "../../services/channelPermissions";
+import { mayInChannel, mayViewChannel, visibleChannelIds } from "../../services/channelPermissions";
 import { fileReadVerdict } from "../../services/fileAccess";
 import { pluginEvents } from "../../plugins";
 import { deleteMessageEverywhere } from "../../moderation/deleteMessage";
@@ -737,6 +738,16 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
            It still sent this, and without the echo its row never settles. */
         if (nonce && !recipients.includes(clientId)) socket.emit("chat:new", { ...enriched, nonce });
 
+        if (access.kind === "dm") {
+          try {
+            const blockers = await blockersOfSender(auth.tokenPayload.serverUserId);
+            const others = access.memberIds.filter((id) => id !== auth.tokenPayload.serverUserId && !blockers.has(id));
+            pushNotify(clientsInfo, others, "dm", created.conversation_id);
+          } catch (err) {
+            consola.warn("dm push failed", created.message_id, err);
+          }
+        }
+
         // The root's "N replies" summary and the thread's activity sort ride on
         // this, sent to the same audience that got the message. GRYT-981.
         if (threadUpdate) {
@@ -809,6 +820,19 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
                 threadId: created.thread_id ?? null,
                 kind,
               });
+            }
+
+            /* Direct and role mentions wake a phone. @everyone and @here would wake
+               the whole server, and a DM already pushed as a DM. */
+            if (access.kind !== "dm") {
+              const blockers = await blockersOfSender(auth.tokenPayload.serverUserId);
+              const woken: string[] = [];
+              for (const [id, kind] of kindOf) {
+                if ((kind !== "user" && kind !== "role") || blockers.has(id)) continue;
+                if (kind === "user" && !(await mayViewChannel(created.conversation_id, id))) continue;
+                woken.push(id);
+              }
+              pushNotify(clientsInfo, woken, "mention", created.conversation_id);
             }
           } catch (err) {
             consola.warn("recording mentions failed", created.message_id, err);

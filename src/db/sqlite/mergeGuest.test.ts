@@ -217,7 +217,7 @@ describe("merging a guest into an account that is already a member", () => {
       "users.server_user_id", "roles.server_user_id", "conversation_members.server_user_id",
       "mentions.server_user_id", "refresh_tokens.server_user_id",
       "mls_devices.server_user_id", "mls_key_packages.server_user_id", "mls_welcomes.server_user_id",
-      "mls_removed_devices.server_user_id",
+      "mls_removed_devices.server_user_id", "push_devices.server_user_id",
     ]);
     const listed = new Set(AUTHOR_COLUMNS.map(([t, c]) => `${t}.${c}`));
     const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all() as { name: string }[];
