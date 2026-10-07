@@ -254,6 +254,8 @@ function createSchema(d: DatabaseSync): void {
       install_id TEXT NOT NULL,
       capability TEXT NOT NULL,
       muted TEXT NOT NULL DEFAULT '[]',
+      loud TEXT NOT NULL DEFAULT '[]',
+      everyone INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       PRIMARY KEY (server_user_id, install_id)
@@ -714,6 +716,13 @@ function runMigrations(d: DatabaseSync): void {
   // Conversations muted on that phone (GRYT-1689). Only dev servers ever had the table without it.
   if (!hasColumn(d, "push_devices", "muted")) {
     d.exec("ALTER TABLE push_devices ADD COLUMN muted TEXT NOT NULL DEFAULT '[]'");
+  }
+  // Conversations at "All messages", and whether @everyone gets through (GRYT-1696). Old phones send neither.
+  if (!hasColumn(d, "push_devices", "loud")) {
+    d.exec("ALTER TABLE push_devices ADD COLUMN loud TEXT NOT NULL DEFAULT '[]'");
+  }
+  if (!hasColumn(d, "push_devices", "everyone")) {
+    d.exec("ALTER TABLE push_devices ADD COLUMN everyone INTEGER NOT NULL DEFAULT 0");
   }
 
   const cols = d.prepare("PRAGMA table_info(users)").all() as { name: string }[];

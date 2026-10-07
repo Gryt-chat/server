@@ -15,12 +15,12 @@ type Reply = { ok: true } | { ok: false; error: string };
 type Ack = (reply: Reply) => void;
 
 const INSTALL_ID = /^[A-Za-z0-9_-]{8,64}$/;
-const MAX_MUTED = 1000;
+const MAX_IDS = 2000;
 
-/** Conversation ids the phone muted. Null when it is not a short list of short strings. */
-function mutedFrom(raw: unknown): string[] | null {
+/** Conversation ids from the phone, muted or at All. Null when it is not a short list of short strings. */
+function idsFrom(raw: unknown): string[] | null {
   if (raw === undefined) return [];
-  if (!Array.isArray(raw) || raw.length > MAX_MUTED) return null;
+  if (!Array.isArray(raw) || raw.length > MAX_IDS) return null;
   if (!raw.every((id) => typeof id === "string" && id.length > 0 && id.length <= 128)) return null;
   return [...new Set(raw as string[])];
 }
@@ -35,7 +35,7 @@ export function registerPushHandlers(ctx: HandlerContext): EventHandlerMap {
 
   return {
     "push:register": async (
-      payload: { accessToken: string; installId?: unknown; capability?: unknown; muted?: unknown },
+      payload: { accessToken: string; installId?: unknown; capability?: unknown; muted?: unknown; all?: unknown; everyone?: unknown },
       ack: Ack,
     ) => {
       ack = typeof ack === "function" ? ack : () => {};
@@ -46,11 +46,20 @@ export function registerPushHandlers(ctx: HandlerContext): EventHandlerMap {
           || typeof payload.capability !== "string" || !CAPABILITY_SHAPE.test(payload.capability)) {
           return ack({ ok: false, error: "invalid_payload" });
         }
-        const muted = mutedFrom(payload.muted);
-        if (!muted) return ack({ ok: false, error: "invalid_payload" });
+        const muted = idsFrom(payload.muted);
+        const loud = idsFrom(payload.all);
+        if (!muted || !loud || (payload.everyone !== undefined && typeof payload.everyone !== "boolean")) {
+          return ack({ ok: false, error: "invalid_payload" });
+        }
         const auth = await requireAuth(socket, payload);
         if (!auth) return ack({ ok: false, error: "unauthorized" });
-        savePushDevice(auth.tokenPayload.serverUserId, payload.installId, payload.capability, muted);
+        // Muted wins over All, so a list that names one conversation twice stays quiet.
+        const quiet = new Set(muted);
+        savePushDevice(auth.tokenPayload.serverUserId, payload.installId, payload.capability, {
+          muted,
+          loud: loud.filter((id) => !quiet.has(id)),
+          everyone: payload.everyone === true,
+        });
         ack({ ok: true });
       } catch (err) {
         consola.error("push:register failed", err);

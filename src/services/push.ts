@@ -8,7 +8,10 @@ import type { Clients } from "../types";
  * a kind, nothing else: it writes the notification text itself.
  */
 
-export type PushKind = "mention" | "dm";
+export type PushKind = "mention" | "dm" | "message";
+
+/** Which of an account's phones want this push, by their own settings. Muted is checked on top. */
+export type PushAccept = (device: PushDevice) => boolean;
 
 export const DEFAULT_PUSH_RELAY = "https://push.gryt.chat";
 
@@ -53,6 +56,7 @@ export interface PusherDeps {
 
 export function createPusher(deps: PusherDeps) {
   const lastSent = new Map<string, number>();
+  const inFlight = new Set<Promise<void>>();
 
   async function send(device: PushDevice, kind: PushKind): Promise<void> {
     try {
@@ -71,7 +75,13 @@ export function createPusher(deps: PusherDeps) {
   }
 
   /** Fire and forget: called after delivery, and never awaited by a send. */
-  function notify(clientsInfo: Clients, serverUserIds: Iterable<string>, kind: PushKind, conversationId: string): void {
+  function notify(
+    clientsInfo: Clients,
+    serverUserIds: Iterable<string>,
+    kind: PushKind,
+    conversationId: string,
+    accept: PushAccept = () => true,
+  ): void {
     if (!deps.relay) return;
     const now = deps.now();
     for (const serverUserId of new Set(serverUserIds)) {
@@ -84,11 +94,12 @@ export function createPusher(deps: PusherDeps) {
         continue;
       }
       for (const device of devices) {
-        if (device.muted.has(conversationId)) continue;
+        if (device.muted.has(conversationId) || !accept(device)) continue;
         const key = `${device.capability}:${conversationId}`;
         if (now - (lastSent.get(key) ?? 0) < QUIET_MS) continue;
         lastSent.set(key, now);
-        void send(device, kind);
+        const sending = send(device, kind).finally(() => inFlight.delete(sending));
+        inFlight.add(sending);
       }
     }
     if (lastSent.size > 5_000) {
@@ -96,7 +107,12 @@ export function createPusher(deps: PusherDeps) {
     }
   }
 
-  return { notify };
+  /** Tests only: resolves once every push sent so far has had its answer. */
+  async function settled(): Promise<void> {
+    while (inFlight.size > 0) await Promise.all([...inFlight]);
+  }
+
+  return { notify, settled };
 }
 
 let shared: ReturnType<typeof createPusher> | null = null;
@@ -108,7 +124,13 @@ function configuredRelay(): string | null {
   return relay;
 }
 
-export function pushNotify(clientsInfo: Clients, serverUserIds: Iterable<string>, kind: PushKind, conversationId: string): void {
+export function pushNotify(
+  clientsInfo: Clients,
+  serverUserIds: Iterable<string>,
+  kind: PushKind,
+  conversationId: string,
+  accept?: PushAccept,
+): void {
   shared ??= createPusher({
     relay: configuredRelay(),
     listDevices: listPushDevices,
@@ -116,7 +138,12 @@ export function pushNotify(clientsInfo: Clients, serverUserIds: Iterable<string>
     fetch,
     now: Date.now,
   });
-  shared.notify(clientsInfo, serverUserIds, kind, conversationId);
+  shared.notify(clientsInfo, serverUserIds, kind, conversationId, accept);
+}
+
+/** Tests only: every push so far has reached the relay and been answered. */
+export function pushesSettled(): Promise<void> {
+  return shared?.settled() ?? Promise.resolve();
 }
 
 /** Tests only: forget the throttle and read the relay setting again. */

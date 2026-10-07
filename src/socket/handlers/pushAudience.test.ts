@@ -16,7 +16,7 @@ import { createRoleDefinition } from "../../db/sqlite/roleDefinitions";
 import { createServerConfigIfNotExists, setServerRole } from "../../db/sqlite/servers";
 import { setUserInactive, upsertUser } from "../../db/sqlite/users";
 import { resetChannelPermissionCache } from "../../services/channelPermissions";
-import { resetPushState } from "../../services/push";
+import { pushesSettled, resetPushState } from "../../services/push";
 import type { Clients } from "../../types";
 import { generateAccessToken } from "../../utils/jwt";
 import { resetRateLimits } from "../../utils/rateLimiter";
@@ -106,10 +106,14 @@ async function member(name: string, roleId: string): Promise<Member> {
   return m;
 }
 
-/** Through the handler, as the phone does it. */
-async function register(m: Member, muted?: string[]): Promise<void> {
+/** Through the handler, as the phone does it. A bare list is what it mutes. */
+async function register(m: Member, settings: string[] | { muted?: string[]; all?: string[]; everyone?: boolean } = {}): Promise<void> {
+  const { muted, all, everyone } = Array.isArray(settings) ? { muted: settings, all: undefined, everyone: undefined } : settings;
   const reply = await new Promise((resolve) =>
-    m.handlers["push:register"]({ accessToken: m.accessToken, installId: `install-${m.name}`, capability: m.capability, muted }, resolve),
+    m.handlers["push:register"](
+      { accessToken: m.accessToken, installId: `install-${m.name}`, capability: m.capability, muted, all, everyone },
+      resolve,
+    ),
   );
   assert.deepEqual(reply, { ok: true }, `${m.name} could not register`);
 }
@@ -127,13 +131,9 @@ function back(m: Member): void {
   } as Clients[string];
 }
 
-/** Pushes are fire and forget, so wait until the relay has been quiet for a moment. */
+/** Pushes are fire and forget, so wait for every one sent to have been answered. A quiet spell lost them under load. */
 async function woken(): Promise<string[]> {
-  let seen = -1;
-  while (seen !== hits.length) {
-    seen = hits.length;
-    await new Promise((r) => setTimeout(r, 60));
-  }
+  await pushesSettled();
   return hits.map((h) => `${members.get(h.capability)?.name ?? "?"}:${JSON.parse(h.body).kind}`).sort();
 }
 
@@ -255,10 +255,17 @@ describe("mentions", () => {
     assert.deepEqual(await woken(), []);
   });
 
-  it("don't wake anybody for @everyone or @here", async () => {
+  it("don't wake anybody for @everyone or @here from a phone that suppresses them", async () => {
     for (const m of [bob, carol, dave, erin]) away(m);
     await send(alice, OPEN, line("@everyone and @here, hello"));
     assert.deepEqual(await woken(), []);
+  });
+
+  it("wake a phone that lets @everyone through, like the desktop does", async () => {
+    await register(carol, { everyone: true });
+    for (const m of [bob, carol, dave, erin]) away(m);
+    await send(alice, OPEN, line("@everyone, meeting"));
+    assert.deepEqual(await woken(), ["Carol:mention"]);
   });
 
   it("don't wake somebody who blocked the sender", async () => {
@@ -280,6 +287,78 @@ describe("mentions", () => {
     away(carol);
     await send(alice, OPEN, line("@Carol but not here"));
     assert.deepEqual(await woken(), ["Carol:mention"]);
+  });
+});
+
+describe("every message, for a phone at All", () => {
+  it("wakes a phone at All for a plain message, and one left at mentions stays quiet", async () => {
+    await register(carol, { all: [OPEN] });
+    away(carol);
+    away(dave);
+    await send(alice, OPEN, line("nothing special"));
+    assert.deepEqual(await woken(), ["Carol:message"]);
+    assert.deepEqual(JSON.parse(hits[0].body), { kind: "message" });
+  });
+
+  it("only for the conversations at All", async () => {
+    await register(carol, { all: [STAFF] });
+    away(carol);
+    await send(alice, OPEN, line("in general"));
+    assert.deepEqual(await woken(), []);
+  });
+
+  it("buzzes once for a burst", async () => {
+    await register(carol, { all: [OPEN] });
+    away(carol);
+    for (const word of ["one", "two", "three"]) await send(alice, OPEN, line(word));
+    assert.deepEqual(await woken(), ["Carol:message"]);
+  });
+
+  it("a mention there arrives as a mention, not twice", async () => {
+    await register(carol, { all: [OPEN] });
+    away(carol);
+    await send(alice, OPEN, line("@Carol in a loud channel"));
+    assert.deepEqual(await woken(), ["Carol:mention"]);
+  });
+
+  it("not somebody at a screen, nor the sender", async () => {
+    await register(carol, { all: [OPEN] });
+    await register(alice, { all: [OPEN] });
+    away(alice);
+    await send(alice, OPEN, line("my own message"));
+    assert.deepEqual(await woken(), []);
+  });
+
+  it("not for a channel they can no longer read", async () => {
+    await register(bob, { all: [STAFF] });
+    away(bob);
+    await send(carol, STAFF, line("staff talk"));
+    assert.deepEqual(await woken(), []);
+  });
+
+  it("muted wins when a phone sends both", async () => {
+    await register(carol, { muted: [OPEN], all: [OPEN] });
+    away(carol);
+    await send(alice, OPEN, line("muted and loud"));
+    assert.deepEqual(await woken(), []);
+  });
+
+  it("not somebody who blocked the sender", async () => {
+    await blockUser(erin.grytUserId, alice.grytUserId);
+    await register(erin, { all: [OPEN] });
+    away(erin);
+    await send(alice, OPEN, line("blocked and loud"));
+    assert.deepEqual(await woken(), []);
+  });
+
+  it("refuses a setting that isn't a list of ids or a yes or no", async () => {
+    const reply = await new Promise((resolve) =>
+      carol.handlers["push:register"](
+        { accessToken: carol.accessToken, installId: "install-Carol", capability: carol.capability, all: "general", everyone: "yes" },
+        resolve,
+      ),
+    );
+    assert.deepEqual(reply, { ok: false, error: "invalid_payload" });
   });
 });
 
@@ -349,7 +428,7 @@ describe("taking it back", () => {
 
 describe("push:register", () => {
   it("refuses a muted list that isn't a short list of ids", async () => {
-    for (const muted of ["general", [1, 2], Array.from({ length: 1001 }, (_, i) => `c${i}`), ["x".repeat(129)]]) {
+    for (const muted of ["general", [1, 2], Array.from({ length: 2001 }, (_, i) => `c${i}`), ["x".repeat(129)]]) {
       const reply = await new Promise((resolve) =>
         carol.handlers["push:register"]({ accessToken: carol.accessToken, installId: "install-Carol", capability: carol.capability, muted }, resolve),
       );

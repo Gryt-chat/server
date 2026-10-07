@@ -49,6 +49,7 @@ import {
   setThreadStatus,
   setThreadTags,
   type ThreadRecord,
+  loudPushAccounts,
 } from "../../db";
 import { isQuarantined } from "../../services/quarantineUpload";
 import { processProfanity, type CensorStyle, type ProfanityMode } from "../../utils/profanityFilter";
@@ -822,20 +823,41 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
               });
             }
 
-            /* Direct and role mentions wake a phone. @everyone and @here would wake
-               the whole server, and a DM already pushed as a DM. */
+            /* Direct and role mentions wake a phone. @everyone and @here only wake one that
+               doesn't suppress them, like the desktop (GRYT-1696). A DM already pushed as a DM. */
             if (access.kind !== "dm") {
               const blockers = await blockersOfSender(auth.tokenPayload.serverUserId);
               const woken: string[] = [];
+              const crowd: string[] = [];
               for (const [id, kind] of kindOf) {
-                if ((kind !== "user" && kind !== "role") || blockers.has(id)) continue;
+                if (blockers.has(id)) continue;
                 if (kind === "user" && !(await mayViewChannel(created.conversation_id, id))) continue;
-                woken.push(id);
+                (kind === "user" || kind === "role" ? woken : crowd).push(id);
               }
               pushNotify(clientsInfo, woken, "mention", created.conversation_id);
+              pushNotify(clientsInfo, crowd, "mention", created.conversation_id, (device) => device.everyone);
             }
           } catch (err) {
             consola.warn("recording mentions failed", created.message_id, err);
+          }
+        }
+
+        /* A phone at "All messages" here wakes for every message (GRYT-1696). After the mention
+           push, so a mention takes the conversation's quiet window and reads as one. */
+        if (access.kind !== "dm") {
+          try {
+            const sender = auth.tokenPayload.serverUserId;
+            const blockers = await blockersOfSender(sender);
+            const loud: string[] = [];
+            for (const id of loudPushAccounts(created.conversation_id)) {
+              if (id === sender || blockers.has(id)) continue;
+              if (!(await mayViewChannel(created.conversation_id, id))) continue;
+              loud.push(id);
+            }
+            const conversationId = created.conversation_id;
+            pushNotify(clientsInfo, loud, "message", conversationId, (device) => device.loud.has(conversationId));
+          } catch (err) {
+            consola.warn("message push failed", created.message_id, err);
           }
         }
 
