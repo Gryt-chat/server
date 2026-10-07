@@ -25,6 +25,8 @@ export interface Clients {
     activity?: string;
     /** The Rich Presence card, checked by `normaliseRichActivity`. Never set without `activity`. */
     richActivity?: import("./utils/richActivity").RichActivity;
+    /** The phone says it went to the background, so it should be woken by push. */
+    appInBackground?: boolean;
     status?: UserStatus;
     lastSeen?: Date;
     accessToken?: string; // JWT access token for this server

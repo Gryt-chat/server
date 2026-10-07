@@ -147,6 +147,8 @@ function mergeInTransaction(
   );
 
   db.prepare(`UPDATE refresh_tokens SET revoked = 1 WHERE gryt_user_id = ? AND revoked = 0`).run(guestGrytUserId);
+  // The phone registers again as the account when it reconnects.
+  db.prepare(`DELETE FROM push_devices WHERE server_user_id = ?`).run(from);
   db.prepare(`DELETE FROM users WHERE server_user_id = ?`).run(from);
 
   return { guestServerUserId: from, accountServerUserId: to, ownerMoved, conversationIds };

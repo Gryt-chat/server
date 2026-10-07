@@ -47,6 +47,7 @@ import { registerVoiceLatencyHandlers } from "./handlers/voiceLatency";
 import { registerReportHandlers } from "./handlers/reports";
 import { registerBlockHandlers } from "./handlers/blocks";
 import { registerContactPrefsHandlers } from "./handlers/contactPrefs";
+import { registerPushHandlers } from "./handlers/push";
 import { registerFriendHandlers } from "./handlers/friends";
 import { registerTypingHandlers } from "./handlers/typing";
 import { registerPluginHandlers } from "./handlers/plugins";
@@ -352,6 +353,7 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
     ...registerMlsHandlers(ctx),
     ...registerMlsPersonKeyHandlers(ctx),
     ...registerMentionHandlers(ctx),
+    ...registerPushHandlers(ctx),
   };
 
   // ── Base socket events ───────────────────────────────────────

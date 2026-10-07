@@ -247,6 +247,17 @@ function createSchema(d: DatabaseSync): void {
       updated_at TEXT NOT NULL
     );
 
+    -- Phones to wake through the push relay (GRYT-1656). The capability is all the
+    -- relay needs; the server never sees the Apple or Google token behind it.
+    CREATE TABLE IF NOT EXISTS push_devices (
+      server_user_id TEXT NOT NULL,
+      install_id TEXT NOT NULL,
+      capability TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (server_user_id, install_id)
+    );
+
     -- Friends on this server (GRYT-1471), one row per pair with the smaller id
     -- first. Each person's whole list is on their own devices.
     CREATE TABLE IF NOT EXISTS friendships (
