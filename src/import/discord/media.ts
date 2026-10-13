@@ -73,7 +73,7 @@ export const uploadPathMedia: ImportMedia = {
   },
 };
 
-/** For a server run with DISABLE_S3, which has nowhere to put a file. The messages still come across. */
+/** For a server run with uploads turned off, which has nowhere to put a file. The messages still come across. */
 export const noFileStorageMedia: ImportMedia = {
   async storeFile(): Promise<StoreOutcome> {
     return { kind: "skipped", reason: "this server has file storage turned off" };

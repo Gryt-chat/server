@@ -30,7 +30,7 @@ import { verifyAccessToken } from "./utils/jwt";
 import { probeSqliteWrite } from "./db/sqlite/connection";
 import { createDatabaseHealth } from "./utils/databaseHealth";
 
-import { ensureBucket, getObject, initStorage, storageBackendName } from "./storage";
+import { ensureBucket, getObject, initStorage, leftoverS3Settings, uploadsDisabled } from "./storage";
 import { serverRouter } from "./routes/server";
 import { messagesRouter } from "./routes/messages";
 import { uploadsRouter } from "./routes/uploads";
@@ -104,27 +104,27 @@ app.get("/health", (_req, res) => {
 });
 
 // Initialize storage and database
-const disableS3 = (process.env.DISABLE_S3 || "").toLowerCase() === "true";
+const leftoverS3 = leftoverS3Settings();
+if (leftoverS3.length > 0) {
+  consola.error(`This server is still set up for S3 (${leftoverS3.join(", ")}), and Gryt 1.11.0 stores files on disk only.`);
+  consola.error("Copy the bucket's files into DATA_DIR/<S3_BUCKET>, remove those settings, and start again:");
+  consola.error("https://docs.gryt.chat/docs/host/docker-compose#moving-off-minio");
+  process.exit(1);
+}
 
-// S3 is optional in dev. We only initialize if not disabled.
 try {
-  if (disableS3) {
-    consola.warn("S3 disabled via DISABLE_S3=true");
+  if (uploadsDisabled()) {
+    consola.warn("Uploads are turned off (DISABLE_UPLOADS=true)");
   } else {
     initStorage();
-    const storageBackend = storageBackendName();
-    consola.success(`Storage initialized (${storageBackend})`);
     const bucket = (process.env.S3_BUCKET || "").trim();
-    if (bucket) {
-      ensureBucket(bucket)
-        .then(() => consola.success(`Storage bucket "${bucket}" ready`))
-        .catch((e) =>
-          consola.error(`Failed to ensure storage bucket "${bucket}"`, e)
-        );
-    }
+    consola.success(`Storage initialized on disk (${bucket})`);
+    ensureBucket(bucket)
+      .then(() => consola.success(`Storage folder "${bucket}" ready`))
+      .catch((e) => consola.error(`Failed to create storage folder "${bucket}"`, e));
   }
 } catch (e) {
-  consola.error("S3 initialization failed", e);
+  consola.error("Storage initialization failed", e);
 }
 
 // Clients pin this on first join. Generated here so a failure is visible at
@@ -156,10 +156,10 @@ initSqlite()
     startSfuClient();
   })
   .then(() => {
-    if (!disableS3) startMediaSweep();
+    if (!uploadsDisabled()) startMediaSweep();
     startMlsRetention();
-    resumeDiscordImports(disableS3 ? noFileStorageMedia : uploadPathMedia);
-    if (!disableS3 && (process.env.S3_BUCKET || "").trim()) {
+    resumeDiscordImports(uploadsDisabled() ? noFileStorageMedia : uploadPathMedia);
+    if (!uploadsDisabled() && (process.env.S3_BUCKET || "").trim()) {
       startEmojiQueueWorker();
     }
   })

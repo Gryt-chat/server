@@ -46,14 +46,18 @@ function getBackend(): StorageBackend {
 }
 
 /**
- * Which backend runs: STORAGE_BACKEND if set, else S3 only when some S3 setting is given.
- * A server started with nothing configured stores files on disk instead of refusing them.
+ * Set when a server is still configured for S3, which went in 1.11.0. Starting anyway would
+ * look healthy and show every file uploaded before as missing.
  */
-export function storageBackendName(): "s3" | "filesystem" {
+export function leftoverS3Settings(): string[] {
   const named = (process.env.STORAGE_BACKEND || "").trim().toLowerCase();
-  if (named === "s3" || named === "filesystem") return named;
-  const s3Configured = ["S3_ENDPOINT", "S3_BUCKET", "S3_ACCESS_KEY_ID"].some((k) => (process.env[k] || "").trim());
-  return s3Configured ? "s3" : "filesystem";
+  const left = ["S3_ENDPOINT", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"].filter((k) => (process.env[k] || "").trim());
+  return named && named !== "filesystem" ? [`STORAGE_BACKEND=${named}`, ...left] : left;
+}
+
+/** Uploads turned off by whoever runs the server. DISABLE_S3 is the old name. */
+export function uploadsDisabled(): boolean {
+  return ["DISABLE_UPLOADS", "DISABLE_S3"].some((k) => (process.env[k] || "").trim().toLowerCase() === "true");
 }
 
 /** What a member is told when a file can't be stored, so they can pass it on. */
@@ -67,20 +71,12 @@ export const STORAGE_DISABLED = {
 } as const;
 
 export function initStorage(): void {
-  const storageType = storageBackendName();
-  if (storageType === "filesystem") {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const fs = require("./filesystem") as typeof import("./filesystem");
-    fs.initFilesystem();
-    // Here the bucket is only a folder under DATA_DIR, and every route refuses without one.
-    if (!(process.env.S3_BUCKET || "").trim()) process.env.S3_BUCKET = DEFAULT_FILESYSTEM_BUCKET;
-    _backend = fs;
-  } else {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const s3 = require("./s3") as typeof import("./s3");
-    s3.initS3();
-    _backend = s3;
-  }
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const fs = require("./filesystem") as typeof import("./filesystem");
+  fs.initFilesystem();
+  // The bucket is only a folder under DATA_DIR, and every route refuses without one.
+  if (!(process.env.S3_BUCKET || "").trim()) process.env.S3_BUCKET = DEFAULT_FILESYSTEM_BUCKET;
+  _backend = fs;
 }
 
 export function ensureBucket(bucket: string): Promise<void> {
@@ -102,9 +98,6 @@ export async function getObject(params: GetObjectParams): Promise<GetObjectResul
     readable = body;
   } else if (Buffer.isBuffer(body) || body instanceof Uint8Array) {
     readable = Readable.from(body);
-  } else if (typeof body.transformToByteArray === "function") {
-    const bytes: Uint8Array = await body.transformToByteArray();
-    readable = Readable.from(Buffer.from(bytes));
   } else {
     readable = undefined;
   }

@@ -5,7 +5,7 @@ import multer from "multer";
 import { v4 as uuidv4 } from "uuid";
 import mime from "mime-types";
 import { unlink } from "fs/promises";
-import { putObject, getObject, STORAGE_DISABLED, STORAGE_NOT_CONFIGURED } from "../storage";
+import { putObject, getObject, STORAGE_DISABLED, STORAGE_NOT_CONFIGURED, uploadsDisabled } from "../storage";
 import { insertFile, getFile, updateUserAvatar, setUserAvatar, setUserBanner, getServerConfig, getUserByServerId, DEFAULT_AVATAR_MAX_BYTES, DEFAULT_UPLOAD_MAX_BYTES } from "../db";
 import { BANNER_BOX } from "../constants/media";
 import { deleteUnreferencedFiles } from "../jobs/mediaSweep";
@@ -202,8 +202,7 @@ const storeAvatarImage = (purpose: "avatar" | "group" | "webhook" | "banner") =>
     if (!isVideo && !(file.mimetype || "").startsWith("image/")) { res.status(400).json({ error: "invalid_file", message: "Only image files are allowed" }); return; }
 
     const what = { avatar: "Avatar", group: "Group picture", webhook: "Webhook avatar", banner: "Banner" }[purpose];
-    const disableS3 = (process.env.DISABLE_S3 || "").toLowerCase() === "true";
-    if (disableS3) { res.status(503).json(STORAGE_DISABLED); return; }
+    if (uploadsDisabled()) { res.status(503).json(STORAGE_DISABLED); return; }
 
     const bucket = process.env.S3_BUCKET as string;
     if (!bucket) { res.status(503).json(STORAGE_NOT_CONFIGURED); return; }
@@ -468,8 +467,7 @@ uploadsRouter.get(
     const fileId = String(req.params.fileId);
     if (!fileId) { res.status(400).json({ error: "fileId is required" }); return; }
 
-    const disableS3 = (process.env.DISABLE_S3 || "").toLowerCase() === "true";
-    if (disableS3) { res.status(503).json(STORAGE_DISABLED); return; }
+    if (uploadsDisabled()) { res.status(503).json(STORAGE_DISABLED); return; }
 
     const bucket = process.env.S3_BUCKET as string;
     if (!bucket) { res.status(503).json(STORAGE_NOT_CONFIGURED); return; }
