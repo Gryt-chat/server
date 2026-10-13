@@ -192,8 +192,9 @@ type Kinded = MessageRecord & { kind?: "poll" };
 
 function pollForViewer(m: MessageRecord, viewer?: string): Kinded {
   if (!isStoredPoll(m.poll)) return m;
-  const { text_fallback: _hidden, ...rest } = m;
-  return { ...rest, kind: "poll", poll: publicPoll(m.poll, viewer) };
+  const out: Kinded = { ...m, kind: "poll", poll: publicPoll(m.poll, viewer) };
+  delete out.text_fallback;
+  return out;
 }
 
 async function enrichSenders(messages: MessageRecord[]): Promise<MessageRecord[]> {
