@@ -7,7 +7,7 @@ import multer from "multer";
 import sharp from "sharp";
 import { v4 as uuidv4 } from "uuid";
 
-import { deleteObject, putObject, STORAGE_DISABLED, STORAGE_NOT_CONFIGURED } from "../storage";
+import { deleteObject, putObject, STORAGE_DISABLED, STORAGE_NOT_CONFIGURED, uploadsDisabled } from "../storage";
 import {
   createServerConfigIfNotExists,
   getServerConfig,
@@ -145,8 +145,7 @@ serverRouter.post(
       }
 
       const bucket = process.env.S3_BUCKET as string;
-      const disableS3 = (process.env.DISABLE_S3 || "").toLowerCase() === "true";
-      if (disableS3) {
+      if (uploadsDisabled()) {
         res.status(503).json(STORAGE_DISABLED);
         return;
       }

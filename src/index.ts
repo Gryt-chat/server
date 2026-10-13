@@ -30,7 +30,8 @@ import { verifyAccessToken } from "./utils/jwt";
 import { probeSqliteWrite } from "./db/sqlite/connection";
 import { createDatabaseHealth } from "./utils/databaseHealth";
 
-import { ensureBucket, getObject, initStorage, storageBackendName } from "./storage";
+import { ensureBucket, getObject, initStorage, leftoverS3Settings, uploadsDisabled } from "./storage";
+import { importFromS3, needsS3Import, s3SourceFromEnv } from "./storage/importFromS3";
 import { serverRouter } from "./routes/server";
 import { messagesRouter } from "./routes/messages";
 import { uploadsRouter } from "./routes/uploads";
@@ -103,29 +104,30 @@ app.get("/health", (_req, res) => {
   res.status(200).json({ status: "healthy", ...common });
 });
 
-// Initialize storage and database
-const disableS3 = (process.env.DISABLE_S3 || "").toLowerCase() === "true";
-
-// S3 is optional in dev. We only initialize if not disabled.
-try {
-  if (disableS3) {
-    consola.warn("S3 disabled via DISABLE_S3=true");
-  } else {
-    initStorage();
-    const storageBackend = storageBackendName();
-    consola.success(`Storage initialized (${storageBackend})`);
-    const bucket = (process.env.S3_BUCKET || "").trim();
-    if (bucket) {
-      ensureBucket(bucket)
-        .then(() => consola.success(`Storage bucket "${bucket}" ready`))
-        .catch((e) =>
-          consola.error(`Failed to ensure storage bucket "${bucket}"`, e)
-        );
+// Initialize storage and database. A server still set up for S3 copies its bucket to disk
+// first, and doesn't listen until that's done: half its files missing would look like a bug.
+const storageReady = (async () => {
+  if (needsS3Import()) {
+    consola.warn(`This server is set up for S3 (${leftoverS3Settings().join(", ")}). Gryt stores uploads on disk now, so it's copying them over first.`);
+    try {
+      await importFromS3(await s3SourceFromEnv());
+    } catch (e) {
+      consola.error("Couldn't copy the uploads off S3, so the server won't start. The bucket wasn't changed.", e);
+      consola.error("Moving them by hand: https://docs.gryt.chat/docs/host/docker-compose#moving-off-minio");
+      process.exit(1);
     }
+  } else if (leftoverS3Settings().length > 0) {
+    consola.info("S3 settings are still set, but the uploads were copied to disk already. They can be removed.");
   }
-} catch (e) {
-  consola.error("S3 initialization failed", e);
-}
+  if (uploadsDisabled()) {
+    consola.warn("Uploads are turned off (DISABLE_UPLOADS=true)");
+    return;
+  }
+  initStorage();
+  const bucket = (process.env.S3_BUCKET || "").trim();
+  await ensureBucket(bucket);
+  consola.success(`Uploads are stored in ${bucket} under DATA_DIR`);
+})().catch((e) => consola.error("Storage initialization failed", e));
 
 // Clients pin this on first join. Generated here so a failure is visible at
 // boot; the module initialises itself on demand regardless.
@@ -156,10 +158,10 @@ initSqlite()
     startSfuClient();
   })
   .then(() => {
-    if (!disableS3) startMediaSweep();
+    if (!uploadsDisabled()) startMediaSweep();
     startMlsRetention();
-    resumeDiscordImports(disableS3 ? noFileStorageMedia : uploadPathMedia);
-    if (!disableS3 && (process.env.S3_BUCKET || "").trim()) {
+    resumeDiscordImports(uploadsDisabled() ? noFileStorageMedia : uploadPathMedia);
+    if (!uploadsDisabled() && (process.env.S3_BUCKET || "").trim()) {
       startEmojiQueueWorker();
     }
   })
@@ -486,7 +488,7 @@ function reachableAddresses(port: number, host: string): string[] {
   return [`Reachable on: ${v4.join(", ")}${suffix}`];
 }
 
-httpServer.listen(PORT, HOST, () => {
+void storageReady.then(() => httpServer.listen(PORT, HOST, () => {
   startWorkerCapabilityPolling();
   consola.box(`Gryt Server v${VERSION}`);
   consola.start(`Starting ${process.env.SERVER_NAME}...`);
@@ -514,7 +516,7 @@ httpServer.listen(PORT, HOST, () => {
 
   // Not started here: it depends on `discoverable` in the database, which is
   // not reliably open yet. syncMdnsAdvertising runs off the SQLite chain.
-});
+}));
 
 const SHUTDOWN_TIMEOUT_MS = 3_000;
 let shuttingDown = false;
