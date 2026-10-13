@@ -45,8 +45,29 @@ function getBackend(): StorageBackend {
   return _backend;
 }
 
+/**
+ * Which backend runs: STORAGE_BACKEND if set, else S3 only when some S3 setting is given.
+ * A server started with nothing configured stores files on disk instead of refusing them.
+ */
+export function storageBackendName(): "s3" | "filesystem" {
+  const named = (process.env.STORAGE_BACKEND || "").trim().toLowerCase();
+  if (named === "s3" || named === "filesystem") return named;
+  const s3Configured = ["S3_ENDPOINT", "S3_BUCKET", "S3_ACCESS_KEY_ID"].some((k) => (process.env[k] || "").trim());
+  return s3Configured ? "s3" : "filesystem";
+}
+
+/** What a member is told when a file can't be stored, so they can pass it on. */
+export const STORAGE_NOT_CONFIGURED = {
+  error: "s3_not_configured",
+  message: "This server can't store files yet, so pictures and files can't be sent here. Let whoever runs it know that file storage isn't set up.",
+} as const;
+export const STORAGE_DISABLED = {
+  error: "s3_disabled",
+  message: "File uploads are turned off on this server. Let whoever runs it know if you need them.",
+} as const;
+
 export function initStorage(): void {
-  const storageType = (process.env.STORAGE_BACKEND || "s3").toLowerCase();
+  const storageType = storageBackendName();
   if (storageType === "filesystem") {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const fs = require("./filesystem") as typeof import("./filesystem");
