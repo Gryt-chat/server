@@ -1,3 +1,4 @@
+import type { PublicPoll, StoredPoll } from "../polls/poll";
 import { randomBytes, scrypt as scryptCb, timingSafeEqual } from "crypto";
 import { promisify } from "util";
 
@@ -162,6 +163,8 @@ export interface MessageRecord {
   /** Set on the notice the server writes for apps from before MLS, sent as "system".
       Apps that read MLS hide these rows (GRYT-1508). */
   mls_placeholder?: MlsPlaceholder;
+  /** Stored with every vote; clients get `publicPoll`'s view of it instead (GRYT-1732). */
+  poll?: StoredPoll | PublicPoll;
 }
 
 export interface MlsPlaceholder {
