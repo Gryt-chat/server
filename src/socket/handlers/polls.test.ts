@@ -136,12 +136,15 @@ function lastUpdate(who: Party): Poll {
 describe("polls", () => {
   let messageId: string;
 
-  it("sends a poll with fallback text for clients that can't show one", async () => {
+  it("sends a poll with a line older apps show, asking to update", async () => {
     messageId = await sendPoll({ question: "Lunch?", options: ["Pizza", "Sushi"] });
     const sent = alice.received("chat:new").at(-1) as { poll: Poll; text: string; text_fallback?: boolean };
     assert.equal(sent.poll.question, "Lunch?");
-    assert.equal(sent.text_fallback, true);
-    assert.match(sent.text, /Pizza/);
+    // Not marked a fallback: apps that hide fallback text and don't know polls would show nothing.
+    assert.equal(sent.text_fallback, undefined);
+    assert.equal((sent as { kind?: string }).kind, "poll");
+    assert.match(sent.text, /Poll: Lunch\?/);
+    assert.match(sent.text, /Update Gryt/);
     assert.equal((sent.poll as unknown as { votes?: unknown }).votes, undefined, "raw votes leaked");
   });
 
