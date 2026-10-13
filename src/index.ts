@@ -31,6 +31,7 @@ import { probeSqliteWrite } from "./db/sqlite/connection";
 import { createDatabaseHealth } from "./utils/databaseHealth";
 
 import { ensureBucket, getObject, initStorage, leftoverS3Settings, uploadsDisabled } from "./storage";
+import { importFromS3, needsS3Import, s3SourceFromEnv } from "./storage/importFromS3";
 import { serverRouter } from "./routes/server";
 import { messagesRouter } from "./routes/messages";
 import { uploadsRouter } from "./routes/uploads";
@@ -103,29 +104,30 @@ app.get("/health", (_req, res) => {
   res.status(200).json({ status: "healthy", ...common });
 });
 
-// Initialize storage and database
-const leftoverS3 = leftoverS3Settings();
-if (leftoverS3.length > 0) {
-  consola.error(`This server is still set up for S3 (${leftoverS3.join(", ")}), and Gryt 1.11.0 stores files on disk only.`);
-  consola.error("Copy the bucket's files into DATA_DIR/<S3_BUCKET>, remove those settings, and start again:");
-  consola.error("https://docs.gryt.chat/docs/host/docker-compose#moving-off-minio");
-  process.exit(1);
-}
-
-try {
+// Initialize storage and database. A server still set up for S3 copies its bucket to disk
+// first, and doesn't listen until that's done: half its files missing would look like a bug.
+const storageReady = (async () => {
+  if (needsS3Import()) {
+    consola.warn(`This server is set up for S3 (${leftoverS3Settings().join(", ")}). Gryt stores uploads on disk now, so it's copying them over first.`);
+    try {
+      await importFromS3(await s3SourceFromEnv());
+    } catch (e) {
+      consola.error("Couldn't copy the uploads off S3, so the server won't start. The bucket wasn't changed.", e);
+      consola.error("Moving them by hand: https://docs.gryt.chat/docs/host/docker-compose#moving-off-minio");
+      process.exit(1);
+    }
+  } else if (leftoverS3Settings().length > 0) {
+    consola.info("S3 settings are still set, but the uploads were copied to disk already. They can be removed.");
+  }
   if (uploadsDisabled()) {
     consola.warn("Uploads are turned off (DISABLE_UPLOADS=true)");
-  } else {
-    initStorage();
-    const bucket = (process.env.S3_BUCKET || "").trim();
-    consola.success(`Storage initialized on disk (${bucket})`);
-    ensureBucket(bucket)
-      .then(() => consola.success(`Storage folder "${bucket}" ready`))
-      .catch((e) => consola.error(`Failed to create storage folder "${bucket}"`, e));
+    return;
   }
-} catch (e) {
-  consola.error("Storage initialization failed", e);
-}
+  initStorage();
+  const bucket = (process.env.S3_BUCKET || "").trim();
+  await ensureBucket(bucket);
+  consola.success(`Uploads are stored in ${bucket} under DATA_DIR`);
+})().catch((e) => consola.error("Storage initialization failed", e));
 
 // Clients pin this on first join. Generated here so a failure is visible at
 // boot; the module initialises itself on demand regardless.
@@ -486,7 +488,7 @@ function reachableAddresses(port: number, host: string): string[] {
   return [`Reachable on: ${v4.join(", ")}${suffix}`];
 }
 
-httpServer.listen(PORT, HOST, () => {
+void storageReady.then(() => httpServer.listen(PORT, HOST, () => {
   startWorkerCapabilityPolling();
   consola.box(`Gryt Server v${VERSION}`);
   consola.start(`Starting ${process.env.SERVER_NAME}...`);
@@ -514,7 +516,7 @@ httpServer.listen(PORT, HOST, () => {
 
   // Not started here: it depends on `discoverable` in the database, which is
   // not reliably open yet. syncMdnsAdvertising runs off the SQLite chain.
-});
+}));
 
 const SHUTDOWN_TIMEOUT_MS = 3_000;
 let shuttingDown = false;
