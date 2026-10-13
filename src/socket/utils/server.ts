@@ -440,6 +440,8 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
         isSystem: r.is_system,
         mentionable: r.mentionable,
       })),
+      /** Takes polls on chat:send and poll:vote (GRYT-1732), so a client offers them. */
+      polls: true,
       max_members: parseInt(process.env.MAX_MEMBERS || "100"),
       voice_enabled: !!sfuHost,
       avatar_max_bytes: cfgAvatarMaxBytes,
