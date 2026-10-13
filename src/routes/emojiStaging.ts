@@ -3,7 +3,7 @@ import type { Router, Request, Response, NextFunction } from "express";
 import { v4 as uuidv4 } from "uuid";
 import { unzipSync } from "fflate";
 
-import { putObject } from "../storage";
+import { putObject, STORAGE_NOT_CONFIGURED } from "../storage";
 import { requireBearerToken } from "../middleware/requireBearerToken";
 import { ensurePermission } from "../middleware/requirePermission";
 import { broadcastEmojiQueueUpdate } from "../socket";
@@ -55,7 +55,7 @@ export function registerStagingRoutes(router: Router): void {
       if (!serverUserId) { res.status(401).json({ error: "auth_required" }); return; }
 
       const bucket = process.env.S3_BUCKET as string;
-      if (!bucket) { res.status(500).json({ error: "s3_not_configured" }); return; }
+      if (!bucket) { res.status(503).json(STORAGE_NOT_CONFIGURED); return; }
 
       Promise.resolve()
         .then(async () => {

@@ -3,7 +3,7 @@ import express from "express";
 import type { Router, Request, Response, NextFunction } from "express";
 import { v4 as uuidv4 } from "uuid";
 
-import { putObject, deleteObject } from "../storage";
+import { putObject, deleteObject, STORAGE_NOT_CONFIGURED } from "../storage";
 import { requireBearerToken } from "../middleware/requireBearerToken";
 import { ensurePermission } from "../middleware/requirePermission";
 import { broadcastCustomEmojisUpdate } from "../socket";
@@ -176,7 +176,7 @@ export function registerBttvRoutes(router: Router): void {
       if (!serverUserId) { res.status(401).json({ error: "auth_required" }); return; }
 
       const bucket = process.env.S3_BUCKET as string;
-      if (!bucket) { res.status(500).json({ error: "s3_not_configured" }); return; }
+      if (!bucket) { res.status(503).json(STORAGE_NOT_CONFIGURED); return; }
 
       const emotes: BttvEmoteInput[] = req.body?.emotes;
       if (!Array.isArray(emotes) || emotes.length === 0) {

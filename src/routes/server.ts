@@ -7,7 +7,7 @@ import multer from "multer";
 import sharp from "sharp";
 import { v4 as uuidv4 } from "uuid";
 
-import { deleteObject, putObject } from "../storage";
+import { deleteObject, putObject, STORAGE_DISABLED, STORAGE_NOT_CONFIGURED } from "../storage";
 import {
   createServerConfigIfNotExists,
   getServerConfig,
@@ -147,18 +147,11 @@ serverRouter.post(
       const bucket = process.env.S3_BUCKET as string;
       const disableS3 = (process.env.DISABLE_S3 || "").toLowerCase() === "true";
       if (disableS3) {
-        res.status(503).json({
-          error: "s3_disabled",
-          message:
-            "S3 is disabled (DISABLE_S3=true). Icon upload is unavailable.",
-        });
+        res.status(503).json(STORAGE_DISABLED);
         return;
       }
       if (!bucket) {
-        res.status(500).json({
-          error: "s3_not_configured",
-          message: "S3_BUCKET not configured",
-        });
+        res.status(503).json(STORAGE_NOT_CONFIGURED);
         return;
       }
 

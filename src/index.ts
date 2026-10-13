@@ -30,7 +30,7 @@ import { verifyAccessToken } from "./utils/jwt";
 import { probeSqliteWrite } from "./db/sqlite/connection";
 import { createDatabaseHealth } from "./utils/databaseHealth";
 
-import { initStorage, ensureBucket, getObject } from "./storage";
+import { ensureBucket, getObject, initStorage, storageBackendName } from "./storage";
 import { serverRouter } from "./routes/server";
 import { messagesRouter } from "./routes/messages";
 import { uploadsRouter } from "./routes/uploads";
@@ -112,7 +112,7 @@ try {
     consola.warn("S3 disabled via DISABLE_S3=true");
   } else {
     initStorage();
-    const storageBackend = (process.env.STORAGE_BACKEND || "s3").toLowerCase();
+    const storageBackend = storageBackendName();
     consola.success(`Storage initialized (${storageBackend})`);
     const bucket = (process.env.S3_BUCKET || "").trim();
     if (bucket) {
