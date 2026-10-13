@@ -183,7 +183,17 @@ const WEBHOOK_PREFIX = "webhook:";
 
 /** Names, pictures and bot tags, and a poll as `viewer` may see it: never anyone's raw votes. */
 async function enrichMessages(messages: MessageRecord[], viewer?: string): Promise<MessageRecord[]> {
-  return (await enrichSenders(messages)).map((m) => (isStoredPoll(m.poll) ? { ...m, poll: publicPoll(m.poll, viewer) } : m));
+  return (await enrichSenders(messages)).map((m) => pollForViewer(m, viewer));
+}
+
+/** A message's kind, when it's more than text. An app that doesn't know the kind says it needs
+    updating; one from before kinds shows `text`, which is why that isn't marked a fallback. */
+type Kinded = MessageRecord & { kind?: "poll" };
+
+function pollForViewer(m: MessageRecord, viewer?: string): Kinded {
+  if (!isStoredPoll(m.poll)) return m;
+  const { text_fallback: _hidden, ...rest } = m;
+  return { ...rest, kind: "poll", poll: publicPoll(m.poll, viewer) };
 }
 
 async function enrichSenders(messages: MessageRecord[]): Promise<MessageRecord[]> {
@@ -446,7 +456,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
               sender_nickname: sender?.nickname,
               sender_avatar_file_id: sender?.avatar_file_id,
               sender_is_bot: isBotIdentity(sender?.gryt_user_id),
-              ...(isStoredPoll(written.poll) ? { poll: publicPoll(written.poll, auth.tokenPayload.serverUserId) } : {}),
+              ...(isStoredPoll(written.poll) ? { kind: "poll", poll: publicPoll(written.poll, auth.tokenPayload.serverUserId) } : {}),
             },
           ]);
           socket.emit("chat:new", { ...again, nonce });
@@ -708,7 +718,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
             reactions: null,
             reply_to_message_id: replyToMessageId,
             thread_id: threadId,
-            ...(poll ? { poll, text_fallback: true } : {}),
+            ...(poll ? { poll } : {}),
           });
         } catch (err) {
           // The same send twice at once: the other one wrote it a moment ago.
@@ -723,7 +733,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           // The live copy needs it too, or a bot's message has no tag until a reload (GRYT-1721).
           sender_is_bot: isBotIdentity(user.gryt_user_id),
           profanity_matches: profanityMatches,
-          ...(isStoredPoll(created.poll) ? { poll: publicPoll(created.poll) } : {}),
+          ...(isStoredPoll(created.poll) ? { kind: "poll", poll: publicPoll(created.poll) } : {}),
         };
         const [withAttachments] = await enrichAttachments([enriched]);
         enriched = withAttachments;

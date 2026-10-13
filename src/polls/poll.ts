@@ -134,7 +134,7 @@ export function publicPoll(poll: StoredPoll, viewer?: string, now = new Date()):
 
 /** The text an app without polls shows instead. */
 export function pollFallbackText(poll: StoredPoll): string {
-  return `📊 ${poll.question}\n${poll.options.map((o) => `• ${o}`).join("\n")}\n(Update Gryt to vote in this poll.)`;
+  return `📊 Poll: ${poll.question}\nThis version of Gryt can't show polls. Update Gryt to see it and vote.`;
 }
 
 export function isStoredPoll(value: unknown): value is StoredPoll {
