@@ -1046,6 +1046,10 @@ function runMigrations(d: DatabaseSync): void {
   if (!hasColumn(d, "messages", "sender_avatar_file_id")) {
     d.exec("ALTER TABLE messages ADD COLUMN sender_avatar_file_id TEXT");
   }
+  // A poll and its votes, as JSON (GRYT-1732). NULL on every other message.
+  if (!hasColumn(d, "messages", "poll")) {
+    d.exec("ALTER TABLE messages ADD COLUMN poll TEXT");
+  }
   // A placeholder the server writes for apps from before MLS, and whose MLS message
   // it stands in for (GRYT-1508). NULL on every other row.
   if (!hasColumn(d, "messages", "mls_seq")) {

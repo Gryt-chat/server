@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 
+import type { StoredPoll } from "../../polls/poll";
 import type { FileOwnership, FileRecord, MessageRecord, Reaction } from "../interfaces";
 import { fromIso, fromIsoNullable, getSqliteDb, toIso, type SQLInputValue } from "./connection";
 
@@ -21,6 +22,7 @@ function rowToMessage(r: Record<string, unknown>): MessageRecord {
     ...(r.text_fallback ? { text_fallback: true } : {}),
     ...(r.sender_display_name ? { sender_display_name: r.sender_display_name as string } : {}),
     ...(r.sender_avatar_file_id ? { sender_avatar_file_id: r.sender_avatar_file_id as string } : {}),
+    ...(r.poll ? { poll: JSON.parse(r.poll as string) } : {}),
     ...(r.pinned_at ? { pinned_at: fromIso(r.pinned_at as string), pinned_by: (r.pinned_by as string) ?? null } : {}),
     ...(r.mls_seq != null
       ? { mls_placeholder: { seq: Number(r.mls_seq), sender_server_id: r.mls_sender_server_id as string } }
@@ -36,7 +38,7 @@ export async function insertMessage(record: Omit<MessageRecord, "message_id" | "
   const message_id = record.message_id ?? randomUUID();
 
   db.prepare(
-    `INSERT INTO messages (conversation_id, message_id, sender_server_id, text, sealed, attachments, reactions, reply_to_message_id, thread_id, cards, text_fallback, sender_display_name, sender_avatar_file_id, mls_seq, mls_sender_server_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO messages (conversation_id, message_id, sender_server_id, text, sealed, attachments, reactions, reply_to_message_id, thread_id, cards, text_fallback, sender_display_name, sender_avatar_file_id, mls_seq, mls_sender_server_id, poll, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     record.conversation_id,
     message_id,
@@ -53,6 +55,7 @@ export async function insertMessage(record: Omit<MessageRecord, "message_id" | "
     record.sender_avatar_file_id ?? null,
     record.mls_placeholder?.seq ?? null,
     record.mls_placeholder?.sender_server_id ?? null,
+    record.poll ? JSON.stringify(record.poll) : null,
     toIso(created_at),
   );
 
@@ -126,6 +129,13 @@ export async function updateMessageText(conversationId: string, messageId: strin
 }
 
 /** Pins a message, or unpins it with `by` null. Returns the message as it now is, or null if it's gone. */
+/** Writes a poll's new votes and returns the message as it now stands (GRYT-1732). */
+export async function setMessagePoll(conversationId: string, messageId: string, poll: StoredPoll): Promise<MessageRecord | null> {
+  const db = getSqliteDb();
+  db.prepare(`UPDATE messages SET poll = ? WHERE conversation_id = ? AND message_id = ?`).run(JSON.stringify(poll), conversationId, messageId);
+  return getMessageById(conversationId, messageId);
+}
+
 export async function setMessagePinned(conversationId: string, messageId: string, by: string | null): Promise<MessageRecord | null> {
   const db = getSqliteDb();
   const result = db

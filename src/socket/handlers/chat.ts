@@ -6,6 +6,8 @@ import type { HandlerContext, EventHandlerMap } from "./types";
 import { requireAuth, type AuthResult } from "../middleware/auth";
 import type { ChannelPermission } from "../../constants/permissions";
 import { isBotIdentity } from "../../auth/identity";
+import { applyVote, isStoredPoll, parsePoll, publicPoll, pollFallbackText, POLL_REFUSALS } from "../../polls/poll";
+import { getEffectiveStanding, listRoles } from "../../services/permissions";
 import { socketMay } from "../utils/standing";
 import {
   insertMessage,
@@ -20,6 +22,7 @@ import {
   addReactionToMessage,
   deleteMessage,
   getMessageById,
+  setMessagePoll,
   updateMessageText,
   setMessagePinned,
   listPinnedMessages,
@@ -96,6 +99,13 @@ const RL_DELETE: RateLimitRule = { limit: 30, windowMs: 60_000, scorePerAction: 
 /** Pins per conversation. Past this a pin list stops being the short list it's for. */
 const MAX_PINS = 50;
 const RL_EDIT: RateLimitRule = { limit: 20, windowMs: 60_000, scorePerAction: 1, maxScore: 10, scoreDecayMs: 2000 };
+const pollWrites = new Map<string, Promise<unknown>>();
+function serialisePollWrite<T>(key: string, work: () => Promise<T>): Promise<T> {
+  const run = (pollWrites.get(key) ?? Promise.resolve()).catch(() => {}).then(work);
+  pollWrites.set(key, run);
+  void run.finally(() => { if (pollWrites.get(key) === run) pollWrites.delete(key); }).catch(() => {});
+  return run;
+}
 const RL_FETCH: RateLimitRule = { limit: 15, windowMs: 10_000, scorePerAction: 0.3, maxScore: 8, scoreDecayMs: 1500 };
 
 /* The whole users table, read on the way out of every message with an `@`.
@@ -171,7 +181,12 @@ async function isTextInVoiceEnabled(channelId: string): Promise<boolean> {
 
 const WEBHOOK_PREFIX = "webhook:";
 
-async function enrichMessages(messages: MessageRecord[]): Promise<MessageRecord[]> {
+/** Names, pictures and bot tags, and a poll as `viewer` may see it: never anyone's raw votes. */
+async function enrichMessages(messages: MessageRecord[], viewer?: string): Promise<MessageRecord[]> {
+  return (await enrichSenders(messages)).map((m) => (isStoredPoll(m.poll) ? { ...m, poll: publicPoll(m.poll, viewer) } : m));
+}
+
+async function enrichSenders(messages: MessageRecord[]): Promise<MessageRecord[]> {
   const senderIds = [...new Set(messages.map(m => m.sender_server_id).filter(Boolean))];
   if (senderIds.length === 0) return messages;
 
@@ -382,7 +397,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
   }
 
   return {
-    'chat:send': async (payload: { conversationId: string; accessToken: string; text?: string; sealed?: string; attachments?: string[]; replyToMessageId?: string; threadId?: string; nonce?: string }) => {
+    'chat:send': async (payload: { conversationId: string; accessToken: string; text?: string; sealed?: string; attachments?: string[]; replyToMessageId?: string; threadId?: string; nonce?: string; poll?: unknown }) => {
       /* Names the send refused, or a burst of refusals can only settle the last
          row queued. After the payload, so older clients read it as before. */
       const nonce = typeof payload?.nonce === "string" && payload.nonce && payload.nonce.length <= NONCE_MAX_LENGTH
@@ -426,7 +441,13 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           if (!written) return false;
           const sender = await getUserByServerId(auth.tokenPayload.serverUserId);
           const [again] = await enrichAttachments([
-            { ...written, sender_nickname: sender?.nickname, sender_avatar_file_id: sender?.avatar_file_id, sender_is_bot: isBotIdentity(sender?.gryt_user_id) },
+            {
+              ...written,
+              sender_nickname: sender?.nickname,
+              sender_avatar_file_id: sender?.avatar_file_id,
+              sender_is_bot: isBotIdentity(sender?.gryt_user_id),
+              ...(isStoredPoll(written.poll) ? { poll: publicPoll(written.poll, auth.tokenPayload.serverUserId) } : {}),
+            },
           ]);
           socket.emit("chat:new", { ...again, nonce });
           return true;
@@ -498,7 +519,25 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         const text = typeof payload.text === "string" ? payload.text.trim() : "";
         const sealed = typeof payload.sealed === "string" ? payload.sealed : null;
         const attachments = Array.isArray(payload.attachments) ? payload.attachments : null;
-        if (!text && !sealed && (!attachments || attachments.length === 0)) {
+        const poll = payload.poll != null ? parsePoll(payload.poll) : null;
+        if (poll && "error" in poll) {
+          refuse({ error: poll.error, message: POLL_REFUSALS[poll.error] ?? "That poll can't be sent." });
+          return;
+        }
+        // The question is the message: text alongside it would show only to old clients.
+        if (poll && (text || sealed || access.kind === "dm" || threadId)) {
+          refuse({ error: "poll_not_allowed_here", message: "Polls go in a channel, on their own." });
+          return;
+        }
+        if (poll?.allowed_roles) {
+          const known = new Set((await listRoles()).map((r) => r.role_id));
+          poll.allowed_roles = poll.allowed_roles.filter((r) => known.has(r));
+          if (poll.allowed_roles.length === 0) {
+            refuse({ error: "poll_roles", message: POLL_REFUSALS.poll_roles });
+            return;
+          }
+        }
+        if (!text && !sealed && !poll && (!attachments || attachments.length === 0)) {
           refuse("Message is empty");
           return;
         }
@@ -608,7 +647,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         // Before the profanity pass, whose match offsets are into the stored text.
         const rights = text ? await mentionRights(auth, payload.conversationId, access.kind === "dm", text) : null;
         const canonical: CanonicalMentions | null = text && rights ? canonicalizeMentions(text, rights) : null;
-        let finalText = canonical?.text ?? text;
+        let finalText = poll ? pollFallbackText(poll) : canonical?.text ?? text;
         let profanityMatches: { startIndex: number; endIndex: number }[] | undefined;
 
         // A sealed message has no text here to filter or moderate.
@@ -617,6 +656,11 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           const result = await processProfanity(finalText, profanityMode, censorStyle);
           if (result.action === "reject") {
             refuse("Message blocked: contains profanity.");
+            return;
+          }
+          // Censoring would only reach the fallback, not the options people see.
+          if (poll && result.text !== finalText) {
+            refuse("Poll blocked: contains profanity.");
             return;
           }
           finalText = result.text;
@@ -642,7 +686,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
             return {
               kind: "channel" as const,
               conversationId: payload.conversationId,
-              text,
+              text: poll ? finalText : text,
               userMentions: mentioned.users,
               massMentions: mentioned.mass,
               roleMentions: mentioned.roles,
@@ -664,6 +708,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
             reactions: null,
             reply_to_message_id: replyToMessageId,
             thread_id: threadId,
+            ...(poll ? { poll, text_fallback: true } : {}),
           });
         } catch (err) {
           // The same send twice at once: the other one wrote it a moment ago.
@@ -678,6 +723,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           // The live copy needs it too, or a bot's message has no tag until a reload (GRYT-1721).
           sender_is_bot: isBotIdentity(user.gryt_user_id),
           profanity_matches: profanityMatches,
+          ...(isStoredPoll(created.poll) ? { poll: publicPoll(created.poll) } : {}),
         };
         const [withAttachments] = await enrichAttachments([enriched]);
         enriched = withAttachments;
@@ -1009,7 +1055,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           ? items
           : items.filter((m) => !hidden.has(m.sender_server_id) && !hidden.has(m.mls_placeholder?.sender_server_id ?? ""));
 
-        let enrichedItems = await enrichMessages(visible);
+        let enrichedItems = await enrichMessages(visible, clientsInfo[clientId]?.serverUserId);
         enrichedItems = await enrichAttachments(enrichedItems);
         /* One statement for the whole page. Without it a reply count only ever
            arrives live, so a reload reads every thread as 0 (GRYT-1386). */
@@ -1133,7 +1179,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         /* Before the block filter, unlike chat:fetch: a page that is entirely
            blocked senders would otherwise end the scrollback. */
         const hasMore = replies.length >= limit;
-        let items = await enrichMessages(visible);
+        let items = await enrichMessages(visible, clientsInfo[clientId]?.serverUserId);
         items = await enrichAttachments(items);
         /* First page only: sending the root with every page would redraw the
            topic above the divider on each scroll. */
@@ -1141,7 +1187,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         if (!before) {
           const rootRaw = await getMessageById(payload.conversationId, thread.root_message_id);
           if (rootRaw && (hidden.size === 0 || !hidden.has(rootRaw.sender_server_id))) {
-            const [enrichedRoot] = await enrichAttachments(await enrichMessages([rootRaw]));
+            const [enrichedRoot] = await enrichAttachments(await enrichMessages([rootRaw], clientsInfo[clientId]?.serverUserId));
             root = enrichedRoot ?? null;
           }
         }
@@ -1307,7 +1353,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         const rootRecords = (await Promise.all(
           threads.map((t) => getMessageById(payload.conversationId, t.root_message_id)),
         )).filter((r): r is MessageRecord => !!r);
-        const enrichedRoots = await enrichMessages(rootRecords);
+        const enrichedRoots = await enrichMessages(rootRecords, clientsInfo[clientId]?.serverUserId);
         const rootById = new Map(enrichedRoots.map((r) => [r.message_id, r]));
 
         // Same base fields as chat:fetch and thread:created, plus what only a
@@ -1457,11 +1503,68 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         let [enrichedReaction] = await enrichMessages([updatedMessage]);
         [enrichedReaction] = await enrichAttachments([enrichedReaction]);
         (await recipientClientIds(updatedMessage.conversation_id, access)).forEach((cid) => {
-          io.sockets.sockets.get(cid)?.emit("chat:reaction", enrichedReaction);
+          // A poll is per viewer, so each gets their own picks back.
+          const poll = isStoredPoll(updatedMessage.poll) ? publicPoll(updatedMessage.poll, clientsInfo[cid]?.serverUserId) : undefined;
+          io.sockets.sockets.get(cid)?.emit("chat:reaction", poll ? { ...enrichedReaction, poll } : enrichedReaction);
         });
       } catch (err) {
         consola.error("chat:react failed", err);
         socket.emit("chat:error", "Failed to add reaction");
+      }
+    },
+
+    // Votes on a poll (GRYT-1732). An empty choice takes the vote back.
+    'poll:vote': async (payload: { conversationId: string; messageId: string; choices: number[]; accessToken: string }) => {
+      try {
+        const ip = getClientIp();
+        const userId = clientsInfo[clientId]?.serverUserId;
+        const rl = checkRateLimit("poll:vote", userId, ip, RL_REACT);
+        if (!rl.allowed) {
+          socket.emit("chat:error", { error: "rate_limited", retryAfterMs: rl.retryAfterMs, message: `Too fast. Wait ${Math.ceil((rl.retryAfterMs || 0) / 1000)}s.` });
+          return;
+        }
+        if (!payload || !payload.conversationId || !payload.messageId || !Array.isArray(payload.choices) || !payload.accessToken) {
+          socket.emit("chat:error", "Invalid vote payload");
+          return;
+        }
+
+        const auth = await requireAuth(socket, payload);
+        if (!auth) return;
+        const access = await requireConversationAccess(payload.conversationId, auth.tokenPayload.serverUserId);
+        if (!access) return;
+
+        if (!(await mayHere(auth, payload.conversationId, "add_reactions"))) {
+          socket.emit("chat:error", { error: "forbidden", message: "You do not have permission to vote here.", permission: "add_reactions" });
+          return;
+        }
+
+        const voter = auth.tokenPayload.serverUserId;
+        const { roleIds } = await getEffectiveStanding(voter, auth.tokenPayload.grytUserId);
+        // One vote at a time per message, so two at once can't drop each other's.
+        const result = await serialisePollWrite(`${payload.conversationId}:${payload.messageId}`, async () => {
+          const message = await getMessageById(payload.conversationId, payload.messageId);
+          if (!message || !isStoredPoll(message.poll)) return { error: "poll_missing" } as const;
+          const next = applyVote(message.poll, voter, payload.choices, new Date(), roleIds);
+          if ("error" in next) return next;
+          const updated = await setMessagePoll(payload.conversationId, payload.messageId, next);
+          return updated && isStoredPoll(updated.poll) ? { updated, poll: updated.poll } : ({ error: "poll_missing" } as const);
+        });
+        if ("error" in result || !result.updated) {
+          socket.emit("chat:error", { error: result.error ?? "poll_missing", message: POLL_REFUSALS[result.error ?? "poll_missing"] ?? "That vote didn't go through." });
+          return;
+        }
+
+        replaceCachedMessage(payload.conversationId, result.updated);
+        (await recipientClientIds(payload.conversationId, access)).forEach((cid) => {
+          io.sockets.sockets.get(cid)?.emit("poll:updated", {
+            conversation_id: payload.conversationId,
+            message_id: payload.messageId,
+            poll: publicPoll(result.poll, clientsInfo[cid]?.serverUserId),
+          });
+        });
+      } catch (err) {
+        consola.error("poll:vote failed", err);
+        socket.emit("chat:error", "Failed to vote");
       }
     },
 
@@ -1571,6 +1674,10 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         // somebody else's puts different words under their name.
         if (message.sender_server_id !== auth.tokenPayload.serverUserId) {
           socket.emit("chat:error", "You can only edit your own messages");
+          return;
+        }
+        if (message.poll) {
+          socket.emit("chat:error", { error: "poll_not_editable", message: "Polls can't be edited." });
           return;
         }
 
@@ -1691,7 +1798,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
 
         const hidden = await blockedServerIdsFor(userId ?? "");
         const pinned = (await listPinnedMessages(payload.conversationId, MAX_PINS)).filter((m) => !hidden.has(m.sender_server_id));
-        const items = await enrichAttachments(await enrichMessages(pinned));
+        const items = await enrichAttachments(await enrichMessages(pinned, clientsInfo[clientId]?.serverUserId));
         socket.emit("chat:pins", { conversation_id: payload.conversationId, items });
       } catch (err) {
         consola.error("chat:pins failed", err);
