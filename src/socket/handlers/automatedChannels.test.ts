@@ -141,8 +141,9 @@ describe("automated channel write policy", () => {
     });
 
     assert.deepEqual(bot.received("chat:error"), [], "the bot was refused");
-    const sent = bot.received("chat:new").at(-1) as { message_id?: string } | undefined;
+    const sent = bot.received("chat:new").at(-1) as { message_id?: string; sender_is_bot?: boolean } | undefined;
     assert.ok(sent?.message_id, "the bot's message was not accepted");
+    assert.equal(sent?.sender_is_bot, true, "the live copy has no BOT tag (GRYT-1721)");
   });
 
   it("leaves a normal channel open to humans", async () => {
@@ -158,6 +159,7 @@ describe("automated channel write policy", () => {
     const news = human.received("chat:new") as { message_id?: string; text?: string }[];
     assert.equal(news.length, before + 1, "a normal channel refused a human");
     assert.equal(news.at(-1)?.text, "hello everyone");
+    assert.equal((news.at(-1) as { sender_is_bot?: boolean }).sender_is_bot, false);
   });
 });
 

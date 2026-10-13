@@ -426,7 +426,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           if (!written) return false;
           const sender = await getUserByServerId(auth.tokenPayload.serverUserId);
           const [again] = await enrichAttachments([
-            { ...written, sender_nickname: sender?.nickname, sender_avatar_file_id: sender?.avatar_file_id },
+            { ...written, sender_nickname: sender?.nickname, sender_avatar_file_id: sender?.avatar_file_id, sender_is_bot: isBotIdentity(sender?.gryt_user_id) },
           ]);
           socket.emit("chat:new", { ...again, nonce });
           return true;
@@ -675,6 +675,8 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           ...created,
           sender_nickname: user.nickname,
           sender_avatar_file_id: user.avatar_file_id,
+          // The live copy needs it too, or a bot's message has no tag until a reload (GRYT-1721).
+          sender_is_bot: isBotIdentity(user.gryt_user_id),
           profanity_matches: profanityMatches,
         };
         const [withAttachments] = await enrichAttachments([enriched]);
@@ -1406,7 +1408,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           .forEach((cid) => io.sockets.sockets.get(cid)?.emit("thread:created", summary));
         socket.emit("forum:topic:created", {
           ...summary,
-          root: { ...created, sender_nickname: user.nickname, sender_avatar_file_id: user.avatar_file_id },
+          root: { ...created, sender_nickname: user.nickname, sender_avatar_file_id: user.avatar_file_id, sender_is_bot: isBotIdentity(user.gryt_user_id) },
         });
       } catch (err) {
         consola.error("forum:topic:create failed", err);
@@ -1591,6 +1593,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           ...updated,
           sender_nickname: user?.nickname ?? "Unknown",
           sender_avatar_file_id: user?.avatar_file_id,
+          sender_is_bot: isBotIdentity(user?.gryt_user_id),
         };
         const [withAttachments] = await enrichAttachments([enriched]);
         enriched = withAttachments;
