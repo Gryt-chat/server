@@ -437,3 +437,71 @@ export async function countMessagesBySender(senderServerUserId: string): Promise
     .get(senderServerUserId) as { cnt: number } | undefined;
   return Number(row?.cnt ?? 0);
 }
+
+/** Where a match starts and ends in a search snippet. Control characters, so no text can fake one. */
+export const SEARCH_MARK_START = "\u0002";
+export const SEARCH_MARK_END = "\u0003";
+
+/**
+ * What somebody typed, as an FTS5 query that can only mean "these words": each word quoted, the
+ * last one a prefix. Null when nothing searchable is left. Operators and syntax never get through.
+ */
+export function toFtsQuery(input: string): string | null {
+  const words = input.normalize("NFC").slice(0, 200).split(/\s+/).map((w) => w.replace(/[\u0000-\u001f]/g, "")).filter(Boolean).slice(0, 8);
+  if (words.length === 0) return null;
+  return words.map((w, i) => `"${w.replace(/"/g, '""')}"${i === words.length - 1 ? "*" : ""}`).join(" ");
+}
+
+export interface MessageSearchHit {
+  conversation_id: string;
+  message_id: string;
+  thread_id: string | null;
+  sender_server_id: string;
+  sender_display_name: string | null;
+  created_at: Date;
+  snippet: string;
+}
+
+/**
+ * Newest first, only in `conversationIds`: the caller decides what the asker may read, and
+ * nothing here widens it. `before` pages on created_at.
+ */
+export async function searchMessages(params: {
+  query: string;
+  conversationIds: readonly string[];
+  senderServerId?: string;
+  before?: Date;
+  limit: number;
+}): Promise<MessageSearchHit[]> {
+  const match = toFtsQuery(params.query);
+  if (!match || params.conversationIds.length === 0) return [];
+  const db = getSqliteDb();
+  const rows = db.prepare(
+    `SELECT m.conversation_id, m.message_id, m.thread_id, m.sender_server_id, m.sender_display_name, m.created_at,
+            snippet(messages_fts, 0, char(2), char(3), '…', 16) AS snippet
+       FROM messages_fts
+       JOIN messages m ON m.rowid = messages_fts.rowid
+      WHERE messages_fts MATCH ?
+        AND m.conversation_id IN (SELECT value FROM json_each(?))
+        AND m.mls_seq IS NULL
+        AND (? IS NULL OR m.sender_server_id = ?)
+        AND (? IS NULL OR m.created_at < ?)
+      ORDER BY m.created_at DESC
+      LIMIT ?`,
+  ).all(
+    match,
+    JSON.stringify(params.conversationIds),
+    params.senderServerId ?? null, params.senderServerId ?? null,
+    params.before ? toIso(params.before) : null, params.before ? toIso(params.before) : null,
+    Math.min(Math.max(Math.floor(params.limit), 1), 50),
+  ) as Record<string, unknown>[];
+  return rows.map((r) => ({
+    conversation_id: r.conversation_id as string,
+    message_id: r.message_id as string,
+    thread_id: (r.thread_id as string) ?? null,
+    sender_server_id: r.sender_server_id as string,
+    sender_display_name: (r.sender_display_name as string) ?? null,
+    created_at: fromIso(r.created_at as string),
+    snippet: (r.snippet as string) ?? "",
+  }));
+}

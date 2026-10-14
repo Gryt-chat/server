@@ -13,6 +13,7 @@ import {
   insertMessage,
   listMessages,
   listMessagesAfter,
+  searchMessages,
   listServerChannels,
   getServerChannel,
   MessageRecord,
@@ -107,6 +108,8 @@ function serialisePollWrite<T>(key: string, work: () => Promise<T>): Promise<T> 
   return run;
 }
 const RL_FETCH: RateLimitRule = { limit: 15, windowMs: 10_000, scorePerAction: 0.3, maxScore: 8, scoreDecayMs: 1500 };
+// One per keystroke after a short debounce: generous, but not a scraper (GRYT-1738).
+const RL_SEARCH: RateLimitRule = { limit: 20, windowMs: 10_000, scorePerAction: 0.4, maxScore: 8, scoreDecayMs: 1500 };
 
 /* The whole users table, read on the way out of every message with an `@`.
    Stale one way only: a very recent joiner is not matched yet. */
@@ -980,6 +983,58 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           });
           refuse("Message not persisted (temporary storage issue)");
         } catch { refuse("Failed to send message"); }
+      }
+    },
+
+    /* Channels only, and only ones the asker may read: DMs are sealed, and voice-channel
+       text is readable only while connected, so neither is offered (GRYT-1738). */
+    'chat:search': async (payload: { query?: string; conversationId?: string; senderServerId?: string; before?: string; limit?: number; requestId?: string }) => {
+      try {
+        const ip = getClientIp();
+        const info = clientsInfo[clientId];
+        const userId = info?.serverUserId;
+        const requestId = typeof payload?.requestId === "string" ? payload.requestId.slice(0, 64) : undefined;
+        if (!userId || !(await socketMay(clientsInfo, clientId, "read_messages"))) {
+          socket.emit("chat:search:results", { requestId, items: [], error: "forbidden" });
+          return;
+        }
+        const rl = checkRateLimit("chat:search", userId, ip, RL_SEARCH);
+        if (!rl.allowed) {
+          socket.emit("chat:search:results", { requestId, items: [], error: "rate_limited", retryAfterMs: rl.retryAfterMs });
+          return;
+        }
+        const query = typeof payload?.query === "string" ? payload.query : "";
+
+        // By stored type: the live check only knows a voice channel while someone is in it.
+        const [visible, channels] = await Promise.all([visibleChannelIds(userId, info?.grytUserId), listServerChannels()]);
+        const textChannels = new Set(channels.filter((c) => c.type === "text").map((c) => c.channel_id));
+        let conversationIds = [...visible].filter((id) => textChannels.has(id));
+        if (typeof payload.conversationId === "string") {
+          conversationIds = conversationIds.includes(payload.conversationId) ? [payload.conversationId] : [];
+        }
+        const before = typeof payload.before === "string" && !Number.isNaN(new Date(payload.before).getTime())
+          ? new Date(payload.before)
+          : undefined;
+        const limit = typeof payload.limit === "number" ? payload.limit : 25;
+
+        const hits = await searchMessages({
+          query,
+          conversationIds,
+          senderServerId: typeof payload.senderServerId === "string" ? payload.senderServerId : undefined,
+          before,
+          limit,
+        });
+        const hidden = await blockedServerIdsFor(userId);
+        const items = hidden.size === 0 ? hits : hits.filter((h) => !hidden.has(h.sender_server_id));
+        socket.emit("chat:search:results", {
+          requestId,
+          query,
+          items: items.map((h) => ({ ...h, created_at: h.created_at.toISOString() })),
+          hasMore: hits.length >= Math.min(Math.max(Math.floor(limit), 1), 50),
+        });
+      } catch (err) {
+        consola.error("[chat:search]", err);
+        socket.emit("chat:search:results", { requestId: payload?.requestId, items: [], error: "failed" });
       }
     },
 

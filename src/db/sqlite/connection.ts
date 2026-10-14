@@ -706,6 +706,35 @@ function createSchema(d: DatabaseSync): void {
   `);
 }
 
+/**
+ * Full-text index over channel messages (GRYT-1738), kept in step by triggers. It follows the
+ * messages table by rowid, so a manual VACUUM (which can renumber rowids) needs a 'rebuild'.
+ */
+function ensureSearchIndex(d: DatabaseSync): void {
+  const exists = d.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'messages_fts'`).get();
+  if (!exists) {
+    // unicode61 with diacritics removed, so "skal" finds "skål" and "cafe" finds "café".
+    d.exec(`CREATE VIRTUAL TABLE messages_fts USING fts5(
+      text, content = 'messages', content_rowid = 'rowid',
+      tokenize = 'unicode61 remove_diacritics 2'
+    )`);
+  }
+  d.exec(`
+    CREATE TRIGGER IF NOT EXISTS messages_fts_insert AFTER INSERT ON messages BEGIN
+      INSERT INTO messages_fts(rowid, text) VALUES (new.rowid, new.text);
+    END;
+    CREATE TRIGGER IF NOT EXISTS messages_fts_delete AFTER DELETE ON messages BEGIN
+      INSERT INTO messages_fts(messages_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+    END;
+    CREATE TRIGGER IF NOT EXISTS messages_fts_update AFTER UPDATE OF text ON messages BEGIN
+      INSERT INTO messages_fts(messages_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+      INSERT INTO messages_fts(rowid, text) VALUES (new.rowid, new.text);
+    END;
+  `);
+  // Messages from before the index existed. Once, on the upgrade that creates it.
+  if (!exists) d.exec(`INSERT INTO messages_fts(messages_fts) VALUES ('rebuild')`);
+}
+
 function hasColumn(d: DatabaseSync, table: string, column: string): boolean {
   const cols = d.prepare(`PRAGMA table_info(${table})`).all() as unknown as {
     name: string;
@@ -714,6 +743,7 @@ function hasColumn(d: DatabaseSync, table: string, column: string): boolean {
 }
 
 function runMigrations(d: DatabaseSync): void {
+  ensureSearchIndex(d);
   // Conversations muted on that phone (GRYT-1689). Only dev servers ever had the table without it.
   if (!hasColumn(d, "push_devices", "muted")) {
     d.exec("ALTER TABLE push_devices ADD COLUMN muted TEXT NOT NULL DEFAULT '[]'");
