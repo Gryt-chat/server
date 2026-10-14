@@ -3,7 +3,7 @@ import type { Router, Request, Response, NextFunction } from "express";
 import { v4 as uuidv4 } from "uuid";
 import { unzipSync } from "fflate";
 
-import { putObject, STORAGE_NOT_CONFIGURED } from "../storage";
+import { putObject, uploadsFolder } from "../storage";
 import { requireBearerToken } from "../middleware/requireBearerToken";
 import { ensurePermission } from "../middleware/requirePermission";
 import { broadcastEmojiQueueUpdate } from "../socket";
@@ -54,8 +54,7 @@ export function registerStagingRoutes(router: Router): void {
       consola.debug("[EmojiStage] POST /api/emojis/stage — serverUserId:", serverUserId);
       if (!serverUserId) { res.status(401).json({ error: "auth_required" }); return; }
 
-      const bucket = process.env.S3_BUCKET as string;
-      if (!bucket) { res.status(503).json(STORAGE_NOT_CONFIGURED); return; }
+      const bucket = uploadsFolder();
 
       Promise.resolve()
         .then(async () => {

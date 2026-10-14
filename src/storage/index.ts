@@ -55,16 +55,19 @@ export function leftoverS3Settings(): string[] {
   return named && named !== "filesystem" ? [`STORAGE_BACKEND=${named}`, ...left] : left;
 }
 
+/**
+ * The folder under DATA_DIR that uploads live in. S3_BUCKET still names it on a server that
+ * came over from S3, because the copy kept the bucket's name; everywhere else it's "gryt".
+ */
+export function uploadsFolder(): string {
+  return (process.env.S3_BUCKET || "").trim() || DEFAULT_FILESYSTEM_BUCKET;
+}
+
 /** Uploads turned off by whoever runs the server. DISABLE_S3 is the old name. */
 export function uploadsDisabled(): boolean {
   return ["DISABLE_UPLOADS", "DISABLE_S3"].some((k) => (process.env[k] || "").trim().toLowerCase() === "true");
 }
 
-/** What a member is told when a file can't be stored, so they can pass it on. */
-export const STORAGE_NOT_CONFIGURED = {
-  error: "s3_not_configured",
-  message: "This server can't store files yet, so pictures and files can't be sent here. Let whoever runs it know that file storage isn't set up.",
-} as const;
 export const STORAGE_DISABLED = {
   error: "s3_disabled",
   message: "File uploads are turned off on this server. Let whoever runs it know if you need them.",
@@ -74,8 +77,6 @@ export function initStorage(): void {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const fs = require("./filesystem") as typeof import("./filesystem");
   fs.initFilesystem();
-  // The bucket is only a folder under DATA_DIR, and every route refuses without one.
-  if (!(process.env.S3_BUCKET || "").trim()) process.env.S3_BUCKET = DEFAULT_FILESYSTEM_BUCKET;
   _backend = fs;
 }
 

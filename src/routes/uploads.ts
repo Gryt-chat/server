@@ -5,7 +5,7 @@ import multer from "multer";
 import { v4 as uuidv4 } from "uuid";
 import mime from "mime-types";
 import { unlink } from "fs/promises";
-import { putObject, getObject, STORAGE_DISABLED, STORAGE_NOT_CONFIGURED, uploadsDisabled } from "../storage";
+import { putObject, getObject, STORAGE_DISABLED, uploadsDisabled, uploadsFolder } from "../storage";
 import { insertFile, getFile, updateUserAvatar, setUserAvatar, setUserBanner, getServerConfig, getUserByServerId, DEFAULT_AVATAR_MAX_BYTES, DEFAULT_UPLOAD_MAX_BYTES } from "../db";
 import { BANNER_BOX } from "../constants/media";
 import { deleteUnreferencedFiles } from "../jobs/mediaSweep";
@@ -151,11 +151,7 @@ uploadsRouter.post(
       res.status(400).json({ error: "file is required" });
       return;
     }
-    const bucket = process.env.S3_BUCKET as string;
-    if (!bucket) {
-      res.status(503).json(STORAGE_NOT_CONFIGURED);
-      return;
-    }
+    const bucket = uploadsFolder();
 
     Promise.resolve()
       .then(async () => {
@@ -204,8 +200,7 @@ const storeAvatarImage = (purpose: "avatar" | "group" | "webhook" | "banner") =>
     const what = { avatar: "Avatar", group: "Group picture", webhook: "Webhook avatar", banner: "Banner" }[purpose];
     if (uploadsDisabled()) { res.status(503).json(STORAGE_DISABLED); return; }
 
-    const bucket = process.env.S3_BUCKET as string;
-    if (!bucket) { res.status(503).json(STORAGE_NOT_CONFIGURED); return; }
+    const bucket = uploadsFolder();
     const serverUserId = req.tokenPayload?.serverUserId;
     if (!serverUserId) { res.status(401).json({ error: "auth_required" }); return; }
 
@@ -469,8 +464,7 @@ uploadsRouter.get(
 
     if (uploadsDisabled()) { res.status(503).json(STORAGE_DISABLED); return; }
 
-    const bucket = process.env.S3_BUCKET as string;
-    if (!bucket) { res.status(503).json(STORAGE_NOT_CONFIGURED); return; }
+    const bucket = uploadsFolder();
 
     Promise.resolve()
       .then(async () => {

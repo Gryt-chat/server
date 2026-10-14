@@ -8,7 +8,7 @@ import {
   getAllReferencedAttachmentIds,
   getAllWebhookAvatarFileIds,
 } from "../db";
-import { deleteObject } from "../storage";
+import { deleteObject, uploadsFolder } from "../storage";
 
 const SWEEP_INTERVAL_MS = parseInt(process.env.MEDIA_SWEEP_INTERVAL_MS || String(10 * 60 * 1000)); // default 10 min
 const GRACE_PERIOD_MS = parseInt(process.env.MEDIA_SWEEP_GRACE_MS || String(30 * 60 * 1000)); // default 30 min
@@ -16,11 +16,7 @@ const GRACE_PERIOD_MS = parseInt(process.env.MEDIA_SWEEP_GRACE_MS || String(30 *
 let sweepTimer: ReturnType<typeof setInterval> | null = null;
 
 export async function runMediaSweep(): Promise<{ deleted: number; errors: number }> {
-  const bucket = process.env.S3_BUCKET;
-  if (!bucket) {
-    consola.warn("[media-sweep] S3_BUCKET not configured, skipping sweep");
-    return { deleted: 0, errors: 0 };
-  }
+  const bucket = uploadsFolder();
 
   const now = Date.now();
   let deleted = 0;
@@ -90,11 +86,7 @@ export async function deleteUnreferencedFiles(fileIds: string[]): Promise<{ dele
 export async function deleteFilesNow(fileIds: string[]): Promise<{ deleted: number; errors: number }> {
   if (fileIds.length === 0) return { deleted: 0, errors: 0 };
 
-  const bucket = process.env.S3_BUCKET;
-  if (!bucket) {
-    consola.warn("[media-sweep] S3_BUCKET not configured, leaving files for the sweep");
-    return { deleted: 0, errors: 0 };
-  }
+  const bucket = uploadsFolder();
 
   const wanted = new Set(fileIds);
   const files = (await getAllFileRecords()).filter((f) => wanted.has(f.file_id));

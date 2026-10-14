@@ -15,7 +15,7 @@ import type { StoredWebhookCard } from "../db";
 import type { PayloadWarning, WebhookCardInput, WebhookMessageInput } from "../routes/webhookSchemas";
 import { colorToHex } from "../routes/webhookSchemas";
 import { storageForUpload } from "../routes/uploadStorage";
-import { putObject } from "../storage";
+import { putObject, uploadsFolder } from "../storage";
 import { validateImage } from "../utils/imageValidation";
 import { fetchFollowingSafely } from "../utils/safePreviewFetch";
 import { storeAvatarPicture } from "./avatarImage";
@@ -123,7 +123,7 @@ async function storeWebhookImage(webhookId: string, bytes: Buffer, format: Image
   const known = await getWebhookMediaFileId(webhookId, sha256);
   if (known && (await getFile(known)) && (await isFileReferencedByMessage(known))) return known;
 
-  const bucket = process.env.S3_BUCKET as string;
+  const bucket = uploadsFolder();
   const fileId = uuidv4();
   const storage = storageForUpload({ sealed: false, fileId, mimetype: MIME[format], originalName: `webhook.${format}` });
   // Fetched from anywhere, so written out again in the worker's jail where there is one.
@@ -160,7 +160,7 @@ async function storeWebhookAvatar(webhookId: string, bytes: Buffer, format: Imag
 
   const stored = workerClearsQuarantine()
     ? { ok: true as const, ...(await quarantineUpload({
-        bucket: process.env.S3_BUCKET as string,
+        bucket: uploadsFolder(),
         use: "avatars",
         bytes,
         mime: MIME[format],
@@ -168,7 +168,7 @@ async function storeWebhookAvatar(webhookId: string, bytes: Buffer, format: Imag
         uploadedBy: `webhook:${webhookId}`,
       })) }
     : await storeAvatarPicture({
-    bucket: process.env.S3_BUCKET as string,
+    bucket: uploadsFolder(),
     bytes,
     mime: MIME[format],
     originalName: `webhook.${format}`,

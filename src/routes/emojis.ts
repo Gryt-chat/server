@@ -4,7 +4,7 @@ import type { Request, Response, NextFunction } from "express";
 import { v4 as uuidv4 } from "uuid";
 import { unzipSync } from "fflate";
 
-import { putObject, deleteObject, getObject, STORAGE_NOT_CONFIGURED } from "../storage";
+import { putObject, deleteObject, getObject, uploadsFolder } from "../storage";
 import { requireBearerToken } from "../middleware/requireBearerToken";
 import { ensurePermission } from "../middleware/requirePermission";
 import { broadcastCustomEmojisUpdate } from "../socket";
@@ -60,9 +60,7 @@ emojisRouter.post(
     consola.debug("[EmojiUpload] POST /api/emojis — serverUserId:", serverUserId);
     if (!serverUserId) { res.status(401).json({ error: "auth_required" }); return; }
 
-    const bucket = process.env.S3_BUCKET as string;
-    consola.debug("[EmojiUpload] S3_BUCKET:", bucket ? `"${bucket}"` : "(not set)");
-    if (!bucket) { res.status(503).json(STORAGE_NOT_CONFIGURED); return; }
+    const bucket = uploadsFolder();
 
     Promise.resolve()
       .then(async () => {
@@ -219,8 +217,7 @@ emojisRouter.get(
     const name = String(req.params.name);
     if (!name) { res.status(400).json({ error: "name_required" }); return; }
 
-    const bucket = process.env.S3_BUCKET as string;
-    if (!bucket) { res.status(503).json(STORAGE_NOT_CONFIGURED); return; }
+    const bucket = uploadsFolder();
 
     Promise.resolve()
       .then(async () => {
@@ -301,7 +298,7 @@ emojisRouter.delete(
     const serverUserId = req.tokenPayload?.serverUserId;
     if (!serverUserId) { res.status(401).json({ error: "auth_required" }); return; }
 
-    const bucket = process.env.S3_BUCKET as string;
+    const bucket = uploadsFolder();
 
     Promise.resolve()
       .then(async () => {
@@ -353,7 +350,7 @@ emojisRouter.delete(
           return;
         }
 
-        const bucket = process.env.S3_BUCKET as string;
+        const bucket = uploadsFolder();
         if (bucket) {
           await deleteObject({ bucket, key: emoji.s3_key }).catch((e) => consola.warn("S3 delete failed", e));
         }

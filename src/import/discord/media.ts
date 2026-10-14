@@ -14,7 +14,7 @@ import {
 } from "../../db";
 import { EMOJI_NAME_RE } from "../../routes/emojiShared";
 import { storeUploadedFile } from "../../services/storeUploadedFile";
-import { putObject } from "../../storage";
+import { putObject, uploadsFolder } from "../../storage";
 import type { ImportMedia, StoreOutcome } from "./importer";
 
 function isRasterImage(type: string): boolean {
@@ -34,7 +34,7 @@ export const uploadPathMedia: ImportMedia = {
     const maxBytes = typeof cfg?.upload_max_bytes === "number" ? cfg.upload_max_bytes : DEFAULT_UPLOAD_MAX_BYTES;
 
     const result = await storeUploadedFile({
-      bucket: process.env.S3_BUCKET as string,
+      bucket: uploadsFolder(),
       path,
       size: info.size,
       mimetype,
@@ -60,7 +60,7 @@ export const uploadPathMedia: ImportMedia = {
     const jobId = uuidv4();
     const rawKey = `emoji_raw/${jobId}`;
     const bytes = await readFile(path);
-    await putObject({ bucket: process.env.S3_BUCKET as string, key: rawKey, body: bytes, contentType });
+    await putObject({ bucket: uploadsFolder(), key: rawKey, body: bytes, contentType });
     await insertEmojiJob({
       job_id: jobId,
       name,
