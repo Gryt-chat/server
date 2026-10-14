@@ -456,6 +456,8 @@ export interface MessageSearchHit {
   conversation_id: string;
   message_id: string;
   thread_id: string | null;
+  /** For a thread reply, the message the thread hangs off, which is what history can open at. */
+  thread_root_message_id: string | null;
   sender_server_id: string;
   sender_display_name: string | null;
   created_at: Date;
@@ -477,10 +479,11 @@ export async function searchMessages(params: {
   if (!match || params.conversationIds.length === 0) return [];
   const db = getSqliteDb();
   const rows = db.prepare(
-    `SELECT m.conversation_id, m.message_id, m.thread_id, m.sender_server_id, m.sender_display_name, m.created_at,
+    `SELECT m.conversation_id, m.message_id, m.thread_id, t.root_message_id AS thread_root_message_id, m.sender_server_id, m.sender_display_name, m.created_at,
             snippet(messages_fts, 0, char(2), char(3), '…', 16) AS snippet
        FROM messages_fts
        JOIN messages m ON m.rowid = messages_fts.rowid
+       LEFT JOIN threads t ON t.thread_id = m.thread_id
       WHERE messages_fts MATCH ?
         AND m.conversation_id IN (SELECT value FROM json_each(?))
         AND m.mls_seq IS NULL
@@ -499,6 +502,7 @@ export async function searchMessages(params: {
     conversation_id: r.conversation_id as string,
     message_id: r.message_id as string,
     thread_id: (r.thread_id as string) ?? null,
+    thread_root_message_id: (r.thread_root_message_id as string) ?? null,
     sender_server_id: r.sender_server_id as string,
     sender_display_name: (r.sender_display_name as string) ?? null,
     created_at: fromIso(r.created_at as string),

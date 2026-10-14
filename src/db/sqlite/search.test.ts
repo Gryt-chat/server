@@ -6,6 +6,7 @@ import { after, before, describe, it } from "node:test";
 
 import { getSqliteDb, initSqlite } from "./connection";
 import { deleteMessage, insertMessage, searchMessages, toFtsQuery, updateMessageText } from "./messages";
+import { createThread } from "./threads";
 
 /** GRYT-1738: full-text search over channel messages, only where the caller says. */
 describe("message search", () => {
@@ -67,6 +68,16 @@ describe("message search", () => {
     await add("general", "written while nothing indexed");
     await initSqlite();
     assert.deepEqual(ids(await searchMessages({ query: "written", conversationIds: ["general"], limit: 10 })), [`m${n}`]);
+  });
+
+  it("gives a thread reply the message its thread hangs off", async () => {
+    const root = await add("general", "thread starter");
+    const thread = await createThread({ conversation_id: "general", root_message_id: root.message_id, created_by: "u1" });
+    await add("general", "reply about zebras", "u1", { thread_id: thread.thread_id });
+    const [hit] = await searchMessages({ query: "zebras", conversationIds: ["general"], limit: 10 });
+    assert.equal(hit.thread_id, thread.thread_id);
+    assert.equal(hit.thread_root_message_id, root.message_id);
+    assert.equal((await searchMessages({ query: "starter", conversationIds: ["general"], limit: 10 }))[0].thread_root_message_id, null);
   });
 
   it("never passes search syntax through", async () => {
