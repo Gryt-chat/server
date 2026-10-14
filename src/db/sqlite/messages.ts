@@ -439,6 +439,11 @@ export async function countMessagesBySender(senderServerUserId: string): Promise
 }
 
 /** Where a match starts and ends in a search snippet. Control characters, so no text can fake one. */
+/** Control characters can't be typed and would collide with the snippet marks. */
+function withoutControlChars(word: string): string {
+  return [...word].filter((c) => c.charCodeAt(0) > 0x1f).join("");
+}
+
 export const SEARCH_MARK_START = "\u0002";
 export const SEARCH_MARK_END = "\u0003";
 
@@ -447,7 +452,7 @@ export const SEARCH_MARK_END = "\u0003";
  * last one a prefix. Null when nothing searchable is left. Operators and syntax never get through.
  */
 export function toFtsQuery(input: string): string | null {
-  const words = input.normalize("NFC").slice(0, 200).split(/\s+/).map((w) => w.replace(/[\u0000-\u001f]/g, "")).filter(Boolean).slice(0, 8);
+  const words = input.normalize("NFC").slice(0, 200).split(/\s+/).map(withoutControlChars).filter(Boolean).slice(0, 8);
   if (words.length === 0) return null;
   return words.map((w, i) => `"${w.replace(/"/g, '""')}"${i === words.length - 1 ? "*" : ""}`).join(" ");
 }
@@ -485,7 +490,7 @@ export interface MessageSearchParams {
 
 /** File names match when every word appears in them, case-insensitive, `%` and `_` taken literally. */
 function nameWords(input: string): string[] {
-  return input.normalize("NFC").slice(0, 200).split(/\s+/).map((w) => w.replace(/[\u0000-\u001f]/g, "")).filter(Boolean).slice(0, 8)
+  return input.normalize("NFC").slice(0, 200).split(/\s+/).map(withoutControlChars).filter(Boolean).slice(0, 8)
     .map((w) => `%${w.replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
 }
 

@@ -38,7 +38,7 @@ describe("message search", () => {
   it("finds words regardless of accents and case", async () => {
     const hits = await searchMessages({ query: "SKAL gryt", conversationIds: ["general"], limit: 10 });
     assert.deepEqual(ids(hits), ["m1"]);
-    assert.match(hits[0].snippet, /\u0002Skål\u0003/);
+    assert.ok(hits[0].snippet.includes("\u0002Skål\u0003"), hits[0].snippet);
   });
 
   it("matches the last word as a prefix", async () => {
