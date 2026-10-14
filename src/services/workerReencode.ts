@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from "uuid";
 
 import { getFile, insertFile, insertImageJob } from "../db";
 import { deleteFilesNow } from "../jobs/mediaSweep";
-import { getObjectAsBuffer, putObject } from "../storage";
+import { getObjectAsBuffer, putObject, uploadsFolder } from "../storage";
 import { QUARANTINE_PREFIX, settleQuarantine } from "./quarantineUpload";
 
 /* A picture the server needs back, such as an emoji or its icon, decoded in the worker's
@@ -20,7 +20,7 @@ export async function reencodeThroughWorker(
   mime: string,
   use: "emojis" | "avatars",
 ): Promise<WorkerCopy> {
-  const bucket = process.env.S3_BUCKET as string;
+  const bucket = uploadsFolder();
   const fileId = uuidv4();
   const key = `${QUARANTINE_PREFIX}${use}/${fileId}`;
   await putObject({ bucket, key, body: bytes, contentType: mime });

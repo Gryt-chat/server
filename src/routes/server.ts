@@ -7,7 +7,7 @@ import multer from "multer";
 import sharp from "sharp";
 import { v4 as uuidv4 } from "uuid";
 
-import { deleteObject, putObject, STORAGE_DISABLED, STORAGE_NOT_CONFIGURED, uploadsDisabled } from "../storage";
+import { deleteObject, putObject, STORAGE_DISABLED, uploadsDisabled, uploadsFolder } from "../storage";
 import {
   createServerConfigIfNotExists,
   getServerConfig,
@@ -144,13 +144,9 @@ serverRouter.post(
         return;
       }
 
-      const bucket = process.env.S3_BUCKET as string;
+      const bucket = uploadsFolder();
       if (uploadsDisabled()) {
         res.status(503).json(STORAGE_DISABLED);
-        return;
-      }
-      if (!bucket) {
-        res.status(503).json(STORAGE_NOT_CONFIGURED);
         return;
       }
 
@@ -368,7 +364,7 @@ serverRouter.delete(
         isConfigured: true,
       });
 
-      if (process.env.S3_BUCKET) deletePreviousIcon(process.env.S3_BUCKET, prev);
+      deletePreviousIcon(uploadsFolder(), prev);
 
       insertServerAudit({
         actorServerUserId: decoded.serverUserId,

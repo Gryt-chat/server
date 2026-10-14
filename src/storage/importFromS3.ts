@@ -6,7 +6,7 @@ import { pipeline } from "stream/promises";
 
 import consola from "consola";
 
-import { DEFAULT_FILESYSTEM_BUCKET, leftoverS3Settings } from "./index";
+import { leftoverS3Settings, uploadsFolder } from "./index";
 
 /** Same name the compose storage-migrate step writes, so either one finishing counts for both. */
 export const IMPORT_MARKER = ".migrated-from-minio";
@@ -25,7 +25,7 @@ export interface S3Source {
 export class ImportError extends Error {}
 
 function bucketDir(): string {
-  const bucket = (process.env.S3_BUCKET || "").trim() || DEFAULT_FILESYSTEM_BUCKET;
+  const bucket = uploadsFolder();
   return join(process.env.DATA_DIR || "./data", bucket);
 }
 
@@ -94,7 +94,7 @@ export async function importFromS3(source: S3Source, log: (line: string) => void
 /** The AWS SDK, loaded only when there's something to import. */
 export async function s3SourceFromEnv(): Promise<S3Source> {
   const sdk = await import("@aws-sdk/client-s3");
-  const bucket = (process.env.S3_BUCKET || "").trim() || DEFAULT_FILESYSTEM_BUCKET;
+  const bucket = uploadsFolder();
   const client = new sdk.S3Client({
     region: process.env.S3_REGION || "auto",
     endpoint: process.env.S3_ENDPOINT || undefined,

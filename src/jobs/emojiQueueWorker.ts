@@ -2,7 +2,7 @@ import consola from "consola";
 import sharp from "sharp";
 import { v4 as uuidv4 } from "uuid";
 
-import { deleteObject, getObjectAsBuffer, putObject } from "../storage";
+import { deleteObject, getObjectAsBuffer, putObject, uploadsFolder } from "../storage";
 import {
   getEmoji,
   getEmojiJob,
@@ -25,11 +25,7 @@ export function startEmojiQueueWorker(): void {
   if ((globalThis as { __grytEmojiWorkerStarted?: boolean }).__grytEmojiWorkerStarted) return;
   (globalThis as { __grytEmojiWorkerStarted?: boolean }).__grytEmojiWorkerStarted = true;
 
-  const bucket = (process.env.S3_BUCKET || "").trim();
-  if (!bucket) {
-    consola.warn("[EmojiQueue] S3_BUCKET missing; worker disabled.");
-    return;
-  }
+  const bucket = uploadsFolder();
 
   const concurrency = clampInt(process.env.EMOJI_QUEUE_CONCURRENCY, 1, 1, 4);
   const pollMs = clampInt(process.env.EMOJI_QUEUE_POLL_MS, 750, 250, 5000);

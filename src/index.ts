@@ -30,7 +30,7 @@ import { verifyAccessToken } from "./utils/jwt";
 import { probeSqliteWrite } from "./db/sqlite/connection";
 import { createDatabaseHealth } from "./utils/databaseHealth";
 
-import { ensureBucket, getObject, initStorage, leftoverS3Settings, uploadsDisabled } from "./storage";
+import { ensureBucket, getObject, initStorage, leftoverS3Settings, uploadsDisabled, uploadsFolder } from "./storage";
 import { importFromS3, needsS3Import, s3SourceFromEnv } from "./storage/importFromS3";
 import { serverRouter } from "./routes/server";
 import { messagesRouter } from "./routes/messages";
@@ -124,7 +124,7 @@ const storageReady = (async () => {
     return;
   }
   initStorage();
-  const bucket = (process.env.S3_BUCKET || "").trim();
+  const bucket = uploadsFolder();
   await ensureBucket(bucket);
   consola.success(`Uploads are stored in ${bucket} under DATA_DIR`);
 })().catch((e) => consola.error("Storage initialization failed", e));
@@ -161,7 +161,7 @@ initSqlite()
     if (!uploadsDisabled()) startMediaSweep();
     startMlsRetention();
     resumeDiscordImports(uploadsDisabled() ? noFileStorageMedia : uploadPathMedia);
-    if (!uploadsDisabled() && (process.env.S3_BUCKET || "").trim()) {
+    if (!uploadsDisabled()) {
       startEmojiQueueWorker();
     }
   })
@@ -297,7 +297,7 @@ app.get("/icon", httpRateLimit("http:public", RL_HTTP_PUBLIC), async (req, res) 
   try {
     const cfg = await getServerConfig();
     const iconKey = cfg?.icon_url;
-    if (!iconKey || !process.env.S3_BUCKET) {
+    if (!iconKey) {
       res
         .status(404)
         .json({ error: "no_icon", message: "No server icon configured" });
@@ -305,7 +305,7 @@ app.get("/icon", httpRateLimit("http:public", RL_HTTP_PUBLIC), async (req, res) 
     }
 
     const obj = await getObject({
-      bucket: process.env.S3_BUCKET,
+      bucket: uploadsFolder(),
       key: iconKey,
     });
     const body = obj.Body;

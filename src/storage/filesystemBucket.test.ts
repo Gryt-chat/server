@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, describe, it } from "node:test";
 
-import { DEFAULT_FILESYSTEM_BUCKET, ensureBucket, initStorage, putObject } from "./index";
+import { DEFAULT_FILESYSTEM_BUCKET, ensureBucket, initStorage, putObject, uploadsFolder } from "./index";
 
 /** GRYT-1443: the CLI set STORAGE_BACKEND=filesystem with no S3_BUCKET, and every
     upload answered 500 "S3_BUCKET not configured". */
@@ -33,23 +33,21 @@ after(() => {
 describe("filesystem storage with no S3_BUCKET", () => {
   it("names the folder gryt, so uploads have somewhere to go", async () => {
     initStorage();
-    assert.equal(process.env.S3_BUCKET, DEFAULT_FILESYSTEM_BUCKET);
+    assert.equal(uploadsFolder(), DEFAULT_FILESYSTEM_BUCKET);
     assert.equal(DEFAULT_FILESYSTEM_BUCKET, "gryt", "the image worker and the compose files expect this name");
 
-    await ensureBucket(process.env.S3_BUCKET!);
-    await putObject({ bucket: process.env.S3_BUCKET!, key: "uploads/a.txt", body: "a", contentType: "text/plain" });
+    await ensureBucket(uploadsFolder());
+    await putObject({ bucket: uploadsFolder(), key: "uploads/a.txt", body: "a", contentType: "text/plain" });
     assert.ok(existsSync(join(dir, "gryt", "uploads", "a.txt")));
   });
 
   it("treats a blank value as unset", () => {
     process.env.S3_BUCKET = "  ";
-    initStorage();
-    assert.equal(process.env.S3_BUCKET, "gryt");
+    assert.equal(uploadsFolder(), "gryt");
   });
 
   it("keeps a folder somebody chose", () => {
     process.env.S3_BUCKET = "uploads";
-    initStorage();
-    assert.equal(process.env.S3_BUCKET, "uploads");
+    assert.equal(uploadsFolder(), "uploads", "a server that came from S3 keeps its bucket's name for the folder");
   });
 });
