@@ -1,0 +1,6 @@
+# Review-required paths, from .claude/CLAUDE.md in the superproject. GitHub asks
+# Sivert to review any PR that touches them. Keep the two lists the same.
+/src/auth/ @sivert-io
+/src/middleware/ @sivert-io
+/src/db/ @sivert-io
+/src/storage/ @sivert-io
