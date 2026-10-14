@@ -462,43 +462,90 @@ export interface MessageSearchHit {
   sender_display_name: string | null;
   created_at: Date;
   snippet: string;
+  /** Files only: the attachment whose name matched. */
+  file?: { file_id: string; name: string | null; mime: string | null; size: number | null };
 }
 
-/**
- * Newest first, only in `conversationIds`: the caller decides what the asker may read, and
- * nothing here widens it. `before` pages on created_at.
- */
-export async function searchMessages(params: {
+export type SearchHas = "image" | "link" | "file";
+export type SearchKind = "messages" | "files";
+
+/** Totals are counted this far and no further, so a broad word can't scan the whole table twice. */
+export const SEARCH_COUNT_CAP = 1000;
+
+export interface MessageSearchParams {
+  kind?: SearchKind;
   query: string;
   conversationIds: readonly string[];
   senderServerId?: string;
   before?: Date;
+  after?: Date;
+  has?: SearchHas;
   limit: number;
-}): Promise<MessageSearchHit[]> {
-  const match = toFtsQuery(params.query);
-  if (!match || params.conversationIds.length === 0) return [];
+}
+
+/** File names match when every word appears in them, case-insensitive, `%` and `_` taken literally. */
+function nameWords(input: string): string[] {
+  return input.normalize("NFC").slice(0, 200).split(/\s+/).map((w) => w.replace(/[\u0000-\u001f]/g, "")).filter(Boolean).slice(0, 8)
+    .map((w) => `%${w.replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
+}
+
+function searchSql(p: MessageSearchParams): { from: string; where: string; args: SQLInputValue[]; select: string } | null {
+  if (p.conversationIds.length === 0) return null;
+  const args: SQLInputValue[] = [];
+  const where: string[] = [];
+  let from: string;
+  let select: string;
+  if (p.kind === "files") {
+    const words = nameWords(p.query);
+    from = `message_attachments a JOIN files f ON f.file_id = a.file_id JOIN messages m ON m.conversation_id = a.conversation_id AND m.message_id = a.message_id`;
+    select = `substr(coalesce(m.text, ''), 1, 160) AS snippet, f.file_id, f.original_name, f.mime, f.size`;
+    for (const w of words) {
+      where.push(`f.original_name LIKE ? ESCAPE '\\'`);
+      args.push(w);
+    }
+  } else {
+    const match = toFtsQuery(p.query);
+    if (match) {
+      from = `messages_fts JOIN messages m ON m.rowid = messages_fts.rowid`;
+      select = `snippet(messages_fts, 0, char(2), char(3), '…', 16) AS snippet`;
+      where.push(`messages_fts MATCH ?`);
+      args.push(match);
+    } else {
+      // Filters alone, like from: somebody: no words to mark, so the start of the text.
+      from = `messages m`;
+      select = `substr(coalesce(m.text, ''), 1, 160) AS snippet`;
+      where.push(`(m.text IS NOT NULL OR EXISTS (SELECT 1 FROM message_attachments x WHERE x.conversation_id = m.conversation_id AND x.message_id = m.message_id))`);
+    }
+    if (p.has === "file") where.push(`EXISTS (SELECT 1 FROM message_attachments x WHERE x.conversation_id = m.conversation_id AND x.message_id = m.message_id)`);
+    if (p.has === "image") where.push(`EXISTS (SELECT 1 FROM message_attachments x JOIN files xf ON xf.file_id = x.file_id WHERE x.conversation_id = m.conversation_id AND x.message_id = m.message_id AND xf.mime LIKE 'image/%')`);
+    if (p.has === "link") where.push(`(m.text LIKE '%http://%' OR m.text LIKE '%https://%')`);
+  }
+  where.push(`m.conversation_id IN (SELECT value FROM json_each(?))`, `m.mls_seq IS NULL`);
+  args.push(JSON.stringify(p.conversationIds));
+  if (p.senderServerId) { where.push(`m.sender_server_id = ?`); args.push(p.senderServerId); }
+  if (p.after) { where.push(`m.created_at > ?`); args.push(toIso(p.after)); }
+  return { from, where: where.join(" AND "), args, select };
+}
+
+/**
+ * Newest first, only in `conversationIds`: the caller decides what the asker may read, and
+ * nothing here widens it. `before` pages on created_at; `total` stops at SEARCH_COUNT_CAP.
+ */
+export async function searchMessages(p: MessageSearchParams): Promise<{ items: MessageSearchHit[]; total: number }> {
+  const sql = searchSql(p);
+  if (!sql) return { items: [], total: 0 };
   const db = getSqliteDb();
+  const page = p.before ? ` AND m.created_at < ?` : "";
   const rows = db.prepare(
-    `SELECT m.conversation_id, m.message_id, m.thread_id, t.root_message_id AS thread_root_message_id, m.sender_server_id, m.sender_display_name, m.created_at,
-            snippet(messages_fts, 0, char(2), char(3), '…', 16) AS snippet
-       FROM messages_fts
-       JOIN messages m ON m.rowid = messages_fts.rowid
+    `SELECT m.conversation_id, m.message_id, m.thread_id, t.root_message_id AS thread_root_message_id, m.sender_server_id, m.sender_display_name, m.created_at, ${sql.select}
+       FROM ${sql.from}
        LEFT JOIN threads t ON t.thread_id = m.thread_id
-      WHERE messages_fts MATCH ?
-        AND m.conversation_id IN (SELECT value FROM json_each(?))
-        AND m.mls_seq IS NULL
-        AND (? IS NULL OR m.sender_server_id = ?)
-        AND (? IS NULL OR m.created_at < ?)
+      WHERE ${sql.where}${page}
       ORDER BY m.created_at DESC
       LIMIT ?`,
-  ).all(
-    match,
-    JSON.stringify(params.conversationIds),
-    params.senderServerId ?? null, params.senderServerId ?? null,
-    params.before ? toIso(params.before) : null, params.before ? toIso(params.before) : null,
-    Math.min(Math.max(Math.floor(params.limit), 1), 50),
-  ) as Record<string, unknown>[];
-  return rows.map((r) => ({
+  ).all(...sql.args, ...(p.before ? [toIso(p.before)] : []), Math.min(Math.max(Math.floor(p.limit), 1), 50)) as Record<string, unknown>[];
+  const { n } = db.prepare(`SELECT count(*) AS n FROM (SELECT 1 FROM ${sql.from} WHERE ${sql.where} LIMIT ${SEARCH_COUNT_CAP})`).get(...sql.args) as { n: number };
+  const items = rows.map((r) => ({
     conversation_id: r.conversation_id as string,
     message_id: r.message_id as string,
     thread_id: (r.thread_id as string) ?? null,
@@ -507,5 +554,14 @@ export async function searchMessages(params: {
     sender_display_name: (r.sender_display_name as string) ?? null,
     created_at: fromIso(r.created_at as string),
     snippet: (r.snippet as string) ?? "",
+    ...(p.kind === "files" && {
+      file: {
+        file_id: r.file_id as string,
+        name: (r.original_name as string) ?? null,
+        mime: (r.mime as string) ?? null,
+        size: (r.size as number) ?? null,
+      },
+    }),
   }));
+  return { items, total: n };
 }

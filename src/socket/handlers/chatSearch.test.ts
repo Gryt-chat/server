@@ -8,7 +8,7 @@ import type { Permission } from "../../constants/permissions";
 import { upsertServerChannel } from "../../db/sqlite/channels";
 import { createPermissionScope, replacePermissionRules, setChannelPermissionScope } from "../../db/sqlite/channelScopes";
 import { initSqlite } from "../../db/sqlite/connection";
-import { insertMessage } from "../../db/sqlite/messages";
+import { insertFile, insertMessage } from "../../db/sqlite/messages";
 import { createRoleDefinition } from "../../db/sqlite/roleDefinitions";
 import { createServerConfigIfNotExists, setServerRole } from "../../db/sqlite/servers";
 import { upsertUser } from "../../db/sqlite/users";
@@ -97,6 +97,10 @@ before(async () => {
   await post("cs-staff", "the launch date is secret");
   await post("cs-voice", "launch music in voice");
   await post("dm-cs-member-someone", "launch plans in a dm");
+  for (const [conversation_id, file_id] of [["cs-general", "f-general"], ["cs-staff", "f-staff"], ["cs-voice", "f-voice"]]) {
+    await insertFile({ file_id, s3_key: file_id, mime: "image/png", size: 1, width: 1, height: 1, thumbnail_key: null, original_name: "launch-poster.png" });
+    await insertMessage({ conversation_id, sender_server_id: "someone", text: "see https://gryt.chat", attachments: [file_id], reactions: null } as Parameters<typeof insertMessage>[0]);
+  }
 });
 
 after(() => rmSync(dir, { recursive: true, force: true }));
@@ -118,5 +122,12 @@ describe("chat:search", () => {
     const r = await search({ query: "   " });
     assert.deepEqual(r.items, []);
     assert.equal(r.error, undefined);
+  });
+
+  it("keeps file and filter-only searches inside the same channels", async () => {
+    const files = await search({ kind: "files", query: "poster" });
+    assert.deepEqual(files.items.map((i) => i.conversation_id), ["cs-general"]);
+    const links = await search({ query: "", has: "link" });
+    assert.deepEqual(links.items.map((i) => i.conversation_id), ["cs-general"]);
   });
 });

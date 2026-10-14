@@ -5,10 +5,12 @@ import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 
 import { getSqliteDb, initSqlite } from "./connection";
-import { deleteMessage, insertMessage, searchMessages, toFtsQuery, updateMessageText } from "./messages";
+import { deleteMessage, insertFile, insertMessage, searchMessages as searchAll, toFtsQuery, updateMessageText } from "./messages";
 import { createThread } from "./threads";
 
 /** GRYT-1738: full-text search over channel messages, only where the caller says. */
+const searchMessages = async (p: Parameters<typeof searchAll>[0]) => (await searchAll(p)).items;
+
 describe("message search", () => {
   const dir = mkdtempSync(join(tmpdir(), "gryt-search-"));
   const base = Date.UTC(2026, 9, 1, 12, 0, 0);
@@ -87,5 +89,42 @@ describe("message search", () => {
     for (const q of ['"', "a AND", "NOT", "text:deep", "(", "deep*"]) {
       await searchMessages({ query: q, conversationIds: ["general"], limit: 10 });
     }
+  });
+
+  it("searches with filters alone, but only within them", async () => {
+    await add("random", "no words needed", "u9");
+    assert.deepEqual(ids(await searchMessages({ query: "", conversationIds: ["general", "random"], senderServerId: "u9", limit: 10 })), [`m${n}`]);
+    const after = await searchMessages({ query: "deep", conversationIds: ["general", "random"], after: new Date(base + 1500), limit: 10 });
+    assert.deepEqual(ids(after), ["m2"]);
+  });
+
+  it("narrows to messages with a link, a file or an image", async () => {
+    const link = await add("general", "patch notes at https://example.com/notes");
+    const pic = await insertFile({ file_id: "f-pic", s3_key: "k1", mime: "image/png", size: 10, width: 1, height: 1, thumbnail_key: null, original_name: "Haz5 Loadout.png" });
+    const doc = await insertFile({ file_id: "f-doc", s3_key: "k2", mime: "text/plain", size: 20, width: null, height: null, thumbnail_key: null, original_name: "route_notes 100%.txt" });
+    const withPic = await add("general", "patch notes picture", "u1", { attachments: [pic.file_id] });
+    const withDoc = await add("general", "patch notes file", "u1", { attachments: [doc.file_id] });
+    const q = { query: "patch notes", conversationIds: ["general"], limit: 10 };
+    assert.deepEqual(ids(await searchMessages({ ...q, has: "link" })), [link.message_id]);
+    assert.deepEqual(ids(await searchMessages({ ...q, has: "image" })), [withPic.message_id]);
+    assert.deepEqual(ids(await searchMessages({ ...q, has: "file" })), [withDoc.message_id, withPic.message_id]);
+  });
+
+  it("finds files by name, every word, with % and _ taken literally", async () => {
+    const files = (query: string) => searchMessages({ kind: "files", query, conversationIds: ["general"], limit: 10 });
+    assert.deepEqual((await files("haz5 LOAD")).map((h) => h.file?.name), ["Haz5 Loadout.png"]);
+    assert.deepEqual((await files("100%")).map((h) => h.file?.file_id), ["f-doc"]);
+    assert.deepEqual(await files("route_x"), []);
+    assert.deepEqual(await files("100_"), []);
+    assert.deepEqual((await searchMessages({ kind: "files", query: "loadout", conversationIds: ["random"], limit: 10 })), []);
+  });
+
+  it("counts every match, not just the page", async () => {
+    const r = await searchAll({ query: "filler", conversationIds: ["general"], limit: 10 });
+    assert.equal(r.items.length, 0);
+    for (let i = 0; i < 3; i++) await add("general", `filler ${i}`);
+    const page = await searchAll({ query: "filler", conversationIds: ["general"], limit: 2 });
+    assert.equal(page.items.length, 2);
+    assert.equal(page.total, 3);
   });
 });

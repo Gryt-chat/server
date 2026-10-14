@@ -988,7 +988,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
 
     /* Channels only, and only ones the asker may read: DMs are sealed, and voice-channel
        text is readable only while connected, so neither is offered (GRYT-1738). */
-    'chat:search': async (payload: { query?: string; conversationId?: string; senderServerId?: string; before?: string; limit?: number; requestId?: string }) => {
+    'chat:search': async (payload: { query?: string; kind?: string; conversationId?: string; senderServerId?: string; before?: string; after?: string; has?: string; limit?: number; requestId?: string }) => {
       try {
         const ip = getClientIp();
         const info = clientsInfo[clientId];
@@ -1012,24 +1012,29 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         if (typeof payload.conversationId === "string") {
           conversationIds = conversationIds.includes(payload.conversationId) ? [payload.conversationId] : [];
         }
-        const before = typeof payload.before === "string" && !Number.isNaN(new Date(payload.before).getTime())
-          ? new Date(payload.before)
-          : undefined;
+        const dateOf = (v: unknown) => (typeof v === "string" && !Number.isNaN(new Date(v).getTime()) ? new Date(v) : undefined);
+        const before = dateOf(payload.before);
+        const after = dateOf(payload.after);
+        const kind = payload.kind === "files" ? "files" : "messages";
+        const has = payload.has === "image" || payload.has === "link" || payload.has === "file" ? payload.has : undefined;
+        const senderServerId = typeof payload.senderServerId === "string" ? payload.senderServerId : undefined;
         const limit = typeof payload.limit === "number" ? payload.limit : 25;
+        // Something to narrow by, or a blank box would list every message on the server.
+        const narrowed = query.trim() || senderServerId || has || after || before || typeof payload.conversationId === "string";
+        if (!narrowed) {
+          socket.emit("chat:search:results", { requestId, query, kind, items: [], total: 0, hasMore: false });
+          return;
+        }
 
-        const hits = await searchMessages({
-          query,
-          conversationIds,
-          senderServerId: typeof payload.senderServerId === "string" ? payload.senderServerId : undefined,
-          before,
-          limit,
-        });
+        const { items: hits, total } = await searchMessages({ kind, query, conversationIds, senderServerId, before, after, has, limit });
         const hidden = await blockedServerIdsFor(userId);
         const items = hidden.size === 0 ? hits : hits.filter((h) => !hidden.has(h.sender_server_id));
         socket.emit("chat:search:results", {
           requestId,
           query,
+          kind,
           items: items.map((h) => ({ ...h, created_at: h.created_at.toISOString() })),
+          total,
           hasMore: hits.length >= Math.min(Math.max(Math.floor(limit), 1), 50),
         });
       } catch (err) {
