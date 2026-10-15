@@ -22,6 +22,7 @@ import {
   isMlsDevice,
   isRemovedMlsDevice,
   listConversationsForUser,
+  lastResortMlsKeyPackages,
   listMlsDevices,
   listMlsGroupsForMember,
   listMlsLog,
@@ -378,7 +379,9 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
         if (!auth) return;
         const self = auth.tokenPayload.serverUserId;
         if (payload.conversationId === undefined) {
-          ack({ ok: true, devices: listMlsDevices([self]) });
+          // Each with its last-resort KeyPackage, so your other devices can read its signed name.
+          const named = lastResortMlsKeyPackages(self);
+          ack({ ok: true, devices: listMlsDevices([self]).map((d) => ({ ...d, lastResortKeyPackage: named.get(d.deviceId) ?? null })) });
           return;
         }
         const memberIds = await dmOf(payload.conversationId, self, ack);
