@@ -73,6 +73,43 @@ export async function postSystemMessage(
   }
 }
 
+/**
+ * A line in a group, sent by "system": who added whom (GRYT-1753). It goes to everybody
+ * in the group, the one just added included, as stored history rather than a toast.
+ */
+export async function postConversationSystemMessage(
+  io: Server,
+  clientsInfo: Clients,
+  conversationId: string,
+  memberIds: string[],
+  text: string,
+): Promise<void> {
+  try {
+    const msg = await insertMessage({
+      conversation_id: conversationId,
+      sender_server_id: SYSTEM_SENDER_ID,
+      text,
+      attachments: null,
+      reactions: null,
+    });
+    const enriched = { ...msg, sender_nickname: "System", sender_avatar_file_id: undefined };
+    const recipients = await recipientClientIds(conversationId, { allowed: true, kind: "dm", memberIds, group: true }, clientsInfo, null);
+    for (const cid of recipients) {
+      io.sockets.sockets.get(cid)?.emit("chat:new", enriched);
+    }
+  } catch (e) {
+    consola.error("[systemMessage] Failed to post a conversation system message:", e);
+  }
+}
+
+/** Who added whom to a group. Mentions, so each client draws the names it knows them by. */
+export function formatAddedMessage(
+  by: { nickname: string; serverUserId: string },
+  added: { nickname: string; serverUserId: string },
+): string {
+  return `[@${by.nickname}](mention:${by.serverUserId}) added [@${added.nickname}](mention:${added.serverUserId})`;
+}
+
 export function formatJoinMessage(nickname: string, serverUserId: string): string {
   return `[@${nickname}](mention:${serverUserId}) joined the server`;
 }

@@ -25,6 +25,7 @@ import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
 import { requireAuth, requirePermission } from "../middleware/auth";
 import { fileReadVerdict } from "../../services/fileAccess";
 import { CONTACT_REFUSALS, mayMessage } from "../utils/contactGate";
+import { formatAddedMessage, postConversationSystemMessage } from "../utils/systemMessages";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
 /** Opening and listing only. Once a DM exists it goes through the same `chat:*`
@@ -350,13 +351,17 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
           return;
         }
 
-        await addConversationMember(payload.conversationId, payload.targetServerUserId);
-        await broadcastConversation(
-          io,
-          clientsInfo,
-          payload.conversationId,
-          await listConversationMemberIds(payload.conversationId),
-        );
+        const added = await addConversationMember(payload.conversationId, payload.targetServerUserId);
+        const memberIds = await listConversationMemberIds(payload.conversationId);
+        await broadcastConversation(io, clientsInfo, payload.conversationId, memberIds);
+        // Everybody in it sees who added whom, the new member too (GRYT-1753). Not for a repeat add.
+        if (added) {
+          const by = await getUserByServerId(self);
+          await postConversationSystemMessage(io, clientsInfo, payload.conversationId, memberIds, formatAddedMessage(
+            { nickname: by?.nickname ?? "Somebody", serverUserId: self },
+            { nickname: target.nickname, serverUserId: payload.targetServerUserId },
+          ));
+        }
       } catch (err) {
         consola.error("dm:group:add failed", err);
         socket.emit("dm:error", { error: "failed", message: err instanceof Error && err.message.includes("at most") ? `A group can hold ${MAX_CONVERSATION_MEMBERS} people` : "Could not add them" });
