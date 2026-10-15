@@ -235,6 +235,21 @@ export function addMlsKeyPackages(
   });
 }
 
+/** Each device's current last-resort KeyPackage. Its credential is the device certificate,
+    which is how your other devices learn its name without sharing a group (GRYT-1764). */
+export function lastResortMlsKeyPackages(serverUserId: string): Map<string, Uint8Array> {
+  const rows = getSqliteDb()
+    .prepare(
+      `SELECT device_id, data FROM mls_key_packages
+        WHERE server_user_id = ? AND last_resort = 1 AND data IS NOT NULL
+        ORDER BY created_at DESC`,
+    )
+    .all(serverUserId) as { device_id: string; data: Uint8Array }[];
+  const out = new Map<string, Uint8Array>();
+  for (const r of rows) if (!out.has(r.device_id)) out.set(r.device_id, r.data);
+  return out;
+}
+
 /** Only what can still be handed out, so a device tops up before its packages run out. */
 export function countMlsKeyPackages(
   serverUserId: string,

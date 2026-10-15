@@ -486,6 +486,22 @@ describe("KeyPackages", () => {
     assert.equal(refs[2][0], refs[3][0]);
   });
 
+  it("come with your own device list, the last-resort one per device (GRYT-1764)", async () => {
+    const gina = await connect("Gina");
+    const laptop = await makeDevice("gina-laptop", 2);
+    const tablet = await makeDevice("gina-tablet", 1);
+    await publish(gina, laptop, true);
+    await publish(gina, tablet);
+    const r = await gina.call("mls:devices", {});
+    assert.equal(r.ok, true);
+    const byId = new Map((r.devices as { deviceId: string; lastResortKeyPackage: Buffer | null }[]).map((d) => [d.deviceId, d]));
+    const sent = byId.get(deviceIdFor("gina-laptop"))?.lastResortKeyPackage;
+    assert.ok(sent, "the laptop published a last-resort package");
+    const parsed = await parseKeyPackage(sent);
+    assert.ok(parsed.ok && parsed.deviceId === deviceIdFor("gina-laptop"));
+    assert.equal(byId.get(deviceIdFor("gina-tablet"))?.lastResortKeyPackage, null, "no last-resort package, nothing sent");
+  });
+
   it("are not handed to somebody outside the conversation", async () => {
     await publish(mallory, await makeDevice("mallory-1", 1));
     const r = await mallory.call("mls:keypackages:claim", { conversationId: dm, deviceId: deviceIdFor("mallory-1") });
