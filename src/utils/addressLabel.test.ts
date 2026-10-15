@@ -18,9 +18,9 @@ describe("labelling an address", () => {
   });
 
   it("does not contain the address", () => {
+    // Hex digits can spell "113" by chance, so check the dotted form only.
     const label = addressLabel("203.0.113.7");
-    assert.ok(!label.includes("203"));
-    assert.ok(!label.includes("113"));
+    assert.ok(!label.includes("203.0.113"));
     assert.match(label, /^ip_[0-9a-f]{8}$/);
   });
 
