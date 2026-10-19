@@ -239,6 +239,30 @@ describe("contact:prefs", () => {
   });
 });
 
+describe("contact:reachable", () => {
+  async function reachable(who: Member, ids: string[]): Promise<string[] | undefined> {
+    who.clear();
+    await who.handlers["contact:reachable"]({ accessToken: who.accessToken, ids });
+    return (who.received("contact:reachable")[0]?.payload as { ids: string[] } | undefined)?.ids;
+  }
+
+  it("leaves out whoever would refuse a new DM, and the asker", async () => {
+    await choose(carol, "nobody", "nobody");
+    assert.deepEqual(await reachable(alice, [alice.serverUserId, bob.serverUserId, carol.serverUserId]), [bob.serverUserId]);
+  });
+
+  it("keeps somebody you already have a conversation with", async () => {
+    await choose(bob, "nobody", "nobody");
+    await openDirectConversation(alice.serverUserId, bob.serverUserId);
+    assert.deepEqual(await reachable(alice, [bob.serverUserId]), [bob.serverUserId]);
+  });
+
+  it("refuses a list that isn't strings", async () => {
+    assert.equal(await reachable(alice, [1 as unknown as string]), undefined);
+    assert.equal(lastError(alice, "server:error")?.error, "invalid_payload");
+  });
+});
+
 describe("dm:open", () => {
   it("won't start a conversation with somebody who takes messages from nobody", async () => {
     await choose(carol, "nobody", "nobody");
