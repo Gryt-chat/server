@@ -1,0 +1,7 @@
+# Plugin samples operators copy. Plugins load through the host's Node, the desktop app's included,
+# and whether that strips types needs checking first.
+examples/crosspost-guard/index.mjs
+examples/presence/index.mjs
+
+# Still to move to TypeScript (GRYT-1800).
+examples/examples.test.mjs
