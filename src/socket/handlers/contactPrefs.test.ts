@@ -212,9 +212,11 @@ after(() => {
 });
 
 describe("contact:prefs", () => {
-  it("reads the defaults when nothing is stored: messages from anyone, calls from friends", async () => {
+  it("reads the defaults when nothing is stored: messages and calls from friends", async () => {
+    await choose(alice, "friends", "friends");
+    alice.clear();
     await alice.handlers["contact:prefs:get"]({ accessToken: alice.accessToken });
-    assert.deepEqual(alice.received("contact:prefs")[0]?.payload, { messages: "everyone", calls: "friends" });
+    assert.deepEqual(alice.received("contact:prefs")[0]?.payload, { messages: "friends", calls: "friends" });
   });
 
   it("keeps a choice, and deletes the row once it is back at the defaults", async () => {
@@ -227,7 +229,7 @@ describe("contact:prefs", () => {
     await alice.handlers["contact:prefs:get"]({ accessToken: alice.accessToken });
     assert.deepEqual(alice.received("contact:prefs")[0]?.payload, { messages: "nobody", calls: "nobody" });
 
-    await choose(alice, "everyone", "friends");
+    await choose(alice, "friends", "friends");
     assert.equal(rows(), 0);
   });
 

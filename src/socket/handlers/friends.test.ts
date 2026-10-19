@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { after, before, beforeEach, describe, it } from "node:test";
 
 import { initSqlite, getSqliteDb } from "../../db/sqlite/connection";
+import { setContactPrefs } from "../../db/sqlite/contactPrefs";
 import { directConversationId, openDirectConversation } from "../../db/sqlite/conversations";
 import { areFriends } from "../../db/sqlite/friends";
 import { createServerConfigIfNotExists, setServerRole } from "../../db/sqlite/servers";
@@ -65,6 +66,8 @@ async function connect(nickname: string, grytUserId = `account-friends-${seq + 1
   seq += 1;
   const clientId = `friends-${seq}`;
   const user = await upsertUser(grytUserId, nickname);
+  // Strangers write to each other here, which the friends-only default (GRYT-1814) refuses.
+  await setContactPrefs(grytUserId, { messages: "everyone", calls: "friends" });
   await setServerRole(user.server_user_id, "member");
 
   const emitted: { event: string; payload: unknown }[] = [];

@@ -11,6 +11,7 @@ import {
   HIDDEN_CONVERSATIONS_KEY,
   initSqlite,
 } from "../../db/sqlite/connection";
+import { setContactPrefs } from "../../db/sqlite/contactPrefs";
 import { BUILT_IN_ROLES } from "../../constants/permissions";
 import { insertFile } from "../../db/sqlite/messages";
 import { createRoleDefinition } from "../../db/sqlite/roleDefinitions";
@@ -83,6 +84,8 @@ async function connectMember(
   const clientId = `socket-${seq}`;
   const grytUserId = grytUserIdOverride ?? `account-dm-${seq}`;
   const user = await upsertUser(grytUserId, nickname);
+  // Strangers write to each other here, which the friends-only default (GRYT-1814) refuses.
+  await setContactPrefs(grytUserId, { messages: "everyone", calls: "friends" });
   await setServerRole(user.server_user_id, roleId);
 
   const emitted: Emitted[] = [];
