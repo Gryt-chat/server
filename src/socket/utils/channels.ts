@@ -1,4 +1,4 @@
-import { Channel } from "../../types/channel";
+import type { Channel } from "../../types/channel";
 
 export function getChannels(): { [id: string]: Channel } {
   // get channels from database

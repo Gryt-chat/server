@@ -1,6 +1,6 @@
 import consola from "consola";
-import { Server, Socket } from "socket.io";
-import { Clients } from "../../types";
+import type { Server, Socket } from "socket.io";
+import type { Clients } from "../../types";
 import { publicClientList } from "./clients";
 import type { ChannelNotificationLevel, JoinPolicy, RoleDefinitionRecord } from "../../db/interfaces";
 import { type ChannelPermission, FALLBACK_ROLE_ID, PERMISSIONS } from "../../constants/permissions";

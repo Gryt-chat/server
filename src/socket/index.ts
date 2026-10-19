@@ -3,10 +3,10 @@ import consola from "consola";
 
 import { addressLabel } from "../utils/addressLabel";
 import { classifyClientKind } from "./utils/clientKind";
-import { Server, Socket } from "socket.io";
-import { Clients } from "../types";
+import type { Server, Socket } from "socket.io";
+import type { Clients } from "../types";
 import { colors } from "../utils/colors";
-import { SFUClient } from "../sfu/client";
+import type { SFUClient } from "../sfu/client";
 import type { SFUPeerEvent, SFUSyncRoom } from "../sfu/client";
 import { verifyAccessToken } from "../utils/jwt";
 import { generateFileUrlKey } from "../utils/fileUrl";
