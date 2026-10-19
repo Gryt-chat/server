@@ -43,7 +43,7 @@ export const isQuarantined = (key: string | null | undefined): boolean => !!key 
 export async function waitOutOfQuarantine<T extends { s3_key: string }>(
   fileId: string,
   first: T,
-  read: (id: string) => Promise<T | null> = getFile as unknown as (id: string) => Promise<T | null>,
+  read: (id: string) => Promise<T | null>,
   waitMs = 15_000,
   stepMs = 250,
   jobStatus: (id: string) => Promise<string | null> = getImageJobStatusForFile,
