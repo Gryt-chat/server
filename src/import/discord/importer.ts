@@ -43,12 +43,12 @@ import {
 import { indexExportFolder, readExportHead, resolveExportAsset, type ExportFolder } from "./exportFolder";
 import { discordSenderId, folderItemId, importedId } from "./ids";
 
-/** `JSON.parse` holds the whole file as one string. DCE's `--partition` keeps files under this. */
 function channelKind(type: string | undefined): "text" | "voice" | "forum" {
   if (VOICE_TYPES.has(type ?? "")) return "voice";
   return type === "GuildForum" ? "forum" : "text";
 }
 
+/** `JSON.parse` holds the whole file as one string. DCE's `--partition` keeps files under this. */
 export const MAX_CHANNEL_FILE_BYTES = 256 * 1024 * 1024;
 const BATCH_SIZE = 250;
 

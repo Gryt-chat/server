@@ -5,16 +5,6 @@ import { v4 as uuidv4 } from "uuid";
 import { AVATAR_MAX_PX, AVATAR_THUMB_PX } from "../constants/media";
 
 /** The box a picture is cut to, and its thumbnail's. Avatars are square. */
-/** What an uploader is told when storage refuses the file. */
-export function storageErrorMessage(raw: string, what: string): string {
-  if (/InvalidBucketName|NoSuchBucket|bucket/i.test(raw)) {
-    return "File storage is misconfigured on this server. Please contact the server administrator.";
-  }
-  if (/AccessDenied|Forbidden/i.test(raw)) return "File storage access denied. Please contact the server administrator.";
-  if (raw.trim().length > 0) return `${what} upload failed: ${raw}`;
-  return `${what} upload failed due to a storage error.`;
-}
-
 export interface PictureBox { width: number; height: number; thumbWidth: number; thumbHeight: number }
 const AVATAR_BOX: PictureBox = { width: AVATAR_MAX_PX, height: AVATAR_MAX_PX, thumbWidth: AVATAR_THUMB_PX, thumbHeight: AVATAR_THUMB_PX };
 import { insertFile, updateFileRecord } from "../db";
@@ -210,4 +200,14 @@ export async function storeAvatarPicture(input: {
   }
 
   return { ok: true, fileId, processing };
+}
+
+/** What an uploader is told when storage refuses the file. */
+export function storageErrorMessage(raw: string, what: string): string {
+  if (/InvalidBucketName|NoSuchBucket|bucket/i.test(raw)) {
+    return "File storage is misconfigured on this server. Please contact the server administrator.";
+  }
+  if (/AccessDenied|Forbidden/i.test(raw)) return "File storage access denied. Please contact the server administrator.";
+  if (raw.trim().length > 0) return `${what} upload failed: ${raw}`;
+  return `${what} upload failed due to a storage error.`;
 }
