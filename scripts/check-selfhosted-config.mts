@@ -6,8 +6,8 @@ import { readFileSync } from "node:fs";
 const file = process.argv[2] ?? "dist-selfhosted/config.env";
 
 // Last assignment wins, and a quoted value keeps its #, as in node --env-file and godotenv.
-function parse(text) {
-  const values = new Map();
+function parse(text: string) {
+  const values = new Map<string, string>();
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();
     if (!line || line.startsWith("#")) continue;
@@ -39,9 +39,9 @@ for (const [name, want, otherwise] of expected) {
 
 // Registration only listens on loopback now, so a server dialling any other host can't reach it.
 const wsHost = values.get("SFU_WS_HOST");
-let dials;
+let dials: string | undefined;
 try {
-  dials = new URL(wsHost).hostname;
+  dials = new URL(wsHost ?? "").hostname;
 } catch {
   dials = undefined;
 }
