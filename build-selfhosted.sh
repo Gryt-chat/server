@@ -83,7 +83,7 @@ fi
 
 # Copy launcher and config
 cp dist-selfhosted/config.env "$OUTDIR/"
-node scripts/check-selfhosted-config.mjs "$OUTDIR/config.env"
+node scripts/check-selfhosted-config.mts "$OUTDIR/config.env"
 cp dist-selfhosted/start.bat "$OUTDIR/"
 
 # Create server launcher scripts
