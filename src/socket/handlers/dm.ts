@@ -21,7 +21,7 @@ import {
   eitherHasBlocked,
 } from "../../db";
 import { isBotIdentity } from "../../auth/identity";
-import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
+import { checkRateLimit, type RateLimitRule } from "../../utils/rateLimiter";
 import { requireAuth, requirePermission } from "../middleware/auth";
 import { fileReadVerdict } from "../../services/fileAccess";
 import { CONTACT_REFUSALS, mayMessage } from "../utils/contactGate";

@@ -23,7 +23,7 @@ import {
   getConversation,
   isConversationMember,
 } from "../../db";
-import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
+import { checkRateLimit, type RateLimitRule } from "../../utils/rateLimiter";
 
 const RL_REPORT: RateLimitRule = { limit: 10, windowMs: 60_000, scorePerAction: 2, maxScore: 10, scoreDecayMs: 5_000 };
 const RL_REPORT_ADMIN: RateLimitRule = { limit: 30, windowMs: 60_000, scorePerAction: 1, maxScore: 15, scoreDecayMs: 3_000 };

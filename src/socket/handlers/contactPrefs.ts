@@ -1,7 +1,7 @@
 import consola from "consola";
 
 import { getContactPrefs, isContactRule, setContactPrefs } from "../../db";
-import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
+import { checkRateLimit, type RateLimitRule } from "../../utils/rateLimiter";
 import { requireAuth } from "../middleware/auth";
 import type { EventHandlerMap, HandlerContext } from "./types";
 

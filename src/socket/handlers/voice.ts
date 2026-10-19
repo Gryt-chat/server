@@ -3,7 +3,7 @@ import consola from "consola";
 import type { HandlerContext, EventHandlerMap } from "./types";
 import { requireAuth, requireOutranks } from "../middleware/auth";
 import { syncAllClients, broadcastMemberList } from "../utils/clients";
-import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
+import { checkRateLimit, type RateLimitRule } from "../../utils/rateLimiter";
 import { getVoiceSeatLimit } from "../../utils/voiceSeats";
 import { insertServerAudit } from "../../db";
 import { socketIsIdentified, socketMay as socketMayFor } from "../utils/standing";

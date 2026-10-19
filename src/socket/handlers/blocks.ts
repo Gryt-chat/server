@@ -9,7 +9,7 @@ import {
   forgetFriendship,
 } from "../../db";
 import { pushFriendList } from "./friends";
-import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
+import { checkRateLimit, type RateLimitRule } from "../../utils/rateLimiter";
 import { endOneToOneCall, syncHiddenPeers } from "../utils/blockedInVoice";
 
 /**

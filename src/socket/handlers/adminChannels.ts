@@ -31,7 +31,7 @@ import {
   resolveChannelScopes,
 } from "../../db";
 import { CHANNEL_PERMISSIONS } from "../../constants/permissions";
-import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
+import { checkRateLimit, type RateLimitRule } from "../../utils/rateLimiter";
 import {
   keepsEmptyFolders,
   mayViewChannel,

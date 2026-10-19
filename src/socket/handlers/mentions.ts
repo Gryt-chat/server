@@ -1,6 +1,6 @@
 import type { HandlerContext, EventHandlerMap } from "./types";
 import { listUnseenMentions, markMentionsSeen } from "../../db";
-import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
+import { checkRateLimit, type RateLimitRule } from "../../utils/rateLimiter";
 import { resolveConversationAccess } from "../utils/conversationAccess";
 
 const RL_LIST: RateLimitRule = { limit: 20, windowMs: 30_000, scorePerAction: 0.5, maxScore: 8, scoreDecayMs: 2000 };

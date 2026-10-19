@@ -346,26 +346,6 @@ export default tseslint.config(
     ],
     rules: { 'no-nested-ternary': 'off' },
   },
-  // Type-only imports not marked yet; a mechanical PR of its own fixes them.
-  {
-    files: [
-      'src/socket/handlers/admin.ts',
-      'src/socket/handlers/adminChannels.ts',
-      'src/socket/handlers/blocks.ts',
-      'src/socket/handlers/calls.ts',
-      'src/socket/handlers/chat.ts',
-      'src/socket/handlers/contactPrefs.ts',
-      'src/socket/handlers/dm.ts',
-      'src/socket/handlers/dmKeys.ts',
-      'src/socket/handlers/join.ts',
-      'src/socket/handlers/members.ts',
-      'src/socket/handlers/mentions.ts',
-      'src/socket/handlers/push.ts',
-      'src/socket/handlers/reports.ts',
-      'src/socket/handlers/voice.ts',
-    ],
-    rules: { '@typescript-eslint/consistent-type-imports': 'off' },
-  },
   // Reassigned parameters from before the rule.
   {
     files: [
