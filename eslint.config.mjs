@@ -194,10 +194,9 @@ export default tseslint.config(
     ],
     rules: { '@typescript-eslint/no-restricted-types': 'off' },
   },
-  // unknown: not typed yet.
+  // unknown: type guards and normalisers that check a value from outside before using it.
   {
     files: [
-      'src/config/cors.ts',
       'src/constants/permissions.ts',
       'src/import/discord/dce.ts',
       'src/moderation/spamFilter.ts',
@@ -205,7 +204,6 @@ export default tseslint.config(
       'src/polls/poll.ts',
       'src/routes/uploadStorage.ts',
       'src/services/mlsWire.ts',
-      'src/services/quarantineUpload.ts',
       'src/utils/activityText.ts',
       'src/utils/linkResolvers.ts',
       'src/utils/profanityFilter.ts',
@@ -213,6 +211,11 @@ export default tseslint.config(
       'src/utils/richActivity.ts',
       'src/utils/wornString.ts',
     ],
+    rules: { '@typescript-eslint/no-restricted-types': 'off' },
+  },
+  // unknown: only inside the cast below.
+  {
+    files: ['src/services/quarantineUpload.ts'],
     rules: { '@typescript-eslint/no-restricted-types': 'off' },
   },
   // Casts through unknown where the types don't line up yet.
