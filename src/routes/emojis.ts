@@ -31,6 +31,10 @@ import { registerStagingRoutes } from "./emojiStaging";
 import { registerBttvRoutes } from "./emojiBttvImport";
 import { registerEmojiGgRoutes } from "./emojiEmojiGgImport";
 
+const EMOJI_CONTENT_TYPES: Record<string, string> = {
+  avif: "image/avif", gif: "image/gif", svg: "image/svg+xml", webp: "image/webp", jpg: "image/jpeg", jpeg: "image/jpeg",
+};
+
 export const emojisRouter = express.Router();
 
 registerStagingRoutes(emojisRouter);
@@ -230,12 +234,7 @@ emojisRouter.get(
 
         res.setHeader("Cache-Control", "public, max-age=604800, immutable");
         const key = emoji.s3_key.toLowerCase();
-        const imgContentType = key.endsWith(".avif") ? "image/avif"
-          : key.endsWith(".gif") ? "image/gif"
-          : key.endsWith(".svg") ? "image/svg+xml"
-          : key.endsWith(".webp") ? "image/webp"
-          : key.endsWith(".jpg") || key.endsWith(".jpeg") ? "image/jpeg"
-          : "image/png";
+        const imgContentType = EMOJI_CONTENT_TYPES[key.slice(key.lastIndexOf(".") + 1)] ?? "image/png";
         res.setHeader("Content-Type", imgContentType);
 
         // Emoji stored before validateImage refused SVG still come back as
