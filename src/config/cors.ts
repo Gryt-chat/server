@@ -19,7 +19,7 @@ export function readAllowedOrigins(
     .concat(isProduction ? [] : DEV_CORS_ORIGINS);
 }
 
-type HeaderSink = { setHeader(name: string, value: string): unknown };
+type HeaderSink = { setHeader(name: string, value: string): void };
 
 /** An <img> or <video> sends no Origin, so without this the browser caches an
     upload with no CORS headers and serves that entry to a later fetch. */
