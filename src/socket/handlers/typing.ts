@@ -1,7 +1,7 @@
 import type { HandlerContext, EventHandlerMap } from "./types";
 import { getUserByServerId } from "../../db";
 import { effectiveModerationState } from "../../db/sqlite/users";
-import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
+import { checkRateLimit, type RateLimitRule } from "../../utils/rateLimiter";
 import { mayViewChannel } from "../../services/channelPermissions";
 import { resolveConversationAccess } from "../utils/conversationAccess";
 import { blockersOfSender } from "../../db";

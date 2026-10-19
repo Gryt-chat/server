@@ -1,4 +1,4 @@
-import { Server } from "socket.io";
+import type { Server } from "socket.io";
 
 import { sendClientNotice } from "./clientNotices";
 import type { Clients } from "../../types";

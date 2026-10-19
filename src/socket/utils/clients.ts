@@ -1,5 +1,5 @@
-import { Server, Socket } from "socket.io";
-import { Clients } from "../../types";
+import type { Server, Socket } from "socket.io";
+import type { Clients } from "../../types";
 import {
   getAllRegisteredUsers,
   getFilesByIds,

@@ -1,5 +1,5 @@
-import { Socket } from "socket.io";
-import { verifyAccessToken, TokenPayload } from "../../utils/jwt";
+import type { Socket } from "socket.io";
+import { verifyAccessToken, type TokenPayload } from "../../utils/jwt";
 import { getServerConfig } from "../../db";
 import type { Permission } from "../../constants/permissions";
 import { checkSessionAllowed } from "../../moderation/sessionGate";

@@ -1,5 +1,5 @@
 import consola from "consola";
-import { Server } from "socket.io";
+import type { Server } from "socket.io";
 
 import { getServerConfig, insertMessage, listServerChannels } from "../../db";
 import type { Clients } from "../../types";
