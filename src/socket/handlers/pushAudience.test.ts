@@ -12,6 +12,7 @@ import { blockUser } from "../../db/sqlite/blocks";
 import { upsertServerChannel, upsertServerSidebarItem } from "../../db/sqlite/channels";
 import { createPermissionScope, replacePermissionRules, setChannelPermissionScope } from "../../db/sqlite/channelScopes";
 import { getSqliteDb, initSqlite } from "../../db/sqlite/connection";
+import { setContactPrefs } from "../../db/sqlite/contactPrefs";
 import { listPushDevices } from "../../db/sqlite/pushDevices";
 import { createRoleDefinition } from "../../db/sqlite/roleDefinitions";
 import { createServerConfigIfNotExists, setServerRole } from "../../db/sqlite/servers";
@@ -77,6 +78,8 @@ async function member(name: string, roleId: string): Promise<Member> {
   const clientId = `push-socket-${seq}`;
   const grytUserId = `push-account-${name}`;
   const user = await upsertUser(grytUserId, name);
+  // Strangers write to each other here, which the friends-only default (GRYT-1814) refuses.
+  await setContactPrefs(grytUserId, { messages: "everyone", calls: "friends" });
   await setServerRole(user.server_user_id, roleId);
   const emitted: Member["emitted"] = [];
   const emit = (event: string, payload?: unknown) => (emitted.push({ event, payload }), true);

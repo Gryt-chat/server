@@ -83,6 +83,8 @@ async function connect(nickname: string): Promise<Participant> {
   const clientId = `mls-socket-${seq}`;
   const grytUserId = `account-mls-${seq}`;
   const user = await upsertUser(grytUserId, nickname);
+  // Strangers write to each other here, which the friends-only default (GRYT-1814) refuses.
+  await setContactPrefs(grytUserId, { messages: "everyone", calls: "friends" });
   await setServerRole(user.server_user_id, "member");
 
   const emitted: { event: string; payload: unknown }[] = [];

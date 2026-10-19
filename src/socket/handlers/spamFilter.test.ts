@@ -6,6 +6,7 @@ import { after, before, beforeEach, describe, it } from "node:test";
 
 import { ensureDefaultChannels } from "../../db/sqlite/channels";
 import { getSqliteDb, initSqlite } from "../../db/sqlite/connection";
+import { setContactPrefs } from "../../db/sqlite/contactPrefs";
 import { openDirectConversation } from "../../db/sqlite/conversations";
 import { listServerAudit } from "../../db/sqlite/invites";
 import { createRoleDefinition } from "../../db/sqlite/roleDefinitions";
@@ -54,6 +55,8 @@ async function connect(roleId: string, opts: { joinedMinutesAgo?: number } = {})
   const grytUserId = `account-spam-${seq}`;
   const nickname = `Spam${seq}`;
   const user = await upsertUser(grytUserId, nickname);
+  // Strangers write to each other here, which the friends-only default (GRYT-1814) refuses.
+  await setContactPrefs(grytUserId, { messages: "everyone", calls: "friends" });
   await setServerRole(user.server_user_id, roleId);
   const joined = new Date(Date.now() - (opts.joinedMinutesAgo ?? 60 * 24 * 30) * 60_000);
   getSqliteDb().prepare(`UPDATE users SET created_at = ? WHERE server_user_id = ?`).run(joined.toISOString(), user.server_user_id);

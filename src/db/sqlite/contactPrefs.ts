@@ -14,8 +14,8 @@ export interface ContactPrefs {
   calls: ContactRule;
 }
 
-/** Sivert's defaults, 2026-09-24. No row reads as these. */
-export const DEFAULT_CONTACT_PREFS: ContactPrefs = { messages: "everyone", calls: "friends" };
+/** Sivert's defaults, messages tightened to friends 2026-10-19 (GRYT-1814). No row reads as these. */
+export const DEFAULT_CONTACT_PREFS: ContactPrefs = { messages: "friends", calls: "friends" };
 
 export function isContactRule(value: unknown): value is ContactRule {
   return value === "everyone" || value === "friends" || value === "nobody";
