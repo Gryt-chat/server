@@ -211,9 +211,9 @@ const storeAvatarImage = (purpose: "avatar" | "group" | "webhook" | "banner") =>
           res.status(415).json({ error: "video_disabled", message: "This server's owner has turned off video avatars and banners. Use a picture instead." });
           return;
         }
-        const maxBytes = isVideo
-          ? (typeof cfg?.upload_max_bytes === "number" ? cfg.upload_max_bytes : DEFAULT_UPLOAD_MAX_BYTES)
-          : (typeof cfg?.avatar_max_bytes === "number" ? cfg.avatar_max_bytes : DEFAULT_AVATAR_MAX_BYTES);
+        const configured = isVideo ? cfg?.upload_max_bytes : cfg?.avatar_max_bytes;
+        const fallback = isVideo ? DEFAULT_UPLOAD_MAX_BYTES : DEFAULT_AVATAR_MAX_BYTES;
+        const maxBytes = typeof configured === "number" ? configured : fallback;
 
         // No exemption for animated files: a file over the limit is refused
         // whatever is in it.

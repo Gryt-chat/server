@@ -1,6 +1,7 @@
 import consola from "consola";
 import { reencodeThroughWorker } from "../services/workerReencode";
 import { workerClearsQuarantine } from "../services/workerCapabilities";
+import { storageErrorMessage } from "../services/avatarImage";
 import express from "express";
 import type { Request, Response, NextFunction } from "express";
 import multer from "multer";
@@ -266,14 +267,7 @@ serverRouter.post(
       } catch (e) {
         const raw = e instanceof Error ? e.message : "";
         consola.error("icon upload s3 error", { bucket, key, message: raw });
-        const friendly = /InvalidBucketName|NoSuchBucket|bucket/i.test(raw)
-          ? "File storage is misconfigured on this server. Please contact the server administrator."
-          : /AccessDenied|Forbidden/i.test(raw)
-          ? "File storage access denied. Please contact the server administrator."
-          : raw.trim().length > 0
-          ? `Icon upload failed: ${raw}`
-          : "Icon upload failed due to a storage error.";
-        res.status(502).json({ error: "s3_error", message: friendly });
+        res.status(502).json({ error: "s3_error", message: storageErrorMessage(raw, "Icon") });
         return;
       }
 

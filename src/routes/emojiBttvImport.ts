@@ -216,9 +216,7 @@ export function registerBttvRoutes(router: Router): void {
               const arrayBuf = await cdnResp.arrayBuffer();
               const imgBuffer = Buffer.from(arrayBuf);
 
-              const sourceMime = emote.imageType === "gif" ? "image/gif"
-                : emote.imageType === "webp" ? "image/webp"
-                : "image/png";
+              const sourceMime = emote.imageType === "gif" || emote.imageType === "webp" ? `image/${emote.imageType}` : "image/png";
               const { processed, ext, contentType } = await processEmojiToOptimizedImage(imgBuffer, sourceMime);
 
               const fileId = uuidv4();

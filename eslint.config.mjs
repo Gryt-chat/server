@@ -313,11 +313,6 @@ export default tseslint.config(
   {
     files: [
       'src/import/discord/importer.ts',
-      'src/routes/emojiBttvImport.ts',
-      'src/routes/emojis.ts',
-      'src/routes/server.ts',
-      'src/routes/uploads.ts',
-      'src/services/avatarImage.ts',
       'src/services/webhookMedia.ts',
       'src/settings/serverSettings.ts',
       'src/socket/handlers/admin.ts',
