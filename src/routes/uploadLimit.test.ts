@@ -28,7 +28,7 @@ let temp: string;
 let server: Server;
 let base = "";
 let auth: Record<string, string> = {};
-const puts: { sourcePath?: string; body?: unknown }[] = [];
+const puts: { sourcePath?: string; buffered: boolean }[] = [];
 
 const files = () => (getSqliteDb().prepare("SELECT COUNT(*) AS n FROM files").get() as { n: number }).n;
 
@@ -36,7 +36,7 @@ async function send(bytes: number) {
   const form = new FormData();
   form.append("file", new Blob([new Uint8Array(bytes).fill(0x61)], { type: "text/plain" }), "notes.txt");
   const res = await fetch(`${base}/api/uploads`, { method: "POST", headers: auth, body: form });
-  return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+  return { status: res.status, body: (await res.json()) as { error?: string } };
 }
 
 before(async () => {
@@ -53,7 +53,7 @@ before(async () => {
 
   const put = storage.putObject;
   storage.putObject = (params) => {
-    puts.push({ sourcePath: params.sourcePath, body: params.body });
+    puts.push({ sourcePath: params.sourcePath, buffered: params.body !== undefined });
     return put(params);
   };
 
@@ -97,7 +97,7 @@ describe("the upload size limit", () => {
     assert.equal(res.status, 201, JSON.stringify(res.body));
     assert.equal(puts.length, 1);
     assert.equal(typeof puts[0].sourcePath, "string");
-    assert.equal(puts[0].body, undefined);
+    assert.equal(puts[0].buffered, false);
     assert.ok(puts[0].sourcePath!.startsWith(temp), puts[0].sourcePath);
     assert.deepEqual(readdirSync(temp), [], "the temp file is gone after success");
   });
