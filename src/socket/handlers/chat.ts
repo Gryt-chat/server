@@ -16,7 +16,7 @@ import {
   searchMessages,
   listServerChannels,
   getServerChannel,
-  MessageRecord,
+  type MessageRecord,
   getUserByServerId,
   getUsersByServerIds,
   verifyUserIdentity,
@@ -57,7 +57,7 @@ import {
 } from "../../db";
 import { isQuarantined } from "../../services/quarantineUpload";
 import { processProfanity, type CensorStyle, type ProfanityMode } from "../../utils/profanityFilter";
-import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
+import { checkRateLimit, type RateLimitRule } from "../../utils/rateLimiter";
 import { textMuteError, textMuteFor } from "../../moderation/textMute";
 import { MESSAGE_MAX_LENGTH, MESSAGE_TOO_LONG, SEALED_MAX_LENGTH } from "../../utils/messageLimits";
 import { applyAutoRoles } from "../../services/autoRoles";

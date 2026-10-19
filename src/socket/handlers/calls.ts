@@ -1,6 +1,6 @@
 import consola from "consola";
 
-import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
+import { checkRateLimit, type RateLimitRule } from "../../utils/rateLimiter";
 import { requireAuth, requirePermission } from "../middleware/auth";
 import {
   DENIAL_RESPONSES,

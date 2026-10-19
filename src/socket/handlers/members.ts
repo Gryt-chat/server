@@ -8,7 +8,7 @@ import { looksLikeABotName } from "../../auth/identity";
 import { readWornUpdate } from "../../utils/wornString";
 import { normaliseActivity } from "../../utils/activityText";
 import { normaliseRichActivity, sameRichActivity } from "../../utils/richActivity";
-import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
+import { checkRateLimit, type RateLimitRule } from "../../utils/rateLimiter";
 import { cardFields, readCardUpdate, setsCardText } from "../../utils/memberCard";
 
 /* Every accepted change fans out to the whole server, so it is bounded like the

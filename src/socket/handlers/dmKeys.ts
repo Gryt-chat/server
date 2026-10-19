@@ -1,6 +1,6 @@
 import type { HandlerContext, EventHandlerMap } from "./types";
 import { getUserByServerId, setUserDmKeyBinding } from "../../db";
-import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
+import { checkRateLimit, type RateLimitRule } from "../../utils/rateLimiter";
 import { broadcastMemberList } from "../utils/clients";
 
 /**

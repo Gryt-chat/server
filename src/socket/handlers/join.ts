@@ -14,7 +14,7 @@ import { broadcastServerUiUpdate } from "../utils/server";
 import { applyAutoRoles } from "../../services/autoRoles";
 import { pluginEvents } from "../../plugins";
 import { readServiceState, serviceStateVarName } from "../../config/serviceState";
-import { generateAccessToken, generateFileToken, TokenPayload } from "../../utils/jwt";
+import { generateAccessToken, generateFileToken, type TokenPayload } from "../../utils/jwt";
 import { generateFileUrlKey } from "../../utils/fileUrl";
 import {
   getServerConfig,
@@ -43,7 +43,7 @@ import {
 import type { BotRecord } from "../../db";
 import { isPrivateIp } from "../../utils/isPrivateIp";
 import { checkIdentityAllowed } from "../../moderation/sessionGate";
-import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
+import { checkRateLimit, type RateLimitRule } from "../../utils/rateLimiter";
 import { cardFields } from "../../utils/memberCard";
 import {
   registerJoinHelpers,

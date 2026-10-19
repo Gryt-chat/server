@@ -52,7 +52,7 @@ import {
   getUserByGrytId,
 } from "../../db";
 import { deleteFilesNow } from "../../jobs/mediaSweep";
-import { checkRateLimit, RateLimitRule } from "../../utils/rateLimiter";
+import { checkRateLimit, type RateLimitRule } from "../../utils/rateLimiter";
 import { evictUser, resolveGrytUserId } from "../../moderation/evict";
 import { announceMute, pushSfuAudioState } from "../../moderation/timeout";
 import { getVersionStatus } from "../../versionCheck";
