@@ -421,11 +421,13 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           if (!verdict.ok) {
             socket.emit("server:error", {
               error: "role_not_bindable",
-              message: `Cannot bind that role: ${INVITE_ROLE_REFUSAL_TEXT[verdict.reason!]}.`,
+              message: `Cannot bind that role: ${INVITE_ROLE_REFUSAL_TEXT[verdict.reason]}.`,
             });
             return;
           }
-          grantedRole = { roleId: def!.role_id, rank: def!.rank };
+          // A missing role is refused above as unknown_role, so this only narrows.
+          if (!def) return;
+          grantedRole = { roleId: def.role_id, rank: def.rank };
         }
 
         const created = await createServerInvite(auth.tokenPayload.serverUserId, { infinite, maxUses, expiresAt, note: payload.note ?? null, customCode: customCode || null, grantedRole });
@@ -781,7 +783,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
             if (!verdict.ok) {
               socket.emit("server:error", {
                 error: "role_not_bindable",
-                message: `Cannot make that role invite-grantable: ${INVITE_ROLE_REFUSAL_TEXT[verdict.reason!]}.`,
+                message: `Cannot make that role invite-grantable: ${INVITE_ROLE_REFUSAL_TEXT[verdict.reason]}.`,
               });
               return;
             }
