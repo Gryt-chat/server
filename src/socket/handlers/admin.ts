@@ -391,7 +391,8 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         if (!auth) return;
 
         const infinite = payload.infinite === true;
-        const maxUses = infinite ? undefined : (typeof payload.maxUses === "number" ? payload.maxUses : 1);
+        const requestedUses = typeof payload.maxUses === "number" ? payload.maxUses : 1;
+        const maxUses = infinite ? undefined : requestedUses;
         const expiresInHours = typeof payload.expiresInHours === "number" ? payload.expiresInHours : undefined;
         const expiresAt = typeof expiresInHours === "number" && expiresInHours > 0
           ? new Date(Date.now() + Math.min(expiresInHours, 24 * 365) * 3_600_000)

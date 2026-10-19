@@ -223,8 +223,10 @@ export async function buildMemberList(clientsInfo: Clients) {
 
   // Most active session wins. Two clients open should show you as being in
   // voice, not as whichever socket was iterated last.
-  const activityRank = (c: ClientInfo): number =>
-    c.hasJoinedChannel ? 2 : c.isAFK ? 0 : 1;
+  const activityRank = (c: ClientInfo): number => {
+    if (c.hasJoinedChannel) return 2;
+    return c.isAFK ? 0 : 1;
+  };
 
   Object.values(clientsInfo).forEach((client) => {
     if (client.serverUserId && !client.serverUserId.startsWith('temp_')) {

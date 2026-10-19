@@ -70,7 +70,8 @@ export async function applyServerSettings(
 ): Promise<ServerConfigRecord> {
   const displayName = typeof patch.displayName === "string" ? patch.displayName.trim().slice(0, 80) : undefined;
   const description = typeof patch.description === "string" ? patch.description.trim().slice(0, 300) : undefined;
-  const iconUrl = typeof patch.iconUrl === "string" ? patch.iconUrl.trim().slice(0, 500) : patch.iconUrl === null ? null : undefined;
+  const iconText = typeof patch.iconUrl === "string" ? patch.iconUrl.trim().slice(0, 500) : undefined;
+  const iconUrl = patch.iconUrl === null ? null : iconText;
 
   const avatarMaxBytes = clampBytes(patch.avatarMaxBytes, 256 * 1024, 200 * 1024 * 1024);
   const uploadMaxBytes = clampBytesAllowingZero(patch.uploadMaxBytes, 256 * 1024, Number.MAX_SAFE_INTEGER);
@@ -86,10 +87,8 @@ export async function applyServerSettings(
       ? patch.profanityCensorStyle as CensorStyle
       : undefined;
 
-  const systemChannelId: string | null | undefined =
-    patch.systemChannelId === null ? null
-      : typeof patch.systemChannelId === "string" ? patch.systemChannelId.trim().slice(0, 64) || null
-        : undefined;
+  const channelText = typeof patch.systemChannelId === "string" ? patch.systemChannelId.trim().slice(0, 64) || null : undefined;
+  const systemChannelId: string | null | undefined = patch.systemChannelId === null ? null : channelText;
 
   const lanOpen: boolean | undefined = typeof patch.lanOpen === "boolean" ? patch.lanOpen : undefined;
 
@@ -110,8 +109,8 @@ export async function applyServerSettings(
   const externalEmojis: boolean | undefined = typeof patch.externalEmojis === "boolean" ? patch.externalEmojis : undefined;
 
   const updated = await updateServerConfig({
-    displayName: displayName === undefined ? undefined : (displayName.length > 0 ? displayName : null),
-    description: description === undefined ? undefined : (description.length > 0 ? description : null),
+    displayName: displayName === "" ? null : displayName,
+    description: description === "" ? null : description,
     iconUrl,
     isConfigured: true,
     avatarMaxBytes,
