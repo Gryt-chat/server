@@ -314,10 +314,6 @@ export default tseslint.config(
     files: [
       'src/import/discord/importer.ts',
       'src/services/webhookMedia.ts',
-      'src/settings/serverSettings.ts',
-      'src/socket/handlers/admin.ts',
-      'src/socket/handlers/join.ts',
-      'src/socket/utils/clients.ts',
       'src/utils/httpErrors.ts',
     ],
     rules: { 'no-nested-ternary': 'off' },

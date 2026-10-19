@@ -541,11 +541,12 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
 
             const consumed = await consumeServerInvite(inviteCode);
             if (!consumed.ok) {
-              const msg =
-                consumed.reason === "expired" ? "That invite code has expired."
-                  : consumed.reason === "revoked" ? "That invite code has been revoked."
-                    : consumed.reason === "used_up" ? "No uses remaining."
-                      : "Invalid invite code.";
+              const refusals: Record<string, string> = {
+                expired: "That invite code has expired.",
+                revoked: "That invite code has been revoked.",
+                used_up: "No uses remaining.",
+              };
+              const msg = refusals[consumed.reason ?? ""] ?? "Invalid invite code.";
               const lock = applyInviteFailure(inviteKey);
               const ipLock = applyInviteIpFailure(ip);
               const isLocked = lock.locked || ipLock.locked;
