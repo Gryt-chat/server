@@ -30,6 +30,13 @@ let base = "";
 let auth: Record<string, string> = {};
 const puts: { sourcePath?: string; buffered: boolean }[] = [];
 
+// The route removes the temp file in a finally after it has answered, so this waits for it.
+async function tempEmptied(): Promise<string[]> {
+  const end = Date.now() + 2000;
+  while (readdirSync(temp).length > 0 && Date.now() < end) await new Promise((resolve) => setTimeout(resolve, 20));
+  return readdirSync(temp);
+}
+
 const files = () => (getSqliteDb().prepare("SELECT COUNT(*) AS n FROM files").get() as { n: number }).n;
 
 async function send(bytes: number) {
@@ -87,7 +94,7 @@ describe("the upload size limit", () => {
     assert.equal(res.body.error, "file_too_large");
     assert.equal(files(), before);
     assert.deepEqual(puts, []);
-    assert.deepEqual(readdirSync(temp), [], "the refused temp file is gone");
+    assert.deepEqual(await tempEmptied(), [], "the refused temp file is gone");
   });
 
   it("takes a file under the limit, hands storage a path rather than a buffer, and drops the temp file", async () => {
@@ -99,13 +106,13 @@ describe("the upload size limit", () => {
     assert.equal(typeof puts[0].sourcePath, "string");
     assert.equal(puts[0].buffered, false);
     assert.ok(puts[0].sourcePath!.startsWith(temp), puts[0].sourcePath);
-    assert.deepEqual(readdirSync(temp), [], "the temp file is gone after success");
+    assert.deepEqual(await tempEmptied(), [], "the temp file is gone after success");
   });
 
   it("treats a limit of 0 as unlimited", async () => {
     await updateServerConfig({ uploadMaxBytes: 0 });
     const res = await send(2000);
     assert.equal(res.status, 201, JSON.stringify(res.body));
-    assert.deepEqual(readdirSync(temp), []);
+    assert.deepEqual(await tempEmptied(), []);
   });
 });
