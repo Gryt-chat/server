@@ -25,10 +25,7 @@ export type InviteRoleRefusal =
   | "rank_not_below_actor"
   | "rank_raised_since";
 
-export interface InviteRoleVerdict {
-  ok: boolean;
-  reason?: InviteRoleRefusal;
-}
+export type InviteRoleVerdict = { ok: true } | { ok: false; reason: InviteRoleRefusal };
 
 const OK: InviteRoleVerdict = { ok: true };
 const no = (reason: InviteRoleRefusal): InviteRoleVerdict => ({ ok: false, reason });
@@ -57,8 +54,8 @@ export function mayBindRoleToInvite(
   actorRank: number,
 ): InviteRoleVerdict {
   const base = alwaysTrue(role);
-  if (!base.ok) return base;
-  if (role!.rank >= actorRank) return no("rank_not_below_actor");
+  if (!base.ok || !role) return base;
+  if (role.rank >= actorRank) return no("rank_not_below_actor");
   return OK;
 }
 
@@ -69,8 +66,8 @@ export function mayRedeemInviteRole(
   rankAtCreation: number,
 ): InviteRoleVerdict {
   const base = alwaysTrue(role);
-  if (!base.ok) return base;
-  if (role!.rank > rankAtCreation) return no("rank_raised_since");
+  if (!base.ok || !role) return base;
+  if (role.rank > rankAtCreation) return no("rank_raised_since");
   return OK;
 }
 
@@ -116,16 +113,18 @@ export async function applyInviteRole(
         code: inviteCode,
         role: invite.granted_role_id,
         reason: verdict.reason,
-        detail: INVITE_ROLE_REFUSAL_TEXT[verdict.reason!],
+        detail: INVITE_ROLE_REFUSAL_TEXT[verdict.reason],
       },
     }).catch(() => {});
     return;
   }
+  // A missing role is refused above as unknown_role, so this only narrows.
+  if (!def) return;
 
-  await addMemberRole(serverUserId, def!.role_id);
+  await addMemberRole(serverUserId, def.role_id);
   await insertServerAudit({
     action: "invite_role_granted",
     target: serverUserId,
-    meta: { code: inviteCode, role: def!.role_id },
+    meta: { code: inviteCode, role: def.role_id },
   }).catch(() => {});
 }

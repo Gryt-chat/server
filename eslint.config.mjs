@@ -292,14 +292,6 @@ export default tseslint.config(
     files: ['**/*.test.ts'],
     rules: { '@typescript-eslint/no-non-null-assertion': 'off' },
   },
-  // Non-null assertions from before the rule.
-  {
-    files: [
-      'src/services/inviteRoles.ts',
-      'src/socket/handlers/admin.ts',
-    ],
-    rules: { '@typescript-eslint/no-non-null-assertion': 'off' },
-  },
   // Reassigned parameters from before the rule.
   {
     files: [
