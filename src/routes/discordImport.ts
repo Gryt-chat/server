@@ -79,8 +79,13 @@ discordImportRouter.post("/", handle(async (req, res) => {
     });
     return;
   }
+  const serverUserId = req.tokenPayload?.serverUserId;
+  if (!serverUserId) {
+    res.status(401).json({ error: "auth_required" });
+    return;
+  }
   try {
-    const record = await startDiscordImport(folder, req.tokenPayload!.serverUserId);
+    const record = await startDiscordImport(folder, serverUserId);
     res.status(202).json(view(record));
   } catch (err) {
     consola.error("discord import: start failed", err);

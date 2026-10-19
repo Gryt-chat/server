@@ -37,8 +37,7 @@ export async function indexExportFolder(root: string): Promise<ExportFolder> {
   const files = new Map<string, string>();
   const byName = new Map<string, string[]>();
   const pending = [root];
-  while (pending.length > 0) {
-    const dir = pending.pop()!;
+  for (let dir = pending.pop(); dir !== undefined; dir = pending.pop()) {
     const entries = await readdir(dir, { withFileTypes: true });
     for (const entry of entries) {
       const full = join(dir, entry.name);

@@ -497,8 +497,9 @@ uploadsRouter.get(
           return;
         }
 
-        const useThumb = req.query.thumb === "1" && fileMeta.thumbnail_key;
-        const s3Key = useThumb ? fileMeta.thumbnail_key! : fileMeta.s3_key;
+        const thumbKey = req.query.thumb === "1" ? fileMeta.thumbnail_key : null;
+        const useThumb = Boolean(thumbKey);
+        const s3Key = thumbKey || fileMeta.s3_key;
         const totalSize = useThumb ? null : (fileMeta.size ?? null);
 
         const rangeHeader = req.headers.range;

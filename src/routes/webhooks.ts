@@ -206,7 +206,8 @@ webhooksRouter.post(
         const avatarFileId = parsed.data.avatar_file_id ?? null;
         if (!(await mayUseAvatar(req, avatarFileId))) { res.status(404).json({ error: "file_not_found" }); return; }
 
-        const serverUserId = req.tokenPayload!.serverUserId;
+        const serverUserId = req.tokenPayload?.serverUserId;
+        if (!serverUserId) { res.status(401).json({ error: "auth_required" }); return; }
         const webhook = await createWebhook(channelId, displayName, serverUserId, avatarFileId);
         const url = webhookUrl(req, webhook.webhook_id, webhook.token);
 

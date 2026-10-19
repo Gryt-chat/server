@@ -295,17 +295,8 @@ export default tseslint.config(
   // Non-null assertions from before the rule.
   {
     files: [
-      'src/import/discord/exportFolder.ts',
-      'src/import/discord/importer.ts',
-      'src/index.ts',
-      'src/routes/discordImport.ts',
-      'src/routes/uploads.ts',
-      'src/routes/webhooks.ts',
       'src/services/inviteRoles.ts',
-      'src/services/webhookMedia.ts',
       'src/socket/handlers/admin.ts',
-      'src/socket/utils/standing.ts',
-      'src/utils/byteRange.ts',
     ],
     rules: { '@typescript-eslint/no-non-null-assertion': 'off' },
   },

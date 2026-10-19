@@ -22,7 +22,7 @@ export function socketIsIdentified(
   clientId: string,
 ): boolean {
   const serverUserId = clientsInfo[clientId]?.serverUserId;
-  return Boolean(serverUserId) && !serverUserId!.startsWith("temp_");
+  return !!serverUserId && !serverUserId.startsWith("temp_");
 }
 
 /** Delivery only; nothing authorises against this. Worst case a stale entry

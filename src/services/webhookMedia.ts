@@ -279,8 +279,9 @@ export async function resolveWebhookMedia(
 
   const fileFor = (path: string, url: string | undefined): string | undefined => {
     if (!url) return undefined;
-    const slot = slots.find((s) => s.path === path)!;
-    const entry = byUrl.get(keyOf(slot))!;
+    const slot = slots.find((s) => s.path === path);
+    const entry = slot && byUrl.get(keyOf(slot));
+    if (!slot || !entry) return undefined;
     const fileId = slot.avatar ? entry.avatarFileId : entry.fileId;
     if (!fileId) {
       const code = entry.code ?? "fetch_failed";
