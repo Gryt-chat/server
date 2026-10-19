@@ -262,8 +262,9 @@ app.get("/info", httpRateLimit("http:public", RL_HTTP_PUBLIC), async (_req, res)
     if (cfg?.lan_open) lanOpen = true;
     if (cfg?.join_policy) joinPolicy = cfg.join_policy;
 
-    if ((cfg as { server_id?: string | null })?.server_id) {
-      serverId = (cfg as { server_id?: string }).server_id!;
+    const storedServerId = (cfg as { server_id?: string | null } | null)?.server_id;
+    if (storedServerId) {
+      serverId = storedServerId;
     }
   } catch {
     // fall back to env

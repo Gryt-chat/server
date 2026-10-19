@@ -185,7 +185,7 @@ class DiscordImport {
         const t = this.threads.get(ch.id) ?? { id: ch.id, name, parentId: ch.categoryId, files: [] };
         t.files.push(file);
         this.threads.set(ch.id, t);
-        if (!this.channelNames.has(ch.categoryId) && ch.category) this.channelNames.set(ch.categoryId, clip(ch.category, 80)!);
+        if (!this.channelNames.has(ch.categoryId) && ch.category) this.channelNames.set(ch.categoryId, clip(ch.category, 80) ?? ch.category);
         continue;
       }
 
@@ -330,10 +330,11 @@ class DiscordImport {
         this.warn(`Thread "${thread.name}" has no messages to import.`);
         return;
       }
-      rootRow = await this.buildRow(messages[index], file, conversationId, thread.id, null);
-      if (!rootRow) return;
+      const root = messages[index];
+      rootRow = await this.buildRow(root, file, conversationId, thread.id, null);
+      if (!rootRow || !root.id) return;
       await this.flush([rootRow]);
-      rootDiscordId = messages[index].id!;
+      rootDiscordId = root.id;
       replies = messages.slice(index + 1);
     }
 
@@ -479,7 +480,7 @@ class DiscordImport {
         src = `:${name}:`;
         this.noteEmoji(name, e.imageUrl, file);
       }
-      const users = (r.users ?? []).filter((u) => isSnowflake(u?.id)).map((u) => discordSenderId(u.id!));
+      const users = (r.users ?? []).flatMap((u) => (isSnowflake(u?.id) ? [discordSenderId(u.id)] : []));
       reactions.push({ src, amount: Math.max(users.length, Number(r.count) || 0), users });
     }
     for (const e of msg.inlineEmojis ?? []) {

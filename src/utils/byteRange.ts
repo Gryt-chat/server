@@ -31,8 +31,9 @@ export function isSingleByteRange(header: string | undefined): header is string 
 /** RFC 9110 14.1.2: a last byte past the end is clamped, a first byte at or past
     it is unsatisfiable, and `-N` is the final N bytes. */
 export function resolveByteRange(header: string | undefined, size: number): ByteRange {
-  if (!isSingleByteRange(header)) return { kind: "full" };
-  const [, first, last] = SINGLE.exec(header)!;
+  const match = isSingleByteRange(header) ? SINGLE.exec(header) : null;
+  if (!match) return { kind: "full" };
+  const [, first, last] = match;
 
   if (!first) {
     const suffix = Number(last);
