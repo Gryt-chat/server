@@ -332,6 +332,6 @@ function fileIdsOf(card: StoredWebhookCard): (string | undefined)[] {
 export function fallbackText(cards: StoredWebhookCard[]): string {
   const first = cards[0];
   const label = first?.title ?? first?.author?.name ?? (cards.length === 1 ? "Posted a card" : `Posted ${cards.length} cards`);
-  const more = first?.title || first?.author?.name ? (cards.length > 1 ? ` (+${cards.length - 1} more)` : "") : "";
+  const more = (first?.title || first?.author?.name) && cards.length > 1 ? ` (+${cards.length - 1} more)` : "";
   return `${label}${more}`.replace(/@/g, "@\u200b").replace(/:\/\//g, ":\u200b//").slice(0, 4000);
 }

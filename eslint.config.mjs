@@ -309,15 +309,6 @@ export default tseslint.config(
     ],
     rules: { '@typescript-eslint/no-non-null-assertion': 'off' },
   },
-  // Nested ternaries from before the rule.
-  {
-    files: [
-      'src/import/discord/importer.ts',
-      'src/services/webhookMedia.ts',
-      'src/utils/httpErrors.ts',
-    ],
-    rules: { 'no-nested-ternary': 'off' },
-  },
   // Reassigned parameters from before the rule.
   {
     files: [

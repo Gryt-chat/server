@@ -46,11 +46,7 @@ export function apiErrorHandler(err: unknown, _req: Request, res: Response, _nex
   }
   consola.error(err);
   const message = typeof e.message === "string" && e.message.trim().length > 0 ? e.message : "Internal Server Error";
-  const errorCode =
-    typeof e.error === "string" && e.error.trim().length > 0
-      ? e.error
-      : typeof e.code === "string" && e.code.trim().length > 0
-      ? e.code
-      : "internal_error";
+  const named = [e.error, e.code].find((v): v is string => typeof v === "string" && v.trim().length > 0);
+  const errorCode = named ?? "internal_error";
   res.status(500).json({ error: errorCode, message });
 }
