@@ -44,6 +44,11 @@ import { indexExportFolder, readExportHead, resolveExportAsset, type ExportFolde
 import { discordSenderId, folderItemId, importedId } from "./ids";
 
 /** `JSON.parse` holds the whole file as one string. DCE's `--partition` keeps files under this. */
+function channelKind(type: string | undefined): "text" | "voice" | "forum" {
+  if (VOICE_TYPES.has(type ?? "")) return "voice";
+  return type === "GuildForum" ? "forum" : "text";
+}
+
 export const MAX_CHANNEL_FILE_BYTES = 256 * 1024 * 1024;
 const BATCH_SIZE = 250;
 
@@ -187,7 +192,7 @@ class DiscordImport {
       const planned = this.channels.get(ch.id) ?? {
         id: ch.id,
         name,
-        kind: VOICE_TYPES.has(ch.type ?? "") ? "voice" : ch.type === "GuildForum" ? "forum" : "text",
+        kind: channelKind(ch.type),
         topic: clip(ch.topic, 200) ?? null,
         categoryId: isSnowflake(ch.categoryId) ? ch.categoryId : null,
         categoryName: clip(ch.category, 80) ?? null,
