@@ -31,12 +31,15 @@ jobs:
       - run: yarn build
 
       # The whole repo, now that the flat config describes scripts/ too.
-      - run: npx eslint .
+      - run: npx eslint --flag unstable_native_nodejs_ts_config .
+
+      # Scripts and the lint config, which the build's tsconfig doesn't reach.
+      - run: npx tsc -p scripts
 
       # No comment runs past two lines. The script carries the list of paths
       # still to be swept, and that list only ever shrinks.
-      - run: node scripts/check-comment-length.mjs
+      - run: node scripts/check-comment-length.mts
 
       # The bundles start the SFU on the host itself, so their config.env has to
       # keep its registration and metrics on 127.0.0.1 (GRYT-1264).
-      - run: node scripts/check-selfhosted-config.mjs
+      - run: node scripts/check-selfhosted-config.mts

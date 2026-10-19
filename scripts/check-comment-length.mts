@@ -9,11 +9,11 @@ const LIMIT = 2;
 const EMPTY = /^(\/\*+|\*+\/?|\/\/|#)$|[─=]{3,}\s*\*?\/?$/;
 const ROOTS = ["src", "scripts", "examples", ".github/workflows"];
 const SKIP = new Set(["node_modules", "dist", "build", "coverage", ".git"]);
-const CODE = /\.(ts|tsx|js|mjs|cjs)$/;
+const CODE = /\.(ts|tsx|mts|js|mjs|cjs)$/;
 const HASH = /\.(ya?ml|sh)$/;
 
-function files(dir) {
-  const out = [];
+function files(dir: string): string[] {
+  const out: string[] = [];
   for (const name of readdirSync(dir)) {
     if (SKIP.has(name)) continue;
     const full = join(dir, name);
@@ -25,9 +25,9 @@ function files(dir) {
 
 // A run is consecutive comment lines: one block comment, or a stack of // lines.
 // Only lines carrying words count: `/**`, `*/` and a ── section rule are free.
-function runs(text, hash) {
+function runs(text: string, hash: boolean) {
   const lines = text.split("\n");
-  const found = [];
+  const found: { line: number; length: number }[] = [];
   let start = -1;
   let length = 0;
   let inBlock = false;

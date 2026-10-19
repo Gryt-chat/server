@@ -1,5 +1,3 @@
-// @ts-check
-
 import eslint from '@eslint/js';
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
@@ -36,10 +34,6 @@ export default tseslint.config(
     files: ['scripts/**'],
     languageOptions: {
       globals: globals.node,
-    },
-    rules: {
-      // scripts/upload-route-test.cjs is CommonJS by extension and by intent.
-      '@typescript-eslint/no-require-imports': 'off',
     },
   },
   // Existing debt, listed per rule rather than marked in each file. The goal is to empty these (GRYT-1792).
