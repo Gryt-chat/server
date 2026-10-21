@@ -46,6 +46,10 @@ export async function validateImage(
     };
 
     const meta = await sharp(buffer, base).metadata();
+    // An iPhone photo. The header reads fine but there's no HEVC decoder, so the decode below fails.
+    if (meta.compression === "hevc") {
+      return { valid: false, reason: "HEIC photos aren't supported yet. Send it as a JPEG or PNG." };
+    }
     if (!meta.width || !meta.height) {
       return { valid: false, reason: "Could not determine image dimensions." };
     }

@@ -1,0 +1,15 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+
+import { validateImage } from "./imageValidation";
+
+/** A 16×16 HEVC HEIC, made with macOS `sips`, which is what an iPhone photo is. */
+const HEIC = Buffer.from("AAAAJGZ0eXBoZWljAAAAAG1pZjFNaVBybWlhZk1pSEJoZWljAAABw21ldGEAAAAAAAAAIWhkbHIAAAAAAAAAAHBpY3QAAAAAAAAAAAAAAAAAAAAAJGRpbmYAAAAcZHJlZgAAAAAAAAABAAAADHVybCAAAAABAAAADnBpdG0AAAAAAAEAAAA4aWluZgAAAAAAAgAAABVpbmZlAgAAAAABAABodmMxAAAAABVpbmZlAgAAAQACAABFeGlmAAAAABppcmVmAAAAAAAAAA5jZHNjAAIAAQABAAAA5mlwcnAAAADFaXBjbwAAABNjb2xybmNseAACAAIABoAAAAAMY2xsaQDLAEAAAAAUaXNwZQAAAAAAAAAQAAAAEAAAAAlpcm90AAAAABBwaXhpAAAAAAMICAgAAABxaHZjQwEDcAAAALAAAAAAAB7wAPz9+PgAAAsDoAABABdAAQwB//8DcAAAAwCwAAADAAADAB5wJKEAAQAjQgEBA3AAAAMAsAAAAwAAAwAeoBQgQcCTDOIe5FlU3AgIGAKiAAEACUQBwGFyyERTZAAAABlpcG1hAAAAAAAAAAEAAQaBAgMFhoQAAAAsaWxvYwAAAABEAAACAAEAAAABAAACQwAAAD0AAgAAAAEAAAH3AAAATAAAAAFtZGF0AAAAAAAAAJkAAAAGRXhpZgAATU0AKgAAAAgAAwEaAAUAAAABAAAAMgEbAAUAAAABAAAAOgEoAAMAAAABAAIAAAAAAAAAAAAZAAAAAQAAABkAAAABAAAAOSgBr6L2RoF8//zGZ6/0l//8se9V/+OB//4Hqf50j3TLJn+gIPnCOc0n/98t713Qi9hX4K3CEmyK4A==", "base64");
+
+describe("validateImage and HEIC", () => {
+  it("says a HEIC photo isn't supported, not that it's corrupt", async () => {
+    const result = await validateImage(HEIC);
+    assert.equal(result.valid, false);
+    assert.match(result.valid ? "" : result.reason, /HEIC/);
+  });
+});
