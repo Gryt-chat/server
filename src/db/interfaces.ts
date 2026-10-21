@@ -242,7 +242,7 @@ export const DEFAULT_EMOJI_MAX_BYTES = 2 * 1024 * 1024;
 
 /** The size cap is per file, so without this one message can name a hundred of
     them. */
-export const DEFAULT_MAX_ATTACHMENTS_PER_MESSAGE = 10;
+export const DEFAULT_MAX_ATTACHMENTS_PER_MESSAGE = 50;
 export const DEFAULT_VOICE_MAX_BITRATE_BPS = 96_000;
 
 export interface ServerConfigRecord {

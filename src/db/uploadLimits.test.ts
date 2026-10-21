@@ -31,7 +31,7 @@ describe("upload defaults", () => {
   });
 
   it("cap how many files one message carries", () => {
-    assert.equal(DEFAULT_MAX_ATTACHMENTS_PER_MESSAGE, 10);
+    assert.equal(DEFAULT_MAX_ATTACHMENTS_PER_MESSAGE, 50);
     assert.ok(DEFAULT_MAX_ATTACHMENTS_PER_MESSAGE > 0);
   });
 });
