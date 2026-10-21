@@ -8,7 +8,7 @@ import type { ChannelPermission } from "../../constants/permissions";
 import { isBotIdentity } from "../../auth/identity";
 import { applyVote, isStoredPoll, parsePoll, publicPoll, pollFallbackText, POLL_REFUSALS } from "../../polls/poll";
 import { getEffectiveStanding, listRoles } from "../../services/permissions";
-import { socketMay } from "../utils/standing";
+import { socketIsIdentified, socketMay } from "../utils/standing";
 import {
   insertMessage,
   listMessages,
@@ -297,6 +297,14 @@ export async function enrichAttachments(messages: MessageRecord[]): Promise<Mess
 
 export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
   const { io, socket, clientId, serverId, clientsInfo, sfuClient, getClientIp } = ctx;
+
+  /** A reconnect asks for history before `session:restore` has said who it is. That's
+      "not yet", and a client told forbidden stops asking (GRYT-1844). */
+  function refuseRead(event: "chat:error" | "thread:error" | "forum:error"): void {
+    socket.emit(event, socketIsIdentified(clientsInfo, clientId)
+      ? { error: "forbidden", message: "You do not have permission to read this channel.", permission: "read_messages" }
+      : { error: "unidentified", message: "Still working out who you are — try again in a moment.", retryAfterMs: 2000 });
+  }
 
   /** Who hears about a conversation, minus anybody who blocked the sender.
       Filtered here because a sealed DM cannot be filtered anywhere else. */
@@ -1050,11 +1058,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         // No access token: history is asked for off an already-verified socket,
         // so the permission is read from who the socket is.
         if (!(await socketMay(clientsInfo, clientId, "read_messages"))) {
-          socket.emit("chat:error", {
-            error: "forbidden",
-            message: "You do not have permission to read this channel.",
-            permission: "read_messages",
-          });
+          refuseRead("chat:error");
           return;
         }
         const rl = checkRateLimit("chat:fetch", userId, ip, RL_FETCH);
@@ -1223,7 +1227,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         const ip = getClientIp();
         const userId = clientsInfo[clientId]?.serverUserId;
         if (!(await socketMay(clientsInfo, clientId, "read_messages"))) {
-          socket.emit("thread:error", { error: "forbidden", message: "You do not have permission to read this channel.", permission: "read_messages" });
+          refuseRead("thread:error");
           return;
         }
         const rl = checkRateLimit("chat:fetch", userId, ip, RL_FETCH);
@@ -1409,7 +1413,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         const ip = getClientIp();
         const userId = clientsInfo[clientId]?.serverUserId;
         if (!(await socketMay(clientsInfo, clientId, "read_messages"))) {
-          socket.emit("forum:error", { error: "forbidden", message: "You do not have permission to read this channel.", permission: "read_messages" });
+          refuseRead("forum:error");
           return;
         }
         const rl = checkRateLimit("chat:fetch", userId, ip, RL_FETCH);
@@ -1856,7 +1860,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         const ip = getClientIp();
         const userId = clientsInfo[clientId]?.serverUserId;
         if (!(await socketMay(clientsInfo, clientId, "read_messages"))) {
-          socket.emit("chat:error", { error: "forbidden", message: "You do not have permission to read this channel.", permission: "read_messages" });
+          refuseRead("chat:error");
           return;
         }
         const rl = checkRateLimit("chat:fetch", userId, ip, RL_FETCH);

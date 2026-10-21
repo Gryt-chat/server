@@ -413,6 +413,18 @@ describe("events that read the socket rather than a token", () => {
     );
   });
 
+  it("chat:fetch tells an unidentified socket to retry, not that it is forbidden", async () => {
+    // A phone back from the background asks for history before session:restore lands (GRYT-1844).
+    const { ctx, emitted, clientsInfo } = makeContext();
+    await socketCaller(["read_messages"], clientsInfo, ctx.clientId);
+    unidentifiedCaller(clientsInfo, ctx.clientId);
+
+    await registerChatHandlers(ctx)["chat:fetch"]({ conversationId: "general" });
+
+    assert.equal(codes(emitted).includes("unidentified"), true);
+    assert.equal(refusals(emitted).length, 0);
+  });
+
   it("voice:channel:joined does the same", async () => {
     const { ctx, emitted, clientsInfo } = makeContext();
     await socketCaller(["join_voice"], clientsInfo, ctx.clientId);
