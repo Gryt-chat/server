@@ -9,6 +9,7 @@ import type { ClientState } from "ts-mls/dist/src/clientState";
 import type { KeyPackage, PrivateKeyPackage } from "ts-mls/dist/src/keyPackage";
 
 import { blockUser, unblockUser } from "../../db/sqlite/blocks";
+import { DEFAULT_MAX_ATTACHMENTS_PER_MESSAGE } from "../../db/interfaces";
 import { getSqliteDb, initSqlite } from "../../db/sqlite/connection";
 import { setContactPrefs } from "../../db/sqlite/contactPrefs";
 import { createGroupConversation, openDirectConversation } from "../../db/sqlite/conversations";
@@ -780,7 +781,7 @@ describe("a DM over MLS", () => {
 
     assert.equal((await send(["mls-file-bob"])).error, "attachment_not_found", "only files the sender can read");
     assert.equal((await send(["no-such-upload"])).error, "attachment_not_found");
-    assert.equal((await send(Array.from({ length: 11 }, (_, i) => `f${i}`))).error, "too_many_attachments");
+    assert.equal((await send(Array.from({ length: DEFAULT_MAX_ATTACHMENTS_PER_MESSAGE + 1 }, (_, i) => `f${i}`))).error, "too_many_attachments");
     assert.equal((await send("mls-file-alice")).error, "invalid_payload");
   });
 });
