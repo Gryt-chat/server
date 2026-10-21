@@ -438,7 +438,7 @@ async function fileReader(req: Request, fileId: string): Promise<FileReader | nu
   return payload;
 }
 
-async function signedFileReader(signed: SignedFileUrl, fileId: string, thumb: boolean, serverHost: string): Promise<FileReader | null> {
+export async function signedFileReader(signed: SignedFileUrl, fileId: string, thumb: boolean, serverHost: string): Promise<FileReader | null> {
   try {
     const cfg = await getServerConfig();
     const member = await getUserByServerId(signed.user);
