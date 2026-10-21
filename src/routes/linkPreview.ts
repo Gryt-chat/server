@@ -4,6 +4,8 @@ import consola from "consola";
 import { requireBearerToken } from "../middleware/requireBearerToken";
 import { ensurePermission } from "../middleware/requirePermission";
 import { httpRateLimit, RL_HTTP_OUTBOUND } from "../middleware/rateLimitHttp";
+import { readSignedFileUrl } from "../utils/fileUrl";
+import { createPreviewImages } from "../utils/previewImages";
 import { fetchRemoteImageMetadata } from "../utils/remoteImageMetadata";
 import {
   charsetFromContentType,
@@ -13,6 +15,7 @@ import {
 import { checkPreviewUrl } from "../utils/previewUrlSafety";
 import { fetchFollowingSafely } from "../utils/safePreviewFetch";
 import { resolverFor, type LinkResolver, type ResolvedMetadata } from "../utils/linkResolvers";
+import { signedFileReader } from "./uploads";
 
 export interface LinkPreviewData {
   url: string;
@@ -332,6 +335,7 @@ export function createPreviewCache(
 }
 
 const previews = createPreviewCache();
+const previewImages = createPreviewImages();
 const limitOutbound = httpRateLimit("http:outbound", RL_HTTP_OUTBOUND);
 
 const router = Router();
@@ -369,7 +373,31 @@ router.get("/", requireBearerToken, async (req, res) => {
     return;
   }
   if (found.stale) consola.warn("[link-preview] refresh failed, serving the previous card", url);
-  res.json(found.data);
+  // Ids for the picture and icon, which this server then serves itself; `image` and `favicon` stay for older clients.
+  res.json({ ...found.data, imageId: previewImages.remember(found.data.image), faviconId: previewImages.remember(found.data.favicon) });
+});
+
+// An <img> can't send the bearer token, so this takes a signed link, as uploads do (GRYT-1549).
+router.get("/image/:id", async (req, res) => {
+  const id = String(req.params.id);
+  const signed = readSignedFileUrl(req.query as Record<string, unknown>);
+  const reader = signed ? await signedFileReader(signed, id, false, req.headers.host || "unknown") : null;
+  if (!reader) {
+    res.status(401).json({ error: "auth_required", message: "A signed link is required." });
+    return;
+  }
+  const image = await previewImages.load(id);
+  if (!image) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  res.setHeader("Content-Type", image.type);
+  res.setHeader("Content-Length", String(image.body.byteLength));
+  // `private`: the URL carries a credential. The rest as for uploads, since this is the API's own origin.
+  res.setHeader("Cache-Control", "private, max-age=3600");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
+  res.end(image.body);
 });
 
 // Unref'd, so importing this module does not hold the process open for a
