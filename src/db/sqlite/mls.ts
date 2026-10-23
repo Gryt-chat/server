@@ -333,6 +333,21 @@ export function getMlsGroupForConversation(conversationId: string): MlsGroup | n
   return row ? rowToGroup(row as Record<string, unknown>) : null;
 }
 
+/** Taken only for the group's current epoch: a device can't join from one that's already behind. */
+export function setMlsGroupInfo(groupId: string, epoch: number, data: Uint8Array): boolean {
+  const r = getSqliteDb()
+    .prepare(`UPDATE mls_groups SET group_info = ?, group_info_epoch = ? WHERE group_id = ? AND epoch = ?`)
+    .run(data, epoch, groupId, epoch);
+  return Number(r.changes) > 0;
+}
+
+export function getMlsGroupInfo(groupId: string): { epoch: number; data: Uint8Array } | null {
+  const row = getSqliteDb()
+    .prepare(`SELECT group_info, group_info_epoch FROM mls_groups WHERE group_id = ? AND group_info IS NOT NULL`)
+    .get(groupId) as { group_info: Uint8Array; group_info_epoch: number } | undefined;
+  return row ? { epoch: Number(row.group_info_epoch), data: new Uint8Array(row.group_info) } : null;
+}
+
 /** The first group registered for a conversation wins, and the loser is handed the winner. */
 export function createMlsGroup(
   groupId: string,

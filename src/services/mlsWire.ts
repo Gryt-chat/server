@@ -150,6 +150,8 @@ export interface ParsedHandshake {
   addedRefs: string[];
   /** Proposals a commit names by reference; their Adds were checked on arrival. */
   referencedProposals: number;
+  /** An external commit's joining device, from the certificate in its path (GRYT-1859). */
+  joinerDeviceId?: string;
 }
 
 /**
@@ -172,8 +174,9 @@ export async function parseGroupMessage(
 
   if (msg.wireformat !== "mls_public_message") return refuse("invalid_message", "That isn't a group message.");
   const content = msg.publicMessage.content;
-  if (content.sender.senderType !== "member") {
-    return refuse("unsupported_sender", "Only a member of the group can send a commit or proposal here.");
+  const external = content.sender.senderType === "new_member_commit";
+  if (content.sender.senderType !== "member" && !(external && content.contentType === "commit")) {
+    return refuse("unsupported_sender", "Only a member of the group, or a device joining by itself, can send a commit here.");
   }
   const base = { groupId: hex(content.groupId), epoch: Number(content.epoch) };
 
@@ -189,9 +192,27 @@ export async function parseGroupMessage(
       if (entry.proposalOrRefType === "reference") referencedProposals += 1;
       else if (entry.proposal.proposalType === "add") addedRefs.push(await keyPackageRef(entry.proposal.add.keyPackage));
     }
-    return { ok: true, kind: "commit", ...base, addedRefs, referencedProposals };
+    if (!external) return { ok: true, kind: "commit", ...base, addedRefs, referencedProposals };
+    // A device joining by itself brings only itself: its certificate says which device that is.
+    const leaf = content.commit.path?.leafNode;
+    const certificate = leaf?.credential.credentialType === "basic" ? readDeviceCertificate(leaf.credential.identity) : null;
+    if (!leaf || !certificate || addedRefs.length > 0 || referencedProposals > 0) {
+      return refuse("invalid_external_commit", "A device joining by itself has to bring its own certified leaf and nothing else.");
+    }
+    if (!Buffer.from(certificate.leafSignatureKey).equals(Buffer.from(leaf.signaturePublicKey))) {
+      return refuse("invalid_device_certificate", "That joining device's certificate is for another leaf key.");
+    }
+    return { ok: true, kind: "commit", ...base, addedRefs, referencedProposals, joinerDeviceId: certificate.deviceId };
   }
   return refuse("must_be_private", "Application messages have to be sent as PrivateMessage.");
+}
+
+/** The group and epoch a GroupInfo is for. The signature is the joining client's to check. */
+export function parseGroupInfo(bytes: Uint8Array): ({ ok: true; groupId: string; epoch: number }) | ({ ok: false } & WireRefusal) {
+  const msg = decodeWhole(bytes);
+  if (!msg || msg.wireformat !== "mls_group_info") return refuse("invalid_group_info", "That isn't an MLS GroupInfo.");
+  const context = msg.groupInfo.groupContext;
+  return { ok: true, groupId: hex(context.groupId), epoch: Number(context.epoch) };
 }
 
 /** Who a Welcome is for, as KeyPackage refs. */
