@@ -1,5 +1,6 @@
 import type { HandlerContext, EventHandlerMap } from "./types";
 import { getUserByServerId, setUserDmKeyBinding } from "../../db";
+import { dmBindingIdentity } from "../../services/personKeyBinding";
 import { checkRateLimit, type RateLimitRule } from "../../utils/rateLimiter";
 import { broadcastMemberList } from "../utils/clients";
 
@@ -29,7 +30,8 @@ export function registerDmKeyHandlers(ctx: HandlerContext): EventHandlerMap {
   const { io, clientId, clientsInfo, serverId, getClientIp } = ctx;
 
   return {
-    "dm:key:publish": async (payload: { binding?: string | null }) => {
+    "dm:key:publish": async (payload: { binding?: string | null; replace?: boolean }, ack?: (reply: { ok: boolean; changed?: boolean; error?: string; message?: string }) => void) => {
+      const reply = typeof ack === "function" ? ack : () => {};
       const serverUserId = clientsInfo[clientId]?.serverUserId;
       if (!serverUserId) return;
 
@@ -49,9 +51,22 @@ export function registerDmKeyHandlers(ctx: HandlerContext): EventHandlerMap {
         if (!COMPACT_JWT.test(binding)) return;
       }
 
-      if (user.dm_key_binding === binding) return;
+      if (user.dm_key_binding === binding) {
+        reply({ ok: true, changed: false });
+        return;
+      }
+
+      // One identity per account (GRYT-1868): a device with its own key links instead of taking over.
+      if (binding !== null && user.dm_key_binding && payload?.replace !== true) {
+        const [had, sent] = await Promise.all([dmBindingIdentity(user.dm_key_binding), dmBindingIdentity(binding)]);
+        if (had && sent !== had) {
+          reply({ ok: false, error: "other_identity", message: "Your account already has a different key here. Link this device from one you use." });
+          return;
+        }
+      }
 
       await setUserDmKeyBinding(serverUserId, binding);
+      reply({ ok: true, changed: true });
 
       // The list is deduped on its contents and the binding is in that hash, so
       // a publish that changed nothing sends nothing.

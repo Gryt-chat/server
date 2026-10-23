@@ -207,3 +207,53 @@ describe("publishing a DM key binding", () => {
     }
   });
 });
+
+describe("one identity per account (GRYT-1868)", () => {
+  /* eslint-disable @typescript-eslint/no-require-imports */
+  const gryt = {
+    ...(require("@gryt/crypto/dm-key-binding") as typeof import("@gryt/crypto/dist/dm-key-binding")),
+    ...(require("@gryt/crypto/dm-keys") as typeof import("@gryt/crypto/dist/dm-keys")),
+  };
+  /* eslint-enable @typescript-eslint/no-require-imports */
+  const scope = "srv:one-identity" as Parameters<typeof gryt.deriveDmKeyPair>[1];
+
+  async function device() {
+    const pair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+    const { kty, crv, x, y } = await crypto.subtle.exportKey("jwk", pair.publicKey);
+    const seed = crypto.getRandomValues(new Uint8Array(32));
+    return () =>
+      gryt.signDmKeyBinding({
+        dmPublicKey: gryt.deriveDmKeyPair(seed, scope).publicKey,
+        scope,
+        identityPrivateKey: pair.privateKey,
+        identityPublicJwk: { kty, crv, x, y },
+      });
+  }
+
+  const publish = (m: Member, payload: Record<string, unknown>) =>
+    new Promise<Record<string, unknown>>((resolve) => void m.handlers["dm:key:publish"](payload, resolve));
+
+  it("keeps the account's key when a device with its own key publishes, and says why", async () => {
+    const carol = await connect("Carol");
+    const [desktop, phone] = [await device(), await device()];
+    const first = await desktop();
+
+    assert.deepEqual(await publish(carol, { binding: first }), { ok: true, changed: true });
+    assert.equal((await publish(carol, { binding: await phone() })).error, "other_identity");
+    assert.equal(await bindingOf(carol.serverUserId), first);
+
+    const again = await desktop();
+    assert.equal((await publish(carol, { binding: again })).ok, true, "the same identity signing again is fine");
+    assert.equal(await bindingOf(carol.serverUserId), again);
+  });
+
+  it("lets a member start fresh with another key when they ask to", async () => {
+    const dave = await connect("Dave");
+    const [lost, fresh] = [await device(), await device()];
+    await publish(dave, { binding: await lost() });
+
+    const replacement = await fresh();
+    assert.equal((await publish(dave, { binding: replacement, replace: true })).ok, true);
+    assert.equal(await bindingOf(dave.serverUserId), replacement);
+  });
+});
