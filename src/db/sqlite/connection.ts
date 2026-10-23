@@ -893,6 +893,12 @@ function runMigrations(d: DatabaseSync): void {
     d.exec("ALTER TABLE mls_key_packages ADD COLUMN not_after INTEGER NOT NULL DEFAULT 0");
   }
 
+  // The latest GroupInfo a member uploaded, so a device of theirs can join by itself (GRYT-1859).
+  if (!hasColumn(d, "mls_groups", "group_info")) {
+    d.exec("ALTER TABLE mls_groups ADD COLUMN group_info BLOB");
+    d.exec("ALTER TABLE mls_groups ADD COLUMN group_info_epoch INTEGER");
+  }
+
   if (!hasColumn(d, "server_config", "join_policy")) {
     d.exec("ALTER TABLE server_config ADD COLUMN join_policy TEXT NOT NULL DEFAULT 'invite'");
   }

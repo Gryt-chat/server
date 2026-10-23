@@ -16,6 +16,7 @@ import {
   getConversation,
   getFilesByIds,
   getMlsGroupForConversation,
+  getMlsGroupInfo,
   getServerConfig,
   getUserByServerId,
   insertMessage,
@@ -28,6 +29,7 @@ import {
   listMlsLog,
   listMlsWelcomes,
   MLS_MAX_DEVICES,
+  setMlsGroupInfo,
   MLS_MAX_KEY_PACKAGES,
   mlsKeyPackageOwner,
   oldestMlsSeq,
@@ -43,7 +45,7 @@ import { isSpamExempt, spamRefusal, timeOutSpammer } from "../../moderation/spam
 import { textMuteError, textMuteFor } from "../../moderation/textMute";
 import { mayInChannel } from "../../services/channelPermissions";
 import { fileReadVerdict } from "../../services/fileAccess";
-import { asBytes, parseGroupMessage, parseKeyPackage, parseWelcome } from "../../services/mlsWire";
+import { asBytes, parseGroupInfo, parseGroupMessage, parseKeyPackage, parseWelcome } from "../../services/mlsWire";
 import { pushNotify } from "../../services/push";
 import { messagePreview } from "../../services/pushPreview";
 import { SEALED_MAX_LENGTH } from "../../utils/messageLimits";
@@ -544,6 +546,10 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
           ack(fail("not_a_member_device", "A commit here can only add devices of people in the conversation."));
           return;
         }
+        if (parsed.joinerDeviceId !== undefined && (parsed.joinerDeviceId !== payload.deviceId || welcome)) {
+          ack(fail("not_own_device", "A device joining by itself can only bring itself in, and makes no Welcome."));
+          return;
+        }
 
         const welcomes: MlsWelcomeFor[] = [];
         if (welcome) {
@@ -831,6 +837,56 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
       } catch (err) {
         consola.error("mls:add:request failed", err);
         ack(fail("failed", "Could not ask to be added"));
+      }
+    },
+
+    /** A member's GroupInfo for the current epoch, so a device can join by itself (GRYT-1859). */
+    "mls:groupinfo:put": async (payload: { accessToken: string; conversationId: string; deviceId: string; groupInfo: unknown }, ack: Ack) => {
+      ack = typeof ack === "function" ? ack : () => {};
+      try {
+        const auth = await begin("mls:commit", RL_COMMIT, payload, ack);
+        if (!auth || !ownDevice(auth, payload.deviceId, ack)) return;
+        const memberIds = await dmOf(payload.conversationId, auth.tokenPayload.serverUserId, ack);
+        if (!memberIds) return;
+        const group = getMlsGroupForConversation(payload.conversationId);
+        const bytes = asBytes(payload.groupInfo);
+        if (!group || !bytes || bytes.length > MAX_HANDSHAKE_BYTES) {
+          ack(fail(group ? "invalid_payload" : "no_group", group ? "groupInfo has to be binary and under 256 kB." : "This conversation has no group yet."));
+          return;
+        }
+        const parsed = parseGroupInfo(bytes);
+        if (!parsed.ok) {
+          ack(fail(parsed.error, parsed.message));
+          return;
+        }
+        if (parsed.groupId !== group.groupId || !setMlsGroupInfo(group.groupId, parsed.epoch, bytes)) {
+          ack(fail("stale_epoch", "That GroupInfo isn't for this group's current epoch.", { group: groupView(group) }));
+          return;
+        }
+        ack({ ok: true });
+      } catch (err) {
+        consola.error("mls:groupinfo:put failed", err);
+        ack(fail("failed", "Could not store the GroupInfo"));
+      }
+    },
+
+    "mls:groupinfo:get": async (payload: { accessToken: string; conversationId: string; deviceId: string }, ack: Ack) => {
+      ack = typeof ack === "function" ? ack : () => {};
+      try {
+        const auth = await begin("mls:read", RL_READ, payload, ack);
+        if (!auth || !ownDevice(auth, payload.deviceId, ack)) return;
+        const memberIds = await dmOf(payload.conversationId, auth.tokenPayload.serverUserId, ack);
+        if (!memberIds) return;
+        const group = getMlsGroupForConversation(payload.conversationId);
+        const info = group ? getMlsGroupInfo(group.groupId) : null;
+        if (!group || !info || info.epoch !== group.epoch) {
+          ack(fail(group ? "no_group_info" : "no_group", "There's nothing to join from yet."));
+          return;
+        }
+        ack({ ok: true, epoch: info.epoch, groupInfo: Buffer.from(info.data) });
+      } catch (err) {
+        consola.error("mls:groupinfo:get failed", err);
+        ack(fail("failed", "Could not read the GroupInfo"));
       }
     },
 

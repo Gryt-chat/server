@@ -815,6 +815,53 @@ describe("asking to be added (GRYT-1858)", () => {
   });
 });
 
+describe("a device joining by itself (GRYT-1859)", () => {
+  it("joins from the GroupInfo a member left, as itself only, and the GroupInfo stays private to the DM", async () => {
+    const nora = await connect("Nora");
+    const otto = await connect("Otto");
+    const outsider = await connect("Pia");
+    const conv = (await openDirectConversation(nora.serverUserId, otto.serverUserId)).conversation_id;
+    const n1 = await makeDevice("nora-1", 1);
+    const o1 = await makeDevice("otto-1", 1);
+    await publish(nora, n1);
+    await publish(otto, o1);
+
+    const { groupIdHex } = await startGroup(n1);
+    assert.equal((await nora.call("mls:group:create", { conversationId: conv, groupId: groupIdHex })).ok, true);
+    const claim = await nora.call("mls:keypackages:claim", { conversationId: conv, deviceId: n1.id });
+    const added = await commitAdding(n1, [(claim.keyPackages as { keyPackage: Uint8Array }[])[0].keyPackage]);
+    assert.equal((await nora.call("mls:commit", { conversationId: conv, deviceId: n1.id, commit: added.commit, welcome: added.welcome })).ok, true);
+    n1.state = added.result.newState;
+
+    const info = mls.encodeMlsMessage({
+      version: "mls10",
+      wireformat: "mls_group_info",
+      groupInfo: await mls.createGroupInfoWithExternalPubAndRatchetTree(n1.state, [], impl),
+    });
+    assert.equal((await nora.call("mls:groupinfo:put", { conversationId: conv, deviceId: n1.id, groupInfo: info })).ok, true);
+
+    const n2 = await makeDevice("nora-2", 1);
+    const o2 = await makeDevice("otto-2", 1);
+    await publish(nora, n2);
+    await publish(otto, o2);
+    assert.equal((await outsider.call("mls:groupinfo:get", { conversationId: conv, deviceId: n2.id })).ok, false, "not for somebody outside the DM");
+    const got = await nora.call("mls:groupinfo:get", { conversationId: conv, deviceId: n2.id });
+    assert.equal(got.ok, true);
+    const groupInfo = (decode(got.groupInfo as Uint8Array) as { groupInfo: Parameters<typeof mls.joinGroupExternal>[0] }).groupInfo;
+
+    const externalCommit = async (d: Device) => {
+      const r = await mls.joinGroupExternal(groupInfo, d.packages[0].publicPackage, d.packages[0].privatePackage, false, impl);
+      return mls.encodeMlsMessage({ version: "mls10", wireformat: "mls_public_message", publicMessage: r.publicMessage });
+    };
+    const ottosJoin = await externalCommit(o2);
+    assert.equal((await otto.call("mls:commit", { conversationId: conv, deviceId: o1.id, commit: ottosJoin })).error, "not_own_device");
+
+    assert.equal((await nora.call("mls:commit", { conversationId: conv, deviceId: n2.id, commit: await externalCommit(n2) })).ok, true);
+    assert.equal((await nora.call("mls:groupinfo:put", { conversationId: conv, deviceId: n1.id, groupInfo: info })).error, "stale_epoch");
+    assert.equal((await nora.call("mls:groupinfo:get", { conversationId: conv, deviceId: n2.id })).error, "no_group_info", "the old one is behind now");
+  });
+});
+
 describe("packets socket.io will carry", () => {
   /* socket.io-parser closes the connection on more than ten binary parts (GRYT-1528). */
   it("hands out waiting Welcomes nine at a time, and says when there are more", async () => {
