@@ -13,7 +13,7 @@ import { DEFAULT_MAX_ATTACHMENTS_PER_MESSAGE } from "../../db/interfaces";
 import { getSqliteDb, initSqlite } from "../../db/sqlite/connection";
 import { setContactPrefs } from "../../db/sqlite/contactPrefs";
 import { createGroupConversation, openDirectConversation } from "../../db/sqlite/conversations";
-import { appendMlsMessage, createMlsGroup, getMlsGroupForConversation } from "../../db/sqlite/mls";
+import { appendMlsMessage, createMlsGroup, getMlsGroupForConversation, MLS_MAX_DEVICES, touchMlsDevice } from "../../db/sqlite/mls";
 import { createServerConfigIfNotExists, setServerRole, updateServerConfig } from "../../db/sqlite/servers";
 import { hasWrittenTo } from "../../db/sqlite/contactPrefs";
 import { insertFile, listMessages } from "../../db/sqlite/messages";
@@ -428,16 +428,16 @@ describe("KeyPackages", () => {
     assert.equal(r.error, "device_mismatch");
   });
 
-  it("stop at five devices per member", async () => {
+  it(`stop at ${MLS_MAX_DEVICES} devices per member, and say how to free one`, async () => {
     const carol = await connect("Carol");
-    for (let i = 0; i < 5; i++) {
-      assert.equal((await publish(carol, await makeDevice(`carol-${i}`, 1))).ok, true);
-    }
-    const sixth = await publish(carol, await makeDevice("carol-5", 1));
-    assert.equal(sixth.error, "too_many_devices");
+    // Straight into the table: publishing 25 in a row would hit the rate limit first.
+    for (let i = 0; i < MLS_MAX_DEVICES; i++) assert.equal(touchMlsDevice(carol.serverUserId, deviceIdFor(`carol-${i}`)), "ok");
+    const over = await publish(carol, await makeDevice(`carol-${MLS_MAX_DEVICES}`, 1));
+    assert.equal(over.error, "too_many_devices");
+    assert.match(String(over.message), /Remove one in Settings/);
 
     assert.equal((await carol.call("mls:device:remove", { deviceId: deviceIdFor("carol-0") })).ok, true);
-    assert.equal((await publish(carol, await makeDevice("carol-5", 1))).ok, true, "removing one frees its slot");
+    assert.equal((await publish(carol, await makeDevice(`carol-${MLS_MAX_DEVICES}`, 1))).ok, true, "removing one frees its slot");
   });
 
   it("won't take a removed device back, though a new one is fine (GRYT-1555)", async () => {

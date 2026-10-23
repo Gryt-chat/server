@@ -27,6 +27,7 @@ import {
   listMlsGroupsForMember,
   listMlsLog,
   listMlsWelcomes,
+  MLS_MAX_DEVICES,
   MLS_MAX_KEY_PACKAGES,
   mlsKeyPackageOwner,
   oldestMlsSeq,
@@ -361,7 +362,7 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
         if (touched === "too_many_devices") {
-          ack(fail("too_many_devices", "You have five devices using encrypted messages here. Remove one first."));
+          ack(fail("too_many_devices", `You have ${MLS_MAX_DEVICES} devices using encrypted messages here. Remove one in Settings first.`));
           return;
         }
         const result = addMlsKeyPackages(self, payload.deviceId, packages);

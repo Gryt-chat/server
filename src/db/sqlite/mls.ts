@@ -8,8 +8,8 @@ import { getSqliteDb, toIso } from "./connection";
  * columns beside it are what ordering, routing and retention read.
  */
 
-/** Five devices per person per server, from docs/mls-design.md in the crypto repo. */
-export const MLS_MAX_DEVICES = 5;
+/** Devices per person per server. @gryt/core holds the same number, or it leaves the extra ones out of DMs. */
+export const MLS_MAX_DEVICES = 100;
 
 /** Unclaimed KeyPackages a device may hold, not counting its last-resort one. */
 export const MLS_MAX_KEY_PACKAGES = 20;
