@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
+import { brotliCompressSync, gzipSync } from "node:zlib";
 import { isIP, type AddressInfo, type LookupFunction } from "node:net";
 import { after, afterEach, before, describe, it } from "node:test";
 import { createServer as createTlsServer, type Server as TlsServer } from "node:tls";
@@ -8,7 +9,7 @@ import { Agent } from "undici";
 
 import { checkPreviewUrl, type UrlRejection } from "./previewUrlSafety";
 import { createPublicOnlyAgent, isBlockedAddressError, type Resolve } from "./publicOnlyAgent";
-import { fetchFollowingSafely, type FetchGuard } from "./safePreviewFetch";
+import { fetchFollowingSafely, RefusedEncodingError, type FetchGuard } from "./safePreviewFetch";
 
 type RecordingResolve = Resolve & { asked: string[] };
 
@@ -264,5 +265,52 @@ describe("fetchFollowingSafely", () => {
       assert.deepEqual(servernames, ["secure.test"]);
       assert.deepEqual(resolve.asked, ["secure.test"]);
     });
+  });
+});
+
+describe("fetchFollowingSafely content encodings", () => {
+  let server: Server;
+  let base: string;
+  let acceptEncoding: string | undefined;
+  const agents: Agent[] = [];
+
+  before(async () => {
+    server = createServer((req, res) => {
+      acceptEncoding = req.headers["accept-encoding"];
+      if (req.url === "/br") {
+        res.writeHead(200, { "Content-Encoding": "br" });
+        res.end(brotliCompressSync("hello"));
+      } else {
+        res.writeHead(200, { "Content-Encoding": "gzip" });
+        res.end(gzipSync("hello"));
+      }
+    });
+    base = `http://127.0.0.1:${await listen(server)}`;
+  });
+
+  after(async () => {
+    await Promise.all(agents.map((a) => a.close()));
+    server.close();
+  });
+
+  function guard(): FetchGuard {
+    const made = createPublicOnlyAgent({ allow: loopbackCountsAsPublic });
+    agents.push(made);
+    return { check: anyUrl, dispatcher: made };
+  }
+
+  it("asks for gzip or deflate only, and still decodes gzip", async () => {
+    const result = await fetchFollowingSafely(`${base}/gzip`, AbortSignal.timeout(5000), "text/html", guard());
+
+    assert.ok("res" in result);
+    assert.equal(await result.res.text(), "hello");
+    assert.equal(acceptEncoding, "gzip, deflate");
+  });
+
+  it("refuses a Brotli body the site sends anyway", async () => {
+    await assert.rejects(
+      fetchFollowingSafely(`${base}/br`, AbortSignal.timeout(5000), "text/html", guard()),
+      (err: Error & { cause?: Error }) => err.cause instanceof RefusedEncodingError,
+    );
   });
 });
