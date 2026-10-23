@@ -85,6 +85,8 @@ const RL_CLAIM: RateLimitRule = { limit: 20, windowMs: 60_000, scorePerAction: 1
 const RL_COMMIT: RateLimitRule = { limit: 30, windowMs: 60_000, scorePerAction: 1, maxScore: 15, scoreDecayMs: 2000 };
 /** chat:send's numbers, under its own key so MLS and sealed sends don't share one budget. */
 const RL_SEND: RateLimitRule = { limit: 20, windowMs: 10_000, banMs: 30_000, scorePerAction: 1, maxScore: 10, scoreDecayMs: 2000 };
+/** Each request has the members' apps claim a package and commit. */
+const RL_ADD_REQUEST: RateLimitRule = { limit: 10, windowMs: 60_000, scorePerAction: 1, maxScore: 5, scoreDecayMs: 6000 };
 const RL_READ: RateLimitRule = { limit: 120, windowMs: 60_000, scorePerAction: 0.2, maxScore: 20, scoreDecayMs: 500 };
 
 const fail = (error: string, message: string, extra: Record<string, unknown> = {}): Reply => ({
@@ -799,6 +801,35 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
       } catch (err) {
         consola.error("mls:sync failed", err);
         ack(fail("failed", "Could not sync"));
+      }
+    },
+
+    /** A device of yours that isn't in the group asks the members' apps to add it (GRYT-1858). */
+    "mls:add:request": async (payload: { accessToken: string; conversationId: string; deviceId: string }, ack: Ack) => {
+      ack = typeof ack === "function" ? ack : () => {};
+      try {
+        const auth = await begin("mls:add:request", RL_ADD_REQUEST, payload, ack);
+        if (!auth || !ownDevice(auth, payload.deviceId, ack)) return;
+        const memberIds = await dmOf(payload.conversationId, auth.tokenPayload.serverUserId, ack);
+        if (!memberIds) return;
+        const refusal = await writeRefusal(auth, memberIds);
+        if (refusal) {
+          ack(refusal);
+          return;
+        }
+        if (!getMlsGroupForConversation(payload.conversationId)) {
+          ack(fail("no_group", "This conversation has no group yet."));
+          return;
+        }
+        ack({ ok: true });
+        emitTo(socketsOf(memberIds), "mls:add:requested", {
+          conversationId: payload.conversationId,
+          serverUserId: auth.tokenPayload.serverUserId,
+          deviceId: payload.deviceId,
+        });
+      } catch (err) {
+        consola.error("mls:add:request failed", err);
+        ack(fail("failed", "Could not ask to be added"));
       }
     },
 

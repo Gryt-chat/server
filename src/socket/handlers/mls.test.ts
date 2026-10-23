@@ -786,6 +786,35 @@ describe("a DM over MLS", () => {
   });
 });
 
+describe("asking to be added (GRYT-1858)", () => {
+  it("reaches both people's apps, and only for a listed device in a conversation with a group", async () => {
+    const k = await connect("Kai");
+    const l = await connect("Liv");
+    const conv = (await openDirectConversation(k.serverUserId, l.serverUserId)).conversation_id;
+    const kPhone = await makeDevice("kai-phone", 1);
+    const kLaptop = await makeDevice("kai-laptop", 1);
+    await publish(k, kPhone);
+    await publish(l, await makeDevice("liv-1", 1));
+    const ask = (deviceId: string) => k.call("mls:add:request", { conversationId: conv, deviceId });
+
+    assert.equal((await ask(kPhone.id)).error, "no_group");
+    const { groupIdHex } = await startGroup(kPhone);
+    assert.equal((await k.call("mls:group:create", { conversationId: conv, groupId: groupIdHex })).ok, true);
+    assert.equal((await ask(kLaptop.id)).error, "unknown_device");
+
+    await publish(k, kLaptop);
+    l.clear();
+    k.clear();
+    assert.deepEqual(await ask(kLaptop.id), { ok: true });
+    const pushed = { conversationId: conv, serverUserId: k.serverUserId, deviceId: kLaptop.id };
+    assert.deepEqual(l.received("mls:add:requested"), [pushed]);
+    assert.deepEqual(k.received("mls:add:requested"), [pushed]);
+
+    const m = await connect("Mo");
+    assert.equal((await m.call("mls:add:request", { conversationId: conv, deviceId: kLaptop.id })).error, "unknown_device");
+  });
+});
+
 describe("packets socket.io will carry", () => {
   /* socket.io-parser closes the connection on more than ten binary parts (GRYT-1528). */
   it("hands out waiting Welcomes nine at a time, and says when there are more", async () => {
