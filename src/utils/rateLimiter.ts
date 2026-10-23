@@ -168,7 +168,15 @@ class SlidingWindowLimiter {
 // Global limiter instance (process-local). For multi-instance deployments, consider Redis.
 export const limiter = new SlidingWindowLimiter({ limit: 100, windowMs: 60_000 });
 
+const production = (process.env.NODE_ENV || "").toLowerCase() === "production";
+const limitsOff = process.env.GRYT_DISABLE_RATE_LIMITS === "true";
+if (limitsOff) {
+	if (production) consola.warn("GRYT_DISABLE_RATE_LIMITS is ignored with NODE_ENV=production.");
+	else consola.warn("Rate limits are off (GRYT_DISABLE_RATE_LIMITS=true). Only for a dev server.");
+}
+
 export function checkRateLimit(event: string, userId?: string, ip?: string, rule?: RateLimitRule) {
+	if (limitsOff && !production) return { allowed: true };
 	return limiter.check({ event, userId, ip }, rule);
 }
 
