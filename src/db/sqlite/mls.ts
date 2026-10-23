@@ -9,7 +9,7 @@ import { getSqliteDb, toIso } from "./connection";
  */
 
 /** Devices per person per server. @gryt/core holds the same number, or it leaves the extra ones out of DMs. */
-export const MLS_MAX_DEVICES = 25;
+export const MLS_MAX_DEVICES = 100;
 
 /** Unclaimed KeyPackages a device may hold, not counting its last-resort one. */
 export const MLS_MAX_KEY_PACKAGES = 20;
