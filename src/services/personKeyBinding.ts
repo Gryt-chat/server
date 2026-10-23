@@ -80,3 +80,14 @@ export async function checkPersonKeyBinding(
   }
   return { ok: true };
 }
+
+/** Which identity key signed a DM key binding, or null when it doesn't verify. */
+export async function dmBindingIdentity(binding: string): Promise<string | null> {
+  const scope = claimedScope(binding);
+  if (!scope) return null;
+  try {
+    return (await verifyDmKeyBinding(binding, scope)).identityThumbprint;
+  } catch {
+    return null;
+  }
+}
