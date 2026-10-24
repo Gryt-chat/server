@@ -155,6 +155,25 @@ export function isRemovedMlsDevice(serverUserId: string, deviceId: string): bool
     .get(serverUserId, deviceId);
 }
 
+/**
+ * Devices not seen since the cutoff, with their KeyPackages and Welcomes. Unlike a removed one,
+ * the id may register again: the device rejoins its DMs when it comes back.
+ */
+export function expireMlsDevices(cutoff: Date): { serverUserId: string; deviceId: string }[] {
+  return inTransaction(() => {
+    const db = getSqliteDb();
+    const quiet = db
+      .prepare(`SELECT server_user_id, device_id FROM mls_devices WHERE last_seen_at < ?`)
+      .all(toIso(cutoff)) as { server_user_id: string; device_id: string }[];
+    for (const d of quiet) {
+      db.prepare(`DELETE FROM mls_devices WHERE server_user_id = ? AND device_id = ?`).run(d.server_user_id, d.device_id);
+      db.prepare(`DELETE FROM mls_key_packages WHERE server_user_id = ? AND device_id = ?`).run(d.server_user_id, d.device_id);
+      db.prepare(`DELETE FROM mls_welcomes WHERE server_user_id = ? AND device_id = ?`).run(d.server_user_id, d.device_id);
+    }
+    return quiet.map((d) => ({ serverUserId: d.server_user_id, deviceId: d.device_id }));
+  });
+}
+
 /** Its KeyPackages and waiting Welcomes go with it, and the id can never register again. */
 export function removeMlsDevice(serverUserId: string, deviceId: string, now = new Date()): boolean {
   return inTransaction(() => {
