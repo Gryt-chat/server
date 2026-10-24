@@ -213,6 +213,7 @@ describe("one identity per account (GRYT-1868)", () => {
   const gryt = {
     ...(require("@gryt/crypto/dm-key-binding") as typeof import("@gryt/crypto/dist/dm-key-binding")),
     ...(require("@gryt/crypto/dm-keys") as typeof import("@gryt/crypto/dist/dm-keys")),
+    ...(require("@gryt/crypto/key-handover") as typeof import("@gryt/crypto/dist/key-handover")),
   };
   /* eslint-enable @typescript-eslint/no-require-imports */
   const scope = "srv:one-identity" as Parameters<typeof gryt.deriveDmKeyPair>[1];
@@ -228,6 +229,17 @@ describe("one identity per account (GRYT-1868)", () => {
         identityPrivateKey: pair.privateKey,
         identityPublicJwk: { kty, crv, x, y },
       });
+  }
+
+  /** A device whose identity key the test can also sign a handover with. */
+  async function signer() {
+    const pair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+    const { kty, crv, x, y } = await crypto.subtle.exportKey("jwk", pair.publicKey);
+    const publicJwk = { kty, crv, x, y };
+    const seed = crypto.getRandomValues(new Uint8Array(32));
+    const binding = () =>
+      gryt.signDmKeyBinding({ dmPublicKey: gryt.deriveDmKeyPair(seed, scope).publicKey, scope, identityPrivateKey: pair.privateKey, identityPublicJwk: publicJwk });
+    return { binding, privateKey: pair.privateKey, publicJwk };
   }
 
   const publish = (m: Member, payload: Record<string, unknown>) =>
@@ -247,13 +259,56 @@ describe("one identity per account (GRYT-1868)", () => {
     assert.equal(await bindingOf(carol.serverUserId), again);
   });
 
-  it("lets a member start fresh with another key when they ask to", async () => {
+  it("won't let a session swap the account's key without the current key's say-so (GRYT-1886)", async () => {
     const dave = await connect("Dave");
     const [lost, fresh] = [await device(), await device()];
-    await publish(dave, { binding: await lost() });
+    const original = await lost();
+    await publish(dave, { binding: original });
 
     const replacement = await fresh();
-    assert.equal((await publish(dave, { binding: replacement, replace: true })).ok, true);
-    assert.equal(await bindingOf(dave.serverUserId), replacement);
+    assert.equal((await publish(dave, { binding: replacement, replace: true })).error, "handover_required",
+      "a password alone must not be able to replace the key everyone pinned");
+    assert.equal(await bindingOf(dave.serverUserId), original);
+  });
+
+  it("takes a replacement the current key handed over, and only that one", async () => {
+    const erin = await connect("Erin");
+    const [oldMac, iphone, thief] = [await signer(), await signer(), await signer()];
+    const old = await oldMac.binding();
+    await publish(erin, { binding: old });
+
+    const next = await iphone.binding();
+    const forged = await gryt.signKeyHandover({ newBinding: next, scope, identityPrivateKey: thief.privateKey, identityPublicJwk: thief.publicJwk });
+    assert.equal((await publish(erin, { binding: next, replace: true, handover: forged })).error, "handover_required");
+
+    const forOther = await gryt.signKeyHandover({ newBinding: await thief.binding(), scope, identityPrivateKey: oldMac.privateKey, identityPublicJwk: oldMac.publicJwk });
+    assert.equal((await publish(erin, { binding: next, replace: true, handover: forOther })).error, "handover_required",
+      "a real note for another key can't be reused");
+
+    const real = await gryt.signKeyHandover({ newBinding: next, scope, identityPrivateKey: oldMac.privateKey, identityPublicJwk: oldMac.publicJwk });
+    assert.deepEqual(await publish(erin, { binding: next, replace: true, handover: real }), { ok: true, changed: true });
+    assert.equal(await bindingOf(erin.serverUserId), next);
+  });
+
+  it("passes a handover request to the account's other devices only", async () => {
+    const frank = await connect("Frank");
+    const frankPhone = await connect("Frank's phone");
+    clientsInfo[frankPhone.clientId].serverUserId = frank.serverUserId;
+    const stranger = await connect("Stranger");
+    const heard: Record<string, unknown[]> = {};
+    for (const m of [frank, frankPhone, stranger]) {
+      io.sockets.sockets.set(m.clientId, { emit: (event: string, body: unknown) => (heard[m.clientId] ??= []).push([event, body]) });
+    }
+    const binding = await (await signer()).binding();
+    frank.handlers["dm:key:handover:ask"]({ binding, deviceName: "Mac" });
+
+    assert.deepEqual(heard[frankPhone.clientId], [["dm:key:handover:asked", { binding, deviceName: "Mac", askerId: frank.clientId }]]);
+    assert.equal(heard[stranger.clientId], undefined, "nobody else's devices hear it");
+    assert.equal(heard[frank.clientId], undefined, "the asker doesn't ask itself");
+
+    stranger.handlers["dm:key:handover:deny"]({ askerId: frank.clientId });
+    assert.equal(heard[frank.clientId], undefined, "only the account's own devices can say no");
+    frankPhone.handlers["dm:key:handover:deny"]({ askerId: frank.clientId });
+    assert.deepEqual(heard[frank.clientId], [["dm:key:handover:denied", {}]]);
   });
 });
