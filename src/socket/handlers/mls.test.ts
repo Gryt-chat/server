@@ -162,9 +162,8 @@ function certify(person: KeyObject, leafPublic: Uint8Array, deviceId: string): U
   });
 }
 
-async function makeDevice(label: string, count: number, lifetime = lifetimeFrom()): Promise<Device> {
+async function makeDevice(label: string, count: number, lifetime = lifetimeFrom(), person = generateKeyPairSync("ed25519")): Promise<Device> {
   const id = deviceIdFor(label);
-  const person = generateKeyPairSync("ed25519");
   const leaf = generateKeyPairSync("ed25519");
   const leafKeys = { signKey: rawKey(leaf.privateKey, "d"), publicKey: rawKey(leaf.publicKey, "x") };
   const certificate = certify(person.privateKey, leafKeys.publicKey, id);
@@ -821,7 +820,8 @@ describe("a device joining by itself (GRYT-1859)", () => {
     const otto = await connect("Otto");
     const outsider = await connect("Pia");
     const conv = (await openDirectConversation(nora.serverUserId, otto.serverUserId)).conversation_id;
-    const n1 = await makeDevice("nora-1", 1);
+    const noraKey = generateKeyPairSync("ed25519");
+    const n1 = await makeDevice("nora-1", 1, lifetimeFrom(), noraKey);
     const o1 = await makeDevice("otto-1", 1);
     await publish(nora, n1);
     await publish(otto, o1);
@@ -840,7 +840,7 @@ describe("a device joining by itself (GRYT-1859)", () => {
     });
     assert.equal((await nora.call("mls:groupinfo:put", { conversationId: conv, deviceId: n1.id, groupInfo: info })).ok, true);
 
-    const n2 = await makeDevice("nora-2", 1);
+    const n2 = await makeDevice("nora-2", 1, lifetimeFrom(), noraKey);
     const o2 = await makeDevice("otto-2", 1);
     await publish(nora, n2);
     await publish(otto, o2);
@@ -859,6 +859,27 @@ describe("a device joining by itself (GRYT-1859)", () => {
     assert.equal((await nora.call("mls:commit", { conversationId: conv, deviceId: n2.id, commit: await externalCommit(n2) })).ok, true);
     assert.equal((await nora.call("mls:groupinfo:put", { conversationId: conv, deviceId: n1.id, groupInfo: info })).error, "stale_epoch");
     assert.equal((await nora.call("mls:groupinfo:get", { conversationId: conv, deviceId: n2.id })).error, "no_group_info", "the old one is behind now");
+  });
+
+  it("refuses a join by somebody with no device left in the group, since members would refuse it", async () => {
+    const nora = await connect("Nora");
+    const otto = await connect("Otto");
+    const conv = (await openDirectConversation(nora.serverUserId, otto.serverUserId)).conversation_id;
+    const n1 = await makeDevice("nora-1", 1);
+    const o1 = await makeDevice("otto-1", 1);
+    await publish(nora, n1);
+    await publish(otto, o1);
+
+    const { groupIdHex } = await startGroup(n1);
+    assert.equal((await nora.call("mls:group:create", { conversationId: conv, groupId: groupIdHex })).ok, true);
+    assert.ok(n1.state);
+    const groupInfo = await mls.createGroupInfoWithExternalPubAndRatchetTree(n1.state, [], impl);
+    const info = mls.encodeMlsMessage({ version: "mls10", wireformat: "mls_group_info", groupInfo });
+    assert.equal((await nora.call("mls:groupinfo:put", { conversationId: conv, deviceId: n1.id, groupInfo: info })).ok, true);
+
+    const r = await mls.joinGroupExternal(groupInfo, o1.packages[0].publicPackage, o1.packages[0].privatePackage, false, impl);
+    const commit = mls.encodeMlsMessage({ version: "mls10", wireformat: "mls_public_message", publicMessage: r.publicMessage });
+    assert.equal((await otto.call("mls:commit", { conversationId: conv, deviceId: o1.id, commit })).error, "not_in_group");
   });
 });
 

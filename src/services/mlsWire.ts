@@ -17,6 +17,7 @@ import { readDeviceCertificate, verifyEd25519 } from "./mlsDeviceCertificate";
 /* eslint-disable @typescript-eslint/no-require-imports */
 const { decodeMlsMessage } = require("ts-mls/message.js") as typeof import("ts-mls/dist/src/message");
 const { makeKeyPackageRef, verifyKeyPackage } = require("ts-mls/keyPackage.js") as typeof import("ts-mls/dist/src/keyPackage");
+const { ratchetTreeFromExtension } = require("ts-mls/groupInfo.js") as typeof import("ts-mls/dist/src/groupInfo");
 /* eslint-enable @typescript-eslint/no-require-imports */
 
 /** Suite 1, the only one Gryt uses (decision 1 in docs/mls-design.md). */
@@ -152,6 +153,7 @@ export interface ParsedHandshake {
   referencedProposals: number;
   /** An external commit's joining device, from the certificate in its path (GRYT-1859). */
   joinerDeviceId?: string;
+  joinerPersonKey?: string;
 }
 
 /**
@@ -202,7 +204,10 @@ export async function parseGroupMessage(
     if (!Buffer.from(certificate.leafSignatureKey).equals(Buffer.from(leaf.signaturePublicKey))) {
       return refuse("invalid_device_certificate", "That joining device's certificate is for another leaf key.");
     }
-    return { ok: true, kind: "commit", ...base, addedRefs, referencedProposals, joinerDeviceId: certificate.deviceId };
+    return {
+      ok: true, kind: "commit", ...base, addedRefs, referencedProposals,
+      joinerDeviceId: certificate.deviceId, joinerPersonKey: hex(certificate.personPublicKey),
+    };
   }
   return refuse("must_be_private", "Application messages have to be sent as PrivateMessage.");
 }
@@ -213,6 +218,23 @@ export function parseGroupInfo(bytes: Uint8Array): ({ ok: true; groupId: string;
   if (!msg || msg.wireformat !== "mls_group_info") return refuse("invalid_group_info", "That isn't an MLS GroupInfo.");
   const context = msg.groupInfo.groupContext;
   return { ok: true, groupId: hex(context.groupId), epoch: Number(context.epoch) };
+}
+
+/** The people with a leaf in a GroupInfo's tree, as hex person keys. Null if it can't be read. */
+export function groupInfoPeople(bytes: Uint8Array): { epoch: number; people: Set<string> } | null {
+  const msg = decodeWhole(bytes);
+  if (!msg || msg.wireformat !== "mls_group_info") return null;
+  try {
+    const people = new Set<string>();
+    for (const node of ratchetTreeFromExtension(msg.groupInfo) ?? []) {
+      if (node?.nodeType !== "leaf" || node.leaf.credential.credentialType !== "basic") continue;
+      const certificate = readDeviceCertificate(node.leaf.credential.identity);
+      if (certificate) people.add(hex(certificate.personPublicKey));
+    }
+    return { epoch: Number(msg.groupInfo.groupContext.epoch), people };
+  } catch {
+    return null;
+  }
 }
 
 /** Who a Welcome is for, as KeyPackage refs. */
