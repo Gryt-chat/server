@@ -9,6 +9,7 @@ import type { IdentityScope } from "@gryt/crypto/dist/scope";
 /* eslint-disable @typescript-eslint/no-require-imports */
 const { verifyPersonKeyBinding } = require("@gryt/crypto/mls-person-key") as typeof import("@gryt/crypto/dist/mls-person-key");
 const { verifyDmKeyBinding } = require("@gryt/crypto/dm-key-binding") as typeof import("@gryt/crypto/dist/dm-key-binding");
+const { verifyKeyHandover } = require("@gryt/crypto/key-handover") as typeof import("@gryt/crypto/dist/key-handover");
 /* eslint-enable @typescript-eslint/no-require-imports */
 
 /** A real binding is about 500 bytes. The same ceiling as the DM key binding's. */
@@ -79,6 +80,18 @@ export async function checkPersonKeyBinding(
     return refuse("wrong_identity", "The person key binding was signed for a different server than your DM key binding.");
   }
   return { ok: true };
+}
+
+/** Whether the key behind `oldBinding` signed `note` handing this server to `newBinding` (GRYT-1886). */
+export async function handoverValid(note: string, oldBinding: string, newBinding: string): Promise<boolean> {
+  const scope = claimedScope(newBinding);
+  if (!scope || note.length > MAX_PERSON_KEY_BINDING_BYTES || !COMPACT_JWT.test(note)) return false;
+  try {
+    await verifyKeyHandover(note, { oldBinding, newBinding, scope });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Which identity key signed a DM key binding, or null when it doesn't verify. */

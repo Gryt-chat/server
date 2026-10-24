@@ -1,6 +1,6 @@
 import type { HandlerContext, EventHandlerMap } from "./types";
 import { getUserByServerId, setUserDmKeyBinding } from "../../db";
-import { dmBindingIdentity } from "../../services/personKeyBinding";
+import { dmBindingIdentity, handoverValid } from "../../services/personKeyBinding";
 import { checkRateLimit, type RateLimitRule } from "../../utils/rateLimiter";
 import { broadcastMemberList } from "../utils/clients";
 
@@ -30,7 +30,7 @@ export function registerDmKeyHandlers(ctx: HandlerContext): EventHandlerMap {
   const { io, clientId, clientsInfo, serverId, getClientIp } = ctx;
 
   return {
-    "dm:key:publish": async (payload: { binding?: string | null; replace?: boolean }, ack?: (reply: { ok: boolean; changed?: boolean; error?: string; message?: string }) => void) => {
+    "dm:key:publish": async (payload: { binding?: string | null; replace?: boolean; handover?: string }, ack?: (reply: { ok: boolean; changed?: boolean; error?: string; message?: string }) => void) => {
       const reply = typeof ack === "function" ? ack : () => {};
       const serverUserId = clientsInfo[clientId]?.serverUserId;
       if (!serverUserId) return;
@@ -57,10 +57,15 @@ export function registerDmKeyHandlers(ctx: HandlerContext): EventHandlerMap {
       }
 
       // One identity per account (GRYT-1868): a device with its own key links instead of taking over.
-      if (binding !== null && user.dm_key_binding && payload?.replace !== true) {
+      if (binding !== null && user.dm_key_binding) {
         const [had, sent] = await Promise.all([dmBindingIdentity(user.dm_key_binding), dmBindingIdentity(binding)]);
-        if (had && sent !== had) {
+        if (had && sent !== had && payload?.replace !== true) {
           reply({ ok: false, error: "other_identity", message: "Your account already has a different key here. Link this device from one you use." });
+          return;
+        }
+        // Only the key being replaced can hand over (GRYT-1886); the password alone isn't enough.
+        if (had && sent !== had && !(typeof payload?.handover === "string" && await handoverValid(payload.handover, user.dm_key_binding, binding))) {
+          reply({ ok: false, error: "handover_required", message: "Approve this from a device that has your current key here." });
           return;
         }
       }
@@ -71,6 +76,28 @@ export function registerDmKeyHandlers(ctx: HandlerContext): EventHandlerMap {
       // The list is deduped on its contents and the binding is in that hash, so
       // a publish that changed nothing sends nothing.
       broadcastMemberList(io, clientsInfo, serverId);
+    },
+
+    /** A device with its own key asks your other devices to hand this server over to it. */
+    "dm:key:handover:ask": (payload: { binding?: string; deviceName?: string }) => {
+      const serverUserId = clientsInfo[clientId]?.serverUserId;
+      const binding = payload?.binding;
+      if (!serverUserId || typeof binding !== "string" || binding.length > MAX_BINDING_BYTES || !COMPACT_JWT.test(binding)) return;
+      if (!checkRateLimit("dm:key:handover:ask", serverUserId, getClientIp(), RL_DM_KEY).allowed) return;
+      const deviceName = typeof payload?.deviceName === "string" ? payload.deviceName.slice(0, 64) : "";
+      for (const [cid, ci] of Object.entries(clientsInfo)) {
+        if (cid !== clientId && ci.serverUserId === serverUserId) {
+          io.sockets.sockets.get(cid)?.emit("dm:key:handover:asked", { binding, deviceName, askerId: clientId });
+        }
+      }
+    },
+
+    /** "That isn't mine": tells the asking device, so it stops waiting. */
+    "dm:key:handover:deny": (payload: { askerId?: string }) => {
+      const serverUserId = clientsInfo[clientId]?.serverUserId;
+      const askerId = payload?.askerId;
+      if (!serverUserId || typeof askerId !== "string" || clientsInfo[askerId]?.serverUserId !== serverUserId) return;
+      io.sockets.sockets.get(askerId)?.emit("dm:key:handover:denied", {});
     },
   };
 }
