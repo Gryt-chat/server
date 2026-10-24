@@ -1025,6 +1025,12 @@ function runMigrations(d: DatabaseSync): void {
     d.exec("ALTER TABLE users ADD COLUMN dm_key_binding TEXT");
   }
 
+  // A key reset with no device and no words (GRYT-1886): the new binding, and when it may take over.
+  if (!hasColumn(d, "users", "dm_key_reset_binding")) {
+    d.exec("ALTER TABLE users ADD COLUMN dm_key_reset_binding TEXT");
+    d.exec("ALTER TABLE users ADD COLUMN dm_key_reset_at INTEGER");
+  }
+
   // The MLS person key binding (GRYT-1515). Checked against the DM key binding's
   // signer when it's published, then stored whole like that one.
   if (!hasColumn(d, "users", "person_key_binding")) {

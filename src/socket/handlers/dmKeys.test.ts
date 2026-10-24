@@ -6,10 +6,10 @@ import { after, before, describe, it } from "node:test";
 
 import { initSqlite } from "../../db/sqlite/connection";
 import { createServerConfigIfNotExists, setServerRole } from "../../db/sqlite/servers";
-import { getUserByServerId, upsertUser } from "../../db/sqlite/users";
+import { getUserByServerId, setUserDmKeyReset, upsertUser } from "../../db/sqlite/users";
 import type { Clients } from "../../types";
 import { buildMemberList } from "../utils/clients";
-import { registerDmKeyHandlers } from "./dmKeys";
+import { KEY_RESET_DELAY_MS, registerDmKeyHandlers } from "./dmKeys";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
 /** Both assertions are about what the server does not do: vouch for the binding,
@@ -310,5 +310,47 @@ describe("one identity per account (GRYT-1868)", () => {
     assert.equal(heard[frank.clientId], undefined, "only the account's own devices can say no");
     frankPhone.handlers["dm:key:handover:deny"]({ askerId: frank.clientId });
     assert.deepEqual(heard[frank.clientId], [["dm:key:handover:denied", {}]]);
+  });
+
+  const call = (m: Member, event: string, payload: Record<string, unknown>) =>
+    new Promise<Record<string, unknown>>((resolve) => void m.handlers[event](payload, resolve));
+
+  it("lets a reset with no device take over only after 30 days", async () => {
+    const gina = await connect("Gina");
+    const [lost, fresh] = [await signer(), await signer()];
+    const old = await lost.binding();
+    await publish(gina, { binding: old });
+    const next = await fresh.binding();
+
+    const asked = await call(gina, "dm:key:reset:request", { binding: next });
+    assert.equal(asked.ok, true);
+    const at = asked.at as number;
+    assert.ok(Math.abs(at - (Date.now() + KEY_RESET_DELAY_MS)) < 5_000, "the clock is 30 days");
+
+    const again = await call(gina, "dm:key:reset:request", { binding: next });
+    assert.equal(again.at, at, "asking again doesn't restart the clock");
+    assert.equal((await publish(gina, { binding: next, replace: true })).error, "handover_required", "not before the 30 days are up");
+
+    await setUserDmKeyReset(gina.serverUserId, next, Date.now() - 1);
+    assert.deepEqual(await publish(gina, { binding: next, replace: true }), { ok: true, changed: true });
+    const after = await getUserByServerId(gina.serverUserId);
+    assert.equal(after?.dm_key_binding, next);
+    assert.equal(after?.dm_key_reset_binding, null, "a finished reset is cleared");
+  });
+
+  it("only cancels a reset with proof from the current key", async () => {
+    const hank = await connect("Hank");
+    const [mine, thief] = [await signer(), await signer()];
+    const current = await mine.binding();
+    await publish(hank, { binding: current });
+    await call(hank, "dm:key:reset:request", { binding: await thief.binding() });
+
+    const forged = await gryt.signKeyHandover({ newBinding: current, scope, identityPrivateKey: thief.privateKey, identityPublicJwk: thief.publicJwk });
+    assert.equal((await call(hank, "dm:key:reset:cancel", { proof: forged })).error, "proof_required");
+    assert.notEqual((await getUserByServerId(hank.serverUserId))?.dm_key_reset_binding, null);
+
+    const proof = await gryt.signKeyHandover({ newBinding: current, scope, identityPrivateKey: mine.privateKey, identityPublicJwk: mine.publicJwk });
+    assert.equal((await call(hank, "dm:key:reset:cancel", { proof })).ok, true);
+    assert.equal((await getUserByServerId(hank.serverUserId))?.dm_key_reset_binding, null);
   });
 });
