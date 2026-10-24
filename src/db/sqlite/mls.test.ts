@@ -9,6 +9,7 @@ import { openDirectConversation, purgeOrphanedConversations } from "./conversati
 import { mergeGuestIntoAccount } from "./mergeGuest";
 import {
   addMlsKeyPackages,
+  expireMlsDevices,
   appendMlsCommit,
   appendMlsMessage,
   claimMlsKeyPackage,
@@ -80,6 +81,20 @@ describe("devices", () => {
     assert.equal(removeMlsDevice(me, "phone"), true);
     assert.deepEqual(listMlsDevices([me]), []);
     assert.equal(mlsKeyPackageOwner("ref-removed"), null);
+  });
+
+  it("expires a device not seen since the cutoff, and lets the same id register again", async () => {
+    const me = await member();
+    const long = new Date("2026-01-01T00:00:00Z");
+    touchMlsDevice(me, "drawer-tablet", long);
+    touchMlsDevice(me, "phone");
+    addMlsKeyPackages(me, "drawer-tablet", [{ ref: "ref-quiet", data: bytes(1), lastResort: false, ...LIVE }]);
+
+    const quiet = expireMlsDevices(new Date("2026-02-01T00:00:00Z"));
+    assert.deepEqual(quiet.filter((d) => d.serverUserId === me), [{ serverUserId: me, deviceId: "drawer-tablet" }]);
+    assert.deepEqual(listMlsDevices([me]).map((d) => d.deviceId), ["phone"]);
+    assert.equal(mlsKeyPackageOwner("ref-quiet"), null);
+    assert.equal(touchMlsDevice(me, "drawer-tablet"), "ok", "expired isn't removed");
   });
 
   it("never lets a removed device id back in, and remembers it through a guest merge", async () => {
