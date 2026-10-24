@@ -45,7 +45,7 @@ import { isSpamExempt, spamRefusal, timeOutSpammer } from "../../moderation/spam
 import { textMuteError, textMuteFor } from "../../moderation/textMute";
 import { mayInChannel } from "../../services/channelPermissions";
 import { fileReadVerdict } from "../../services/fileAccess";
-import { asBytes, parseGroupInfo, parseGroupMessage, parseKeyPackage, parseWelcome } from "../../services/mlsWire";
+import { asBytes, groupInfoPeople, parseGroupInfo, parseGroupMessage, parseKeyPackage, parseWelcome } from "../../services/mlsWire";
 import { pushNotify } from "../../services/push";
 import { messagePreview } from "../../services/pushPreview";
 import { SEALED_MAX_LENGTH } from "../../utils/messageLimits";
@@ -549,6 +549,15 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
         if (parsed.joinerDeviceId !== undefined && (parsed.joinerDeviceId !== payload.deviceId || welcome)) {
           ack(fail("not_own_device", "A device joining by itself can only bring itself in, and makes no Welcome."));
           return;
+        }
+        // Members refuse a join by someone with no leaf left, and nobody gets past a commit they refuse.
+        if (parsed.joinerPersonKey !== undefined) {
+          const stored = getMlsGroupInfo(group.groupId);
+          const tree = stored?.epoch === parsed.epoch ? groupInfoPeople(stored.data) : null;
+          if (!tree?.people.has(parsed.joinerPersonKey)) {
+            ack(fail("not_in_group", "None of this person's devices is in the group any more, so a member has to add this one."));
+            return;
+          }
         }
 
         const welcomes: MlsWelcomeFor[] = [];
