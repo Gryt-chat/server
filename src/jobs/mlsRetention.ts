@@ -1,6 +1,7 @@
 import consola from "consola";
 
-import { sweepMls } from "../db";
+import { expireMlsDevices, listConversationsForUser, sweepMls } from "../db";
+import { emitToMember } from "../socket/utils/server";
 import { deleteUnreferencedFiles } from "./mediaSweep";
 
 /** Decision 7 in docs/mls-design.md: 30 days, and a host can make it shorter but not longer. */
@@ -20,7 +21,16 @@ export function mlsRetentionDays(env: NodeJS.ProcessEnv = process.env): number {
 }
 
 export function runMlsRetention(now = new Date()): ReturnType<typeof sweepMls> {
-  const swept = sweepMls(new Date(now.getTime() - mlsRetentionDays() * DAY_MS), now);
+  const cutoff = new Date(now.getTime() - mlsRetentionDays() * DAY_MS);
+  const swept = sweepMls(cutoff, now);
+  // Past the cutoff its log is gone, so it couldn't follow its DMs anyway. Members take it out.
+  const quiet = expireMlsDevices(cutoff);
+  if (quiet.length > 0) {
+    consola.info("[mls-retention] expired quiet devices", { devices: quiet.length });
+    for (const serverUserId of new Set(quiet.map((d) => d.serverUserId))) {
+      void announceDevices(serverUserId).catch((err) => consola.warn("[mls-retention] announcing expired devices failed", err));
+    }
+  }
   const { fileIds, ...counts } = swept;
   if (swept.log || swept.welcomes || swept.keyPackages || swept.expired || swept.groups) {
     consola.info("[mls-retention] swept", { ...counts, files: fileIds.length });
@@ -30,6 +40,12 @@ export function runMlsRetention(now = new Date()): ReturnType<typeof sweepMls> {
     void deleteUnreferencedFiles(fileIds).catch((err) => consola.warn("[mls-retention] file cleanup failed", err));
   }
   return swept;
+}
+
+async function announceDevices(serverUserId: string): Promise<void> {
+  const people = new Set([serverUserId]);
+  for (const c of await listConversationsForUser(serverUserId)) for (const id of c.other_server_user_ids) people.add(id);
+  for (const id of people) emitToMember(id, "mls:devices:changed", { serverUserId });
 }
 
 export function startMlsRetention(): void {
