@@ -883,6 +883,39 @@ describe("a device joining by itself (GRYT-1859)", () => {
   });
 });
 
+describe("rebuilding a group nobody can add to (GRYT-1862)", () => {
+  it("replaces the group only once every device in its GroupInfo is gone", async () => {
+    const nora = await connect("Nora");
+    const otto = await connect("Otto");
+    const conv = (await openDirectConversation(nora.serverUserId, otto.serverUserId)).conversation_id;
+    const n1 = await makeDevice("nora-1", 1);
+    const n2 = await makeDevice("nora-2", 1);
+    await publish(nora, n1);
+    await publish(nora, n2);
+    const { groupIdHex } = await startGroup(n1);
+    assert.equal((await nora.call("mls:group:create", { conversationId: conv, groupId: groupIdHex })).ok, true);
+    const replace = (groupId: string) =>
+      nora.call("mls:group:replace", { conversationId: conv, deviceId: n2.id, oldGroupId: groupIdHex, groupId });
+
+    assert.equal((await replace("ab".repeat(16))).error, "not_abandoned", "no GroupInfo, so nothing proves it");
+
+    assert.ok(n1.state);
+    const info = mls.encodeMlsMessage({
+      version: "mls10",
+      wireformat: "mls_group_info",
+      groupInfo: await mls.createGroupInfoWithExternalPubAndRatchetTree(n1.state, [], impl),
+    });
+    assert.equal((await nora.call("mls:groupinfo:put", { conversationId: conv, deviceId: n1.id, groupInfo: info })).ok, true);
+    assert.equal((await replace("ab".repeat(16))).error, "not_abandoned", "nora-1 is in it and still registered");
+
+    assert.equal((await nora.call("mls:device:remove", { deviceId: n1.id })).ok, true);
+    const done = await replace("cd".repeat(16));
+    assert.equal(done.ok, true);
+    assert.equal((done.group as { groupId: string; epoch: number }).groupId, "cd".repeat(16));
+    assert.equal((await replace("ef".repeat(16))).error, "stale_group", "the old id is gone now");
+  });
+});
+
 describe("packets socket.io will carry", () => {
   /* socket.io-parser closes the connection on more than ten binary parts (GRYT-1528). */
   it("hands out waiting Welcomes nine at a time, and says when there are more", async () => {

@@ -25,6 +25,7 @@ import {
   listConversationsForUser,
   lastResortMlsKeyPackages,
   listMlsDevices,
+  replaceMlsGroup,
   listMlsGroupsForMember,
   listMlsLog,
   listMlsWelcomes,
@@ -498,6 +499,44 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
       } catch (err) {
         consola.error("mls:group:create failed", err);
         ack(fail("failed", "Could not create the group"));
+      }
+    },
+
+    /* A fresh group when every device in the old one is gone, so nobody could add anyone. Only
+       provable from a stored GroupInfo: otherwise any member could wipe a DM's unread log. */
+    "mls:group:replace": async (
+      payload: { accessToken: string; conversationId: string; deviceId: string; oldGroupId: string; groupId: string },
+      ack: Ack,
+    ) => {
+      ack = typeof ack === "function" ? ack : () => {};
+      try {
+        const auth = await begin("mls:commit", RL_COMMIT, payload, ack);
+        if (!auth || !ownDevice(auth, payload.deviceId, ack)) return;
+        const self = auth.tokenPayload.serverUserId;
+        const memberIds = await dmOf(payload.conversationId, self, ack);
+        if (!memberIds) return;
+        if (typeof payload.groupId !== "string" || !GROUP_ID.test(payload.groupId)) {
+          ack(fail("invalid_group_id", "groupId has to be 1 to 64 bytes of lower-case hex."));
+          return;
+        }
+        const group = getMlsGroupForConversation(payload.conversationId);
+        if (!group || group.groupId !== payload.oldGroupId) {
+          ack(fail("stale_group", "That isn't this conversation's group anymore.", group ? { group: groupView(group) } : {}));
+          return;
+        }
+        const info = getMlsGroupInfo(group.groupId);
+        const tree = info ? groupInfoPeople(info.data) : null;
+        const registered = new Set(listMlsDevices(memberIds).map((d) => d.deviceId));
+        if (!tree || [...tree.devices].some((d) => registered.has(d))) {
+          ack(fail("not_abandoned", "Somebody in this group can still add devices."));
+          return;
+        }
+        const result = replaceMlsGroup(payload.conversationId, group.groupId, payload.groupId, self);
+        if (result.replaced) ack({ ok: true, group: groupView(result.group) });
+        else ack(fail("stale_group", "That isn't this conversation's group anymore.", result.group ? { group: groupView(result.group) } : {}));
+      } catch (err) {
+        consola.error("mls:group:replace failed", err);
+        ack(fail("failed", "Could not replace the group"));
       }
     },
 

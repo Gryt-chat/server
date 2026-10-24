@@ -390,6 +390,31 @@ export function createMlsGroup(
   });
 }
 
+/**
+ * A fresh group in place of the conversation's current one, only if that's still `oldGroupId`.
+ * The old group's log and Welcomes go with it.
+ */
+export function replaceMlsGroup(
+  conversationId: string,
+  oldGroupId: string,
+  groupId: string,
+  createdByServerUserId: string,
+  now = new Date(),
+): { replaced: true; group: MlsGroup } | { replaced: false; group: MlsGroup | null } {
+  return inTransaction(() => {
+    const current = getMlsGroupForConversation(conversationId);
+    if (!current || current.groupId !== oldGroupId || getMlsGroup(groupId)) return { replaced: false as const, group: current };
+    dropMlsGroupForConversation(conversationId);
+    getSqliteDb()
+      .prepare(
+        `INSERT INTO mls_groups (group_id, conversation_id, epoch, head_seq, created_by_server_user_id, created_at)
+         VALUES (?, ?, 0, 0, ?, ?)`,
+      )
+      .run(groupId, conversationId, createdByServerUserId, toIso(now));
+    return { replaced: true as const, group: getMlsGroup(groupId)! };
+  });
+}
+
 export function listMlsGroupsForMember(serverUserId: string): (MlsGroup & { oldestSeq: number | null })[] {
   const rows = getSqliteDb()
     .prepare(

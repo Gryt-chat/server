@@ -220,18 +220,22 @@ export function parseGroupInfo(bytes: Uint8Array): ({ ok: true; groupId: string;
   return { ok: true, groupId: hex(context.groupId), epoch: Number(context.epoch) };
 }
 
-/** The people with a leaf in a GroupInfo's tree, as hex person keys. Null if it can't be read. */
-export function groupInfoPeople(bytes: Uint8Array): { epoch: number; people: Set<string> } | null {
+/** The people (hex person keys) and devices with a leaf in a GroupInfo's tree. Null if it can't be read. */
+export function groupInfoPeople(bytes: Uint8Array): { epoch: number; people: Set<string>; devices: Set<string> } | null {
   const msg = decodeWhole(bytes);
   if (!msg || msg.wireformat !== "mls_group_info") return null;
   try {
     const people = new Set<string>();
+    const devices = new Set<string>();
     for (const node of ratchetTreeFromExtension(msg.groupInfo) ?? []) {
       if (node?.nodeType !== "leaf" || node.leaf.credential.credentialType !== "basic") continue;
       const certificate = readDeviceCertificate(node.leaf.credential.identity);
-      if (certificate) people.add(hex(certificate.personPublicKey));
+      if (certificate) {
+        people.add(hex(certificate.personPublicKey));
+        devices.add(certificate.deviceId);
+      }
     }
-    return { epoch: Number(msg.groupInfo.groupContext.epoch), people };
+    return { epoch: Number(msg.groupInfo.groupContext.epoch), people, devices };
   } catch {
     return null;
   }
