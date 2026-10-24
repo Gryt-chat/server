@@ -499,17 +499,17 @@
   resolved "https://registry.yarnpkg.com/@exodus/bytes/-/bytes-1.15.1.tgz#b13bc464ca162c17abf0837fb3a11aeab79e45d1"
   integrity sha512-S6mL0yNB/Abt9Ei4tq8gDhcczc4S3+vQ4ra7vxnAf+YHC02srtqxKKZghx2Dq6p0e66THKwR6r8N6P95wEty7Q==
 
-"@gryt/crypto@0.10.0":
-  version "0.10.0"
-  resolved "https://registry.yarnpkg.com/@gryt/crypto/-/crypto-0.10.0.tgz#95fb629bf986669dad00445bb949be77c69b191a"
-  integrity sha512-e34aYOyoIcrLtf3KNbIZ68DXN+4PrmwY/vj6uozBez7piFkq7qQl9OivlHp1KQV7BljL0mkSXvC9G58Vn3Mn6w==
+"@gryt/crypto@0.11.0":
+  version "0.11.0"
+  resolved "https://registry.yarnpkg.com/@gryt/crypto/-/crypto-0.11.0.tgz#22d5fa051d26ad2591db158eadc1adef76e2d77d"
+  integrity sha512-IiWD2evCApOpCUOXc6aSpmIKaDYYAKN+EsX6YWMbmShQpGOkLvzFpnUYTz0wnHnAA6zZ0QIhBZ9W65oivJ7Dwg==
   dependencies:
     "@noble/ciphers" "^2"
     "@noble/curves" "^2.3.0"
     "@noble/hashes" "^2.3.0"
     "@scure/bip39" "^2.3.0"
     fflate "0.8.3"
-    ts-mls "1.6.4"
+    ts-mls "npm:@gryt/ts-mls@1.6.4-gryt.1"
 
 "@hpke/common@^1.10.0":
   version "1.10.1"
@@ -2608,10 +2608,10 @@ ts-api-utils@^2.5.0:
   resolved "https://registry.yarnpkg.com/ts-api-utils/-/ts-api-utils-2.5.0.tgz#4acd4a155e22734990a5ed1fe9e97f113bcb37c1"
   integrity sha512-OJ/ibxhPlqrMM0UiNHJ/0CKQkoKF243/AEmplt3qpRgkW8VG7IfOS41h7V8TjITqdByHzrjcS/2si+y4lIh8NA==
 
-ts-mls@1.6.4:
-  version "1.6.4"
-  resolved "https://registry.yarnpkg.com/ts-mls/-/ts-mls-1.6.4.tgz#a2f35de3ed3d57a35dfa7247995e25bd97f828d6"
-  integrity sha512-BFb9qJ3V1+HIuifC+MtnlROEj3oc6NEzA7Ig1/LAmANDRhNay7UCnwkzijzHH9cav5wf1BoJw8KQ2mXiEhPy1Q==
+"ts-mls@npm:@gryt/ts-mls@1.6.4-gryt.1":
+  version "1.6.4-gryt.1"
+  resolved "https://registry.yarnpkg.com/@gryt/ts-mls/-/ts-mls-1.6.4-gryt.1.tgz#026d5601f2b8a08e7f7b401cc14b35d352e54449"
+  integrity sha512-+QYmVFE0j6/TVSa/zQMn/16/egLSTKVGIYcCYXiLPOTReJAVpnS65NBMkSvtopm1QSUQloseK9h2DZfN6jLaNQ==
   dependencies:
     "@hpke/core" "1.9.0"
 
