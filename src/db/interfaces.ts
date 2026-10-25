@@ -66,6 +66,9 @@ export interface UserRecord {
   dm_key_binding: string | null;
   /** Signed by the same identity key as `dm_key_binding`, which is checked on the way in. */
   person_key_binding: string | null;
+  /** A pending reset to this binding, with no handover note (GRYT-1886). Takes over at `dm_key_reset_at`, in ms. */
+  dm_key_reset_binding: string | null;
+  dm_key_reset_at: number | null;
   /** Null when they have no designed look. Stored and passed on without being
       read — see `utils/wornString.ts`. */
   avatar_worn: string | null;

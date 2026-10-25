@@ -258,6 +258,8 @@ export async function buildMemberList(clientsInfo: Clients) {
         dmKeyBinding: user.dm_key_binding,
         /** Checked against the DM key binding's signer on the way in (GRYT-1515). */
         personKeyBinding: user.person_key_binding,
+        /** When a pending key reset takes over, so contacts and your own devices can see it coming. */
+        keyResetAt: user.dm_key_reset_binding ? user.dm_key_reset_at : null,
         avatarFileId: user.avatar_file_id || null,
         avatarColor: user.avatar_file_id
           ? avatarFiles.get(user.avatar_file_id)?.dominant_color ?? null
@@ -321,6 +323,7 @@ export function memberStateHash(members: MemberListEntry[]): string {
       dmKeyBinding: m.dmKeyBinding,
       // Without it a new person key never goes out, and nobody can add that member's devices.
       personKeyBinding: m.personKeyBinding,
+      keyResetAt: m.keyResetAt,
       // Redundant with `nickname`, except for a rename back to a previous name,
       // which leaves that field looking untouched.
       nicknameChangedAt: m.nicknameChangedAt,

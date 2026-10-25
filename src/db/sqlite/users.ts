@@ -35,6 +35,8 @@ function rowToUser(r: Record<string, unknown>): UserRecord {
     status_line: (r.status_line as string) || null,
     dm_key_binding: (r.dm_key_binding as string) || null,
     person_key_binding: (r.person_key_binding as string) || null,
+    dm_key_reset_binding: (r.dm_key_reset_binding as string) || null,
+    dm_key_reset_at: r.dm_key_reset_at == null ? null : Number(r.dm_key_reset_at),
   };
 }
 
@@ -144,6 +146,8 @@ export async function upsertUser(
     // one, and a member with no binding simply has no encrypted messages.
     dm_key_binding: null,
     person_key_binding: null,
+    dm_key_reset_binding: null,
+    dm_key_reset_at: null,
   };
 }
 
@@ -158,6 +162,13 @@ export async function setUserDmKeyBinding(
     binding,
     serverUserId,
   );
+}
+
+/** Start (or with nulls, cancel) a key reset. The caller checks who may. */
+export async function setUserDmKeyReset(serverUserId: string, binding: string | null, at: number | null): Promise<void> {
+  getSqliteDb()
+    .prepare(`UPDATE users SET dm_key_reset_binding = ?, dm_key_reset_at = ? WHERE server_user_id = ?`)
+    .run(binding, at, serverUserId);
 }
 
 /** Checked by the caller (`services/personKeyBinding.ts`), not here. Null withdraws it. */
