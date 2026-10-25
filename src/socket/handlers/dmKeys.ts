@@ -1,6 +1,7 @@
 import type { HandlerContext, EventHandlerMap } from "./types";
 import { getUserByServerId, setUserDmKeyBinding, setUserDmKeyReset } from "../../db";
 import { dmBindingIdentity, handoverValid } from "../../services/personKeyBinding";
+import { pushNotify } from "../../services/push";
 import { checkRateLimit, type RateLimitRule } from "../../utils/rateLimiter";
 import { broadcastMemberList } from "../utils/clients";
 
@@ -15,6 +16,20 @@ const MAX_BINDING_BYTES = 4096;
 
 /** Three non-empty base64url segments. Not a verification, a shape. */
 const COMPACT_JWT = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
+
+/** As long as a link code lasts: a phone that connects within this still sees the request. */
+const HANDOVER_ASK_TTL_MS = 10 * 60 * 1000;
+
+interface HandoverAsk { binding: string; deviceName: string; askerId: string; at: number }
+/* Per server and account, the requests still waiting, so a phone that connects late gets them. */
+const pendingAsks = new Map<string, HandoverAsk[]>();
+
+function liveAsks(key: string, now = Date.now()): HandoverAsk[] {
+  const live = (pendingAsks.get(key) ?? []).filter((a) => now - a.at < HANDOVER_ASK_TTL_MS);
+  if (live.length) pendingAsks.set(key, live);
+  else pendingAsks.delete(key);
+  return live;
+}
 
 /** Long enough to outlast a holiday, so a thief with the password can't finish one while you're away. */
 export const KEY_RESET_DELAY_MS = 30 * 24 * 60 * 60 * 1000;
@@ -82,6 +97,8 @@ export function registerDmKeyHandlers(ctx: HandlerContext): EventHandlerMap {
 
       await setUserDmKeyBinding(serverUserId, binding);
       if (user.dm_key_reset_binding) await setUserDmKeyReset(serverUserId, null, null);
+      const askKey = `${serverId}:${serverUserId}`;
+      if (pendingAsks.has(askKey)) pendingAsks.set(askKey, liveAsks(askKey).filter((a) => a.binding !== binding));
       reply({ ok: true, changed: true });
 
       // The list is deduped on its contents and the binding is in that hash, so
@@ -96,10 +113,23 @@ export function registerDmKeyHandlers(ctx: HandlerContext): EventHandlerMap {
       if (!serverUserId || typeof binding !== "string" || binding.length > MAX_BINDING_BYTES || !COMPACT_JWT.test(binding)) return;
       if (!checkRateLimit("dm:key:handover:ask", serverUserId, getClientIp(), RL_DM_KEY).allowed) return;
       const deviceName = typeof payload?.deviceName === "string" ? payload.deviceName.slice(0, 64) : "";
+      const key = `${serverId}:${serverUserId}`;
+      pendingAsks.set(key, [...liveAsks(key).filter((a) => a.askerId !== clientId).slice(-4), { binding, deviceName, askerId: clientId, at: Date.now() }]);
       for (const [cid, ci] of Object.entries(clientsInfo)) {
         if (cid !== clientId && ci.serverUserId === serverUserId) {
           io.sockets.sockets.get(cid)?.emit("dm:key:handover:asked", { binding, deviceName, askerId: clientId });
         }
+      }
+      pushNotify(clientsInfo, [serverUserId], "approve", `handover:${serverUserId}`, { evenIfPresent: true });
+    },
+
+    /** A device that just connected asks for requests made while it was away. */
+    "dm:key:handover:pending": () => {
+      const serverUserId = clientsInfo[clientId]?.serverUserId;
+      if (!serverUserId) return;
+      for (const ask of liveAsks(`${serverId}:${serverUserId}`)) {
+        if (ask.askerId === clientId || !clientsInfo[ask.askerId]) continue;
+        io.sockets.sockets.get(clientId)?.emit("dm:key:handover:asked", { binding: ask.binding, deviceName: ask.deviceName, askerId: ask.askerId });
       }
     },
 
@@ -141,6 +171,8 @@ export function registerDmKeyHandlers(ctx: HandlerContext): EventHandlerMap {
       const serverUserId = clientsInfo[clientId]?.serverUserId;
       const askerId = payload?.askerId;
       if (!serverUserId || typeof askerId !== "string" || clientsInfo[askerId]?.serverUserId !== serverUserId) return;
+      const key = `${serverId}:${serverUserId}`;
+      pendingAsks.set(key, liveAsks(key).filter((a) => a.askerId !== askerId));
       io.sockets.sockets.get(askerId)?.emit("dm:key:handover:denied", {});
     },
   };

@@ -312,6 +312,26 @@ describe("one identity per account (GRYT-1868)", () => {
     assert.deepEqual(heard[frank.clientId], [["dm:key:handover:denied", {}]]);
   });
 
+  it("hands a request to a device that connects after it was made, until it's answered", async () => {
+    const ida = await connect("Ida");
+    const heard: Record<string, unknown[]> = {};
+    const listen = (m: Member) => io.sockets.sockets.set(m.clientId, { emit: (event: string, body: unknown) => (heard[m.clientId] ??= []).push([event, body]) });
+    listen(ida);
+    const binding = await (await signer()).binding();
+    ida.handlers["dm:key:handover:ask"]({ binding, deviceName: "Mac" });
+
+    const phone = await connect("Ida's phone");
+    clientsInfo[phone.clientId].serverUserId = ida.serverUserId;
+    listen(phone);
+    phone.handlers["dm:key:handover:pending"]({});
+    assert.deepEqual(heard[phone.clientId], [["dm:key:handover:asked", { binding, deviceName: "Mac", askerId: ida.clientId }]]);
+
+    phone.handlers["dm:key:handover:deny"]({ askerId: ida.clientId });
+    heard[phone.clientId] = [];
+    phone.handlers["dm:key:handover:pending"]({});
+    assert.deepEqual(heard[phone.clientId], [], "an answered request isn't handed out again");
+  });
+
   const call = (m: Member, event: string, payload: Record<string, unknown>) =>
     new Promise<Record<string, unknown>>((resolve) => void m.handlers[event](payload, resolve));
 
