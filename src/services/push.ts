@@ -9,7 +9,7 @@ import { sealPreview, type PushPreview } from "./pushPreview";
  * a kind, nothing else: it writes the notification text itself.
  */
 
-export type PushKind = "mention" | "dm" | "message";
+export type PushKind = "mention" | "dm" | "message" | "approve";
 
 /** Which of an account's phones want this push, by their own settings. Muted is checked on top. */
 export type PushAccept = (device: PushDevice) => boolean;
@@ -18,6 +18,8 @@ export interface PushOptions {
   accept?: PushAccept;
   /** Asked once, and only when a phone with a preview key is about to be pushed (GRYT-1688). */
   preview?: () => Promise<PushPreview | null>;
+  /** Push even with a session open: a device asking to be approved is that open session. */
+  evenIfPresent?: boolean;
 }
 
 export const DEFAULT_PUSH_RELAY = "https://push.gryt.chat";
@@ -101,7 +103,7 @@ export function createPusher(deps: PusherDeps) {
       return null;
     }));
     for (const serverUserId of new Set(serverUserIds)) {
-      if (isPresent(clientsInfo, serverUserId)) continue;
+      if (!options.evenIfPresent && isPresent(clientsInfo, serverUserId)) continue;
       let devices: PushDevice[];
       try {
         devices = deps.listDevices(serverUserId);
