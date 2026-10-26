@@ -147,7 +147,7 @@ describe("holding several roles", () => {
     // Every user above who holds scribe, counted once each even though several
     // of them hold janitor too.
     const before = await countRoleHolders("scribe");
-    const user = await upsertUser("key:multi-9", "Ola");
+    const user = await upsertUser("key:multi-9", "Juno");
     await setMemberRoles(user.server_user_id, ["scribe", "janitor"]);
     assert.equal(await countRoleHolders("scribe"), before + 1);
   });

@@ -100,7 +100,7 @@ describe("importing a DiscordChatExporter export", () => {
   it("keeps who wrote it, when, and what it said", async () => {
     const m = await stored("100", "1001");
     assert.equal(m.sender_server_id, "discord:11");
-    assert.equal(m.sender_display_name, "Ola N");
+    assert.equal(m.sender_display_name, "Mia N");
     assert.ok(m.sender_avatar_file_id);
     assert.equal(m.created_at.toISOString(), "2021-01-01T10:00:00.000Z");
     assert.equal(m.edited_at?.toISOString(), "2021-01-01T10:05:00.000Z");

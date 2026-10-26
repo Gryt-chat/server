@@ -123,7 +123,7 @@ describe("resolving what somebody may do", () => {
   });
 
   it("gives the config owner everything, whatever their roles row says", async () => {
-    const owner = await upsertUser("account-owner", "Ola");
+    const owner = await upsertUser("account-owner", "Juno");
     await claimServerOwner("account-owner");
     // Deliberately the weakest role there is. Ownership is a property of the
     // server, and the row is only a cache of it.
