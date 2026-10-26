@@ -82,6 +82,7 @@ export function publicClientRecord(client: Clients[string], voiceChannelId: stri
     screenShareEnabled: client.screenShareEnabled,
     screenShareVideoStreamID: client.screenShareVideoStreamID,
     screenShareAudioStreamID: client.screenShareAudioStreamID,
+    screenShares: client.screenShares ?? [],
   };
 }
 
@@ -161,6 +162,7 @@ export function syncAllClients(io: Server, clientsInfo: Clients) {
         screenShareEnabled: client.screenShareEnabled,
         screenShareVideoStreamID: client.screenShareVideoStreamID,
         screenShareAudioStreamID: client.screenShareAudioStreamID,
+        screenShares: client.screenShares ?? [],
         isServerMuted: client.isServerMuted,
         isServerDeafened: client.isServerDeafened,
       }))

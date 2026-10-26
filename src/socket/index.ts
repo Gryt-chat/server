@@ -223,6 +223,7 @@ export function setupSFUSync(io: Server, sfuClient: SFUClient): void {
           ci.screenShareEnabled = false;
           ci.screenShareVideoStreamID = "";
           ci.screenShareAudioStreamID = "";
+          ci.screenShares = [];
           sfuClient.untrackUserConnection(ci.serverUserId);
 
           const sock = io.sockets.sockets.get(sid);
