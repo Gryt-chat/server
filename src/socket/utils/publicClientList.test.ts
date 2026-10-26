@@ -18,7 +18,7 @@ import { publicClientList, publicClientRecord } from "./clients";
 const PUBLIC_FIELDS = [
   "cameraEnabled", "cameraStreamID", "hasJoinedChannel", "isAFK", "isConnectedToVoice",
   "isDeafened", "isMuted", "isServerDeafened", "isServerMuted", "nickname",
-  "screenShareAudioStreamID", "screenShareEnabled", "screenShareVideoStreamID",
+  "screenShareAudioStreamID", "screenShareEnabled", "screenShareVideoStreamID", "screenShares",
   "serverUserId", "streamID", "voiceChannelId",
 ];
 
@@ -40,6 +40,7 @@ const everything: Required<Clients[string]> = {
   screenShareEnabled: true,
   screenShareVideoStreamID: "share-video-a",
   screenShareAudioStreamID: "share-audio-a",
+  screenShares: [{ videoStreamID: "share-video-a", audioStreamID: "share-audio-a" }],
   isServerMuted: false,
   isServerDeafened: true,
   activity: "Playing something",

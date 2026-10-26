@@ -198,6 +198,7 @@ export default tseslint.config(
       'src/polls/poll.ts',
       'src/routes/uploadStorage.ts',
       'src/services/mlsWire.ts',
+      'src/socket/utils/screenShares.ts',
       'src/utils/activityText.ts',
       'src/utils/linkResolvers.ts',
       'src/utils/profanityFilter.ts',

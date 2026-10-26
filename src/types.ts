@@ -18,6 +18,8 @@ export interface Clients {
     screenShareEnabled: boolean;
     screenShareVideoStreamID: string;
     screenShareAudioStreamID: string;
+    /** Every shared window, first one also in the two fields above for older apps (GRYT-1905). */
+    screenShares?: { videoStreamID: string; audioStreamID: string }[];
     isServerMuted: boolean;
     isServerDeafened: boolean;
     /** On the connection rather than in `users`, like `isAFK`: a stored one would

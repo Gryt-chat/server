@@ -3,6 +3,7 @@ import consola from "consola";
 import type { HandlerContext, EventHandlerMap } from "./types";
 import { requireAuth, requireOutranks } from "../middleware/auth";
 import { syncAllClients, broadcastMemberList } from "../utils/clients";
+import { screenSharesFrom } from "../utils/screenShares";
 import { checkRateLimit, type RateLimitRule } from "../../utils/rateLimiter";
 import { getVoiceSeatLimit } from "../../utils/voiceSeats";
 import { insertServerAudit } from "../../db";
@@ -138,9 +139,11 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
         return;
       }
       consola.info(`[ScreenShare] voice:screen:state from=${clientId} enabled=${enabled} videoStreamId=${videoStreamId} audioStreamId=${audioStreamId}`);
+      const shares = enabled ? screenSharesFrom(payload) : [];
       clientsInfo[clientId].screenShareEnabled = enabled;
-      clientsInfo[clientId].screenShareVideoStreamID = enabled ? videoStreamId : "";
-      clientsInfo[clientId].screenShareAudioStreamID = enabled ? audioStreamId : "";
+      clientsInfo[clientId].screenShares = shares;
+      clientsInfo[clientId].screenShareVideoStreamID = enabled ? (shares[0]?.videoStreamID ?? videoStreamId) : "";
+      clientsInfo[clientId].screenShareAudioStreamID = enabled ? (shares[0]?.audioStreamID ?? audioStreamId) : "";
       syncAllClients(io, clientsInfo);
     },
 
@@ -232,6 +235,7 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
             clientsInfo[existingClientId].screenShareEnabled = false;
             clientsInfo[existingClientId].screenShareVideoStreamID = "";
             clientsInfo[existingClientId].screenShareAudioStreamID = "";
+            clientsInfo[existingClientId].screenShares = [];
             if (sfuClient) sfuClient.untrackUserConnection(serverUserId);
           }
         }
@@ -258,6 +262,7 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
         clientsInfo[clientId].screenShareEnabled = false;
         clientsInfo[clientId].screenShareVideoStreamID = "";
         clientsInfo[clientId].screenShareAudioStreamID = "";
+        clientsInfo[clientId].screenShares = [];
         if (sfuClient && serverUserId) sfuClient.untrackUserConnection(serverUserId);
       }
 
@@ -461,6 +466,7 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
           carried.screenShareEnabled = false;
           carried.screenShareVideoStreamID = "";
           carried.screenShareAudioStreamID = "";
+          carried.screenShares = [];
         }
 
         consola.success(`[Voice:Step 5] Granting room access: client=${clientId} room=${uniqueRoomId} sfu_urls=${sfuPublicUrls.join(", ")}`);
@@ -547,6 +553,7 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
         clientsInfo[clientId].screenShareEnabled = false;
         clientsInfo[clientId].screenShareVideoStreamID = "";
         clientsInfo[clientId].screenShareAudioStreamID = "";
+        clientsInfo[clientId].screenShares = [];
       }
 
       syncAllClients(io, clientsInfo);
@@ -676,6 +683,7 @@ export function registerVoiceHandlers(ctx: HandlerContext): EventHandlerMap {
         targetClient.screenShareEnabled = false;
         targetClient.screenShareVideoStreamID = "";
         targetClient.screenShareAudioStreamID = "";
+        targetClient.screenShares = [];
         if (sfuClient) sfuClient.untrackUserConnection(targetUserId);
 
         syncAllClients(io, clientsInfo);
