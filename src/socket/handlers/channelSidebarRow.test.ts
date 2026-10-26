@@ -151,3 +151,23 @@ describe("one row per channel", () => {
     assert.equal(separators.length, 2, "two separators carry no channel and must not collapse into one");
   });
 });
+
+describe("a new voice channel has its own text chat (GRYT-1897)", () => {
+  const textInVoice = async (channelId: string) =>
+    (await listServerChannels()).find((c) => c.channel_id === channelId)?.text_in_voice;
+
+  it("is on when the request doesn't say", async () => {
+    await handlers["server:channels:upsert"]({ accessToken, channelId: "v-default", name: "voice", type: "voice" });
+    assert.equal(await textInVoice("v-default"), true);
+  });
+
+  it("stays off when the request says off", async () => {
+    await handlers["server:channels:upsert"]({ accessToken, channelId: "v-off", name: "voice", type: "voice", textInVoice: false });
+    assert.equal(await textInVoice("v-off"), false);
+  });
+
+  it("is not added to a text channel", async () => {
+    await handlers["server:channels:upsert"]({ accessToken, channelId: "t-plain", name: "text", type: "text" });
+    assert.equal(await textInVoice("t-plain"), false);
+  });
+});

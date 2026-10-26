@@ -302,7 +302,8 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
           disableRnnoise: payload.disableRnnoise,
           maxBitrate: payload.maxBitrate,
           eSportsMode: payload.eSportsMode,
-          textInVoice: payload.textInVoice,
+          // New voice channels get their own text chat unless the request says otherwise (GRYT-1897).
+          textInVoice: payload.textInVoice ?? (isNewChannel && payload.type === "voice"),
           layout: payload.layout,
           automated: payload.automated,
           forumTags: payload.forumTags,
