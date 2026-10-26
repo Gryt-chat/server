@@ -1,3 +1,5 @@
+import { normaliseActivity } from "../../utils/activityText";
+
 /** Ceiling on windows one client can announce, matching the SFU's `maxScreenShares`. */
 export const MAX_SCREEN_SHARES = 8;
 const MAX_ID_LENGTH = 128;
@@ -5,6 +7,8 @@ const MAX_ID_LENGTH = 128;
 export interface ScreenShare {
   videoStreamID: string;
   audioStreamID: string;
+  /** The window's title as the sharer's app has it, cleaned like activity text. */
+  name?: string;
 }
 
 const id = (v: unknown): string | null => (typeof v === "string" && v.length <= MAX_ID_LENGTH ? v : null);
@@ -20,10 +24,11 @@ export function screenSharesFrom(payload: unknown): ScreenShare[] {
   const out: ScreenShare[] = [];
   for (const entry of raw.slice(0, MAX_SCREEN_SHARES)) {
     if (typeof entry !== "object" || entry === null) continue;
-    const e = entry as { videoStreamId?: unknown; audioStreamId?: unknown };
+    const e = entry as { videoStreamId?: unknown; audioStreamId?: unknown; name?: unknown };
     const video = id(e.videoStreamId);
     if (!video) continue;
-    out.push({ videoStreamID: video, audioStreamID: id(e.audioStreamId) ?? "" });
+    const name = normaliseActivity(e.name);
+    out.push({ videoStreamID: video, audioStreamID: id(e.audioStreamId) ?? "", ...(name ? { name } : {}) });
   }
   return out;
 }

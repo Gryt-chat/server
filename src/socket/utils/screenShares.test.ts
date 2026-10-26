@@ -24,4 +24,19 @@ describe("screenSharesFrom", () => {
     assert.deepEqual(screenSharesFrom("yes"), []);
     assert.deepEqual(screenSharesFrom({ enabled: true }), []);
   });
+
+  it("keeps a window's name, cleaned, and leaves out one that is empty or not text", () => {
+    const shares = [
+      { videoStreamId: "v1", name: "Counter-Strike 2" },
+      { videoStreamId: "v2", name: "Fire\u202Efox\n" },
+      { videoStreamId: "v3", name: "   " },
+      { videoStreamId: "v4", name: 42 },
+    ];
+    assert.deepEqual(screenSharesFrom({ enabled: true, shares }), [
+      { videoStreamID: "v1", audioStreamID: "", name: "Counter-Strike 2" },
+      { videoStreamID: "v2", audioStreamID: "", name: "Fire fox" },
+      { videoStreamID: "v3", audioStreamID: "" },
+      { videoStreamID: "v4", audioStreamID: "" },
+    ]);
+  });
 });
