@@ -37,7 +37,7 @@ function row(id: string, patch: Partial<ImportedMessageRow> = {}): ImportedMessa
     conversation_id: "chan-a",
     message_id: id,
     sender_server_id: "discord:111",
-    sender_display_name: "Ola",
+    sender_display_name: "Mia",
     sender_avatar_file_id: null,
     text: `message ${id}`,
     attachments: [],
@@ -62,7 +62,7 @@ describe("discord import rows", () => {
     assert.equal(stored.created_at, "2021-03-04T05:06:07.000Z");
     assert.equal(stored.edited_at, "2021-03-05T00:00:00.000Z");
     assert.equal(stored.sender_server_id, "discord:111");
-    assert.equal(stored.sender_display_name, "Ola");
+    assert.equal(stored.sender_display_name, "Mia");
   });
 
   it("adds nothing on a second run over the same rows", () => {
