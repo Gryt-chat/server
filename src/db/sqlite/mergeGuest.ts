@@ -108,6 +108,26 @@ function mergeInTransaction(
   ).run(from, to);
   db.prepare(`UPDATE mentions SET server_user_id = ? WHERE server_user_id = ?`).run(to, from);
 
+  /* Read markers keep the further of the two rather than the account's, which the two
+     above do: merging two of your own identities should not lose read progress. */
+  db.prepare(
+    `DELETE FROM read_markers WHERE server_user_id = ?
+        AND conversation_id IN (
+          SELECT g.conversation_id FROM read_markers g
+            JOIN read_markers a
+              ON a.server_user_id = ? AND a.conversation_id = g.conversation_id
+           WHERE g.server_user_id = ?
+             AND (a.read_through_at > g.read_through_at
+                  OR (a.read_through_at = g.read_through_at
+                      AND a.read_through_message_id >= g.read_through_message_id)))`,
+  ).run(from, to, from);
+  // Whatever the guest still holds is further along, so the account's row gives way.
+  db.prepare(
+    `DELETE FROM read_markers WHERE server_user_id = ?
+        AND conversation_id IN (SELECT conversation_id FROM read_markers WHERE server_user_id = ?)`,
+  ).run(to, from);
+  db.prepare(`UPDATE read_markers SET server_user_id = ? WHERE server_user_id = ?`).run(to, from);
+
   for (const [table, column] of AUTHOR_COLUMNS) {
     db.prepare(`UPDATE ${table} SET ${column} = ? WHERE ${column} = ?`).run(to, from);
   }

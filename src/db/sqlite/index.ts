@@ -22,6 +22,7 @@ export * from "./contactPrefs";
 export * from "./pushDevices";
 export * from "./friends";
 export * from "./mentions";
+export * from "./readMarkers";
 export * from "./webhooks";
 export * from "./mls";
 export * from "./discordImports";

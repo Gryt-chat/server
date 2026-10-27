@@ -566,6 +566,16 @@ function createSchema(d: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_mentions_unseen
       ON mentions(server_user_id, created_at) WHERE seen_at IS NULL;
 
+    -- Position is the message's own (created_at, id) pair, never when anybody looked. No foreign
+    -- key: deleting the message somebody stopped at must not forget where they were.
+    CREATE TABLE IF NOT EXISTS read_markers (
+      server_user_id TEXT NOT NULL,
+      conversation_id TEXT NOT NULL,
+      read_through_at TEXT NOT NULL,
+      read_through_message_id TEXT NOT NULL,
+      PRIMARY KEY (server_user_id, conversation_id)
+    );
+
     -- A report about a person rather than about one message.
     --
     -- Its own table rather than a nullable message_id on reports, because the
