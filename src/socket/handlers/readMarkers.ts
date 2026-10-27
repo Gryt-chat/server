@@ -66,7 +66,8 @@ export function registerReadMarkerHandlers(ctx: HandlerContext): EventHandlerMap
       /* Before the write, or a guessed conversation id tells you whether a message is
          in it by whether the marker moved. */
       const access = await resolveConversationAccess(conversationId, userId);
-      if (!access.allowed) return;
+      // A DM's marker would be a read receipt on an encrypted message.
+      if (!access.allowed || access.kind !== "channel") return;
 
       await setReadMarker({ serverUserId: userId, conversationId, messageId });
 
