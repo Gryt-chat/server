@@ -55,6 +55,7 @@ import { registerDmKeyHandlers } from "./handlers/dmKeys";
 import { registerMlsHandlers } from "./handlers/mls";
 import { registerMlsPersonKeyHandlers } from "./handlers/mlsPersonKey";
 import { registerMentionHandlers } from "./handlers/mentions";
+import { registerReadMarkerHandlers } from "./handlers/readMarkers";
 import { addressIsOwn, resolveClientIp, trustedProxyHops } from "../config/clientAddress";
 
 export { broadcastChatNew, broadcastCustomEmojisUpdate, broadcastEmojiQueueUpdate, broadcastServerUiUpdate };
@@ -354,6 +355,7 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
     ...registerMlsHandlers(ctx),
     ...registerMlsPersonKeyHandlers(ctx),
     ...registerMentionHandlers(ctx),
+    ...registerReadMarkerHandlers(ctx),
     ...registerPushHandlers(ctx),
   };
 

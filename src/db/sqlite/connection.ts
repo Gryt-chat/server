@@ -566,6 +566,30 @@ function createSchema(d: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_mentions_unseen
       ON mentions(server_user_id, created_at) WHERE seen_at IS NULL;
 
+    -- Where somebody has read up to in a conversation. One row per person per
+    -- conversation they have opened, updated in place rather than appended.
+    --
+    -- The marker is the message's own created_at and id, never the time anybody
+    -- looked. Whoever runs the server learns which message you reached, which
+    -- everyone in the channel can already see, and not when you were reading.
+    --
+    -- No foreign key, unlike mentions. A mention row *is* its message, so it
+    -- should go when the message does; a marker is a position, and deleting the
+    -- message somebody stopped at must not forget where they were. The id is
+    -- kept for ordering only, so a dangling one costs nothing.
+    --
+    -- created_at is ISO to the millisecond, so two messages can share one. Every
+    -- comparison here is on the pair, or a busy channel loses or repeats a message.
+    CREATE TABLE IF NOT EXISTS read_markers (
+      server_user_id TEXT NOT NULL,
+      conversation_id TEXT NOT NULL,
+      read_through_at TEXT NOT NULL,
+      read_through_message_id TEXT NOT NULL,
+      PRIMARY KEY (server_user_id, conversation_id)
+    );
+    -- No index beyond the primary key: both questions asked here are every marker
+    -- for one person, which is a prefix of it.
+
     -- A report about a person rather than about one message.
     --
     -- Its own table rather than a nullable message_id on reports, because the
