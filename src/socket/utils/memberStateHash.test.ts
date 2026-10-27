@@ -70,6 +70,7 @@ describe("the member list dedupe", () => {
     ["going bot", { isBot: true }],
     ["going offline", { status: "offline" }],
     ["joining voice", { isConnectedToVoice: true }],
+    ["a new voice stream", { streamID: "stream_2" }],
     ["joining a channel", { hasJoinedChannel: true }],
     ["moving channel", { voiceChannelId: "chan_2" }],
     ["muting", { isMuted: true }],
