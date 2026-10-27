@@ -128,9 +128,8 @@ describe("read markers over the socket", () => {
     clientsInfo[clientId].serverUserId = real;
   });
 
-  it("wants both a conversation and a message", async () => {
+  it("wants a conversation", async () => {
     const before = received("read:list").length;
-    await handlers["read:set"]({ conversationId: CHANNEL });
     await handlers["read:set"]({ messageId: lastMessageId });
     await handlers["read:set"](undefined);
     assert.equal(received("read:list").length, before, "a half-filled payload was answered");

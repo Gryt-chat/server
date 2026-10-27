@@ -50,7 +50,7 @@ export function registerReadMarkerHandlers(ctx: HandlerContext): EventHandlerMap
     },
 
     /**
-     * Read up to a message. The reply carries the whole state back, so two devices in
+     * Read up to a message, or with none, everything there. The reply carries the whole state back, so two devices in
      * the same account converge without either guessing what the other did.
      */
     "read:set": async (payload: { conversationId?: string; messageId?: string } | undefined) => {
@@ -61,7 +61,7 @@ export function registerReadMarkerHandlers(ctx: HandlerContext): EventHandlerMap
       if (!rl.allowed) return;
 
       const { conversationId, messageId } = payload ?? {};
-      if (!conversationId || !messageId) return;
+      if (!conversationId) return;
 
       /* Before the write, or a guessed conversation id tells you whether a message is
          in it by whether the marker moved. */

@@ -18,15 +18,25 @@ export interface ReadMarker {
 export async function setReadMarker(args: {
   serverUserId: string;
   conversationId: string;
-  messageId: string;
+  /** Omitted for "mark as read": everything in the conversation. */
+  messageId?: string;
 }): Promise<boolean> {
   const db = getSqliteDb();
 
   /* The message supplies the position. An id this server does not hold -- deleted, or
      never here -- moves nothing, rather than parking the marker somewhere unorderable. */
-  const at = db
-    .prepare(`SELECT created_at FROM messages WHERE conversation_id = ? AND message_id = ?`)
-    .get(args.conversationId, args.messageId) as { created_at: string } | undefined;
+  const at = (
+    args.messageId
+      ? db
+          .prepare(`SELECT created_at, message_id FROM messages WHERE conversation_id = ? AND message_id = ?`)
+          .get(args.conversationId, args.messageId)
+      : db
+          .prepare(
+            `SELECT created_at, message_id FROM messages WHERE conversation_id = ?
+              ORDER BY created_at DESC, message_id DESC LIMIT 1`,
+          )
+          .get(args.conversationId)
+  ) as { created_at: string; message_id: string } | undefined;
   if (!at) return false;
 
   /* ON CONFLICT with a WHERE, so a marker never goes backwards. created_at is an ISO
@@ -42,7 +52,7 @@ export async function setReadMarker(args: {
            OR (excluded.read_through_at = read_markers.read_through_at
                AND excluded.read_through_message_id > read_markers.read_through_message_id)`,
     )
-    .run(args.serverUserId, args.conversationId, at.created_at, args.messageId);
+    .run(args.serverUserId, args.conversationId, at.created_at, at.message_id);
 
   return Number(result.changes ?? 0) > 0;
 }

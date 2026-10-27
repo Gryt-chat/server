@@ -59,6 +59,14 @@ describe("read markers", () => {
     assert.deepEqual(await listReadMarkers(ALICE), []);
   });
 
+  it("reads everything when no message is named, as Mark as read does", async () => {
+    await say("c-all", BOB, "2026-01-03T00:00:00.000Z");
+    await say("c-all", BOB, "2026-01-03T00:00:01.000Z");
+    assert.equal(await setReadMarker({ serverUserId: ALICE, conversationId: "c-all" }), true);
+    assert.equal((await countUnreadByConversation(ALICE))["c-all"], undefined);
+    assert.equal(await setReadMarker({ serverUserId: ALICE, conversationId: "c-empty" }), false);
+  });
+
   it("counts what arrived after the marker, and not the marker itself", async () => {
     const first = await say("c-basic", BOB, "2026-01-02T00:00:00.000Z");
     await say("c-basic", BOB, "2026-01-02T00:00:01.000Z");
