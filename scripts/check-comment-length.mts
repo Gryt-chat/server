@@ -6,11 +6,13 @@ import { join } from "node:path";
 
 const LIMIT = 2;
 
-const EMPTY = /^(\/\*+|\*+\/?|\/\/|#)$|[─=]{3,}\s*\*?\/?$/;
+const EMPTY = /^(\/\*+|\*+\/?|\/\/|#|--)$|[─=]{3,}\s*\*?\/?$/;
 const ROOTS = ["src", "scripts", "examples", ".github/workflows"];
 const SKIP = new Set(["node_modules", "dist", "build", "coverage", ".git"]);
 const CODE = /\.(ts|tsx|mts|js|mjs|cjs)$/;
 const HASH = /\.(ya?ml|sh)$/;
+// SQL comment runs over the limit that predate counting them. Only ever lower these.
+const SQL_DEBT: Record<string, number> = { "src/db/sqlite/connection.ts": 15 };
 
 function files(dir: string): string[] {
   const out: string[] = [];
@@ -27,15 +29,17 @@ function files(dir: string): string[] {
 // Only lines carrying words count: `/**`, `*/` and a ── section rule are free.
 function runs(text: string, hash: boolean) {
   const lines = text.split("\n");
-  const found: { line: number; length: number }[] = [];
+  const found: { line: number; length: number; sql: boolean }[] = [];
   let start = -1;
   let length = 0;
   let inBlock = false;
+  let sql = false;
 
   const close = () => {
-    if (length > LIMIT) found.push({ line: start + 1, length });
+    if (length > LIMIT) found.push({ line: start + 1, length, sql });
     start = -1;
     length = 0;
+    sql = false;
   };
 
   for (let i = 0; i < lines.length; i++) {
@@ -50,6 +54,10 @@ function runs(text: string, hash: boolean) {
       if (!line.includes("*/")) inBlock = true;
     } else if (!hash && line.startsWith("//")) {
       comment = true;
+    } else if (!hash && /^--( |$)/.test(line)) {
+      // SQL inside a template string.
+      comment = true;
+      sql = true;
     } else if (hash && line.startsWith("#") && !line.startsWith("#!")) {
       comment = true;
     }
@@ -75,7 +83,11 @@ for (const root of ROOTS) {
   }
   for (const file of entries) {
     const text = readFileSync(file, "utf8");
-    for (const run of runs(text, HASH.test(file))) {
+    const found = runs(text, HASH.test(file));
+    const sqlRuns = found.filter((run) => run.sql).length;
+    const debt = SQL_DEBT[file.split("\\").join("/")] ?? 0;
+    for (const run of found) {
+      if (run.sql && sqlRuns <= debt) continue;
       offenders.push(`${file}:${run.line} — ${run.length} lines`);
     }
   }
