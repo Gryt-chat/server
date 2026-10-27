@@ -350,6 +350,8 @@ export function memberStateHash(members: MemberListEntry[]): string {
       // A new round or a new party size leaves the line above as it was.
       richActivity: m.richActivity,
       isConnectedToVoice: m.isConnectedToVoice,
+      // The phone names a voice tile by it; a rejoin changes only this.
+      streamID: m.streamID,
       hasJoinedChannel: m.hasJoinedChannel,
       voiceChannelId: m.voiceChannelId,
       isMuted: m.isMuted,
