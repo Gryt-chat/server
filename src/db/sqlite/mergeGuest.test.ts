@@ -6,6 +6,7 @@ import { after, before, describe, it } from "node:test";
 
 import { eitherHasBlocked, blockUser, listBlocks } from "./blocks";
 import { getSqliteDb, initSqlite } from "./connection";
+import { listReadMarkers, setReadMarker } from "./readMarkers";
 import { createGroupConversation, listConversationMemberIds, openDirectConversation } from "./conversations";
 import { recordMentions } from "./mentions";
 import { AUTHOR_COLUMNS, mergeGuestIntoAccount } from "./mergeGuest";
@@ -174,6 +175,39 @@ describe("merging a guest into an account that is already a member", () => {
     assert.deepEqual(mentions.map((m) => m.server_user_id), [account.server_user_id]);
   });
 
+  it("keeps the further read marker where both had one", async () => {
+    const { guest, account, guestId, accountId } = await pair("marker");
+    /* created_at given rather than taken from the clock: which marker is further is the
+       whole question, and two sends in one millisecond would decide it by id instead. */
+    const at = (conversation: string, iso: string) =>
+      insertMessage({
+        conversation_id: conversation, sender_server_id: "someone-else",
+        text: iso, attachments: null, reactions: null, created_at: new Date(iso),
+      });
+
+    const early = await at("general", "2026-03-01T00:00:00.000Z");
+    const late = await at("general", "2026-03-01T00:00:10.000Z");
+    const guestOnly = await at("mk-guest-only", "2026-03-01T00:00:00.000Z");
+    const behind = await at("forum", "2026-03-01T00:00:00.000Z");
+    const ahead = await at("forum", "2026-03-01T00:00:10.000Z");
+
+    await setReadMarker({ serverUserId: account.server_user_id, conversationId: "general", messageId: early.message_id });
+    await setReadMarker({ serverUserId: guest.server_user_id, conversationId: "general", messageId: late.message_id });
+    await setReadMarker({ serverUserId: guest.server_user_id, conversationId: "mk-guest-only", messageId: guestOnly.message_id });
+    await setReadMarker({ serverUserId: guest.server_user_id, conversationId: "forum", messageId: behind.message_id });
+    await setReadMarker({ serverUserId: account.server_user_id, conversationId: "forum", messageId: ahead.message_id });
+
+    mergeGuestIntoAccount(guestId, accountId);
+
+    const kept = new Map(
+      (await listReadMarkers(account.server_user_id)).map((m) => [m.conversation_id, m.read_through_message_id]),
+    );
+    assert.equal(kept.get("general"), late.message_id, "the guest had read further and the merge lost it");
+    assert.equal(kept.get("forum"), ahead.message_id, "the account had read further and the guest overwrote it");
+    assert.equal(kept.get("mk-guest-only"), guestOnly.message_id, "a marker only the guest held did not move");
+    assert.deepEqual(await listReadMarkers(guest.server_user_id), [], "the guest kept markers after the merge");
+  });
+
   it("carries blocks both ways, revokes the guest's sessions and keeps the stricter mute", async () => {
     const { guest, guestId, accountId } = await pair("safety");
     await upsertUser("account-safety-pest", "Pest");
@@ -215,7 +249,7 @@ describe("merging a guest into an account that is already a member", () => {
     // Keyed on the pair or on the row itself, and handled one by one in the merge.
     const handledApart = new Set([
       "users.server_user_id", "roles.server_user_id", "conversation_members.server_user_id",
-      "mentions.server_user_id", "refresh_tokens.server_user_id",
+      "mentions.server_user_id", "read_markers.server_user_id", "refresh_tokens.server_user_id",
       "mls_devices.server_user_id", "mls_key_packages.server_user_id", "mls_welcomes.server_user_id",
       "mls_removed_devices.server_user_id", "push_devices.server_user_id",
     ]);
