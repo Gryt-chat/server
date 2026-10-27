@@ -158,6 +158,7 @@ export default tseslint.config(
       'src/socket/handlers/presenceRateLimit.test.ts',
       'src/socket/handlers/presenceRichActivity.test.ts',
       'src/socket/handlers/pushAudience.test.ts',
+      'src/socket/handlers/readMarkers.test.ts',
       'src/socket/handlers/scopeTemplates.test.ts',
       'src/socket/handlers/sendAcrossRestart.test.ts',
       'src/socket/handlers/sessions.test.ts',
