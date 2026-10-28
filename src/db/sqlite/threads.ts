@@ -19,6 +19,7 @@ function rowToThread(r: Record<string, unknown>): ThreadRecord {
     tags: r.tags ? (JSON.parse(r.tags as string) as string[]) : [],
     reply_count: Number(r.reply_count ?? 0),
     locked: Number(r.locked ?? 0) === 1,
+    answer_message_id: (r.answer_message_id as string) ?? null,
     created_at: fromIso(r.created_at as string),
     last_message_at: fromIso(r.last_message_at as string),
   };
@@ -60,6 +61,7 @@ export async function createThread(record: {
     tags: Array.isArray(record.tags) ? record.tags.slice(0, 20) : [],
     reply_count: 0,
     locked: false,
+    answer_message_id: null,
     created_at,
     last_message_at: created_at,
   };
@@ -115,6 +117,27 @@ export async function countThreadParticipants(threadId: string, rootMessageId: s
   return Number(row?.c ?? 0);
 }
 
+/** Up to three people who replied most recently in each thread, newest first. The root author isn't counted. */
+export async function listRecentRepliers(threadIds: string[]): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>();
+  if (threadIds.length === 0) return out;
+  const db = getSqliteDb();
+  const rows = db
+    .prepare(
+      `SELECT thread_id, sender_server_id, MAX(created_at) AS at FROM messages
+        WHERE thread_id IN (${threadIds.map(() => "?").join(",")})
+        GROUP BY thread_id, sender_server_id
+        ORDER BY at DESC`,
+    )
+    .all(...threadIds) as { thread_id: string; sender_server_id: string }[];
+  for (const r of rows) {
+    const list = out.get(r.thread_id) ?? [];
+    if (list.length < 3) list.push(r.sender_server_id);
+    out.set(r.thread_id, list);
+  }
+  return out;
+}
+
 export async function bumpThreadOnReply(threadId: string, at: Date): Promise<ThreadRecord | null> {
   const db = getSqliteDb();
   const res = db
@@ -139,10 +162,15 @@ export async function setThreadTags(threadId: string, tags: string[]): Promise<T
   return getThread(threadId);
 }
 
-/** open, solved (answered, still repliable) or closed (locked). */
-export async function setThreadStatus(threadId: string, status: ThreadStatus): Promise<ThreadRecord | null> {
+/** open, solved (answered, still repliable) or closed (locked). Anything but solved drops the answer. */
+export async function setThreadStatus(
+  threadId: string,
+  status: ThreadStatus,
+  answerMessageId: string | null = null,
+): Promise<ThreadRecord | null> {
   const db = getSqliteDb();
-  const res = db.prepare(`UPDATE threads SET status = ? WHERE thread_id = ?`).run(status, threadId);
+  const answer = status === "solved" ? answerMessageId : null;
+  const res = db.prepare(`UPDATE threads SET status = ?, answer_message_id = ? WHERE thread_id = ?`).run(status, answer, threadId);
   if (res.changes === 0) return null;
   return getThread(threadId);
 }

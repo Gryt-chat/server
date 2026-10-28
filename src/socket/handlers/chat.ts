@@ -50,6 +50,7 @@ import {
   listThreadsByConversation,
   listThreadsByRootMessageIds,
   countThreadParticipants,
+  listRecentRepliers,
   setThreadStatus,
   setThreadTags,
   type ThreadRecord,
@@ -131,8 +132,10 @@ async function getMentionableMembers(): Promise<MentionableMember[]> {
 
 /* The wire shape of a thread, the same one thread:created sends, so a client
    that reloads ends up with what a client that watched them arrive has. */
-function toThreadSummary(t: ThreadRecord) {
+function toThreadSummary(t: ThreadRecord, recentRepliers?: string[]) {
   return {
+    answer_message_id: t.answer_message_id,
+    ...(recentRepliers ? { recent_repliers: recentRepliers } : {}),
     thread_id: t.thread_id,
     conversation_id: t.conversation_id,
     root_message_id: t.root_message_id,
@@ -757,7 +760,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         }
 
         let threadUpdate:
-          | { conversation_id: string; thread_id: string; root_message_id: string; reply_count: number; last_message_at: string; status: string }
+          | { conversation_id: string; thread_id: string; root_message_id: string; reply_count: number; last_message_at: string; status: string; recent_repliers: string[] }
           | null = null;
         if (threadId) {
           const bumped = await bumpThreadOnReply(threadId, created.created_at);
@@ -769,6 +772,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
               reply_count: bumped.reply_count,
               last_message_at: bumped.last_message_at.toISOString(),
               status: bumped.status,
+              recent_repliers: (await listRecentRepliers([bumped.thread_id])).get(bumped.thread_id) ?? [],
             };
           }
         }
@@ -1134,12 +1138,12 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         enrichedItems = await enrichAttachments(enrichedItems);
         /* One statement for the whole page. Without it a reply count only ever
            arrives live, so a reload reads every thread as 0 (GRYT-1386). */
-        const threads = (
-          await listThreadsByRootMessageIds(
-            payload.conversationId,
-            enrichedItems.map((m) => m.message_id),
-          )
-        ).map(toThreadSummary);
+        const pageThreads = await listThreadsByRootMessageIds(
+          payload.conversationId,
+          enrichedItems.map((m) => m.message_id),
+        );
+        const repliers = await listRecentRepliers(pageThreads.map((t) => t.thread_id));
+        const threads = pageThreads.map((t) => toThreadSummary(t, repliers.get(t.thread_id) ?? []));
         const response: {
           conversation_id: string;
           items: typeof enrichedItems;
@@ -1293,7 +1297,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
 
     // Author or moderator. 'solved' stays repliable; 'closed' stops new
     // replies, which chat:send checks.
-    'thread:status:set': async (payload: { conversationId: string; threadId: string; status: string; accessToken: string }) => {
+    'thread:status:set': async (payload: { conversationId: string; threadId: string; status: string; answerMessageId?: string; accessToken: string }) => {
       try {
         const ip = getClientIp();
         const userId = clientsInfo[clientId]?.serverUserId;
@@ -1331,7 +1335,17 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           socket.emit("thread:error", { error: "forbidden", message: "Only the topic's author or a moderator can change this.", permission: "manage_messages" });
           return;
         }
-        const updated = await setThreadStatus(payload.threadId, status);
+        // The answer has to be a reply in this thread, and only rides on solved.
+        let answer: string | null = null;
+        if (status === "solved" && typeof payload.answerMessageId === "string") {
+          const reply = await getMessageById(payload.conversationId, payload.answerMessageId);
+          if (!reply || reply.thread_id !== thread.thread_id) {
+            socket.emit("thread:error", { error: "bad_answer", message: "The answer has to be a reply in this topic." });
+            return;
+          }
+          answer = reply.message_id;
+        }
+        const updated = await setThreadStatus(payload.threadId, status, answer);
         if (!updated) { socket.emit("thread:error", "Failed to update the topic."); return; }
         const upd = {
           conversation_id: updated.conversation_id,
@@ -1340,6 +1354,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           reply_count: updated.reply_count,
           last_message_at: updated.last_message_at.toISOString(),
           status: updated.status,
+          answer_message_id: updated.answer_message_id,
         };
         (await recipientClientIds(payload.conversationId, access)).forEach((cid) =>
           io.sockets.sockets.get(cid)?.emit("thread:updated", upd),

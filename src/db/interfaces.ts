@@ -128,6 +128,8 @@ export interface ThreadRecord {
   tags: string[];
   reply_count: number;
   locked: boolean;
+  /** The reply that solved it, set with the status. Null when open or solved without one. */
+  answer_message_id: string | null;
   created_at: Date;
   last_message_at: Date;
 }

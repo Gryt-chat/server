@@ -14,6 +14,7 @@ import {
   getThread,
   getThreadByRoot,
   listThreadsByConversation,
+  listRecentRepliers,
   listThreadsByRootMessageIds,
 } from "./threads";
 
@@ -201,5 +202,23 @@ describe("threads persistence", () => {
     assert.deepEqual(byRoot.get(rootB)?.tags, ["t1"]);
 
     assert.deepEqual(await listThreadsByRootMessageIds(conv, []), [], "an empty page runs no query");
+  });
+});
+
+describe("recent repliers", () => {
+  it("names up to three, newest first, once each, and leaves out the root's author", async () => {
+    const rootId = await seedRoot("who has a cable?");
+    const t = await createThread({ conversation_id: CONV, root_message_id: rootId, created_by: "u_alice" });
+    const reply = (sender: string, at: string) =>
+      insertMessage({ conversation_id: CONV, sender_server_id: sender, text: "x", attachments: null, reactions: null, thread_id: t.thread_id, created_at: new Date(at) });
+    await reply("u_bob", "2026-10-28T10:00:00Z");
+    await reply("u_carol", "2026-10-28T10:01:00Z");
+    await reply("u_dave", "2026-10-28T10:02:00Z");
+    await reply("u_erin", "2026-10-28T10:03:00Z");
+    await reply("u_bob", "2026-10-28T10:04:00Z");
+
+    const got = await listRecentRepliers([t.thread_id]);
+    assert.deepEqual(got.get(t.thread_id), ["u_bob", "u_erin", "u_dave"]);
+    assert.deepEqual(await listRecentRepliers([]), new Map());
   });
 });
