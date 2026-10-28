@@ -117,6 +117,10 @@ describe("marking which reply answered it", () => {
     assert.equal(upd.answer_message_id, reply.message_id);
     assert.equal((await getThread(threadId))?.answer_message_id, reply.message_id);
 
+    await alice.handlers["thread:fetch"]({ conversationId: FORUM, threadId });
+    const fetched = alice.received("thread:history").at(-1) as { thread: { answer_message_id: string | null } };
+    assert.equal(fetched.thread.answer_message_id, reply.message_id, "opening the topic has to show the answer too");
+
     await alice.handlers["thread:status:set"]({ conversationId: FORUM, threadId, status: "open", accessToken: alice.accessToken });
     assert.equal((await getThread(threadId))?.answer_message_id, null);
   });
