@@ -66,6 +66,7 @@ after(() => {
 });
 
 const BASE_THREAD_FIELDS = [
+  "answer_message_id",
   "thread_id",
   "conversation_id",
   "root_message_id",
@@ -110,8 +111,9 @@ describe("one thread summary shape everywhere (GRYT-1391)", () => {
     const history = alice.received("chat:history").at(-1) as { threads: Record<string, unknown>[] };
 
     assert.ok(history.threads.length >= 1, "the thread:create thread should be on the page");
+    // A page's threads also say who replied last, for the faces on the replies line.
     for (const t of history.threads) {
-      assert.deepEqual(Object.keys(t).sort(), BASE_THREAD_FIELDS);
+      assert.deepEqual(Object.keys(t).sort(), [...BASE_THREAD_FIELDS, "recent_repliers"].sort());
     }
   });
 

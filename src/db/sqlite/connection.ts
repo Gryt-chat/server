@@ -1083,6 +1083,9 @@ function runMigrations(d: DatabaseSync): void {
   if (!hasColumn(d, "threads", "tags")) {
     d.exec("ALTER TABLE threads ADD COLUMN tags TEXT");
   }
+  if (!hasColumn(d, "threads", "answer_message_id")) {
+    d.exec("ALTER TABLE threads ADD COLUMN answer_message_id TEXT");
+  }
 
   // Webhook cards, and the name and picture a webhook posted under. Both used to live
   // only in the live broadcast, so a reload showed the webhook's current ones. GRYT-1186.

@@ -105,3 +105,27 @@ describe("marking a topic solved", () => {
     assert.ok(errors.some((e) => e?.error === "bad_status"));
   });
 });
+
+describe("marking which reply answered it", () => {
+  it("keeps the answer with solved, tells everyone, and drops it on reopen", async () => {
+    await bob.handlers["thread:status:set"]({ conversationId: FORUM, threadId, status: "open", accessToken: bob.accessToken });
+    await bob.handlers["chat:send"]({ conversationId: FORUM, threadId, text: "pin the phone to 5 GHz", accessToken: bob.accessToken });
+    const reply = bob.received("chat:new").at(-1) as { message_id: string };
+
+    await alice.handlers["thread:status:set"]({ conversationId: FORUM, threadId, status: "solved", answerMessageId: reply.message_id, accessToken: alice.accessToken });
+    const upd = alice.received("thread:updated").at(-1) as { status: string; answer_message_id: string | null };
+    assert.equal(upd.answer_message_id, reply.message_id);
+    assert.equal((await getThread(threadId))?.answer_message_id, reply.message_id);
+
+    await alice.handlers["thread:status:set"]({ conversationId: FORUM, threadId, status: "open", accessToken: alice.accessToken });
+    assert.equal((await getThread(threadId))?.answer_message_id, null);
+  });
+
+  it("refuses an answer that isn't a reply in this topic", async () => {
+    const before = alice.received("thread:error").length;
+    await alice.handlers["thread:status:set"]({ conversationId: FORUM, threadId, status: "solved", answerMessageId: "not-a-reply", accessToken: alice.accessToken });
+    const errors = alice.received("thread:error").slice(before) as { error?: string }[];
+    assert.ok(errors.some((e) => e?.error === "bad_answer"));
+    assert.equal((await getThread(threadId))?.status, "open", "a refused answer must not solve it either");
+  });
+});
