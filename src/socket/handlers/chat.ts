@@ -1281,6 +1281,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
             status: thread.status,
             reply_count: thread.reply_count,
             locked: thread.locked,
+            answer_message_id: thread.answer_message_id,
             created_at: thread.created_at.toISOString(),
             last_message_at: thread.last_message_at.toISOString(),
           },
