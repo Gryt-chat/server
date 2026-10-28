@@ -2,7 +2,7 @@ import consola from "consola";
 import sharp from "sharp";
 import { v4 as uuidv4 } from "uuid";
 
-import { AVATAR_MAX_PX, AVATAR_THUMB_PX } from "../constants/media";
+import { AVATAR_MAX_PX, AVATAR_QUALITY, AVATAR_THUMB_PX } from "../constants/media";
 
 /** The box a picture is cut to, and its thumbnail's. Avatars are square. */
 export interface PictureBox { width: number; height: number; thumbWidth: number; thumbHeight: number }
@@ -71,7 +71,7 @@ export async function storeAvatarPicture(input: {
 
     const thumb = await sharp(bytes, { pages: 1, failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
       .resize({ width: box.thumbWidth, height: box.thumbHeight, fit: "cover" })
-      .avif({ quality: 50 })
+      .avif({ quality: AVATAR_QUALITY })
       .toBuffer()
       .catch(() => null);
 
@@ -88,7 +88,7 @@ export async function storeAvatarPicture(input: {
     try {
       storedBody = await sharp(bytes, { pages: 1, failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
         .resize({ width: box.width, height: box.height, fit: "cover" })
-        .avif()
+        .avif({ quality: AVATAR_QUALITY })
         .toBuffer();
     } catch {
       return { ok: false, status: 400, error: "invalid_file", message: "Could not process image." };
@@ -104,7 +104,7 @@ export async function storeAvatarPicture(input: {
     try {
       storedBody = await sharp(bytes, { failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
         .resize({ width: box.width, height: box.height, fit: "cover" })
-        .avif()
+        .avif({ quality: AVATAR_QUALITY })
         .toBuffer();
     } catch {
       return { ok: false, status: 400, error: "invalid_file", message: "Could not process image. Please upload a valid image under the size limit." };
@@ -116,7 +116,7 @@ export async function storeAvatarPicture(input: {
 
     const thumb = await sharp(bytes, { failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
       .resize({ width: box.thumbWidth, height: box.thumbHeight, fit: "cover" })
-      .avif({ quality: 50 })
+      .avif({ quality: AVATAR_QUALITY })
       .toBuffer()
       .catch(() => null);
 
@@ -177,7 +177,7 @@ export async function storeAvatarPicture(input: {
 
           const thumbBuf = await sharp(resized, { pages: 1, failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
             .resize({ width: box.thumbWidth, height: box.thumbHeight, fit: "cover" })
-            .avif({ quality: 50 })
+            .avif({ quality: AVATAR_QUALITY })
             .toBuffer()
             .catch(() => null);
           const newThumbKey = thumbBuf ? `${prefix}/thumb_${fileId}.avif` : null;
