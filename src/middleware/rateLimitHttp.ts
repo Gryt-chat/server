@@ -46,6 +46,9 @@ export const RL_HTTP_OUTBOUND: RateLimitRule = { limit: 20, windowMs: 60_000, ba
 /** Writing bytes to disk, which costs storage rather than only time. */
 export const RL_HTTP_UPLOAD: RateLimitRule = { limit: 30, windowMs: 60_000, banMs: 30_000 };
 
+/** Chat files. A Discord import sends hundreds of them in one go, and each is capped by size. */
+export const RL_HTTP_CHAT_UPLOAD: RateLimitRule = { limit: 300, windowMs: 60_000, banMs: 30_000 };
+
 /** An import is one gesture that becomes a request per emoji. No `banMs`: the
     ban is what took the emoji list down with the writes. */
 export const RL_HTTP_EMOJI_WRITE: RateLimitRule = { limit: 150, windowMs: 60_000 };
