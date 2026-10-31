@@ -1028,6 +1028,11 @@ function runMigrations(d: DatabaseSync): void {
   if (!hasColumn(d, "server_config", "external_emojis")) {
     d.exec("ALTER TABLE server_config ADD COLUMN external_emojis INTEGER NOT NULL DEFAULT 0");
   }
+  // From this upgrade on, or everybody's unopened channels would light up with old messages (GRYT-1977).
+  if (!hasColumn(d, "server_config", "unread_from")) {
+    d.exec("ALTER TABLE server_config ADD COLUMN unread_from TEXT");
+    d.prepare("UPDATE server_config SET unread_from = ?").run(new Date().toISOString());
+  }
 
   // Stored and handed back whole, and never read here. One column rather than a
   // key beside a signature, so the two cannot be mixed between members.

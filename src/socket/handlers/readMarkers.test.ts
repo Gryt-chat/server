@@ -8,6 +8,9 @@ import { upsertServerChannel } from "../../db/sqlite/channels";
 import { initSqlite } from "../../db/sqlite/connection";
 import { insertMessage } from "../../db/sqlite/messages";
 import { setReadMarker } from "../../db/sqlite/readMarkers";
+import { createPermissionScope, replacePermissionRules, setChannelPermissionScope } from "../../db/sqlite/channelScopes";
+import { createRoleDefinition } from "../../db/sqlite/roleDefinitions";
+import { resetChannelPermissionCache } from "../../services/channelPermissions";
 import { createServerConfigIfNotExists, setServerRole } from "../../db/sqlite/servers";
 import { upsertUser } from "../../db/sqlite/users";
 import type { Clients } from "../../types";
@@ -116,6 +119,38 @@ describe("read markers over the socket", () => {
     const reply = received("read:list").at(-1) as Reply;
     assert.equal(reply.markers.some((m) => m.conversation_id === GONE), false, "the marker leaked a channel");
     assert.equal(reply.counts[GONE], undefined, "the count leaked a channel");
+  });
+
+  it("counts an unopened channel from joining, and hides one you can't read", async () => {
+    const say = (conversation_id: string) => insertMessage({
+      conversation_id,
+      sender_server_id: "someone-else",
+      text: "new",
+      attachments: null,
+      reactions: null,
+      created_at: new Date("2099-01-01T00:00:00.000Z"),
+    });
+    await upsertServerChannel({ channelId: "chan-open", name: "open", type: "text" });
+    await upsertServerChannel({ channelId: "chan-staff", name: "staff", type: "text" });
+    await say("chan-open");
+    await say("chan-staff");
+
+    await createRoleDefinition("regular", { name: "Regular", rank: 10, permissions: ["read_messages"] });
+    const scope = await createPermissionScope({ isTemplate: false });
+    await replacePermissionRules(scope, [{ roleId: "regular", permission: "read_messages", effect: "deny" }]);
+    await setChannelPermissionScope("chan-staff", scope);
+    resetChannelPermissionCache();
+
+    const dana = await upsertUser("account-dana", "Dana");
+    await setServerRole(dana.server_user_id, "regular");
+    const owner = clientsInfo[clientId].serverUserId;
+    clientsInfo[clientId].serverUserId = dana.server_user_id;
+    await handlers["read:list"]();
+    clientsInfo[clientId].serverUserId = owner;
+
+    const reply = received("read:list").at(-1) as Reply;
+    assert.equal(reply.counts["chan-open"], 1);
+    assert.equal(reply.counts["chan-staff"], undefined, "the count leaked a private channel");
   });
 
   it("ignores a client that has not finished signing in", async () => {
