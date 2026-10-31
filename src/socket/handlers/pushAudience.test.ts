@@ -390,7 +390,13 @@ describe("previews sealed to the phone (GRYT-1688)", () => {
     assert.deepEqual(await woken(), ["Carol:mention"]);
     const body = JSON.parse(hits[0].body) as { kind: string; preview: string };
     assert.ok(!hits[0].body.includes("green"), "the relay could read the message");
-    assert.deepEqual(openPreview(key, carol.capability, body.preview), {
+    const opened = openPreview(key, carol.capability, body.preview) as Record<string, unknown>;
+    assert.equal(opened.o, OPEN);
+    assert.equal(typeof opened.m, "string", "a tap lands on the message");
+    assert.equal(opened.d, undefined);
+    delete opened.o;
+    delete opened.m;
+    assert.deepEqual(opened, {
       t: "Alice", s: "#General · Gryt", b: "@Carol the build is green",
     });
   });
@@ -402,7 +408,13 @@ describe("previews sealed to the phone (GRYT-1688)", () => {
     await send(erin, dm, "lunch?");
     assert.deepEqual(await woken(), ["Dave:dm"]);
     const body = JSON.parse(hits[0].body) as { preview: string };
-    assert.deepEqual(openPreview(key, dave.capability, body.preview), { t: "Erin", s: "Gryt", b: "lunch?" });
+    const opened = openPreview(key, dave.capability, body.preview) as Record<string, unknown>;
+    assert.equal(opened.d, 1, "a tap opens it on the Messages tab");
+    assert.equal(opened.o, dm);
+    delete opened.o;
+    delete opened.m;
+    delete opened.d;
+    assert.deepEqual(opened, { t: "Erin", s: "Gryt", b: "lunch?" });
   });
 
   it("a phone without a key gets the relay's fixed text, as before", async () => {

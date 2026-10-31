@@ -771,7 +771,7 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
           try {
             const blockers = await blockersOfSender(self);
             // Who and which server, never what: the server can't read an MLS message (GRYT-1688).
-            const preview = async () => messagePreview({ sender: (await getUserByServerId(self))?.nickname, body: "New direct message" });
+            const preview = async () => messagePreview({ sender: (await getUserByServerId(self))?.nickname, body: "New direct message", conversationId: payload.conversationId });
             pushNotify(clientsInfo, memberIds.filter((id) => id !== self && !blockers.has(id)), "dm", payload.conversationId, { preview });
           } catch (err) {
             consola.warn("mls push failed", payload.conversationId, err);
