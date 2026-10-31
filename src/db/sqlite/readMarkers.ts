@@ -77,8 +77,7 @@ export async function countUnreadByConversation(
 ): Promise<Record<string, number>> {
   const db = getSqliteDb();
 
-  /* A conversation with no marker is left out, and the client reads absent as caught
-     up: joining a server should not light up every channel in it. */
+  // A conversation with no marker is left out. countUnreadInUnopenedChannels has those.
   const rows = db
     .prepare(
       `SELECT m.conversation_id AS conversation_id, COUNT(*) AS n
@@ -96,6 +95,35 @@ export async function countUnreadByConversation(
         GROUP BY m.conversation_id`,
     )
     .all(serverUserId, serverUserId) as Array<{ conversation_id: string; n: number }>;
+
+  const counts: Record<string, number> = {};
+  for (const row of rows) counts[row.conversation_id] = row.n;
+  return counts;
+}
+
+/**
+ * A channel nobody here has opened has no marker to count from, so it counts from when they
+ * joined, or from when this server started counting these if that's later.
+ */
+export async function countUnreadInUnopenedChannels(
+  serverUserId: string,
+): Promise<Record<string, number>> {
+  const rows = getSqliteDb()
+    .prepare(
+      `SELECT m.conversation_id AS conversation_id, COUNT(*) AS n
+         FROM users u
+         JOIN channels c
+         JOIN messages m ON m.conversation_id = c.channel_id
+         LEFT JOIN read_markers r
+           ON r.server_user_id = u.server_user_id AND r.conversation_id = c.channel_id
+        WHERE u.server_user_id = ?
+          AND r.conversation_id IS NULL
+          AND m.created_at > MAX(u.created_at, COALESCE((SELECT unread_from FROM server_config LIMIT 1), ''))
+          AND m.thread_id IS NULL
+          AND m.sender_server_id != u.server_user_id
+        GROUP BY m.conversation_id`,
+    )
+    .all(serverUserId) as Array<{ conversation_id: string; n: number }>;
 
   const counts: Record<string, number> = {};
   for (const row of rows) counts[row.conversation_id] = row.n;

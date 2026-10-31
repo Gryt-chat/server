@@ -4,10 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 
+import { upsertServerChannel } from "./channels";
 import { initSqlite, getSqliteDb } from "./connection";
 import { insertMessage } from "./messages";
+import { createServerConfigIfNotExists } from "./servers";
+import { upsertUser } from "./users";
 import {
   countUnreadByConversation,
+  countUnreadInUnopenedChannels,
   deleteReadMarkers,
   listReadMarkers,
   setReadMarker,
@@ -167,5 +171,47 @@ describe("read markers", () => {
     assert.equal(await deleteReadMarkers(ALICE, "c-two"), 1);
     assert.equal((await countUnreadByConversation(ALICE))["c-two"], undefined);
     assert.ok((await listReadMarkers(ALICE)).length > 0, "every marker went, not just the one asked for");
+  });
+});
+
+describe("channels nobody has opened", () => {
+  const LATER = "2099-01-01T00:00:00.000Z";
+  let carol: string;
+
+  before(async () => {
+    await createServerConfigIfNotExists();
+    await upsertServerChannel({ channelId: "unopened", name: "unopened", type: "text" });
+    await upsertServerChannel({ channelId: "unopened-marked", name: "marked", type: "text" });
+    await say("unopened", BOB, "2020-01-01T00:00:00.000Z");
+    carol = (await upsertUser("account-carol", "Carol")).server_user_id;
+  });
+
+  it("counts what came after joining, and nothing from before", async () => {
+    assert.equal((await countUnreadInUnopenedChannels(carol)).unopened, undefined);
+    await say("unopened", BOB, LATER);
+    assert.equal((await countUnreadInUnopenedChannels(carol)).unopened, 1);
+  });
+
+  it("leaves out your own messages, thread replies and anything that isn't a channel", async () => {
+    await say("unopened", carol, LATER);
+    await say("unopened", BOB, LATER, { thread_id: "t-1" });
+    await say("dm-not-a-channel", BOB, LATER);
+    const counts = await countUnreadInUnopenedChannels(carol);
+    assert.equal(counts.unopened, 1);
+    assert.equal(counts["dm-not-a-channel"], undefined);
+  });
+
+  it("hands a channel over to its marker once it's opened", async () => {
+    await say("unopened-marked", BOB, LATER);
+    assert.equal((await countUnreadInUnopenedChannels(carol))["unopened-marked"], 1);
+    await setReadMarker({ serverUserId: carol, conversationId: "unopened-marked" });
+    assert.equal((await countUnreadInUnopenedChannels(carol))["unopened-marked"], undefined);
+  });
+
+  it("starts at the upgrade for somebody who joined before it", async () => {
+    getSqliteDb().prepare("UPDATE server_config SET unread_from = ?").run("2099-06-01T00:00:00.000Z");
+    assert.equal((await countUnreadInUnopenedChannels(carol)).unopened, undefined);
+    getSqliteDb().prepare("UPDATE server_config SET unread_from = NULL").run();
+    assert.equal((await countUnreadInUnopenedChannels(carol)).unopened, 1);
   });
 });

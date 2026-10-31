@@ -1,5 +1,6 @@
 import type { HandlerContext, EventHandlerMap } from "./types";
-import { countUnreadByConversation, listReadMarkers, setReadMarker } from "../../db";
+import { countUnreadByConversation, countUnreadInUnopenedChannels, listReadMarkers, setReadMarker } from "../../db";
+import { visibleChannelIds } from "../../services/channelPermissions";
 import { checkRateLimit, type RateLimitRule } from "../../utils/rateLimiter";
 import { resolveConversationAccess } from "../utils/conversationAccess";
 
@@ -16,9 +17,11 @@ export function registerReadMarkerHandlers(ctx: HandlerContext): EventHandlerMap
    * one that has just installed has none to count.
    */
   async function sendState(userId: string) {
-    const [markers, counts] = await Promise.all([
+    const [markers, counts, unopened, visibleChannels] = await Promise.all([
       listReadMarkers(userId),
       countUnreadByConversation(userId),
+      countUnreadInUnopenedChannels(userId),
+      visibleChannelIds(userId),
     ]);
 
     /* Filtered on read, as mentions are: a marker says where somebody got to, not that
@@ -32,6 +35,9 @@ export function registerReadMarkerHandlers(ctx: HandlerContext): EventHandlerMap
     const open_counts: Record<string, number> = {};
     for (const [id, n] of Object.entries(counts)) {
       if (open.has(id)) open_counts[id] = n;
+    }
+    for (const [id, n] of Object.entries(unopened)) {
+      if (visibleChannels.has(id)) open_counts[id] = n;
     }
 
     socket.emit("read:list", { markers: visible, counts: open_counts });
