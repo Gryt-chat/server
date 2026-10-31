@@ -28,6 +28,13 @@ describe("sealPreview", () => {
     assert.deepEqual(open(key, CAP, blob), { t: "Alice", s: "#general · Gryt", b: "hey there" });
   });
 
+  it("carries where a tap should land, and leaves it out when there's no such place", () => {
+    const blob = sealPreview(key, CAP, { title: "Alice", body: "hi", conversationId: "dm_1", messageId: "m1", dm: true });
+    assert.deepEqual(open(key, CAP, blob), { t: "Alice", b: "hi", o: "dm_1", m: "m1", d: 1 });
+    const bare = sealPreview(key, CAP, { title: "Alice", body: "hi", conversationId: "general" });
+    assert.deepEqual(open(key, CAP, bare), { t: "Alice", b: "hi", o: "general" });
+  });
+
   it("uses the same tag the relay puts on the push", () => {
     assert.equal(capabilityTag(CAP), createHash("sha256").update(CAP).digest("hex").slice(0, 16));
   });

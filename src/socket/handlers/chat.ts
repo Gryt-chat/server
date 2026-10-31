@@ -819,6 +819,9 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           sender: user.nickname,
           channelId: access.kind === "dm" ? undefined : created.conversation_id,
           body: sealed ? "New direct message" : previewText(created.text, created.attachments?.length ?? 0),
+          conversationId: created.conversation_id,
+          // A thread reply isn't in the channel's list, so that tap stops at the channel.
+          messageId: threadId ? undefined : created.message_id,
         });
 
         if (access.kind === "dm") {

@@ -3,12 +3,16 @@ import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import { getServerChannel, getServerConfig } from "../db";
 
 /* A push's preview, sealed to the phone's key so the relay can't read it (GRYT-1688). AES-256-GCM:
-   0x01 | nonce | ciphertext | tag, base64url; AAD "gryt-push-1|" + capability tag; JSON {t, s?, b}. */
+   0x01 | nonce | ciphertext | tag, base64url; AAD "gryt-push-1|" + capability tag; JSON {t, s?, b, o?, m?, d?}. */
 
 export interface PushPreview {
   title: string;
   subtitle?: string;
   body: string;
+  /** Where a tap lands: the conversation, the message when one can be jumped to, and whether it's a DM. */
+  conversationId?: string;
+  messageId?: string;
+  dm?: boolean;
 }
 
 /** 32 random bytes, base64url without padding. */
@@ -33,6 +37,9 @@ export function sealPreview(previewKey: string, capability: string, preview: Pus
     t: clip(preview.title, TITLE_MAX),
     ...(preview.subtitle ? { s: clip(preview.subtitle, TITLE_MAX) } : {}),
     b: clip(preview.body, BODY_MAX),
+    ...(preview.conversationId ? { o: preview.conversationId } : {}),
+    ...(preview.messageId ? { m: preview.messageId } : {}),
+    ...(preview.dm ? { d: 1 } : {}),
   });
   const sealed = Buffer.concat([cipher.update(plain, "utf8"), cipher.final()]);
   return Buffer.concat([Buffer.from([VERSION]), nonce, sealed, cipher.getAuthTag()]).toString("base64url");
@@ -58,9 +65,22 @@ function clip(text: string, max: number): string {
 }
 
 /** "Alice", "#general · Gryt", and the first line. A DM leaves the channel out. */
-export async function messagePreview(o: { sender: string | null | undefined; channelId?: string; body: string }): Promise<PushPreview> {
+export async function messagePreview(o: {
+  sender: string | null | undefined;
+  channelId?: string;
+  body: string;
+  conversationId: string;
+  messageId?: string;
+}): Promise<PushPreview> {
   const cfg = await getServerConfig().catch(() => null);
   const server = cfg?.display_name || process.env.SERVER_NAME || "Gryt";
   const channel = o.channelId ? (await getServerChannel(o.channelId).catch(() => null))?.name : null;
-  return { title: o.sender || "Someone", subtitle: channel ? `#${channel} · ${server}` : server, body: o.body };
+  return {
+    title: o.sender || "Someone",
+    subtitle: channel ? `#${channel} · ${server}` : server,
+    body: o.body,
+    conversationId: o.conversationId,
+    ...(o.messageId ? { messageId: o.messageId } : {}),
+    ...(o.channelId ? {} : { dm: true }),
+  };
 }
