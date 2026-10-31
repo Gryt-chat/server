@@ -3,7 +3,7 @@ import { startWorkerCapabilityPolling } from "./services/workerCapabilities";
 import { join } from "path";
 import { config } from "dotenv";
 import { applyCors, isOriginAllowed, readAllowedOrigins } from "./config/cors";
-import { RL_HTTP_API, RL_HTTP_EMOJI_WRITE, RL_HTTP_FILE, RL_HTTP_OUTBOUND, RL_HTTP_PUBLIC, RL_HTTP_UPLOAD, httpRateLimit } from "./middleware/rateLimitHttp";
+import { RL_HTTP_API, RL_HTTP_CHAT_UPLOAD, RL_HTTP_EMOJI_WRITE, RL_HTTP_FILE, RL_HTTP_OUTBOUND, RL_HTTP_PUBLIC, RL_HTTP_UPLOAD, httpRateLimit } from "./middleware/rateLimitHttp";
 config({ path: "config.env", override: false });
 config({ override: false });
 import { consola } from "consola";
@@ -342,7 +342,7 @@ app.use("/api/server", httpRateLimit("http:server", RL_HTTP_UPLOAD), serverRoute
 app.use("/api/messages", httpRateLimit("http:api", RL_HTTP_API), messagesRouter);
 // Reads and writes share a mount and need different budgets. Express runs every
 // matching mount, so without the skip a read is charged to the write budget.
-const limitUploadWrites = httpRateLimit("http:upload", RL_HTTP_UPLOAD);
+const limitUploadWrites = httpRateLimit("http:upload", RL_HTTP_CHAT_UPLOAD);
 app.use("/api/uploads/files", httpRateLimit("http:file", RL_HTTP_FILE));
 app.use(
   "/api/uploads",
