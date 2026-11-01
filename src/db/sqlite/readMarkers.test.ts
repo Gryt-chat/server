@@ -91,6 +91,14 @@ describe("read markers", () => {
     assert.equal((await countUnreadByConversation(ALICE))["c-mine"], 1, "somebody else's message is not counted");
   });
 
+  it("does not count a line from the system", async () => {
+    await upsertServerChannel({ channelId: "marked-system", name: "marked-system", type: "text" });
+    await say("marked-system", BOB, "2020-01-01T00:00:00.000Z");
+    await setReadMarker({ serverUserId: ALICE, conversationId: "marked-system" });
+    await say("marked-system", "system", "2020-01-02T00:00:00.000Z");
+    assert.equal((await countUnreadByConversation(ALICE))["marked-system"], undefined);
+  });
+
   it("leaves thread replies to the thread's own count", async () => {
     const root = await say("c-thread", BOB, "2026-01-04T00:00:00.000Z");
     await setReadMarker({ serverUserId: ALICE, conversationId: "c-thread", messageId: root });
@@ -199,6 +207,12 @@ describe("channels nobody has opened", () => {
     const counts = await countUnreadInUnopenedChannels(carol);
     assert.equal(counts.unopened, 1);
     assert.equal(counts["dm-not-a-channel"], undefined);
+  });
+
+  it("does not count a line from the system", async () => {
+    const before = (await countUnreadInUnopenedChannels(carol)).unopened;
+    await say("unopened", "system", LATER);
+    assert.equal((await countUnreadInUnopenedChannels(carol)).unopened, before);
   });
 
   it("hands a channel over to its marker once it's opened", async () => {

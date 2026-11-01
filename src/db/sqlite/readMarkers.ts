@@ -90,8 +90,9 @@ export async function countUnreadByConversation(
         WHERE r.server_user_id = ?
           -- Replies belong to their thread's count, which the client keeps apart.
           AND m.thread_id IS NULL
-          -- Your own messages are not news to you.
+          -- Your own messages are not news to you, and nor is who joined.
           AND m.sender_server_id != ?
+          AND m.sender_server_id != 'system'
         GROUP BY m.conversation_id`,
     )
     .all(serverUserId, serverUserId) as Array<{ conversation_id: string; n: number }>;
@@ -121,6 +122,7 @@ export async function countUnreadInUnopenedChannels(
           AND m.created_at > MAX(u.created_at, COALESCE((SELECT unread_from FROM server_config LIMIT 1), ''))
           AND m.thread_id IS NULL
           AND m.sender_server_id != u.server_user_id
+          AND m.sender_server_id != 'system'
         GROUP BY m.conversation_id`,
     )
     .all(serverUserId) as Array<{ conversation_id: string; n: number }>;
