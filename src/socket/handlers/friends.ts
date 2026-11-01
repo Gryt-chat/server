@@ -40,13 +40,14 @@ const NOT_A_MEMBER = { error: "unknown_member", message: "That person is not a m
 export interface FriendView {
   serverUserId: string;
   nickname: string | null;
+  avatarFileId: string | null;
   at: string;
 }
 
 const view = (people: FriendPerson[]): FriendView[] =>
   people
     .filter((p): p is FriendPerson & { serverUserId: string } => !!p.serverUserId)
-    .map((p) => ({ serverUserId: p.serverUserId, nickname: p.nickname, at: p.at }));
+    .map((p) => ({ serverUserId: p.serverUserId, nickname: p.nickname, avatarFileId: p.avatarFileId, at: p.at }));
 
 /** What one member is shown. A request from somebody either of them blocked isn't. */
 export async function friendListFor(grytUserId: string): Promise<{ friends: FriendView[]; incoming: FriendView[]; outgoing: FriendView[] }> {

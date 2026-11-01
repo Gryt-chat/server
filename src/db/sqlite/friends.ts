@@ -15,6 +15,7 @@ export interface FriendPerson {
   /** Null when their member row is gone. */
   serverUserId: string | null;
   nickname: string | null;
+  avatarFileId: string | null;
   /** When the friendship, or the request, was made. */
   at: string;
 }
@@ -34,12 +35,13 @@ function cutoff(now = Date.now()): string {
   return toIso(new Date(now - FRIEND_REQUEST_TTL_MS));
 }
 
-type PersonRow = { gryt_user_id: string; server_user_id: string | null; nickname: string | null; at: string };
+type PersonRow = { gryt_user_id: string; server_user_id: string | null; nickname: string | null; avatar_file_id: string | null; at: string };
 
 const toPerson = (r: PersonRow): FriendPerson => ({
   grytUserId: r.gryt_user_id,
   serverUserId: r.server_user_id,
   nickname: r.nickname,
+  avatarFileId: r.avatar_file_id,
   at: r.at,
 });
 
@@ -59,7 +61,7 @@ export async function hasAnyFriend(grytUserId: string): Promise<boolean> {
 export async function listFriends(grytUserId: string): Promise<FriendPerson[]> {
   const rows = getSqliteDb()
     .prepare(
-      `SELECT f.other AS gryt_user_id, u.server_user_id, u.nickname, f.created_at AS at
+      `SELECT f.other AS gryt_user_id, u.server_user_id, u.nickname, u.avatar_file_id, f.created_at AS at
          FROM (SELECT CASE WHEN a_gryt_user_id = ? THEN b_gryt_user_id ELSE a_gryt_user_id END AS other, created_at
                  FROM friendships WHERE a_gryt_user_id = ? OR b_gryt_user_id = ?) f
          LEFT JOIN users u ON u.gryt_user_id = f.other
@@ -110,7 +112,7 @@ export async function listFriendRequests(grytUserId: string): Promise<FriendRequ
   const since = cutoff();
   const incoming = db
     .prepare(
-      `SELECT r.from_gryt_user_id AS gryt_user_id, u.server_user_id, u.nickname, r.created_at AS at
+      `SELECT r.from_gryt_user_id AS gryt_user_id, u.server_user_id, u.nickname, u.avatar_file_id, r.created_at AS at
          FROM friend_requests r LEFT JOIN users u ON u.gryt_user_id = r.from_gryt_user_id
         WHERE r.to_gryt_user_id = ? AND r.ignored = 0 AND r.created_at > ?
         ORDER BY r.created_at`,
@@ -118,7 +120,7 @@ export async function listFriendRequests(grytUserId: string): Promise<FriendRequ
     .all(grytUserId, since) as PersonRow[];
   const outgoing = db
     .prepare(
-      `SELECT r.to_gryt_user_id AS gryt_user_id, u.server_user_id, u.nickname, r.created_at AS at
+      `SELECT r.to_gryt_user_id AS gryt_user_id, u.server_user_id, u.nickname, u.avatar_file_id, r.created_at AS at
          FROM friend_requests r LEFT JOIN users u ON u.gryt_user_id = r.to_gryt_user_id
         WHERE r.from_gryt_user_id = ? AND r.created_at > ?
         ORDER BY r.created_at`,
