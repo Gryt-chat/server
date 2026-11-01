@@ -136,8 +136,15 @@ async function tryBonjour(
   const iface = process.env.MDNS_INTERFACE;
   try {
     const { Bonjour } = await import("bonjour-service");
+    let warned = false;
+    // Without this callback the library throws from a socket event, which takes the whole server down.
     const bonjour = new Bonjour(
-      iface ? { interface: iface, bind: "0.0.0.0" } : undefined
+      iface ? { interface: iface, bind: "0.0.0.0" } : undefined,
+      (err: Error) => {
+        if (warned) return;
+        warned = true;
+        consola.warn("mDNS: LAN discovery may not work on this network", err);
+      }
     );
     bonjour.publish({
       name,
