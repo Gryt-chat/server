@@ -169,10 +169,12 @@ class SlidingWindowLimiter {
 export const limiter = new SlidingWindowLimiter({ limit: 100, windowMs: 60_000 });
 
 const production = (process.env.NODE_ENV || "").toLowerCase() === "production";
-const limitsOff = process.env.GRYT_DISABLE_RATE_LIMITS === "true";
+const limitsFlag = process.env.GRYT_DISABLE_RATE_LIMITS;
+// `yarn dev` passes --dev. Set the flag to false to test limits there.
+const limitsOff = limitsFlag === "true" || (limitsFlag !== "false" && process.argv.includes("--dev"));
 if (limitsOff) {
-	if (production) consola.warn("GRYT_DISABLE_RATE_LIMITS is ignored with NODE_ENV=production.");
-	else consola.warn("Rate limits are off (GRYT_DISABLE_RATE_LIMITS=true). Only for a dev server.");
+	if (production) consola.warn("Rate limits can't be turned off with NODE_ENV=production.");
+	else consola.warn("Rate limits are off. Only for a dev server.");
 }
 
 export function checkRateLimit(event: string, userId?: string, ip?: string, rule?: RateLimitRule) {
