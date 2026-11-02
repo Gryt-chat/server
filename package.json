@@ -58,7 +58,7 @@
     "build:selfhosted": "bash build-selfhosted.sh",
     "build:selfhosted:windows": "bash build-selfhosted.sh windows-x64",
     "build:selfhosted:linux": "bash build-selfhosted.sh linux-x64",
-    "dev": "node --watch -r ts-node/register src/index.ts",
+    "dev": "node --watch -r ts-node/register src/index.ts --dev",
     "start": "node dist/index.js"
   }
 }
