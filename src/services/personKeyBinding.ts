@@ -104,3 +104,12 @@ export async function dmBindingIdentity(binding: string): Promise<string | null>
     return null;
   }
 }
+
+/** Long enough to outlast a holiday, so a thief with the password can't finish one while you're away. */
+export const KEY_RESET_DELAY_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** A reset finishes 30 days after it was asked for, or 30 days after a device with the current key was last here, whichever is first. */
+export function keyResetDueAt(user: { dm_key_reset_binding: string | null; dm_key_reset_at: number | null; dm_key_seen_at: number | null }): number | null {
+  if (!user.dm_key_reset_binding || user.dm_key_reset_at == null) return null;
+  return user.dm_key_seen_at == null ? user.dm_key_reset_at : Math.min(user.dm_key_reset_at, user.dm_key_seen_at + KEY_RESET_DELAY_MS);
+}

@@ -1053,6 +1053,13 @@ function runMigrations(d: DatabaseSync): void {
     d.exec("ALTER TABLE users ADD COLUMN dm_key_reset_at INTEGER");
   }
 
+  // When a device with the account's key was last here, and its name: a key nobody uses can hand over.
+  if (!hasColumn(d, "users", "dm_key_seen_at")) {
+    d.exec("ALTER TABLE users ADD COLUMN dm_key_seen_at INTEGER");
+    d.exec("ALTER TABLE users ADD COLUMN dm_key_holder TEXT");
+    d.prepare("UPDATE users SET dm_key_seen_at = ? WHERE dm_key_binding IS NOT NULL").run(Date.now());
+  }
+
   // The MLS person key binding (GRYT-1515). Checked against the DM key binding's
   // signer when it's published, then stored whole like that one.
   if (!hasColumn(d, "users", "person_key_binding")) {

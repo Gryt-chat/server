@@ -14,6 +14,7 @@ import { memberIdentity } from "./memberIdentity";
 import { scopedChannelIds, visibleChannelIds } from "../../services/channelPermissions";
 import { hasPermission, listRolesByMember } from "../../services/permissions";
 import { cardFields } from "../../utils/memberCard";
+import { keyResetDueAt } from "../../services/personKeyBinding";
 
 /** A member whose permissions were never cached receives no broadcasts, so all
     three admission paths call this and all three await it. */
@@ -261,7 +262,7 @@ export async function buildMemberList(clientsInfo: Clients) {
         /** Checked against the DM key binding's signer on the way in (GRYT-1515). */
         personKeyBinding: user.person_key_binding,
         /** When a pending key reset takes over, so contacts and your own devices can see it coming. */
-        keyResetAt: user.dm_key_reset_binding ? user.dm_key_reset_at : null,
+        keyResetAt: keyResetDueAt(user),
         avatarFileId: user.avatar_file_id || null,
         avatarColor: user.avatar_file_id
           ? avatarFiles.get(user.avatar_file_id)?.dominant_color ?? null

@@ -37,6 +37,8 @@ function rowToUser(r: Record<string, unknown>): UserRecord {
     person_key_binding: (r.person_key_binding as string) || null,
     dm_key_reset_binding: (r.dm_key_reset_binding as string) || null,
     dm_key_reset_at: r.dm_key_reset_at == null ? null : Number(r.dm_key_reset_at),
+    dm_key_seen_at: r.dm_key_seen_at == null ? null : Number(r.dm_key_seen_at),
+    dm_key_holder: (r.dm_key_holder as string) || null,
   };
 }
 
@@ -148,6 +150,8 @@ export async function upsertUser(
     person_key_binding: null,
     dm_key_reset_binding: null,
     dm_key_reset_at: null,
+    dm_key_seen_at: null,
+    dm_key_holder: null,
   };
 }
 
@@ -169,6 +173,12 @@ export async function setUserDmKeyReset(serverUserId: string, binding: string | 
   getSqliteDb()
     .prepare(`UPDATE users SET dm_key_reset_binding = ?, dm_key_reset_at = ? WHERE server_user_id = ?`)
     .run(binding, at, serverUserId);
+}
+
+export async function setUserDmKeySeen(serverUserId: string, at: number, holder: string | null): Promise<void> {
+  getSqliteDb()
+    .prepare(`UPDATE users SET dm_key_seen_at = ?, dm_key_holder = ? WHERE server_user_id = ?`)
+    .run(at, holder, serverUserId);
 }
 
 /** Checked by the caller (`services/personKeyBinding.ts`), not here. Null withdraws it. */

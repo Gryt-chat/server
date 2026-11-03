@@ -69,6 +69,9 @@ export interface UserRecord {
   /** A pending reset to this binding, with no handover note (GRYT-1886). Takes over at `dm_key_reset_at`, in ms. */
   dm_key_reset_binding: string | null;
   dm_key_reset_at: number | null;
+  /** When a device with the current key was last connected, in ms, and what it calls itself. */
+  dm_key_seen_at: number | null;
+  dm_key_holder: string | null;
   /** Null when they have no designed look. Stored and passed on without being
       read — see `utils/wornString.ts`. */
   avatar_worn: string | null;

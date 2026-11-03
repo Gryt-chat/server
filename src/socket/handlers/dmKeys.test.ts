@@ -6,7 +6,7 @@ import { after, before, describe, it } from "node:test";
 
 import { initSqlite } from "../../db/sqlite/connection";
 import { createServerConfigIfNotExists, setServerRole } from "../../db/sqlite/servers";
-import { getUserByServerId, setUserDmKeyReset, upsertUser } from "../../db/sqlite/users";
+import { getUserByServerId, setUserDmKeyReset, setUserDmKeySeen, upsertUser } from "../../db/sqlite/users";
 import type { Clients } from "../../types";
 import { buildMemberList } from "../utils/clients";
 import { KEY_RESET_DELAY_MS, registerDmKeyHandlers } from "./dmKeys";
@@ -356,6 +356,50 @@ describe("one identity per account (GRYT-1868)", () => {
     const after = await getUserByServerId(gina.serverUserId);
     assert.equal(after?.dm_key_binding, next);
     assert.equal(after?.dm_key_reset_binding, null, "a finished reset is cleared");
+  });
+
+  it("keeps an ask after the asker leaves, and starts the 30 days with it", async () => {
+    const jill = await connect("Jill");
+    const [pc, phone] = [await signer(), await signer()];
+    await publish(jill, { binding: await pc.binding(), deviceName: "Windows PC" });
+    const asking = await connect("Jill's phone");
+    clientsInfo[asking.clientId].serverUserId = jill.serverUserId;
+    const next = await phone.binding();
+
+    const asked = await call(asking, "dm:key:handover:ask", { binding: next, deviceName: "iPhone" });
+    assert.equal(asked.holder, "Windows PC", "the asker learns which device it waits for");
+    assert.ok(Math.abs((asked.at as number) - (Date.now() + KEY_RESET_DELAY_MS)) < 5_000);
+    assert.equal((await getUserByServerId(jill.serverUserId))?.dm_key_reset_binding, next);
+
+    delete clientsInfo[asking.clientId];
+    const heard: unknown[] = [];
+    io.sockets.sockets.set(jill.clientId, { emit: (event: string, body: unknown) => heard.push([event, body]) });
+    jill.handlers["dm:key:handover:pending"]({});
+    assert.deepEqual(heard, [["dm:key:handover:asked", { binding: next, deviceName: "iPhone", askerId: asking.clientId }]], "an ask outlives the asker's connection");
+  });
+
+  it("hands over at once when no device with the current key has been here for 30 days", async () => {
+    const kim = await connect("Kim");
+    const [gone, phone] = [await signer(), await signer()];
+    await publish(kim, { binding: await gone.binding() });
+    const next = await phone.binding();
+    assert.equal((await publish(kim, { binding: next, replace: true })).error, "handover_required", "not without asking");
+
+    await setUserDmKeySeen(kim.serverUserId, Date.now() - KEY_RESET_DELAY_MS - 1, null);
+    const asked = await call(kim, "dm:key:handover:ask", { binding: next });
+    assert.ok((asked.at as number) <= Date.now(), "a key nobody has used for 30 days has nobody to say no");
+    assert.deepEqual(await publish(kim, { binding: next, replace: true }), { ok: true, changed: true });
+  });
+
+  it("a device with the current key coming back keeps the full 30 days", async () => {
+    const lee = await connect("Lee");
+    const [pc, thief] = [await signer(), await signer()];
+    const current = await pc.binding();
+    await publish(lee, { binding: current });
+    await setUserDmKeySeen(lee.serverUserId, Date.now() - KEY_RESET_DELAY_MS - 1, null);
+    await publish(lee, { binding: current });
+    const asked = await call(lee, "dm:key:handover:ask", { binding: await thief.binding() });
+    assert.ok((asked.at as number) > Date.now() + KEY_RESET_DELAY_MS - 5_000);
   });
 
   it("only cancels a reset with proof from the current key", async () => {
