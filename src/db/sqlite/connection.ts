@@ -1060,6 +1060,15 @@ function runMigrations(d: DatabaseSync): void {
     d.prepare("UPDATE users SET dm_key_seen_at = ? WHERE dm_key_binding IS NOT NULL").run(Date.now());
   }
 
+  // Handover asks, so a restart doesn't lose one (GRYT-2023).
+  d.exec(`CREATE TABLE IF NOT EXISTS dm_key_asks (
+    server_user_id TEXT NOT NULL,
+    binding TEXT NOT NULL,
+    device_name TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (server_user_id, binding)
+  )`);
+
   // The MLS person key binding (GRYT-1515). Checked against the DM key binding's
   // signer when it's published, then stored whole like that one.
   if (!hasColumn(d, "users", "person_key_binding")) {
