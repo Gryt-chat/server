@@ -516,3 +516,41 @@ describe("push:register", () => {
     assert.deepEqual(reply, { ok: false, error: "invalid_payload" });
   });
 });
+
+describe("thread replies (GRYT-2008)", () => {
+  async function thread(): Promise<string> {
+    const root = line("voice cuts out for me");
+    await send(alice, OPEN, root);
+    const posted = alice.emitted.find((e) => e.event === "chat:new" && (e.payload as { text?: string }).text === root)
+      ?.payload as { message_id: string };
+    await alice.handlers["thread:create"]({ accessToken: alice.accessToken, conversationId: OPEN, rootMessageId: posted.message_id });
+    const created = alice.emitted.find((e) => e.event === "thread:created")?.payload as { thread_id: string };
+    assert.ok(created?.thread_id, "no thread was created");
+    return created.thread_id;
+  }
+
+  async function reply(from: Member, threadId: string, text: string): Promise<void> {
+    await from.handlers["chat:send"]({ accessToken: from.accessToken, conversationId: OPEN, text, threadId });
+    const refused = from.emitted.find((e) => e.event === "chat:error" || e.event === "thread:error");
+    assert.equal(refused, undefined, `${from.name}'s reply was refused: ${JSON.stringify(refused?.payload)}`);
+  }
+
+  it("wake whoever started the thread or replied in it, and nobody else", async () => {
+    const id = await thread();
+    await reply(carol, id, line("same here"));
+    hits.length = 0;
+    resetPushState();
+    for (const m of [alice, carol, dave, erin]) away(m);
+    await reply(erin, id, line("try another headset"));
+    assert.deepEqual(await woken(), ["Alice:message", "Carol:message"]);
+  });
+
+  it("don't wake the person who replied", async () => {
+    const id = await thread();
+    hits.length = 0;
+    resetPushState();
+    away(alice);
+    await reply(alice, id, line("never mind, fixed it"));
+    assert.deepEqual(await woken(), []);
+  });
+});

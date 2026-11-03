@@ -117,6 +117,15 @@ export async function countThreadParticipants(threadId: string, rootMessageId: s
   return Number(row?.c ?? 0);
 }
 
+/** Everyone who wrote in a thread, the root's author included. */
+export async function listThreadParticipants(threadId: string, rootMessageId: string): Promise<string[]> {
+  const db = getSqliteDb();
+  const rows = db
+    .prepare(`SELECT DISTINCT sender_server_id AS id FROM messages WHERE thread_id = ? OR message_id = ?`)
+    .all(threadId, rootMessageId) as { id: string }[];
+  return rows.map((r) => r.id);
+}
+
 /** Up to three people who replied most recently in each thread, newest first. The root author isn't counted. */
 export async function listRecentRepliers(threadIds: string[]): Promise<Map<string, string[]>> {
   const out = new Map<string, string[]>();
