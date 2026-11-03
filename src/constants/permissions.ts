@@ -92,6 +92,8 @@ export const PERMISSIONS = [
   "view_audit_log",
   /** Whether this server is running a current build. */
   "view_server_status",
+  /** Live voice rooms, latency and SFU numbers. What an AI debugging the server reads. */
+  "view_diagnostics",
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -211,7 +213,8 @@ const ADMIN_PERMISSIONS = EVERY_PERMISSION.filter(
     p !== "replace_identity" &&
     // Owner-only to begin with: approving a bot grants permissions to
     // something nobody in the room can vouch for.
-    p !== "manage_bots",
+    p !== "manage_bots" &&
+    p !== "view_diagnostics",
 ) as Permission[];
 
 /** Spaced so a custom role slots between two built-ins without renumbering. */
@@ -270,7 +273,7 @@ export interface PermissionBackfill {
 }
 
 /** Bump this when adding a batch, and give the new entries the new number. */
-export const PERMISSION_SCHEMA_VERSION = 10;
+export const PERMISSION_SCHEMA_VERSION = 11;
 
 export const PERMISSION_BACKFILLS: readonly PermissionBackfill[] = [
   // Had no gate before: anybody admitted to the server could do all four.
@@ -313,6 +316,9 @@ export const PERMISSION_BACKFILLS: readonly PermissionBackfill[] = [
 
   // Banners used the avatar-image gate before this was split out.
   { version: 10, permission: "upload_banner_image", grantedWith: "upload_avatar_image" },
+
+  // GRYT-2005. Owner-only to begin with, like `manage_bots`.
+  { version: 11, permission: "view_diagnostics", grantedWith: "manage_server" },
 ];
 
 /** Pure: getting this wrong is a silent privilege change in either direction. */
