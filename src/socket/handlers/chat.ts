@@ -50,6 +50,7 @@ import {
   listThreadsByConversation,
   listThreadsByRootMessageIds,
   countThreadParticipants,
+  listThreadParticipants,
   listRecentRepliers,
   setThreadStatus,
   setThreadTags,
@@ -506,6 +507,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         // Same channel and permissions as any other message, plus a thread_id
         // so the client can place it. Threads live in channels, not DMs.
         let threadId: string | null = null;
+        let threadRoot: string | null = null;
         if (typeof payload.threadId === "string" && payload.threadId) {
           if (access.kind === "dm") {
             refuse({ error: "threads_not_allowed", message: "Threads are not available in direct messages." });
@@ -521,6 +523,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
             return;
           }
           threadId = thread.thread_id;
+          threadRoot = thread.root_message_id;
         }
 
         // Identity verification
@@ -949,6 +952,24 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
             });
           } catch (err) {
             consola.warn("message push failed", created.message_id, err);
+          }
+        }
+
+        /* Everyone who wrote in the thread hears about a reply, and nobody else (GRYT-2008).
+           After the mention push, so a mention in a thread is still one notification. */
+        if (threadId && threadRoot && access.kind !== "dm") {
+          try {
+            const sender = auth.tokenPayload.serverUserId;
+            const blockers = await blockersOfSender(sender);
+            const told: string[] = [];
+            for (const id of await listThreadParticipants(threadId, threadRoot)) {
+              if (id === sender || blockers.has(id) || id === "system") continue;
+              if (!(await mayViewChannel(created.conversation_id, id))) continue;
+              told.push(id);
+            }
+            pushNotify(clientsInfo, told, "message", created.conversation_id, { preview: pushPreview });
+          } catch (err) {
+            consola.warn("thread push failed", created.message_id, err);
           }
         }
 
