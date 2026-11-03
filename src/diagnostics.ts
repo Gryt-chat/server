@@ -6,7 +6,7 @@ export interface DiagnosticsSnapshot {
   uptimeSeconds: number;
   online: number;
   sfu: ReturnType<SFUClient["getConnectionStatus"]> | null;
-  /** Null when SFU_METRICS_URL is unset or the SFU did not answer. */
+  /** Null when the SFU's metrics did not answer. */
   sfuMetrics: Record<string, number> | null;
   voice: {
     channelId: string;
@@ -32,6 +32,17 @@ export function parseSfuMetrics(text: string): Record<string, number> {
     if (Number.isFinite(value)) out[m[1]] = (out[m[1]] ?? 0) + value;
   }
   return out;
+}
+
+/** SFU_METRICS_URL, or the SFU's default metrics port on the host SFU_WS_HOST names. */
+export function sfuMetricsUrl(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  if (env.SFU_METRICS_URL) return env.SFU_METRICS_URL;
+  try {
+    const host = new URL(env.SFU_WS_HOST ?? "").hostname;
+    return host ? `http://${host}:9091/metrics` : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function readSfuMetrics(url: string | undefined): Promise<Record<string, number> | null> {
@@ -72,7 +83,7 @@ export async function collectDiagnostics(
     uptimeSeconds: Math.round(process.uptime()),
     online,
     sfu: sfuClient?.getConnectionStatus() ?? null,
-    sfuMetrics: await readSfuMetrics(process.env.SFU_METRICS_URL),
+    sfuMetrics: await readSfuMetrics(sfuMetricsUrl()),
     voice: [...rooms].map(([channelId, members]) => ({ channelId, members })),
   };
 }
