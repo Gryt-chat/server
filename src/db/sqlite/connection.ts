@@ -754,6 +754,13 @@ function hasColumn(d: DatabaseSync, table: string, column: string): boolean {
 
 function runMigrations(d: DatabaseSync): void {
   ensureSearchIndex(d);
+  // A known bot asking for more, and what was turned down (GRYT-2006).
+  if (!hasColumn(d, "bots", "more_permissions")) {
+    d.exec("ALTER TABLE bots ADD COLUMN more_permissions TEXT NOT NULL DEFAULT '[]'");
+  }
+  if (!hasColumn(d, "bots", "declined_permissions")) {
+    d.exec("ALTER TABLE bots ADD COLUMN declined_permissions TEXT NOT NULL DEFAULT '[]'");
+  }
   // Conversations muted on that phone (GRYT-1689). Only dev servers ever had the table without it.
   if (!hasColumn(d, "push_devices", "muted")) {
     d.exec("ALTER TABLE push_devices ADD COLUMN muted TEXT NOT NULL DEFAULT '[]'");
