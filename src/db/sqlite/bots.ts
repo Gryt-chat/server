@@ -55,6 +55,8 @@ function rowToBot(r: Record<string, unknown>): BotRecord {
     updated_at: fromIso(r.updated_at as string),
     decided_at: fromIsoNullable(r.decided_at as string | null),
     decided_by_server_user_id: (r.decided_by_server_user_id as string) ?? null,
+    more_permissions: parsePermissions(r.more_permissions),
+    declined_permissions: parsePermissions(r.declined_permissions),
   };
 }
 
@@ -113,6 +115,24 @@ export async function recordBotKnock(input: {
   const bot = await getBotById(input.botId);
   if (!bot) throw new Error("Failed to record bot knock");
   return { bot, created: true };
+}
+
+/** An approved bot declaring permissions it never asked for. Nothing is granted here: it
+    is held for an admin, and whatever was turned down before is not asked again. */
+export async function recordBotAsksMore(botId: string, declared: Permission[]): Promise<boolean> {
+  const existing = await getBotById(botId);
+  if (!existing || existing.status !== "approved") return false;
+  const known = new Set([...existing.requested_permissions, ...existing.declined_permissions, ...existing.more_permissions]);
+  const fresh = normalizePermissions(declared).filter((p) => !known.has(p));
+  if (fresh.length === 0) return false;
+
+  const db = getSqliteDb();
+  db.prepare(`UPDATE bots SET more_permissions = ?, updated_at = ? WHERE bot_id = ?`).run(
+    JSON.stringify(normalizePermissions([...existing.more_permissions, ...fresh])),
+    toIso(new Date()),
+    botId,
+  );
+  return true;
 }
 
 /** The unattended path: an operator decides up front and hands over a token.
@@ -186,14 +206,37 @@ export async function decideBot(
   const existing = await getBotById(botId);
   if (!existing) return null;
 
+  const db = getSqliteDb();
+  const now = toIso(new Date());
+
+  /* Answering an approved bot's later ask. Declining it must not turn the bot away:
+     it keeps what it had, and only the new ones it isn't given are remembered as no. */
+  if (existing.status === "approved" && existing.more_permissions.length > 0) {
+    const more = existing.more_permissions;
+    const allowed = new Set([...existing.requested_permissions, ...more]);
+    const wanted = decision === "approved" ? normalizePermissions(grantedPermissions).filter((p) => allowed.has(p)) : [];
+    const granted = decision === "approved" ? wanted : existing.granted_permissions;
+    const given = new Set(granted);
+    db.prepare(
+      `UPDATE bots SET requested_permissions = ?, granted_permissions = ?, more_permissions = '[]', declined_permissions = ?, decided_at = ?, decided_by_server_user_id = ?, updated_at = ? WHERE bot_id = ?`,
+    ).run(
+      JSON.stringify(normalizePermissions([...existing.requested_permissions, ...more.filter((p) => given.has(p))])),
+      JSON.stringify(normalizePermissions(granted)),
+      JSON.stringify(normalizePermissions([...existing.declined_permissions, ...more.filter((p) => !given.has(p))])),
+      now,
+      decidedByServerUserId,
+      now,
+      botId,
+    );
+    return getBotById(botId);
+  }
+
   const asked = new Set(existing.requested_permissions);
   const granted =
     decision === "approved"
       ? normalizePermissions(grantedPermissions).filter((p) => asked.has(p))
       : [];
 
-  const db = getSqliteDb();
-  const now = toIso(new Date());
   db.prepare(
     `UPDATE bots SET status = ?, granted_permissions = ?, rank = ?, decided_at = ?, decided_by_server_user_id = ?, updated_at = ? WHERE bot_id = ?`,
   ).run(

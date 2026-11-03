@@ -346,6 +346,10 @@ export interface BotRecord {
   updated_at: Date;
   decided_at: Date | null;
   decided_by_server_user_id: string | null;
+  /** What an approved bot has asked for since, waiting on an admin (GRYT-2006). */
+  more_permissions: Permission[];
+  /** Asked for later and turned down, so the next knock doesn't ask again. */
+  declined_permissions: Permission[];
 }
 
 /** `request` records a knock and admits nothing; `disabled` refuses at the door,

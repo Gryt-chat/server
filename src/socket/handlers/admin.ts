@@ -170,6 +170,8 @@ async function botsView() {
       description: b.description,
       requested: b.requested_permissions,
       granted: b.granted_permissions,
+      // Asked for since it was approved, and not yet answered (GRYT-2006).
+      more: b.more_permissions,
       rank: b.rank,
       status: b.status,
       // Whether it is still waiting for a bot to turn up and claim it.

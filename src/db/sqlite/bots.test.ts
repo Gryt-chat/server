@@ -14,6 +14,7 @@ import {
   deleteBotRegistration,
   getBotById,
   listBots,
+  recordBotAsksMore,
   recordBotKnock,
   updateBotGrant,
 } from "./bots";
@@ -224,5 +225,48 @@ describe("what an approved bot can actually do", () => {
       "BOT_ffffffffffffffffffffffffffffffffffffffff",
     );
     assert.deepEqual([...standing.permissions], []);
+  });
+});
+
+describe("an approved bot that asks for more (GRYT-2006)", () => {
+  const BOT_D = "BOT_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+  const PENDING = "BOT_ffffffffffffffffffffffffffffffffffffffff";
+
+  async function approved() {
+    await recordBotKnock({ botId: BOT_D, nickname: "Gryt", requestedPermissions: ["read_messages", "send_messages"] });
+    await decideBot(BOT_D, "approved", "owner", ["read_messages", "send_messages"]);
+  }
+
+  it("is held for an admin, and grants nothing on its own", async () => {
+    await approved();
+    assert.equal(await recordBotAsksMore(BOT_D, ["read_messages", "set_activity", "add_reactions"]), true);
+    const bot = await getBotById(BOT_D);
+    assert.deepEqual(bot?.more_permissions.sort(), ["add_reactions", "set_activity"]);
+    assert.deepEqual(bot?.granted_permissions.sort(), ["read_messages", "send_messages"]);
+    assert.equal(bot?.status, "approved");
+    assert.equal(await recordBotAsksMore(BOT_D, ["set_activity"]), false, "asking again is not news");
+  });
+
+  it("gets only what was ticked from the new ask, and keeps what it had", async () => {
+    await decideBot(BOT_D, "approved", "owner", ["read_messages", "send_messages", "set_activity", "kick_members"]);
+    const bot = await getBotById(BOT_D);
+    assert.deepEqual(bot?.granted_permissions.sort(), ["read_messages", "send_messages", "set_activity"]);
+    assert.deepEqual(bot?.more_permissions, []);
+    assert.deepEqual(bot?.declined_permissions, ["add_reactions"]);
+    assert.equal(await recordBotAsksMore(BOT_D, ["add_reactions"]), false, "a no is not asked again");
+  });
+
+  it("stays in, with what it had, when the new ask is declined", async () => {
+    await recordBotAsksMore(BOT_D, ["view_members"]);
+    await decideBot(BOT_D, "denied", "owner");
+    const bot = await getBotById(BOT_D);
+    assert.equal(bot?.status, "approved");
+    assert.deepEqual(bot?.granted_permissions.sort(), ["read_messages", "send_messages", "set_activity"]);
+    assert.ok(bot?.declined_permissions.includes("view_members"));
+  });
+
+  it("is not asked for a bot still waiting at the door", async () => {
+    await recordBotKnock({ botId: PENDING, nickname: "Waiting", requestedPermissions: ["read_messages"] });
+    assert.equal(await recordBotAsksMore(PENDING, ["kick_members"]), false);
   });
 });

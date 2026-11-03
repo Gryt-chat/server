@@ -37,6 +37,7 @@ import {
   clearJoinRequest,
   getBotById,
   claimBotRegistration,
+  recordBotAsksMore,
   recordBotKnock,
   insertServerAudit,
 } from "../../db";
@@ -115,7 +116,19 @@ async function admitBot(
   const existing = await getBotById(botId);
 
   if (existing) {
-    if (existing.status === "approved") return { ok: true, bot: existing };
+    if (existing.status === "approved") {
+      // Let in on what it already holds. Anything new it declares waits for an admin (GRYT-2006).
+      if (await recordBotAsksMore(botId, normalizePermissions(declaration?.permissions ?? []))) {
+        insertServerAudit({
+          actorServerUserId: null,
+          action: "bot_asked_more",
+          target: botId,
+          meta: { nickname: existing.nickname, asked: (await getBotById(botId))?.more_permissions ?? [] },
+        }).catch((e: unknown) => consola.warn("audit log write failed", e));
+        broadcastServerUiUpdate();
+      }
+      return { ok: true, bot: existing };
+    }
     if (existing.status === "denied") {
       // Told the same thing as a pending bot: confirming somebody looked and
       // said no invites an argument with the message.
