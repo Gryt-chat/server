@@ -202,6 +202,7 @@ const TOKEN_GATES: {
   { event: "server:user:replace", permission: "replace_identity", payload: { targetServerUserId: "user_x", newGrytUserId: "account-new" } },
   { event: "server:audit:list", permission: "view_audit_log" },
   { event: "server:version:check", permission: "view_server_status", refusalOnly: true },
+  { event: "server:diagnostics", permission: "view_diagnostics" },
   { event: "server:member:invite", permission: "create_invite", payload: { targetServerUserId: "user_x" } },
   { event: "server:bots:list", permission: "manage_bots" },
   { event: "server:bots:decide", permission: "manage_bots", payload: { botId: "BOT_x", decision: "denied" } },

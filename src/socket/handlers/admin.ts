@@ -56,6 +56,7 @@ import { checkRateLimit, type RateLimitRule } from "../../utils/rateLimiter";
 import { evictUser, resolveGrytUserId } from "../../moderation/evict";
 import { announceMute, pushSfuAudioState } from "../../moderation/timeout";
 import { getVersionStatus } from "../../versionCheck";
+import { collectDiagnostics } from "../../diagnostics";
 import { registerAdminChannelHandlers } from "./adminChannels";
 import {
   FALLBACK_ROLE_ID,
@@ -1606,6 +1607,16 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
         socket.emit("server:version:status", status);
       } catch (e) {
         consola.error("server:version:check failed", e);
+      }
+    },
+
+    'server:diagnostics': async (payload: { accessToken: string }) => {
+      try {
+        const auth = await requireAuth(socket, payload, { permission: "view_diagnostics" });
+        if (!auth) return;
+        socket.emit("server:diagnostics", await collectDiagnostics(clientsInfo, sfuClient));
+      } catch (e) {
+        consola.error("server:diagnostics failed", e);
       }
     },
 
