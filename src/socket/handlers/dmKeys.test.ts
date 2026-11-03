@@ -7,6 +7,7 @@ import { after, before, describe, it } from "node:test";
 import { initSqlite } from "../../db/sqlite/connection";
 import { createServerConfigIfNotExists, setServerRole } from "../../db/sqlite/servers";
 import { getUserByServerId, setUserDmKeyReset, setUserDmKeySeen, upsertUser } from "../../db/sqlite/users";
+import { listDmKeyAsks } from "../../db/sqlite/dmKeyAsks";
 import type { Clients } from "../../types";
 import { buildMemberList } from "../utils/clients";
 import { KEY_RESET_DELAY_MS, registerDmKeyHandlers } from "./dmKeys";
@@ -299,17 +300,19 @@ describe("one identity per account (GRYT-1868)", () => {
     for (const m of [frank, frankPhone, stranger]) {
       io.sockets.sockets.set(m.clientId, { emit: (event: string, body: unknown) => (heard[m.clientId] ??= []).push([event, body]) });
     }
+    await publish(frankPhone, { binding: await (await signer()).binding() });
+    delete heard[frankPhone.clientId];
     const binding = await (await signer()).binding();
-    frank.handlers["dm:key:handover:ask"]({ binding, deviceName: "Mac" });
+    await call(frank, "dm:key:handover:ask", { binding, deviceName: "Mac" });
 
-    assert.deepEqual(heard[frankPhone.clientId], [["dm:key:handover:asked", { binding, deviceName: "Mac", askerId: frank.clientId }]]);
+    assert.deepEqual(heard[frankPhone.clientId]?.[0], ["dm:key:handover:asked", { binding, deviceName: "Mac", askerId: binding }]);
     assert.equal(heard[stranger.clientId], undefined, "nobody else's devices hear it");
-    assert.equal(heard[frank.clientId], undefined, "the asker doesn't ask itself");
+    assert.ok(!heard[frank.clientId]?.some((e) => (e as unknown[])[0] === "dm:key:handover:asked"), "the asker doesn't ask itself");
 
-    stranger.handlers["dm:key:handover:deny"]({ askerId: frank.clientId });
-    assert.equal(heard[frank.clientId], undefined, "only the account's own devices can say no");
-    frankPhone.handlers["dm:key:handover:deny"]({ askerId: frank.clientId });
-    assert.deepEqual(heard[frank.clientId], [["dm:key:handover:denied", {}]]);
+    await stranger.handlers["dm:key:handover:deny"]({ askerId: binding });
+    assert.ok(!heard[frank.clientId]?.some((e) => (e as unknown[])[0] === "dm:key:handover:denied"), "only the account's own devices can say no");
+    await frankPhone.handlers["dm:key:handover:deny"]({ askerId: binding });
+    assert.deepEqual(heard[frank.clientId]?.at(-1), ["dm:key:handover:denied", { binding }]);
   });
 
   it("hands a request to a device that connects after it was made, until it's answered", async () => {
@@ -317,18 +320,19 @@ describe("one identity per account (GRYT-1868)", () => {
     const heard: Record<string, unknown[]> = {};
     const listen = (m: Member) => io.sockets.sockets.set(m.clientId, { emit: (event: string, body: unknown) => (heard[m.clientId] ??= []).push([event, body]) });
     listen(ida);
+    await publish(ida, { binding: await (await signer()).binding() });
     const binding = await (await signer()).binding();
-    ida.handlers["dm:key:handover:ask"]({ binding, deviceName: "Mac" });
+    await call(ida, "dm:key:handover:ask", { binding, deviceName: "Mac" });
 
     const phone = await connect("Ida's phone");
     clientsInfo[phone.clientId].serverUserId = ida.serverUserId;
     listen(phone);
-    phone.handlers["dm:key:handover:pending"]({});
-    assert.deepEqual(heard[phone.clientId], [["dm:key:handover:asked", { binding, deviceName: "Mac", askerId: ida.clientId }]]);
+    await phone.handlers["dm:key:handover:pending"]({});
+    assert.deepEqual(heard[phone.clientId], [["dm:key:handover:asked", { binding, deviceName: "Mac", askerId: binding }]]);
 
-    phone.handlers["dm:key:handover:deny"]({ askerId: ida.clientId });
+    await phone.handlers["dm:key:handover:deny"]({ askerId: binding });
     heard[phone.clientId] = [];
-    phone.handlers["dm:key:handover:pending"]({});
+    await phone.handlers["dm:key:handover:pending"]({});
     assert.deepEqual(heard[phone.clientId], [], "an answered request isn't handed out again");
   });
 
@@ -374,8 +378,27 @@ describe("one identity per account (GRYT-1868)", () => {
     delete clientsInfo[asking.clientId];
     const heard: unknown[] = [];
     io.sockets.sockets.set(jill.clientId, { emit: (event: string, body: unknown) => heard.push([event, body]) });
-    jill.handlers["dm:key:handover:pending"]({});
-    assert.deepEqual(heard, [["dm:key:handover:asked", { binding: next, deviceName: "iPhone", askerId: asking.clientId }]], "an ask outlives the asker's connection");
+    await jill.handlers["dm:key:handover:pending"]({});
+    assert.deepEqual(heard, [["dm:key:handover:asked", { binding: next, deviceName: "iPhone", askerId: next }]], "an ask outlives the asker's connection");
+    assert.deepEqual((await listDmKeyAsks(jill.serverUserId, KEY_RESET_DELAY_MS)).map((a) => a.deviceName), ["iPhone"], "and it's in the database, not in memory");
+  });
+
+  it("drops the ask when the reset is stopped or the handover is approved", async () => {
+    const max = await connect("Max");
+    const [pc, phone, mac] = [await signer(), await signer(), await signer()];
+    const current = await pc.binding();
+    await publish(max, { binding: current });
+    await call(max, "dm:key:handover:ask", { binding: await phone.binding(), deviceName: "iPhone" });
+    const proof = await gryt.signKeyHandover({ newBinding: current, scope, identityPrivateKey: pc.privateKey, identityPublicJwk: pc.publicJwk });
+    await call(max, "dm:key:reset:cancel", { proof });
+    assert.deepEqual(await listDmKeyAsks(max.serverUserId, KEY_RESET_DELAY_MS), [], "\"that wasn't me\" takes the ask with it");
+
+    const next = await mac.binding();
+    await call(max, "dm:key:handover:ask", { binding: next, deviceName: "Mac" });
+    const handover = await gryt.signKeyHandover({ newBinding: next, scope, identityPrivateKey: pc.privateKey, identityPublicJwk: pc.publicJwk });
+    assert.equal((await publish(max, { binding: next, replace: true, handover })).ok, true);
+    assert.deepEqual(await listDmKeyAsks(max.serverUserId, KEY_RESET_DELAY_MS), []);
+    assert.equal((await getUserByServerId(max.serverUserId))?.dm_key_holder, "Mac", "the new holder is named after the asker");
   });
 
   it("hands over at once when no device with the current key has been here for 30 days", async () => {
