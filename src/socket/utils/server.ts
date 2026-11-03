@@ -47,6 +47,17 @@ export function setSocketRefs(io: Server, serverId: string, clientsInfo: Clients
   _clientsInfo = clientsInfo;
 }
 
+/** EXTERNAL_HOST is documented as a URL; clients save a bare host[:port]. */
+export function publicHost(external: string | undefined): string | undefined {
+  const raw = external?.trim();
+  if (!raw) return undefined;
+  try {
+    return new URL(/^[a-z]+:\/\//i.test(raw) ? raw : `http://${raw}`).host || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function broadcastServerUiUpdate(reason: "settings" | "icon" | "other" = "other"): void {
   if (!_io || !_serverId || !_clientsInfo) return;
   consola.info(`Broadcasting server UI update (${reason})`);
@@ -442,6 +453,8 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
       })),
       /** Takes polls on chat:send and poll:vote (GRYT-1732), so a client offers them. */
       polls: true,
+      /** Where this server answers from anywhere, for a member who saved its LAN address (GRYT-2007). */
+      public_host: publicHost(process.env.EXTERNAL_HOST),
       max_members: parseInt(process.env.MAX_MEMBERS || "100"),
       voice_enabled: !!sfuHost,
       avatar_max_bytes: cfgAvatarMaxBytes,
