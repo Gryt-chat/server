@@ -1,6 +1,6 @@
 import type { HandlerContext, EventHandlerMap } from "./types";
-import { getUserByServerId, setUserDmKeyBinding, setUserDmKeyReset } from "../../db";
-import { dmBindingIdentity, handoverValid } from "../../services/personKeyBinding";
+import { getUserByServerId, setUserDmKeyBinding, setUserDmKeyReset, setUserDmKeySeen } from "../../db";
+import { dmBindingIdentity, handoverValid, KEY_RESET_DELAY_MS, keyResetDueAt } from "../../services/personKeyBinding";
 import { pushNotify } from "../../services/push";
 import { checkRateLimit, type RateLimitRule } from "../../utils/rateLimiter";
 import { broadcastMemberList } from "../utils/clients";
@@ -17,22 +17,21 @@ const MAX_BINDING_BYTES = 4096;
 /** Three non-empty base64url segments. Not a verification, a shape. */
 const COMPACT_JWT = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 
-/** As long as a link code lasts: a phone that connects within this still sees the request. */
-const HANDOVER_ASK_TTL_MS = 10 * 60 * 1000;
+export { KEY_RESET_DELAY_MS };
+
+/** Every connect republishes, so this only stops a write per connect. */
+const SEEN_WRITE_EVERY_MS = 60 * 60 * 1000;
 
 interface HandoverAsk { binding: string; deviceName: string; askerId: string; at: number }
 /* Per server and account, the requests still waiting, so a phone that connects late gets them. */
 const pendingAsks = new Map<string, HandoverAsk[]>();
 
 function liveAsks(key: string, now = Date.now()): HandoverAsk[] {
-  const live = (pendingAsks.get(key) ?? []).filter((a) => now - a.at < HANDOVER_ASK_TTL_MS);
+  const live = (pendingAsks.get(key) ?? []).filter((a) => now - a.at < KEY_RESET_DELAY_MS);
   if (live.length) pendingAsks.set(key, live);
   else pendingAsks.delete(key);
   return live;
 }
-
-/** Long enough to outlast a holiday, so a thief with the password can't finish one while you're away. */
-export const KEY_RESET_DELAY_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** A binding is derived from a seed and a scope, so it is sent on arrival and
     then never again. Anything faster is a client with a loop in it. */
@@ -54,7 +53,7 @@ export function registerDmKeyHandlers(ctx: HandlerContext): EventHandlerMap {
   };
 
   return {
-    "dm:key:publish": async (payload: { binding?: string | null; replace?: boolean; handover?: string }, ack?: (reply: { ok: boolean; changed?: boolean; error?: string; message?: string }) => void) => {
+    "dm:key:publish": async (payload: { binding?: string | null; replace?: boolean; handover?: string; deviceName?: string }, ack?: (reply: { ok: boolean; changed?: boolean; error?: string; message?: string }) => void) => {
       const reply = typeof ack === "function" ? ack : () => {};
       const serverUserId = clientsInfo[clientId]?.serverUserId;
       if (!serverUserId) return;
@@ -75,7 +74,15 @@ export function registerDmKeyHandlers(ctx: HandlerContext): EventHandlerMap {
         if (!COMPACT_JWT.test(binding)) return;
       }
 
+      const deviceName = typeof payload?.deviceName === "string" ? payload.deviceName.slice(0, 64) || null : null;
+      const seen = async () => {
+        if (Date.now() - (user.dm_key_seen_at ?? 0) > SEEN_WRITE_EVERY_MS || (deviceName && deviceName !== user.dm_key_holder)) {
+          await setUserDmKeySeen(serverUserId, Date.now(), deviceName ?? user.dm_key_holder);
+        }
+      };
+
       if (user.dm_key_binding === binding) {
+        if (binding) await seen();
         reply({ ok: true, changed: false });
         return;
       }
@@ -88,16 +95,19 @@ export function registerDmKeyHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
         // Only the key being replaced can hand over (GRYT-1886); the password alone isn't enough.
-        const resetDue = user.dm_key_reset_binding === binding && (user.dm_key_reset_at ?? Infinity) <= Date.now();
+        const resetDue = user.dm_key_reset_binding === binding && (keyResetDueAt(user) ?? Infinity) <= Date.now();
         if (had && sent !== had && !resetDue && !(typeof payload?.handover === "string" && await handoverValid(payload.handover, user.dm_key_binding, binding))) {
           reply({ ok: false, error: "handover_required", message: "Approve this from a device that has your current key here." });
           return;
         }
       }
 
+      const askKey = `${serverId}:${serverUserId}`;
       await setUserDmKeyBinding(serverUserId, binding);
       if (user.dm_key_reset_binding) await setUserDmKeyReset(serverUserId, null, null);
-      const askKey = `${serverId}:${serverUserId}`;
+      // Approving publishes the asker's key, so the name is the asker's.
+      const asker = liveAsks(askKey).find((a) => a.binding === binding);
+      if (binding) await setUserDmKeySeen(serverUserId, Date.now(), asker ? asker.deviceName || null : deviceName);
       if (pendingAsks.has(askKey)) pendingAsks.set(askKey, liveAsks(askKey).filter((a) => a.binding !== binding));
       reply({ ok: true, changed: true });
 
@@ -106,8 +116,12 @@ export function registerDmKeyHandlers(ctx: HandlerContext): EventHandlerMap {
       broadcastMemberList(io, clientsInfo, serverId);
     },
 
-    /** A device with its own key asks your other devices to hand this server over to it. */
-    "dm:key:handover:ask": (payload: { binding?: string; deviceName?: string }) => {
+    /**
+     * A device with its own key asks your other devices to hand this server over to it. The ask is
+     * also a reset (GRYT-1886), so it finishes alone if nobody with the current key says no.
+     */
+    "dm:key:handover:ask": async (payload: { binding?: string; deviceName?: string }, ack?: (reply: { ok: boolean; at?: number; holder?: string | null; seenAt?: number | null }) => void) => {
+      const reply = typeof ack === "function" ? ack : () => {};
       const serverUserId = clientsInfo[clientId]?.serverUserId;
       const binding = payload?.binding;
       if (!serverUserId || typeof binding !== "string" || binding.length > MAX_BINDING_BYTES || !COMPACT_JWT.test(binding)) return;
@@ -121,14 +135,27 @@ export function registerDmKeyHandlers(ctx: HandlerContext): EventHandlerMap {
         }
       }
       pushNotify(clientsInfo, [serverUserId], "approve", `handover:${serverUserId}`, { evenIfPresent: true });
+
+      const user = await getUserByServerId(serverUserId);
+      const [had, sent] = user?.dm_key_binding ? await Promise.all([dmBindingIdentity(user.dm_key_binding), dmBindingIdentity(binding)]) : [null, null];
+      if (!user || !sent || sent === had) return reply({ ok: false });
+      // Same rule as a reset: asking again doesn't restart the clock.
+      if (user.dm_key_reset_binding !== binding || !user.dm_key_reset_at) {
+        await setUserDmKeyReset(serverUserId, binding, Date.now() + KEY_RESET_DELAY_MS);
+      }
+      const after = await getUserByServerId(serverUserId);
+      const at = after ? keyResetDueAt(after) : null;
+      reply({ ok: true, at: at ?? undefined, holder: user.dm_key_holder, seenAt: user.dm_key_seen_at });
+      emitToAccount(serverUserId, "dm:key:reset:pending", { at });
+      broadcastMemberList(io, clientsInfo, serverId);
     },
 
-    /** A device that just connected asks for requests made while it was away. */
+    /** A device that just connected asks for requests made while it was away, even if the asker has gone since. */
     "dm:key:handover:pending": () => {
       const serverUserId = clientsInfo[clientId]?.serverUserId;
       if (!serverUserId) return;
       for (const ask of liveAsks(`${serverId}:${serverUserId}`)) {
-        if (ask.askerId === clientId || !clientsInfo[ask.askerId]) continue;
+        if (ask.askerId === clientId) continue;
         io.sockets.sockets.get(clientId)?.emit("dm:key:handover:asked", { binding: ask.binding, deviceName: ask.deviceName, askerId: ask.askerId });
       }
     },
@@ -143,8 +170,9 @@ export function registerDmKeyHandlers(ctx: HandlerContext): EventHandlerMap {
       const user = await getUserByServerId(serverUserId);
       if (!user || !(await dmBindingIdentity(binding))) return reply({ ok: false, error: "invalid_binding" });
       // A second request doesn't restart the clock, or a thief could keep yours from ever finishing.
-      const at = user.dm_key_reset_binding === binding && user.dm_key_reset_at ? user.dm_key_reset_at : Date.now() + KEY_RESET_DELAY_MS;
-      await setUserDmKeyReset(serverUserId, binding, at);
+      if (user.dm_key_reset_binding !== binding || !user.dm_key_reset_at) await setUserDmKeyReset(serverUserId, binding, Date.now() + KEY_RESET_DELAY_MS);
+      const after = await getUserByServerId(serverUserId);
+      const at = (after && keyResetDueAt(after)) ?? Date.now() + KEY_RESET_DELAY_MS;
       reply({ ok: true, at });
       emitToAccount(serverUserId, "dm:key:reset:pending", { at });
       broadcastMemberList(io, clientsInfo, serverId);
@@ -170,8 +198,8 @@ export function registerDmKeyHandlers(ctx: HandlerContext): EventHandlerMap {
     "dm:key:handover:deny": (payload: { askerId?: string }) => {
       const serverUserId = clientsInfo[clientId]?.serverUserId;
       const askerId = payload?.askerId;
-      if (!serverUserId || typeof askerId !== "string" || clientsInfo[askerId]?.serverUserId !== serverUserId) return;
       const key = `${serverId}:${serverUserId}`;
+      if (!serverUserId || typeof askerId !== "string" || !liveAsks(key).some((a) => a.askerId === askerId)) return;
       pendingAsks.set(key, liveAsks(key).filter((a) => a.askerId !== askerId));
       io.sockets.sockets.get(askerId)?.emit("dm:key:handover:denied", {});
     },
