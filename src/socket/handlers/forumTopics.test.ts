@@ -122,6 +122,19 @@ describe("forum topics", () => {
     assert.ok(t.preview && t.preview.startsWith("After my laptop wakes"));
   });
 
+  it("shows a mention in the preview as the person's name, not the link (GRYT-2025)", async () => {
+    await alice.handlers["forum:topic:create"]({
+      conversationId: FORUM,
+      title: "Mentions in previews",
+      text: `[](mention:${bob.serverUserId}) can you check this?`,
+      accessToken: alice.accessToken,
+    });
+    await bob.handlers["forum:topics"]({ conversationId: FORUM });
+    const list = bob.received("forum:topics:list").at(-1) as { topics: TopicSummary[] };
+    const t = list.topics.find((x) => x.title === "Mentions in previews");
+    assert.equal(t?.preview, "@Bob can you check this?");
+  });
+
   it("counts a second person once they reply", async () => {
     await bob.handlers["chat:send"]({
       conversationId: FORUM,
