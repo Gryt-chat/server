@@ -184,3 +184,40 @@ export function canonicalizeMentions(text: string, rights: MentionRights): Canon
 
   return { text: result, everyone, here, roleIds, forNicknames };
 }
+
+/* What's left where a snippet cut through a link: the end of one at the start, the start of one at the end. */
+const CUT_HEAD = /^([^[\]\n]*)\]\((?:mention|role|channel):[^)\s]*\)?/;
+const CUT_TAIL = /\[([^\]\n]*)(?:\]\((?:mention|role|channel):[^)\s]*)?$/;
+
+/**
+ * Mention, role and channel links as the words they stand for, for text shown outside a
+ * message (GRYT-2025). Users by their current nickname, since a link's label can be empty or stale.
+ */
+export async function mentionsAsText(text: string, nickname: (serverUserId: string) => Promise<string | null>): Promise<string> {
+  const names = new Map<string, string | null>();
+  for (const m of text.matchAll(LINK)) {
+    const target = mentionTarget(m[2]);
+    if (target?.kind === "user" && !names.has(target.id)) names.set(target.id, await nickname(target.id));
+  }
+  const words = (segment: string) =>
+    segment.replace(LINK, (whole: string, label: string, href: string) => {
+      const target = mentionTarget(href);
+      if (!target) return whole;
+      const bare = label.trim().replace(/^[@#]/, "");
+      if (target.kind === "user") {
+        const name = names.get(target.id) ?? bare;
+        return name ? `@${name}` : "@someone";
+      }
+      if (target.kind === "everyone" || target.kind === "here") return `@${target.kind}`;
+      if (target.kind === "role") return bare ? `@${bare}` : "@role";
+      return CHANNEL_LABEL;
+    });
+  let out = "";
+  let last = 0;
+  for (const m of text.matchAll(LITERAL)) {
+    const start = m.index ?? 0;
+    out += words(text.slice(last, start)) + m[0];
+    last = start + m[0].length;
+  }
+  return (out + words(text.slice(last))).replace(CUT_HEAD, "$1").replace(CUT_TAIL, (whole, label: string) => (whole.includes("](") ? label : whole));
+}

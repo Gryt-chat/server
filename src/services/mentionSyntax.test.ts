@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
-import { canonicalizeMentions, mentionTarget } from "./mentionSyntax";
+import { canonicalizeMentions, mentionsAsText, mentionTarget } from "./mentionSyntax";
 
 interface Vectors {
   targets: { href: string; target: unknown }[];
@@ -52,5 +52,32 @@ describe("what the server stores", () => {
     });
     assert.equal(out.forNicknames.includes("(role:ada)"), false);
     assert.equal(out.forNicknames.includes("[@Ada](mention:user_1)"), true);
+  });
+});
+
+describe("mention links as words, for previews and search (GRYT-2025)", () => {
+  const nickname = async (id: string) => ({ user_leo: "Leo", user_ada: "Ada" } as Record<string, string>)[id] ?? null;
+
+  it("names users by their current nickname, even with an empty or stale label", async () => {
+    assert.equal(await mentionsAsText("[](mention:user_leo) look at this", nickname), "@Leo look at this");
+    assert.equal(await mentionsAsText("thanks [@OldName](mention:user_ada)!", nickname), "thanks @Ada!");
+    assert.equal(await mentionsAsText("[@Gone](mention:user_gone) and [](mention:user_x)", nickname), "@Gone and @someone");
+  });
+
+  it("turns mass, role and channel links into words", async () => {
+    assert.equal(
+      await mentionsAsText("[@everyone](mention:everyone) [@here](mention:here) [@Mods](role:mods) see [#channel](channel:abc)", nickname),
+      "@everyone @here @Mods see #channel",
+    );
+  });
+
+  it("leaves code and ordinary links alone", async () => {
+    assert.equal(await mentionsAsText("`[](mention:user_leo)` and [docs](https://gryt.chat)", nickname), "`[](mention:user_leo)` and [docs](https://gryt.chat)");
+  });
+
+  it("keeps the name and drops the markup where a snippet cut through a link", async () => {
+    assert.equal(await mentionsAsText("eo](mention:user_leo) said hi", nickname), "eo said hi");
+    assert.equal(await mentionsAsText("said hi to [@Le", nickname), "said hi to [@Le");
+    assert.equal(await mentionsAsText("said hi to [@Leo](mention:user_l", nickname), "said hi to @Leo");
   });
 });

@@ -66,7 +66,7 @@ import { applyAutoRoles } from "../../services/autoRoles";
 import { findMentions, type MentionableMember } from "../../services/mentions";
 import { pushNotify } from "../../services/push";
 import { messagePreview, previewText } from "../../services/pushPreview";
-import { canonicalizeMentions, type CanonicalMentions, type MentionRights } from "../../services/mentionSyntax";
+import { canonicalizeMentions, mentionsAsText, type CanonicalMentions, type MentionRights } from "../../services/mentionSyntax";
 import { massMentionAudience } from "../../services/massMentions";
 import { mayInChannel, mayViewChannel, visibleChannelIds } from "../../services/channelPermissions";
 import { fileReadVerdict } from "../../services/fileAccess";
@@ -129,6 +129,18 @@ async function getMentionableMembers(): Promise<MentionableMember[]> {
   }));
   mentionableCache = { members, fetchedAt: now };
   return members;
+}
+
+/** Current nicknames for `mentionsAsText`, each member looked up once per request. */
+function nicknameLookup(): (serverUserId: string) => Promise<string | null> {
+  const seen = new Map<string, Promise<string | null>>();
+  return (id) => {
+    const known = seen.get(id);
+    if (known) return known;
+    const next = getUserByServerId(id).then((u) => u?.nickname ?? null, () => null);
+    seen.set(id, next);
+    return next;
+  };
 }
 
 /* The wire shape of a thread, the same one thread:created sends, so a client
@@ -1065,11 +1077,12 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         const { items: hits, total } = await searchMessages({ kind, query, conversationIds, senderServerId, before, after, has, limit });
         const hidden = await blockedServerIdsFor(userId);
         const items = hidden.size === 0 ? hits : hits.filter((h) => !hidden.has(h.sender_server_id));
+        const nickname = nicknameLookup();
         socket.emit("chat:search:results", {
           requestId,
           query,
           kind,
-          items: items.map((h) => ({ ...h, created_at: h.created_at.toISOString() })),
+          items: await Promise.all(items.map(async (h) => ({ ...h, snippet: await mentionsAsText(h.snippet, nickname), created_at: h.created_at.toISOString() }))),
           total,
           hasMore: hits.length >= Math.min(Math.max(Math.floor(limit), 1), 50),
         });
@@ -1473,6 +1486,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
 
         // Same base fields as chat:fetch and thread:created, plus what only a
         // topic row needs: participant count and the root's author and preview.
+        const nickname = nicknameLookup();
         const topics = await Promise.all(threads.map(async (t) => {
           const root = rootById.get(t.root_message_id);
           const participantCount = await countThreadParticipants(t.thread_id, t.root_message_id);
@@ -1482,7 +1496,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
             creator_server_id: t.created_by,
             creator_nickname: root?.sender_nickname ?? null,
             creator_avatar_file_id: root?.sender_avatar_file_id ?? null,
-            preview: root?.text ? root.text.slice(0, 200) : null,
+            preview: root?.text ? (await mentionsAsText(root.text, nickname)).slice(0, 200) : null,
           };
         }));
         socket.emit("forum:topics:list", { conversation_id: payload.conversationId, topics });
