@@ -91,6 +91,17 @@ export function createLinkHistoryStore(files: ChunkFiles, limits = LINK_HISTORY_
       return files.get(`${id}/${n}`);
     },
 
+    /** The new device drops each chunk once it has it, so the disk empties as it goes. */
+    async removeChunk(owner: string, id: string, n: number): Promise<boolean> {
+      const t = own(id, owner);
+      const size = t?.slots.get(n);
+      if (!t || size === undefined) return false;
+      t.slots.delete(n);
+      t.bytes -= size;
+      await files.del(`${id}/${n}`).catch(() => undefined);
+      return true;
+    },
+
     async remove(owner: string, id: string): Promise<boolean> {
       if (!own(id, owner)) return false;
       await drop(id);
@@ -149,6 +160,14 @@ linkHistoryRouter.get("/:transfer/:n", (req: Request, res: Response, next: NextF
   store
     .get(userOf(req), id, n)
     .then((body) => (body ? res.type("application/octet-stream").send(body) : res.status(404).json({ error: "not_found" })))
+    .catch(next);
+});
+
+linkHistoryRouter.delete("/:transfer/:n", (req: Request, res: Response, next: NextFunction) => {
+  const { id, n } = slot(req);
+  store
+    .removeChunk(userOf(req), id, n)
+    .then((ok) => res.status(ok ? 204 : 404).end())
     .catch(next);
 });
 

@@ -53,6 +53,16 @@ describe("link history store", () => {
     assert.equal(await store.put("alice", ID, 0, Buffer.alloc(0)), "too_large");
   });
 
+  it("frees a chunk's room once the new device has it", async () => {
+    const limits = { ...LINK_HISTORY_LIMITS, userBytes: 10 };
+    const { store, disk } = setup(limits);
+    await store.put("alice", ID, 0, Buffer.alloc(10));
+    assert.equal(await store.removeChunk("mallory", ID, 0), false);
+    assert.equal(await store.removeChunk("alice", ID, 0), true);
+    assert.equal(disk.size, 0);
+    assert.equal(await store.put("alice", ID, 1, Buffer.alloc(10)), null, "its bytes no longer count");
+  });
+
   it("deletes a transfer's files when it's removed or runs out of time", async () => {
     const { store, disk, tick } = setup();
     await store.put("alice", ID, 0, Buffer.from("a"));
