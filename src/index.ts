@@ -42,6 +42,7 @@ import { oEmbedRouter } from "./routes/oembed";
 import { mediaMetadataRouter } from "./routes/mediaMetadata";
 import { webhooksRouter } from "./routes/webhooks";
 import { discordImportRouter } from "./routes/discordImport";
+import { clearLinkHistoryOnStart, linkHistoryRouter } from "./routes/linkHistory";
 import { resumeDiscordImports } from "./import/discord/runner";
 import { noFileStorageMedia, uploadPathMedia } from "./import/discord/media";
 import { parsesOwnJson } from "./routes/ownJsonParsers";
@@ -124,6 +125,7 @@ const storageReady = (async () => {
     return;
   }
   initStorage();
+  await clearLinkHistoryOnStart();
   const bucket = uploadsFolder();
   await ensureBucket(bucket);
   consola.success(`Uploads are stored in ${bucket} under DATA_DIR`);
@@ -289,6 +291,8 @@ app.get("/info", httpRateLimit("http:public", RL_HTTP_PUBLIC), async (_req, res)
     // anybody tries. Neither field says more than a failed join would.
     identityTiers: getAcceptedIdentityTiers(),
     joinPolicy,
+    // A linked device's history goes through here rather than through Gryt's relay.
+    linkHistory: !uploadsDisabled(),
   });
 });
 
@@ -369,6 +373,7 @@ app.use("/api/oembed", httpRateLimit("http:outbound", RL_HTTP_OUTBOUND), oEmbedR
 app.use("/api/media/metadata", httpRateLimit("http:outbound", RL_HTTP_OUTBOUND), mediaMetadataRouter);
 app.use("/api/webhooks", webhooksRouter);
 app.use("/api/imports/discord", httpRateLimit("http:api", RL_HTTP_API), discordImportRouter);
+app.use("/api/link-history", httpRateLimit("http:link-history", RL_HTTP_CHAT_UPLOAD), linkHistoryRouter);
 
 app.use(apiErrorHandler);
 
