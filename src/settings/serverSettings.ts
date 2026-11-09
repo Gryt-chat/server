@@ -37,6 +37,7 @@ export interface SettingsPatch {
   spamSensitivity?: string;
   videoProfiles?: boolean;
   externalEmojis?: boolean;
+  linkHistory?: boolean;
 }
 
 /** Who asked for the change, for the audit trail. */
@@ -107,6 +108,7 @@ export async function applyServerSettings(
 
   const videoProfiles: boolean | undefined = typeof patch.videoProfiles === "boolean" ? patch.videoProfiles : undefined;
   const externalEmojis: boolean | undefined = typeof patch.externalEmojis === "boolean" ? patch.externalEmojis : undefined;
+  const linkHistory: boolean | undefined = typeof patch.linkHistory === "boolean" ? patch.linkHistory : undefined;
 
   const updated = await updateServerConfig({
     displayName: displayName === "" ? null : displayName,
@@ -126,6 +128,7 @@ export async function applyServerSettings(
     spamSensitivity,
     videoProfiles,
     externalEmojis,
+    linkHistory,
   });
 
   if (systemChannelId !== undefined) invalidateSystemChannelCache();
@@ -178,6 +181,7 @@ export function settingsView(cfg: ServerConfigRecord, serverId: string, isOwner:
     spamSensitivity: cfg.spam_filter_sensitivity ?? "normal",
     videoProfiles: cfg.video_profiles_enabled !== false,
     externalEmojis: cfg.external_emojis_enabled === true,
+    linkHistory: cfg.link_history_enabled !== false,
     // What this host can do, so settings can say why a switch is off rather than hide it.
     media: { checked: workerClearsQuarantine(), video: workerTranscodesVideo() },
   };

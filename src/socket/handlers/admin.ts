@@ -302,6 +302,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
       spamFilter?: boolean;
       spamSensitivity?: string;
       videoProfiles?: boolean;
+      linkHistory?: boolean;
       externalEmojis?: boolean;
     }) => {
       try {

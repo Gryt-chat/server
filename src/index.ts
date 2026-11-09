@@ -42,6 +42,7 @@ import { oEmbedRouter } from "./routes/oembed";
 import { mediaMetadataRouter } from "./routes/mediaMetadata";
 import { webhooksRouter } from "./routes/webhooks";
 import { discordImportRouter } from "./routes/discordImport";
+import { clearLinkHistoryOnStart, linkHistoryRouter } from "./routes/linkHistory";
 import { resumeDiscordImports } from "./import/discord/runner";
 import { noFileStorageMedia, uploadPathMedia } from "./import/discord/media";
 import { parsesOwnJson } from "./routes/ownJsonParsers";
@@ -124,6 +125,7 @@ const storageReady = (async () => {
     return;
   }
   initStorage();
+  await clearLinkHistoryOnStart();
   const bucket = uploadsFolder();
   await ensureBucket(bucket);
   consola.success(`Uploads are stored in ${bucket} under DATA_DIR`);
@@ -222,6 +224,7 @@ app.get("/info", httpRateLimit("http:public", RL_HTTP_PUBLIC), async (_req, res)
 
   let displayName = process.env.SERVER_NAME || "Unknown Server";
   let description = process.env.SERVER_DESCRIPTION || "A Gryt server";
+  let linkHistoryOn = !uploadsDisabled();
   let lanOpen = false;
   // Falls back to the stricter answer if the config cannot be read, so a
   // database wobble never advertises a server as easier to get into than it is.
@@ -260,6 +263,7 @@ app.get("/info", httpRateLimit("http:public", RL_HTTP_PUBLIC), async (_req, res)
     if (cfg?.display_name) displayName = cfg.display_name;
     if (cfg?.description) description = cfg.description;
     if (cfg?.lan_open) lanOpen = true;
+    if (cfg?.link_history_enabled === false) linkHistoryOn = false;
     if (cfg?.join_policy) joinPolicy = cfg.join_policy;
 
     const storedServerId = (cfg as { server_id?: string | null } | null)?.server_id;
@@ -289,6 +293,8 @@ app.get("/info", httpRateLimit("http:public", RL_HTTP_PUBLIC), async (_req, res)
     // anybody tries. Neither field says more than a failed join would.
     identityTiers: getAcceptedIdentityTiers(),
     joinPolicy,
+    // A linked device's history goes through here rather than through Gryt's relay.
+    linkHistory: linkHistoryOn,
   });
 });
 
@@ -369,6 +375,7 @@ app.use("/api/oembed", httpRateLimit("http:outbound", RL_HTTP_OUTBOUND), oEmbedR
 app.use("/api/media/metadata", httpRateLimit("http:outbound", RL_HTTP_OUTBOUND), mediaMetadataRouter);
 app.use("/api/webhooks", webhooksRouter);
 app.use("/api/imports/discord", httpRateLimit("http:api", RL_HTTP_API), discordImportRouter);
+app.use("/api/link-history", httpRateLimit("http:link-history", RL_HTTP_CHAT_UPLOAD), linkHistoryRouter);
 
 app.use(apiErrorHandler);
 

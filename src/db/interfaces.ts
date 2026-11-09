@@ -283,6 +283,8 @@ export interface ServerConfigRecord {
   spam_filter_sensitivity: SpamSensitivity;
   /** Whether members may use a video avatar or banner, where the worker can transcode one. */
   video_profiles_enabled: boolean;
+  /** Holds a linked device's sealed history for it (GRYT-2055). */
+  link_history_enabled: boolean;
   /** Whether messages here may show other Gryt servers' custom emoji. Off: they load from another host. */
   external_emojis_enabled: boolean;
   is_configured: boolean;
