@@ -111,7 +111,7 @@ export function createLinkHistoryStore(files: ChunkFiles, limits = LINK_HISTORY_
 }
 
 const store = createLinkHistoryStore({
-  put: (key, body) => putObject({ bucket: BUCKET, key, body, contentType: "application/octet-stream" }),
+  put: (key, body) => putObject({ bucket: BUCKET, key, body }),
   get: (key) => getObjectAsBuffer({ bucket: BUCKET, key }),
   del: (key) => deleteObject({ bucket: BUCKET, key }),
 });
