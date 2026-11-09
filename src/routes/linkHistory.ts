@@ -3,6 +3,7 @@ import type { NextFunction, Request, Response } from "express";
 import { rm } from "fs/promises";
 import { join } from "path";
 
+import { getServerConfig } from "../db";
 import { requireBearerToken } from "../middleware/requireBearerToken";
 import { deleteObject, getObjectAsBuffer, putObject, STORAGE_DISABLED, uploadsDisabled } from "../storage";
 
@@ -125,7 +126,9 @@ linkHistoryRouter.use(requireBearerToken);
 linkHistoryRouter.use((req: Request, res: Response, next: NextFunction) => {
   if (!userOf(req)) return void res.status(401).json({ error: "auth_required" });
   if (uploadsDisabled()) return void res.status(503).json(STORAGE_DISABLED);
-  next();
+  getServerConfig()
+    .then((cfg) => (cfg?.link_history_enabled === false ? res.status(403).json({ error: "link_history_off" }) : next()))
+    .catch(next);
 });
 
 linkHistoryRouter.put(

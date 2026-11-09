@@ -224,6 +224,7 @@ app.get("/info", httpRateLimit("http:public", RL_HTTP_PUBLIC), async (_req, res)
 
   let displayName = process.env.SERVER_NAME || "Unknown Server";
   let description = process.env.SERVER_DESCRIPTION || "A Gryt server";
+  let linkHistoryOn = !uploadsDisabled();
   let lanOpen = false;
   // Falls back to the stricter answer if the config cannot be read, so a
   // database wobble never advertises a server as easier to get into than it is.
@@ -262,6 +263,7 @@ app.get("/info", httpRateLimit("http:public", RL_HTTP_PUBLIC), async (_req, res)
     if (cfg?.display_name) displayName = cfg.display_name;
     if (cfg?.description) description = cfg.description;
     if (cfg?.lan_open) lanOpen = true;
+    if (cfg?.link_history_enabled === false) linkHistoryOn = false;
     if (cfg?.join_policy) joinPolicy = cfg.join_policy;
 
     const storedServerId = (cfg as { server_id?: string | null } | null)?.server_id;
@@ -292,7 +294,7 @@ app.get("/info", httpRateLimit("http:public", RL_HTTP_PUBLIC), async (_req, res)
     identityTiers: getAcceptedIdentityTiers(),
     joinPolicy,
     // A linked device's history goes through here rather than through Gryt's relay.
-    linkHistory: !uploadsDisabled(),
+    linkHistory: linkHistoryOn,
   });
 });
 
