@@ -8,6 +8,7 @@ import {
 } from "../../db";
 import { voiceRoomName } from "./voiceRooms";
 import { removeFromVoice, type VoiceSfu } from "./voiceLeave";
+import { stashedVoiceState } from "./voiceStash";
 import { clientMayReceive, refreshClientPermissions } from "./standing";
 import { isBotIdentity } from "../../auth/identity";
 import { memberIdentity } from "./memberIdentity";
@@ -244,13 +245,15 @@ export async function buildMemberList(clientsInfo: Clients) {
     .filter((user) => user.is_active)
     .map((user) => {
       const onlineClient = onlineUsers.get(user.server_user_id);
+      // Socket gone but the call carries on: still in it, under the stream id others hear.
+      const held = onlineClient ? undefined : stashedVoiceState.get(user.server_user_id);
 
       let status: 'online' | 'in_voice' | 'afk' | 'offline' = 'offline';
       if (onlineClient) {
         if (onlineClient.isAFK) status = 'afk';
         else if (onlineClient.hasJoinedChannel) status = 'in_voice';
         else status = 'online';
-      }
+      } else if (held) status = 'in_voice';
 
       return {
         serverUserId: user.server_user_id,
@@ -295,15 +298,15 @@ export async function buildMemberList(clientsInfo: Clients) {
         activity: onlineClient?.activity,
         /** What a game said about itself. An older client ignores it and reads `activity`. */
         richActivity: onlineClient?.richActivity,
-        isMuted: onlineClient?.isMuted || false,
-        isDeafened: onlineClient?.isDeafened || false,
+        isMuted: (onlineClient ?? held)?.isMuted || false,
+        isDeafened: (onlineClient ?? held)?.isDeafened || false,
         isServerMuted: onlineClient?.isServerMuted || false,
         isServerDeafened: onlineClient?.isServerDeafened || false,
         color: onlineClient?.color || '#666666',
-        isConnectedToVoice: onlineClient?.isConnectedToVoice || false,
-        hasJoinedChannel: onlineClient?.hasJoinedChannel || false,
-        voiceChannelId: publicVoiceRoom(onlineClient?.voiceChannelId),
-        streamID: onlineClient?.streamID || '',
+        isConnectedToVoice: onlineClient?.isConnectedToVoice || !!held,
+        hasJoinedChannel: onlineClient?.hasJoinedChannel || !!held,
+        voiceChannelId: publicVoiceRoom((onlineClient ?? held)?.voiceChannelId),
+        streamID: (onlineClient ?? held)?.streamID || '',
       };
     });
 }
