@@ -328,7 +328,10 @@ describe("one identity per account (GRYT-1868)", () => {
     clientsInfo[phone.clientId].serverUserId = ida.serverUserId;
     listen(phone);
     await phone.handlers["dm:key:handover:pending"]({});
-    assert.deepEqual(heard[phone.clientId], [["dm:key:handover:asked", { binding, deviceName: "Mac", askerId: binding }]]);
+    const [[event, body]] = heard[phone.clientId] as [string, Record<string, unknown>][];
+    assert.equal(event, "dm:key:handover:asked");
+    assert.deepEqual({ ...body, seenAt: typeof body.seenAt, at: typeof body.at },
+      { binding, deviceName: "Mac", askerId: binding, holder: null, seenAt: "number", at: "number" }, "with who to approve it on, for the asker after a reload");
 
     await phone.handlers["dm:key:handover:deny"]({ askerId: binding });
     heard[phone.clientId] = [];
@@ -376,10 +379,11 @@ describe("one identity per account (GRYT-1868)", () => {
     assert.equal((await getUserByServerId(jill.serverUserId))?.dm_key_reset_binding, next);
 
     delete clientsInfo[asking.clientId];
-    const heard: unknown[] = [];
-    io.sockets.sockets.set(jill.clientId, { emit: (event: string, body: unknown) => heard.push([event, body]) });
+    const heard: [string, { binding: string; holder: string }][] = [];
+    io.sockets.sockets.set(jill.clientId, { emit: (event: string, body: unknown) => heard.push([event, body as { binding: string; holder: string }]) });
     await jill.handlers["dm:key:handover:pending"]({});
-    assert.deepEqual(heard, [["dm:key:handover:asked", { binding: next, deviceName: "iPhone", askerId: next }]], "an ask outlives the asker's connection");
+    assert.deepEqual(heard.map(([e, b]) => [e, b.binding]), [["dm:key:handover:asked", next]], "an ask outlives the asker's connection");
+    assert.equal(heard[0][1].holder, "Windows PC");
     assert.deepEqual((await listDmKeyAsks(jill.serverUserId, KEY_RESET_DELAY_MS)).map((a) => a.deviceName), ["iPhone"], "and it's in the database, not in memory");
   });
 
