@@ -1065,6 +1065,12 @@ function runMigrations(d: DatabaseSync): void {
     d.prepare("UPDATE users SET dm_key_seen_at = ? WHERE dm_key_binding IS NOT NULL").run(Date.now());
   }
 
+  // The last signed handover, so contacts who trusted the old key can trust the new one too.
+  if (!hasColumn(d, "users", "dm_key_handover")) {
+    d.exec("ALTER TABLE users ADD COLUMN dm_key_handover TEXT");
+    d.exec("ALTER TABLE users ADD COLUMN dm_key_handover_from TEXT");
+  }
+
   // Handover asks, so a restart doesn't lose one (GRYT-2023).
   d.exec(`CREATE TABLE IF NOT EXISTS dm_key_asks (
     server_user_id TEXT NOT NULL,

@@ -264,6 +264,8 @@ export async function buildMemberList(clientsInfo: Clients) {
         dmKeyBinding: user.dm_key_binding,
         /** Checked against the DM key binding's signer on the way in (GRYT-1515). */
         personKeyBinding: user.person_key_binding,
+        /** The replaced key's signed note and binding, for contacts who trusted that key. */
+        dmKeyHandover: user.dm_key_handover && user.dm_key_handover_from ? { note: user.dm_key_handover, from: user.dm_key_handover_from } : null,
         /** When a pending key reset takes over, so contacts and your own devices can see it coming. */
         keyResetAt: keyResetDueAt(user),
         avatarFileId: user.avatar_file_id || null,

@@ -289,6 +289,13 @@ describe("one identity per account (GRYT-1868)", () => {
     const real = await gryt.signKeyHandover({ newBinding: next, scope, identityPrivateKey: oldMac.privateKey, identityPublicJwk: oldMac.publicJwk });
     assert.deepEqual(await publish(erin, { binding: next, replace: true, handover: real }), { ok: true, changed: true });
     assert.equal(await bindingOf(erin.serverUserId), next);
+
+    const kept = await getUserByServerId(erin.serverUserId);
+    assert.equal(kept?.dm_key_handover, real, "the note is kept for contacts who trusted the old key");
+    assert.equal(kept?.dm_key_handover_from, old);
+
+    await publish(erin, { binding: null });
+    assert.equal((await getUserByServerId(erin.serverUserId))?.dm_key_handover, null, "a change without a note clears it");
   });
 
   it("passes a handover request to the account's other devices only", async () => {

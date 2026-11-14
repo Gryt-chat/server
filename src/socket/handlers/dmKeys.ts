@@ -1,5 +1,5 @@
 import type { HandlerContext, EventHandlerMap } from "./types";
-import { addDmKeyAsk, getUserByServerId, listDmKeyAsks, removeDmKeyAsk, setUserDmKeyBinding, setUserDmKeyReset, setUserDmKeySeen } from "../../db";
+import { addDmKeyAsk, getUserByServerId, listDmKeyAsks, removeDmKeyAsk, setUserDmKeyBinding, setUserDmKeyHandover, setUserDmKeyReset, setUserDmKeySeen } from "../../db";
 import { dmBindingIdentity, handoverValid, KEY_RESET_DELAY_MS, keyResetDueAt } from "../../services/personKeyBinding";
 import { pushNotify } from "../../services/push";
 import { checkRateLimit, type RateLimitRule } from "../../utils/rateLimiter";
@@ -80,6 +80,8 @@ export function registerDmKeyHandlers(ctx: HandlerContext): EventHandlerMap {
         return;
       }
 
+      const note = typeof payload?.handover === "string" ? payload.handover : null;
+      let handedOver = false;
       // One identity per account (GRYT-1868): a device with its own key links instead of taking over.
       if (binding !== null && user.dm_key_binding) {
         const [had, sent] = await Promise.all([dmBindingIdentity(user.dm_key_binding), dmBindingIdentity(binding)]);
@@ -89,13 +91,16 @@ export function registerDmKeyHandlers(ctx: HandlerContext): EventHandlerMap {
         }
         // Only the key being replaced can hand over (GRYT-1886); the password alone isn't enough.
         const resetDue = user.dm_key_reset_binding === binding && (keyResetDueAt(user) ?? Infinity) <= Date.now();
-        if (had && sent !== had && !resetDue && !(typeof payload?.handover === "string" && await handoverValid(payload.handover, user.dm_key_binding, binding))) {
+        handedOver = !!had && sent !== had && note !== null && await handoverValid(note, user.dm_key_binding, binding);
+        if (had && sent !== had && !resetDue && !handedOver) {
           reply({ ok: false, error: "handover_required", message: "Approve this from a device that has your current key here." });
           return;
         }
       }
 
       await setUserDmKeyBinding(serverUserId, binding);
+      // Contacts follow a signed handover without asking; any other change leaves them to compare codes.
+      await setUserDmKeyHandover(serverUserId, handedOver ? note : null, handedOver ? user.dm_key_binding : null);
       if (user.dm_key_reset_binding) await setUserDmKeyReset(serverUserId, null, null);
       // Approving publishes the asker's key, so the name is the asker's.
       const asker = binding ? (await listDmKeyAsks(serverUserId, KEY_RESET_DELAY_MS)).find((a) => a.binding === binding) : undefined;

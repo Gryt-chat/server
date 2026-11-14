@@ -72,6 +72,9 @@ export interface UserRecord {
   /** When a device with the current key was last connected, in ms, and what it calls itself. */
   dm_key_seen_at: number | null;
   dm_key_holder: string | null;
+  /** The note the replaced key signed when it handed over, and that key's binding, so contacts can follow it. */
+  dm_key_handover: string | null;
+  dm_key_handover_from: string | null;
   /** Null when they have no designed look. Stored and passed on without being
       read — see `utils/wornString.ts`. */
   avatar_worn: string | null;
