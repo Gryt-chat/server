@@ -39,6 +39,8 @@ function rowToUser(r: Record<string, unknown>): UserRecord {
     dm_key_reset_at: r.dm_key_reset_at == null ? null : Number(r.dm_key_reset_at),
     dm_key_seen_at: r.dm_key_seen_at == null ? null : Number(r.dm_key_seen_at),
     dm_key_holder: (r.dm_key_holder as string) || null,
+    dm_key_handover: (r.dm_key_handover as string) || null,
+    dm_key_handover_from: (r.dm_key_handover_from as string) || null,
   };
 }
 
@@ -152,6 +154,8 @@ export async function upsertUser(
     dm_key_reset_at: null,
     dm_key_seen_at: null,
     dm_key_holder: null,
+    dm_key_handover: null,
+    dm_key_handover_from: null,
   };
 }
 
@@ -179,6 +183,13 @@ export async function setUserDmKeySeen(serverUserId: string, at: number, holder:
   getSqliteDb()
     .prepare(`UPDATE users SET dm_key_seen_at = ?, dm_key_holder = ? WHERE server_user_id = ?`)
     .run(at, holder, serverUserId);
+}
+
+/** The last handover, or nulls when the key changed without one. */
+export async function setUserDmKeyHandover(serverUserId: string, note: string | null, from: string | null): Promise<void> {
+  getSqliteDb()
+    .prepare(`UPDATE users SET dm_key_handover = ?, dm_key_handover_from = ? WHERE server_user_id = ?`)
+    .run(note, from, serverUserId);
 }
 
 /** Checked by the caller (`services/personKeyBinding.ts`), not here. Null withdraws it. */
