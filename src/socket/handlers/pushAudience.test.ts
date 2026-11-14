@@ -26,6 +26,7 @@ import { resetChannelIdCache } from "../utils/conversationAccess";
 import { refreshClientPermissions } from "../utils/standing";
 import { registerChatHandlers } from "./chat";
 import { registerDirectMessageHandlers } from "./dm";
+import { registerFriendHandlers } from "./friends";
 import { registerPushHandlers } from "./push";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
@@ -103,7 +104,7 @@ async function member(name: string, roleId: string): Promise<Member> {
     serverUserId: user.server_user_id,
     accessToken: generateAccessToken({ grytUserId, serverUserId: user.server_user_id, nickname: name, serverHost: HOST, tokenVersion: 0 }),
     capability: capabilityFor(seq),
-    handlers: { ...registerChatHandlers(ctx), ...registerDirectMessageHandlers(ctx), ...registerPushHandlers(ctx) },
+    handlers: { ...registerChatHandlers(ctx), ...registerDirectMessageHandlers(ctx), ...registerFriendHandlers(ctx), ...registerPushHandlers(ctx) },
     emitted,
   };
   members.set(m.capability, m);
@@ -551,6 +552,32 @@ describe("thread replies (GRYT-2008)", () => {
     resetPushState();
     away(alice);
     await reply(alice, id, line("never mind, fixed it"));
+    assert.deepEqual(await woken(), []);
+  });
+});
+
+describe("friend requests", () => {
+  const ask = (from: Member, to: Member) =>
+    from.handlers["friend:request"]({ accessToken: from.accessToken, serverUserId: to.serverUserId });
+
+  it("wake the person asked, once, with only the kind", async () => {
+    away(carol);
+    await ask(alice, carol);
+    assert.deepEqual(await woken(), ["Carol:friend"]);
+    assert.deepEqual(JSON.parse(hits[0].body), { kind: "friend" });
+    await ask(alice, carol);
+    assert.deepEqual(await woken(), ["Carol:friend"], "asking again woke them again");
+  });
+
+  it("don't wake somebody at a screen", async () => {
+    await ask(alice, dave);
+    assert.deepEqual(await woken(), []);
+  });
+
+  it("don't wake somebody who blocked the sender", async () => {
+    await blockUser(erin.grytUserId, alice.grytUserId);
+    away(erin);
+    await ask(alice, erin);
     assert.deepEqual(await woken(), []);
   });
 });

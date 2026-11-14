@@ -16,6 +16,8 @@ import {
   unfriend,
   type FriendPerson,
 } from "../../db";
+import { pushNotify } from "../../services/push";
+import { messagePreview } from "../../services/pushPreview";
 import { spamFilter } from "../../moderation/spamFilter";
 import { isSpamExempt, spamRefusal, timeOutSpammer } from "../../moderation/spamTimeout";
 import { textMuteError, textMuteFor } from "../../moderation/textMute";
@@ -190,6 +192,13 @@ export function registerFriendHandlers(ctx: HandlerContext): EventHandlerMap {
         if (stored && !blocked) {
           await pushFriendList(io, clientsInfo, target.server_user_id, them);
           emitTo(target.server_user_id, "friend:request:incoming", { serverUserId: self, nickname: clientsInfo[clientId]?.nickname ?? null });
+          pushNotify(clientsInfo, [target.server_user_id], "friend", `friend:${self}`, {
+            preview: () => messagePreview({
+              sender: clientsInfo[clientId]?.nickname,
+              body: "Wants to be friends",
+              conversationId: `friend:${self}`,
+            }),
+          });
         }
       } catch (err) {
         consola.error("friend:request failed", err);
