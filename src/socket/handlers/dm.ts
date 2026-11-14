@@ -33,6 +33,7 @@ import type { EventHandlerMap, HandlerContext } from "./types";
 
 const RL_OPEN: RateLimitRule = { limit: 10, windowMs: 60_000, scorePerAction: 1, maxScore: 10, scoreDecayMs: 3000 };
 const RL_LIST: RateLimitRule = { limit: 20, windowMs: 60_000, scorePerAction: 0.3, maxScore: 8, scoreDecayMs: 2000 };
+const RL_HISTORY_ASK: RateLimitRule = { limit: 6, windowMs: 60_000, scorePerAction: 1, maxScore: 6, scoreDecayMs: 10_000 };
 
 export interface ConversationParticipant {
   server_user_id: string;
@@ -485,6 +486,32 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
       } catch (err) {
         consola.error("dm:list failed", err);
         socket.emit("dm:error", { error: "failed", message: "Could not list conversations" });
+      }
+    },
+
+    /** "Send me your copy": passed to the other members who are connected. The asker sends it again
+        when they come online, so nothing is kept here. Their app decides whether to offer it. */
+    'dm:history:ask': async (payload: { accessToken: string; conversationId: string }, ack?: (reply: { ok: boolean }) => void) => {
+      const reply = typeof ack === "function" ? ack : () => {};
+      try {
+        if (!payload || typeof payload.accessToken !== "string" || typeof payload.conversationId !== "string") return reply({ ok: false });
+        if (!checkRateLimit("dm:history:ask", clientsInfo[clientId]?.serverUserId, getClientIp(), RL_HISTORY_ASK).allowed) return reply({ ok: false });
+        const auth = await requireAuth(socket, payload);
+        if (!auth) return reply({ ok: false });
+        const asker = auth.tokenPayload.serverUserId;
+        if (!(await isConversationMember(payload.conversationId, asker))) return reply({ ok: false });
+        let delivered = false;
+        for (const member of await listConversationMemberIds(payload.conversationId)) {
+          if (member === asker) continue;
+          for (const cid of socketIdsFor(member)) {
+            io.sockets.sockets.get(cid)?.emit("dm:history:asked", { conversationId: payload.conversationId, from: asker });
+            delivered = true;
+          }
+        }
+        reply({ ok: delivered });
+      } catch (err) {
+        consola.error("dm:history:ask failed", err);
+        reply({ ok: false });
       }
     },
   };
