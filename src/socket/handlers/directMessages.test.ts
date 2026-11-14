@@ -956,3 +956,22 @@ describe("a sealed direct message", () => {
     assert.ok(alice.received("chat:error").length > 0);
   });
 });
+
+describe("asking for the other person's copy", () => {
+  it("reaches the other member and nobody else, and only from inside the conversation", async () => {
+    const conversationId = await openDm(alice, bob);
+    clearAll();
+    const reply = await new Promise<{ ok: boolean }>((resolve) =>
+      void alice.handlers["dm:history:ask"]({ accessToken: alice.accessToken, conversationId }, resolve));
+    assert.equal(reply.ok, true);
+    assert.deepEqual(bob.received("dm:history:asked"), [{ conversationId, from: alice.serverUserId }]);
+    assert.deepEqual(mallory.received("dm:history:asked"), []);
+    assert.deepEqual(alice.received("dm:history:asked"), [], "the asker isn't asked");
+
+    clearAll();
+    const outsider = await new Promise<{ ok: boolean }>((resolve) =>
+      void mallory.handlers["dm:history:ask"]({ accessToken: mallory.accessToken, conversationId }, resolve));
+    assert.equal(outsider.ok, false);
+    assert.deepEqual(bob.received("dm:history:asked"), [], "somebody outside the conversation can't ask");
+  });
+});
