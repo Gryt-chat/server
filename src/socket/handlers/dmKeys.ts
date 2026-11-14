@@ -146,9 +146,11 @@ export function registerDmKeyHandlers(ctx: HandlerContext): EventHandlerMap {
     "dm:key:handover:pending": async () => {
       const serverUserId = clientsInfo[clientId]?.serverUserId;
       if (!serverUserId) return;
-      // The asking device gets its own ask back too, and ignores it: only a device with the current key answers.
+      // The asking device gets its own ask back too, with who to approve it on, after a reload.
+      const user = await getUserByServerId(serverUserId);
       for (const ask of await listDmKeyAsks(serverUserId, KEY_RESET_DELAY_MS)) {
-        io.sockets.sockets.get(clientId)?.emit("dm:key:handover:asked", asked(ask));
+        const at = user?.dm_key_reset_binding === ask.binding ? keyResetDueAt(user) ?? undefined : undefined;
+        io.sockets.sockets.get(clientId)?.emit("dm:key:handover:asked", { ...asked(ask), holder: user?.dm_key_holder ?? null, seenAt: user?.dm_key_seen_at ?? null, at });
       }
     },
 

@@ -93,6 +93,7 @@ export default tseslint.config(
   // unknown: caught errors are unknown until checked.
   {
     files: [
+      'src/admin/resetDmKey.ts',
       'src/admin/setOwner.ts',
       'src/moderation/deleteMessage.ts',
       'src/socket/handlers/members.ts',
