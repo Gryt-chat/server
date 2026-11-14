@@ -9,7 +9,7 @@ import { sealPreview, type PushPreview } from "./pushPreview";
  * a kind, nothing else: it writes the notification text itself.
  */
 
-export type PushKind = "mention" | "dm" | "message" | "approve";
+export type PushKind = "mention" | "dm" | "message" | "approve" | "friend";
 
 /** Which of an account's phones want this push, by their own settings. Muted is checked on top. */
 export type PushAccept = (device: PushDevice) => boolean;
