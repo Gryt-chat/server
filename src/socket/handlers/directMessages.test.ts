@@ -975,3 +975,18 @@ describe("asking for the other person's copy", () => {
     assert.deepEqual(bob.received("dm:history:asked"), [], "somebody outside the conversation can't ask");
   });
 });
+
+describe("asking your own other devices for a DM's history", () => {
+  it("reaches your other devices only, not the other person and not the asking device", async () => {
+    const conversationId = await openDm(alice, bob);
+    const phone = await connectMember("Alice", alice.grytUserId);
+    clearAll();
+    phone.clear();
+    const reply = await new Promise<{ ok: boolean }>((resolve) =>
+      void alice.handlers["dm:history:ask"]({ accessToken: alice.accessToken, conversationId, own: true }, resolve));
+    assert.equal(reply.ok, true);
+    assert.deepEqual(phone.received("dm:history:asked"), [{ conversationId, from: alice.serverUserId }]);
+    assert.deepEqual(alice.received("dm:history:asked"), [], "the asking device isn't asked");
+    assert.deepEqual(bob.received("dm:history:asked"), [], "the other person isn't asked");
+  });
+});
