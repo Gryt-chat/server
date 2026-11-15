@@ -491,7 +491,7 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
 
     /** "Send me your copy": passed to the other members who are connected. The asker sends it again
         when they come online, so nothing is kept here. Their app decides whether to offer it. */
-    'dm:history:ask': async (payload: { accessToken: string; conversationId: string }, ack?: (reply: { ok: boolean }) => void) => {
+    'dm:history:ask': async (payload: { accessToken: string; conversationId: string; own?: boolean }, ack?: (reply: { ok: boolean }) => void) => {
       const reply = typeof ack === "function" ? ack : () => {};
       try {
         if (!payload || typeof payload.accessToken !== "string" || typeof payload.conversationId !== "string") return reply({ ok: false });
@@ -501,9 +501,11 @@ export function registerDirectMessageHandlers(ctx: HandlerContext): EventHandler
         const asker = auth.tokenPayload.serverUserId;
         if (!(await isConversationMember(payload.conversationId, asker))) return reply({ ok: false });
         let delivered = false;
-        for (const member of await listConversationMemberIds(payload.conversationId)) {
-          if (member === asker) continue;
+        // `own`: the asker's other devices, which share its key and answer without asking anyone.
+        const targets = payload.own === true ? [asker] : (await listConversationMemberIds(payload.conversationId)).filter((m) => m !== asker);
+        for (const member of targets) {
           for (const cid of socketIdsFor(member)) {
+            if (cid === clientId) continue;
             io.sockets.sockets.get(cid)?.emit("dm:history:asked", { conversationId: payload.conversationId, from: asker });
             delivered = true;
           }
