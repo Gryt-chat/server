@@ -40,6 +40,7 @@ import {
   recordBotAsksMore,
   recordBotKnock,
   insertServerAudit,
+  setUserAccountKey,
 } from "../../db";
 import type { BotRecord } from "../../db";
 import { isPrivateIp } from "../../utils/isPrivateIp";
@@ -714,7 +715,7 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           clientsInfo[clientId].serverUserId = user.server_user_id;
           clientsInfo[clientId].nickname = user.nickname;
           clientsInfo[clientId].accessToken = accessToken;
-          clientsInfo[clientId].accountKey = accountKey;
+          if (accountKey) await setUserAccountKey(user.server_user_id, accountKey);
 
           // Carried on the user rather than the connection, so rejoining does
           // not clear a server mute.

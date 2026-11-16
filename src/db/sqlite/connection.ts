@@ -1071,6 +1071,11 @@ function runMigrations(d: DatabaseSync): void {
     d.exec("ALTER TABLE users ADD COLUMN dm_key_handover_from TEXT");
   }
 
+  // The account key a certificate named, so any connection of this member can move a server to it.
+  if (!hasColumn(d, "users", "account_key")) {
+    d.exec("ALTER TABLE users ADD COLUMN account_key TEXT");
+  }
+
   // Handover asks, so a restart doesn't lose one (GRYT-2023).
   d.exec(`CREATE TABLE IF NOT EXISTS dm_key_asks (
     server_user_id TEXT NOT NULL,

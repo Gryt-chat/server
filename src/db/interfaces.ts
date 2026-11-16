@@ -75,6 +75,8 @@ export interface UserRecord {
   /** The note the replaced key signed when it handed over, and that key's binding, so contacts can follow it. */
   dm_key_handover: string | null;
   dm_key_handover_from: string | null;
+  /** The account key the identity service vouched for at this member's last certificate join. */
+  account_key: string | null;
   /** Null when they have no designed look. Stored and passed on without being
       read — see `utils/wornString.ts`. */
   avatar_worn: string | null;

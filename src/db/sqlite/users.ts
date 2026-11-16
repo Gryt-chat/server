@@ -41,6 +41,7 @@ function rowToUser(r: Record<string, unknown>): UserRecord {
     dm_key_holder: (r.dm_key_holder as string) || null,
     dm_key_handover: (r.dm_key_handover as string) || null,
     dm_key_handover_from: (r.dm_key_handover_from as string) || null,
+    account_key: (r.account_key as string) || null,
   };
 }
 
@@ -156,6 +157,7 @@ export async function upsertUser(
     dm_key_holder: null,
     dm_key_handover: null,
     dm_key_handover_from: null,
+    account_key: null,
   };
 }
 
@@ -183,6 +185,10 @@ export async function setUserDmKeySeen(serverUserId: string, at: number, holder:
   getSqliteDb()
     .prepare(`UPDATE users SET dm_key_seen_at = ?, dm_key_holder = ? WHERE server_user_id = ?`)
     .run(at, holder, serverUserId);
+}
+
+export async function setUserAccountKey(serverUserId: string, accountKey: string): Promise<void> {
+  getSqliteDb().prepare(`UPDATE users SET account_key = ? WHERE server_user_id = ?`).run(accountKey, serverUserId);
 }
 
 /** The last handover, or nulls when the key changed without one. */

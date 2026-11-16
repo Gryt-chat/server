@@ -21,7 +21,7 @@ const COMPACT_JWT = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 export { KEY_RESET_DELAY_MS };
 
 /** Signed by the account key this device's certificate names, over the binding it publishes. */
-export async function provesAccountKey(proof: unknown, binding: string, accountKey: string | undefined): Promise<boolean> {
+export async function provesAccountKey(proof: string | undefined, binding: string, accountKey: string | undefined): Promise<boolean> {
   if (!accountKey || typeof proof !== "string" || proof.length > MAX_BINDING_BYTES) return false;
   try {
     const { payload, protectedHeader } = await jwtVerify(proof, EmbeddedJWK, { algorithms: ["ES256"] });
@@ -105,7 +105,7 @@ export function registerDmKeyHandlers(ctx: HandlerContext): EventHandlerMap {
         const resetDue = user.dm_key_reset_binding === binding && (keyResetDueAt(user) ?? Infinity) <= Date.now();
         handedOver = !!had && sent !== had && note !== null && await handoverValid(note, user.dm_key_binding, binding);
         // The account's one key takes the server over with no older device's say; contacts compare codes once.
-        const accountMove = !!had && sent !== had && !handedOver && await provesAccountKey(payload?.account, binding, clientsInfo[clientId]?.accountKey);
+        const accountMove = !!had && sent !== had && !handedOver && await provesAccountKey(payload?.account, binding, user.account_key ?? undefined);
         if (had && sent !== had && !resetDue && !handedOver && !accountMove) {
           reply({ ok: false, error: "handover_required", message: "Approve this from a device that has your current key here." });
           return;

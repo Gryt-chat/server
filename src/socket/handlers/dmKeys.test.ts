@@ -7,7 +7,7 @@ import { calculateJwkThumbprint, exportJWK, generateKeyPair, SignJWT } from "jos
 
 import { initSqlite } from "../../db/sqlite/connection";
 import { createServerConfigIfNotExists, setServerRole } from "../../db/sqlite/servers";
-import { getUserByServerId, setUserDmKeyReset, setUserDmKeySeen, upsertUser } from "../../db/sqlite/users";
+import { getUserByServerId, setUserAccountKey, setUserDmKeyReset, setUserDmKeySeen, upsertUser } from "../../db/sqlite/users";
 import { listDmKeyAsks } from "../../db/sqlite/dmKeyAsks";
 import type { Clients } from "../../types";
 import { buildMemberList } from "../utils/clients";
@@ -279,7 +279,7 @@ describe("one identity per account (GRYT-1868)", () => {
     await publish(erin, { binding: await old() });
     const account = await generateKeyPair("ES256");
     const accountJwk = await exportJWK(account.publicKey);
-    clientsInfo[erin.clientId].accountKey = await calculateJwkThumbprint(accountJwk);
+    await setUserAccountKey(erin.serverUserId, await calculateJwkThumbprint(accountJwk));
     const sign = (binding: string, key = account.privateKey, jwk = accountJwk) =>
       new SignJWT({ binding }).setProtectedHeader({ alg: "ES256", jwk }).sign(key);
 
