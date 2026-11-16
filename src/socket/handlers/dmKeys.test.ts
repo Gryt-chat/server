@@ -3,10 +3,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
+import { calculateJwkThumbprint, exportJWK, generateKeyPair, SignJWT } from "jose";
 
 import { initSqlite } from "../../db/sqlite/connection";
 import { createServerConfigIfNotExists, setServerRole } from "../../db/sqlite/servers";
-import { getUserByServerId, setUserDmKeyReset, setUserDmKeySeen, upsertUser } from "../../db/sqlite/users";
+import { getUserByServerId, setUserAccountKey, setUserDmKeyReset, setUserDmKeySeen, upsertUser } from "../../db/sqlite/users";
 import { listDmKeyAsks } from "../../db/sqlite/dmKeyAsks";
 import type { Clients } from "../../types";
 import { buildMemberList } from "../utils/clients";
@@ -270,6 +271,28 @@ describe("one identity per account (GRYT-1868)", () => {
     assert.equal((await publish(dave, { binding: replacement, replace: true })).error, "handover_required",
       "a password alone must not be able to replace the key everyone pinned");
     assert.equal(await bindingOf(dave.serverUserId), original);
+  });
+
+  it("takes the account's key when the device signs for the key its certificate names", async () => {
+    const erin = await connect("Erin");
+    const [old, mine] = [await device(), await device()];
+    await publish(erin, { binding: await old() });
+    const account = await generateKeyPair("ES256");
+    const accountJwk = await exportJWK(account.publicKey);
+    await setUserAccountKey(erin.serverUserId, await calculateJwkThumbprint(accountJwk));
+    const sign = (binding: string, key = account.privateKey, jwk = accountJwk) =>
+      new SignJWT({ binding }).setProtectedHeader({ alg: "ES256", jwk }).sign(key);
+
+    const next = await mine();
+    assert.equal((await publish(erin, { binding: next, replace: true })).error, "handover_required", "no proof, no move");
+    assert.equal((await publish(erin, { binding: next, replace: true, account: await sign(await mine()) })).error, "handover_required", "a proof for another binding");
+    const other = await generateKeyPair("ES256");
+    assert.equal((await publish(erin, { binding: next, replace: true, account: await sign(next, other.privateKey, await exportJWK(other.publicKey)) })).error,
+      "handover_required", "a key the certificate doesn't name");
+
+    assert.equal((await publish(erin, { binding: next, replace: true, account: await sign(next) })).ok, true);
+    assert.equal(await bindingOf(erin.serverUserId), next);
+    assert.equal((await getUserByServerId(erin.serverUserId))?.dm_key_handover, null, "contacts compare codes, no signed handover");
   });
 
   it("takes a replacement the current key handed over, and only that one", async () => {

@@ -198,6 +198,8 @@ export interface VerifiedCertificate {
   jwk: JsonWebKey;
   issuer: string;
   tier: IdentityTier;
+  /** The account key's thumbprint, when the identity service saw this device prove it. */
+  accountKey?: string;
 }
 
 /** Generous because `consumeChallenge` bounds the replay window on this
@@ -545,6 +547,7 @@ export async function verifyCertificate(
         ? payload["preferred_username"]
         : undefined;
 
+    const seed = (payload as JWTPayload & { seed?: unknown }).seed;
     return {
       sub: payload.sub,
       grytUserId: qualifiedAccountSub(issuer, payload.sub),
@@ -552,6 +555,7 @@ export async function verifyCertificate(
       jwk: jwk as JsonWebKey,
       issuer,
       tier: "account",
+      ...(typeof seed === "string" && /^[A-Za-z0-9_-]{16,128}$/.test(seed) ? { accountKey: seed } : {}),
     };
   } catch (err) {
     throw new IdentityVerificationError(
