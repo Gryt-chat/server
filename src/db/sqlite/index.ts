@@ -1,6 +1,5 @@
 export { initSqlite } from "./connection";
 export * from "./users";
-export * from "./dmKeyAsks";
 export * from "./mergeGuest";
 export * from "./messages";
 export * from "./threads";

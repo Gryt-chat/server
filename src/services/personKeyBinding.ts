@@ -9,7 +9,6 @@ import type { IdentityScope } from "@gryt/crypto/dist/scope";
 /* eslint-disable @typescript-eslint/no-require-imports */
 const { verifyPersonKeyBinding } = require("@gryt/crypto/mls-person-key") as typeof import("@gryt/crypto/dist/mls-person-key");
 const { verifyDmKeyBinding } = require("@gryt/crypto/dm-key-binding") as typeof import("@gryt/crypto/dist/dm-key-binding");
-const { verifyKeyHandover } = require("@gryt/crypto/key-handover") as typeof import("@gryt/crypto/dist/key-handover");
 /* eslint-enable @typescript-eslint/no-require-imports */
 
 /** A real binding is about 500 bytes. The same ceiling as the DM key binding's. */
@@ -82,18 +81,6 @@ export async function checkPersonKeyBinding(
   return { ok: true };
 }
 
-/** Whether the key behind `oldBinding` signed `note` handing this server to `newBinding` (GRYT-1886). */
-export async function handoverValid(note: string, oldBinding: string, newBinding: string): Promise<boolean> {
-  const scope = claimedScope(newBinding);
-  if (!scope || note.length > MAX_PERSON_KEY_BINDING_BYTES || !COMPACT_JWT.test(note)) return false;
-  try {
-    await verifyKeyHandover(note, { oldBinding, newBinding, scope });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /** Which identity key signed a DM key binding, or null when it doesn't verify. */
 export async function dmBindingIdentity(binding: string): Promise<string | null> {
   const scope = claimedScope(binding);
@@ -103,13 +90,4 @@ export async function dmBindingIdentity(binding: string): Promise<string | null>
   } catch {
     return null;
   }
-}
-
-/** Long enough to outlast a holiday, so a thief with the password can't finish one while you're away. */
-export const KEY_RESET_DELAY_MS = 30 * 24 * 60 * 60 * 1000;
-
-/** A reset finishes 30 days after it was asked for, or 30 days after a device with the current key was last here, whichever is first. */
-export function keyResetDueAt(user: { dm_key_reset_binding: string | null; dm_key_reset_at: number | null; dm_key_seen_at: number | null }): number | null {
-  if (!user.dm_key_reset_binding || user.dm_key_reset_at == null) return null;
-  return user.dm_key_seen_at == null ? user.dm_key_reset_at : Math.min(user.dm_key_reset_at, user.dm_key_seen_at + KEY_RESET_DELAY_MS);
 }

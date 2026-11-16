@@ -5,10 +5,7 @@ import {
   getUserByServerId,
   initSqlite,
   insertServerAudit,
-  listDmKeyAsks,
-  removeDmKeyAsk,
   setUserDmKeyBinding,
-  setUserDmKeyReset,
   setUserPersonKeyBinding,
 } from "../db";
 
@@ -23,14 +20,12 @@ function usage(): string {
   ].join("\n");
 }
 
-/** Clears the DM key, the person key, a pending reset and open handover asks. */
+/** Clears the DM key and the person key. */
 export async function resetDmKey(serverUserId: string): Promise<boolean> {
   const user = await getUserByServerId(serverUserId);
   if (!user) return false;
   await setUserDmKeyBinding(serverUserId, null);
   await setUserPersonKeyBinding(serverUserId, null);
-  await setUserDmKeyReset(serverUserId, null, null);
-  for (const ask of await listDmKeyAsks(serverUserId, Number.MAX_SAFE_INTEGER)) await removeDmKeyAsk(serverUserId, ask.binding);
   return true;
 }
 
