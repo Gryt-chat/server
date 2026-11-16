@@ -452,3 +452,32 @@ describe("one identity per account (GRYT-1868)", () => {
     assert.equal((await getUserByServerId(hank.serverUserId))?.dm_key_reset_binding, null);
   });
 });
+
+describe("device approval prompts", () => {
+  it("pass the ticket to your other devices only, and a no reaches the asker", async () => {
+    const mac = await connect("Mac owner");
+    const pcId = "socket-pc";
+    clientsInfo[pcId] = { ...clientsInfo[mac.clientId] } as Clients[string];
+    const stranger = await connect("Someone else");
+    const got: Record<string, { event: string; body: unknown }[]> = {};
+    for (const id of [mac.clientId, pcId, stranger.clientId]) {
+      got[id] = [];
+      io.sockets.sockets.set(id, { emit: (event: string, body: unknown) => got[id].push({ event, body }) });
+    }
+
+    await mac.handlers["device:approve:ask"]({ ticket: "not a jwt" });
+    assert.equal(got[pcId].length, 0, "only something shaped like a ticket is passed on");
+    const ticket = shapedLikeABinding();
+    await mac.handlers["device:approve:ask"]({ ticket });
+    assert.deepEqual(got[pcId], [{ event: "device:approve:asked", body: { askId: mac.clientId, ticket } }]);
+    assert.equal(got[mac.clientId].length, 0, "not to itself");
+    assert.equal(got[stranger.clientId].length, 0, "not to another account");
+
+    await stranger.handlers["device:approve:deny"]({ askId: mac.clientId });
+    assert.equal(got[mac.clientId].length, 0, "another account can't say no for you");
+
+    const pc = { handlers: registerDmKeyHandlers({ io, socket: { id: pcId, emit() {}, join() {}, leave() {} }, clientId: pcId, serverId: "key-test", clientsInfo, sfuClient: null, getClientIp: () => "10.0.9.9", clientAddressIsOwn: () => true } as unknown as HandlerContext) };
+    await pc.handlers["device:approve:deny"]({ askId: mac.clientId });
+    assert.deepEqual(got[mac.clientId], [{ event: "device:approve:denied", body: {} }]);
+  });
+});

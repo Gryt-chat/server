@@ -194,6 +194,26 @@ export function registerDmKeyHandlers(ctx: HandlerContext): EventHandlerMap {
       broadcastMemberList(io, clientsInfo, serverId);
     },
 
+    /** A device waiting to be approved: your other devices here show a prompt. The ticket is the identity service's; devices check it. */
+    "device:approve:ask": async (payload: { ticket?: string }) => {
+      const serverUserId = clientsInfo[clientId]?.serverUserId;
+      const ticket = payload?.ticket;
+      if (!serverUserId || typeof ticket !== "string" || ticket.length > 2048 || !COMPACT_JWT.test(ticket)) return;
+      if (!checkRateLimit("device:approve:ask", serverUserId, getClientIp(), RL_DM_KEY).allowed) return;
+      for (const [cid, ci] of Object.entries(clientsInfo)) {
+        if (cid !== clientId && ci.serverUserId === serverUserId) io.sockets.sockets.get(cid)?.emit("device:approve:asked", { askId: clientId, ticket });
+      }
+      pushNotify(clientsInfo, [serverUserId], "approve", `device:${serverUserId}`, { evenIfPresent: true });
+    },
+
+    /** "Not me": tells the waiting device, which must be on the same account. */
+    "device:approve:deny": async (payload: { askId?: string }) => {
+      const serverUserId = clientsInfo[clientId]?.serverUserId;
+      const askId = payload?.askId;
+      if (!serverUserId || typeof askId !== "string" || clientsInfo[askId]?.serverUserId !== serverUserId) return;
+      io.sockets.sockets.get(askId)?.emit("device:approve:denied", {});
+    },
+
     /** "That isn't mine": tells the asking device, so it stops waiting. */
     "dm:key:handover:deny": async (payload: { askerId?: string }) => {
       const serverUserId = clientsInfo[clientId]?.serverUserId;
