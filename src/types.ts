@@ -32,6 +32,8 @@ export interface Clients {
     status?: UserStatus;
     lastSeen?: Date;
     accessToken?: string; // JWT access token for this server
+    /** The account key this device proved to the identity service, from its certificate. */
+    accountKey?: string;
     /** Never used to authorise an action; see socket/utils/standing. Undefined
         until the socket has joined. */
     permissions?: ReadonlySet<import("./constants/permissions").Permission>;

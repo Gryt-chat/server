@@ -4,6 +4,7 @@ import { dmBindingIdentity, handoverValid, KEY_RESET_DELAY_MS, keyResetDueAt } f
 import { pushNotify } from "../../services/push";
 import { checkRateLimit, type RateLimitRule } from "../../utils/rateLimiter";
 import { broadcastMemberList } from "../utils/clients";
+import { calculateJwkThumbprint, EmbeddedJWK, type JWK, jwtVerify } from "jose";
 
 /**
  * A column in, the member list out, and nothing on this side reads it: verifying
@@ -18,6 +19,17 @@ const MAX_BINDING_BYTES = 4096;
 const COMPACT_JWT = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 
 export { KEY_RESET_DELAY_MS };
+
+/** Signed by the account key this device's certificate names, over the binding it publishes. */
+export async function provesAccountKey(proof: unknown, binding: string, accountKey: string | undefined): Promise<boolean> {
+  if (!accountKey || typeof proof !== "string" || proof.length > MAX_BINDING_BYTES) return false;
+  try {
+    const { payload, protectedHeader } = await jwtVerify(proof, EmbeddedJWK, { algorithms: ["ES256"] });
+    return payload.binding === binding && (await calculateJwkThumbprint(protectedHeader.jwk as JWK)) === accountKey;
+  } catch {
+    return false;
+  }
+}
 
 /** Every connect republishes, so this only stops a write per connect. */
 const SEEN_WRITE_EVERY_MS = 60 * 60 * 1000;
@@ -46,7 +58,7 @@ export function registerDmKeyHandlers(ctx: HandlerContext): EventHandlerMap {
   };
 
   return {
-    "dm:key:publish": async (payload: { binding?: string | null; replace?: boolean; handover?: string; deviceName?: string }, ack?: (reply: { ok: boolean; changed?: boolean; error?: string; message?: string }) => void) => {
+    "dm:key:publish": async (payload: { binding?: string | null; replace?: boolean; handover?: string; deviceName?: string; account?: string }, ack?: (reply: { ok: boolean; changed?: boolean; error?: string; message?: string }) => void) => {
       const reply = typeof ack === "function" ? ack : () => {};
       const serverUserId = clientsInfo[clientId]?.serverUserId;
       if (!serverUserId) return;
@@ -92,7 +104,9 @@ export function registerDmKeyHandlers(ctx: HandlerContext): EventHandlerMap {
         // Only the key being replaced can hand over (GRYT-1886); the password alone isn't enough.
         const resetDue = user.dm_key_reset_binding === binding && (keyResetDueAt(user) ?? Infinity) <= Date.now();
         handedOver = !!had && sent !== had && note !== null && await handoverValid(note, user.dm_key_binding, binding);
-        if (had && sent !== had && !resetDue && !handedOver) {
+        // The account's one key takes the server over with no older device's say; contacts compare codes once.
+        const accountMove = !!had && sent !== had && !handedOver && await provesAccountKey(payload?.account, binding, clientsInfo[clientId]?.accountKey);
+        if (had && sent !== had && !resetDue && !handedOver && !accountMove) {
           reply({ ok: false, error: "handover_required", message: "Approve this from a device that has your current key here." });
           return;
         }

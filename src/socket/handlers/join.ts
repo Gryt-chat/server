@@ -337,6 +337,7 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
         let grytUserId: string;
         let suggestedNickname: string | undefined;
         let identityTier: IdentityTier;
+        let accountKey: string | undefined;
         // The local identity this person used here before making an account,
         // if they proved they still hold its key.
         let priorSub: string | null = null;
@@ -359,6 +360,7 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           grytUserId = cert.grytUserId;
           suggestedNickname = cert.preferredUsername;
           identityTier = cert.tier;
+          accountKey = cert.accountKey;
 
           // Only an account may claim a prior identity, and only a local one:
           // otherwise holding two keys is a way to shed a ban.
@@ -712,6 +714,7 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
           clientsInfo[clientId].serverUserId = user.server_user_id;
           clientsInfo[clientId].nickname = user.nickname;
           clientsInfo[clientId].accessToken = accessToken;
+          clientsInfo[clientId].accountKey = accountKey;
 
           // Carried on the user rather than the connection, so rejoining does
           // not clear a server mute.
