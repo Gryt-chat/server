@@ -412,6 +412,14 @@ describe("one identity per account (GRYT-1868)", () => {
     assert.equal((await getUserByServerId(max.serverUserId))?.dm_key_holder, "Mac", "the new holder is named after the asker");
   });
 
+  it("tells your own devices which one has the key here", async () => {
+    const ana = await connect("Ana");
+    await publish(ana, { binding: await (await signer()).binding(), deviceName: "iPhone" });
+    const reply = await call(ana, "dm:key:holder", {});
+    assert.equal(reply?.holder, "iPhone");
+    assert.equal(typeof reply?.seenAt, "number");
+  });
+
   it("hands over at once when no device with the current key has been here for 30 days", async () => {
     const kim = await connect("Kim");
     const [gone, phone] = [await signer(), await signer()];

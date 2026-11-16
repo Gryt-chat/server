@@ -147,6 +147,15 @@ export function registerDmKeyHandlers(ctx: HandlerContext): EventHandlerMap {
       broadcastMemberList(io, clientsInfo, serverId);
     },
 
+    /** Which of your devices has your key here, as it named itself, so a notice can say who approves. Own account only. */
+    "dm:key:holder": async (_payload: Record<string, never>, ack?: (reply: { holder: string | null; seenAt: number | null }) => void) => {
+      const serverUserId = clientsInfo[clientId]?.serverUserId;
+      if (!serverUserId || typeof ack !== "function") return;
+      if (!checkRateLimit("dm:key:holder", serverUserId, getClientIp(), RL_DM_KEY).allowed) return;
+      const user = await getUserByServerId(serverUserId);
+      ack({ holder: user?.dm_key_holder ?? null, seenAt: user?.dm_key_seen_at ?? null });
+    },
+
     /** A device that just connected asks for requests made while it was away, even if the asker has gone since. */
     "dm:key:handover:pending": async () => {
       const serverUserId = clientsInfo[clientId]?.serverUserId;
