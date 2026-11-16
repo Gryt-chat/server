@@ -89,7 +89,7 @@ after(async () => {
 });
 
 describe("POST /api/uploads/banner", () => {
-  it("stores the picture cut to the banner box, beside the avatar", async () => {
+  it("stores the picture in its own shape within the banner box, beside the avatar", async () => {
     const alice = await member("alice");
     const res = await upload(alice, await png());
 
@@ -102,8 +102,20 @@ describe("POST /api/uploads/banner", () => {
     const file = await getFile(fileId);
     assert.equal(file?.mime, "image/avif");
     assert.equal(file?.width, BANNER_BOX.width);
-    assert.equal(file?.height, BANNER_BOX.height);
+    assert.equal(file?.height, 540, "a 16:9 picture was cut to another shape");
     assert.ok(file?.s3_key.startsWith("banners/"));
+  });
+
+  it("keeps a whole-card banner tall and never enlarges a small one", async () => {
+    const alice = await member("alice-tall");
+    const tall = await upload(alice, await png(1920, 2520));
+    assert.equal(tall.status, 201, JSON.stringify(tall.body));
+    const big = await getFile(tall.body.bannerFileId as string);
+    assert.deepEqual([big?.width, big?.height], [BANNER_BOX.width, BANNER_BOX.height]);
+
+    const small = await upload(alice, await png(320, 164));
+    const file = await getFile(small.body.bannerFileId as string);
+    assert.deepEqual([file?.width, file?.height], [320, 164]);
   });
 
   it("is refused to a member who may not upload, and nothing is stored", async () => {

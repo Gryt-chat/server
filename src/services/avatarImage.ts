@@ -4,8 +4,9 @@ import { v4 as uuidv4 } from "uuid";
 
 import { AVATAR_MAX_PX, AVATAR_QUALITY, AVATAR_THUMB_PX } from "../constants/media";
 
-/** The box a picture is cut to, and its thumbnail's. Avatars are square. */
-export interface PictureBox { width: number; height: number; thumbWidth: number; thumbHeight: number }
+/** The box a picture is cut to, and its thumbnail's. Avatars are square. `inside` keeps the
+    picture's own shape within the box instead of cutting it to the box. */
+export interface PictureBox { width: number; height: number; thumbWidth: number; thumbHeight: number; fit?: "cover" | "inside" }
 const AVATAR_BOX: PictureBox = { width: AVATAR_MAX_PX, height: AVATAR_MAX_PX, thumbWidth: AVATAR_THUMB_PX, thumbHeight: AVATAR_THUMB_PX };
 import { insertFile, updateFileRecord } from "../db";
 import { deleteObject, putObject } from "../storage";
@@ -34,6 +35,8 @@ export async function storeAvatarPicture(input: {
 }): Promise<StoredAvatarPicture> {
   const { bucket, bytes, originalName, uploadedBy, maxBytes, what } = input;
   const box = input.box ?? AVATAR_BOX;
+  const fit = box.fit ?? "cover";
+  const shrinkOnly = fit === "inside";
   const prefix = input.prefix ?? "avatars";
   const fileId = uuidv4();
   const inputMime = input.mime.toLowerCase();
@@ -70,7 +73,7 @@ export async function storeAvatarPicture(input: {
     storedSize = bytes.length;
 
     const thumb = await sharp(bytes, { pages: 1, failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
-      .resize({ width: box.thumbWidth, height: box.thumbHeight, fit: "cover" })
+      .resize({ width: box.thumbWidth, height: box.thumbHeight, fit, withoutEnlargement: shrinkOnly })
       .avif({ quality: AVATAR_QUALITY })
       .toBuffer()
       .catch(() => null);
@@ -87,35 +90,40 @@ export async function storeAvatarPicture(input: {
     processing = true;
     try {
       storedBody = await sharp(bytes, { pages: 1, failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
-        .resize({ width: box.width, height: box.height, fit: "cover" })
+        .resize({ width: box.width, height: box.height, fit, withoutEnlargement: shrinkOnly })
         .avif({ quality: AVATAR_QUALITY })
-        .toBuffer();
+        .toBuffer({ resolveWithObject: true })
+        .then((out) => {
+          // What was stored, not what was uploaded: the original describes a file that is gone.
+          width = out.info.width;
+          height = out.info.height;
+          return out.data;
+        });
     } catch {
       return { ok: false, status: 400, error: "invalid_file", message: "Could not process image." };
     }
     storedMime = "image/avif";
     storedSize = storedBody.length;
-    // What was stored, not what was uploaded: `cover` crops to exactly
-    // this box, so the original describes a file that is gone.
-    width = box.width;
-    height = box.height;
   } else {
     key = `${prefix}/${fileId}.avif`;
     try {
       storedBody = await sharp(bytes, { failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
-        .resize({ width: box.width, height: box.height, fit: "cover" })
+        .resize({ width: box.width, height: box.height, fit, withoutEnlargement: shrinkOnly })
         .avif({ quality: AVATAR_QUALITY })
-        .toBuffer();
+        .toBuffer({ resolveWithObject: true })
+        .then((out) => {
+          width = out.info.width;
+          height = out.info.height;
+          return out.data;
+        });
     } catch {
       return { ok: false, status: 400, error: "invalid_file", message: "Could not process image. Please upload a valid image under the size limit." };
     }
     storedMime = "image/avif";
     storedSize = storedBody.length;
-    width = box.width;
-    height = box.height;
 
     const thumb = await sharp(bytes, { failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
-      .resize({ width: box.thumbWidth, height: box.thumbHeight, fit: "cover" })
+      .resize({ width: box.thumbWidth, height: box.thumbHeight, fit, withoutEnlargement: shrinkOnly })
       .avif({ quality: AVATAR_QUALITY })
       .toBuffer()
       .catch(() => null);
@@ -167,7 +175,7 @@ export async function storeAvatarPicture(input: {
           // Every frame is decoded here, unlike the single-page check
           // that let this buffer through, so the ceiling comes with it.
           const pipeline = sharp(animBuf, { animated: true, failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
-            .resize({ width: box.width, height: box.height, fit: "cover" });
+            .resize({ width: box.width, height: box.height, fit, withoutEnlargement: shrinkOnly });
           const resized = outputFormat === "gif"
             ? await pipeline.gif().toBuffer()
             : await pipeline.webp().toBuffer();
@@ -176,7 +184,7 @@ export async function storeAvatarPicture(input: {
           await putObject({ bucket, key: animKey, body: resized, contentType: outputMime });
 
           const thumbBuf = await sharp(resized, { pages: 1, failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
-            .resize({ width: box.thumbWidth, height: box.thumbHeight, fit: "cover" })
+            .resize({ width: box.thumbWidth, height: box.thumbHeight, fit, withoutEnlargement: shrinkOnly })
             .avif({ quality: AVATAR_QUALITY })
             .toBuffer()
             .catch(() => null);

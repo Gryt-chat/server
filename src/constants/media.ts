@@ -12,6 +12,6 @@ export const AVATAR_THUMB_PX = 128;
 /** AVIF quality for avatars, banners and their thumbnails. sharp's default of 50 blurs a flat drawing's edges. */
 export const AVATAR_QUALITY = 75;
 
-/** The member card's banner is 320 by 164 CSS px, so 3x of that. Any other shape and the card
-    crops and scales the stored picture again, so it stops matching what the editor showed. */
-export const BANNER_BOX = { width: 960, height: 492, thumbWidth: 480, thumbHeight: 246 } as const;
+/** The client crops a banner to the card's band (960 by 492) or the whole card (960 by 1260),
+    so it is kept in its own shape within the larger box rather than cut again here. */
+export const BANNER_BOX = { width: 960, height: 1260, thumbWidth: 480, thumbHeight: 630, fit: "inside" } as const;
