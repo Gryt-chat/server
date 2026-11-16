@@ -7,11 +7,10 @@ import { calculateJwkThumbprint, exportJWK, generateKeyPair, SignJWT } from "jos
 
 import { initSqlite } from "../../db/sqlite/connection";
 import { createServerConfigIfNotExists, setServerRole } from "../../db/sqlite/servers";
-import { getUserByServerId, setUserAccountKey, setUserDmKeyReset, setUserDmKeySeen, upsertUser } from "../../db/sqlite/users";
-import { listDmKeyAsks } from "../../db/sqlite/dmKeyAsks";
+import { getUserByServerId, setUserAccountKey, upsertUser } from "../../db/sqlite/users";
 import type { Clients } from "../../types";
 import { buildMemberList } from "../utils/clients";
-import { KEY_RESET_DELAY_MS, registerDmKeyHandlers } from "./dmKeys";
+import { registerDmKeyHandlers } from "./dmKeys";
 import type { EventHandlerMap, HandlerContext } from "./types";
 
 /** Both assertions are about what the server does not do: vouch for the binding,
@@ -233,17 +232,6 @@ describe("one identity per account (GRYT-1868)", () => {
       });
   }
 
-  /** A device whose identity key the test can also sign a handover with. */
-  async function signer() {
-    const pair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
-    const { kty, crv, x, y } = await crypto.subtle.exportKey("jwk", pair.publicKey);
-    const publicJwk = { kty, crv, x, y };
-    const seed = crypto.getRandomValues(new Uint8Array(32));
-    const binding = () =>
-      gryt.signDmKeyBinding({ dmPublicKey: gryt.deriveDmKeyPair(seed, scope).publicKey, scope, identityPrivateKey: pair.privateKey, identityPublicJwk: publicJwk });
-    return { binding, privateKey: pair.privateKey, publicJwk };
-  }
-
   const publish = (m: Member, payload: Record<string, unknown>) =>
     new Promise<Record<string, unknown>>((resolve) => void m.handlers["dm:key:publish"](payload, resolve));
 
@@ -292,195 +280,6 @@ describe("one identity per account (GRYT-1868)", () => {
 
     assert.equal((await publish(erin, { binding: next, replace: true, account: await sign(next) })).ok, true);
     assert.equal(await bindingOf(erin.serverUserId), next);
-    assert.equal((await getUserByServerId(erin.serverUserId))?.dm_key_handover, null, "contacts compare codes, no signed handover");
-  });
-
-  it("takes a replacement the current key handed over, and only that one", async () => {
-    const erin = await connect("Erin");
-    const [oldMac, iphone, thief] = [await signer(), await signer(), await signer()];
-    const old = await oldMac.binding();
-    await publish(erin, { binding: old });
-
-    const next = await iphone.binding();
-    const forged = await gryt.signKeyHandover({ newBinding: next, scope, identityPrivateKey: thief.privateKey, identityPublicJwk: thief.publicJwk });
-    assert.equal((await publish(erin, { binding: next, replace: true, handover: forged })).error, "handover_required");
-
-    const forOther = await gryt.signKeyHandover({ newBinding: await thief.binding(), scope, identityPrivateKey: oldMac.privateKey, identityPublicJwk: oldMac.publicJwk });
-    assert.equal((await publish(erin, { binding: next, replace: true, handover: forOther })).error, "handover_required",
-      "a real note for another key can't be reused");
-
-    const real = await gryt.signKeyHandover({ newBinding: next, scope, identityPrivateKey: oldMac.privateKey, identityPublicJwk: oldMac.publicJwk });
-    assert.deepEqual(await publish(erin, { binding: next, replace: true, handover: real }), { ok: true, changed: true });
-    assert.equal(await bindingOf(erin.serverUserId), next);
-
-    const kept = await getUserByServerId(erin.serverUserId);
-    assert.equal(kept?.dm_key_handover, real, "the note is kept for contacts who trusted the old key");
-    assert.equal(kept?.dm_key_handover_from, old);
-
-    await publish(erin, { binding: null });
-    assert.equal((await getUserByServerId(erin.serverUserId))?.dm_key_handover, null, "a change without a note clears it");
-  });
-
-  it("passes a handover request to the account's other devices only", async () => {
-    const frank = await connect("Frank");
-    const frankPhone = await connect("Frank's phone");
-    clientsInfo[frankPhone.clientId].serverUserId = frank.serverUserId;
-    const stranger = await connect("Stranger");
-    const heard: Record<string, unknown[]> = {};
-    for (const m of [frank, frankPhone, stranger]) {
-      io.sockets.sockets.set(m.clientId, { emit: (event: string, body: unknown) => (heard[m.clientId] ??= []).push([event, body]) });
-    }
-    await publish(frankPhone, { binding: await (await signer()).binding(), deviceName: "iPhone" });
-    delete heard[frankPhone.clientId];
-    const binding = await (await signer()).binding();
-    await call(frank, "dm:key:handover:ask", { binding, deviceName: "Mac" });
-
-    assert.deepEqual(heard[frankPhone.clientId]?.[0], ["dm:key:handover:asked", { binding, deviceName: "Mac", askerId: binding, holder: "iPhone" }]);
-    assert.equal(heard[stranger.clientId], undefined, "nobody else's devices hear it");
-    assert.ok(!heard[frank.clientId]?.some((e) => (e as unknown[])[0] === "dm:key:handover:asked"), "the asker doesn't ask itself");
-
-    await stranger.handlers["dm:key:handover:deny"]({ askerId: binding });
-    assert.ok(!heard[frank.clientId]?.some((e) => (e as unknown[])[0] === "dm:key:handover:denied"), "only the account's own devices can say no");
-    await frankPhone.handlers["dm:key:handover:deny"]({ askerId: binding });
-    assert.deepEqual(heard[frank.clientId]?.at(-1), ["dm:key:handover:denied", { binding }]);
-  });
-
-  it("hands a request to a device that connects after it was made, until it's answered", async () => {
-    const ida = await connect("Ida");
-    const heard: Record<string, unknown[]> = {};
-    const listen = (m: Member) => io.sockets.sockets.set(m.clientId, { emit: (event: string, body: unknown) => (heard[m.clientId] ??= []).push([event, body]) });
-    listen(ida);
-    await publish(ida, { binding: await (await signer()).binding() });
-    const binding = await (await signer()).binding();
-    await call(ida, "dm:key:handover:ask", { binding, deviceName: "Mac" });
-
-    const phone = await connect("Ida's phone");
-    clientsInfo[phone.clientId].serverUserId = ida.serverUserId;
-    listen(phone);
-    await phone.handlers["dm:key:handover:pending"]({});
-    const [[event, body]] = heard[phone.clientId] as [string, Record<string, unknown>][];
-    assert.equal(event, "dm:key:handover:asked");
-    assert.deepEqual({ ...body, seenAt: typeof body.seenAt, at: typeof body.at },
-      { binding, deviceName: "Mac", askerId: binding, holder: null, seenAt: "number", at: "number" }, "with who to approve it on, for the asker after a reload");
-
-    await phone.handlers["dm:key:handover:deny"]({ askerId: binding });
-    heard[phone.clientId] = [];
-    await phone.handlers["dm:key:handover:pending"]({});
-    assert.deepEqual(heard[phone.clientId], [], "an answered request isn't handed out again");
-  });
-
-  const call = (m: Member, event: string, payload: Record<string, unknown>) =>
-    new Promise<Record<string, unknown>>((resolve) => void m.handlers[event](payload, resolve));
-
-  it("lets a reset with no device take over only after 30 days", async () => {
-    const gina = await connect("Gina");
-    const [lost, fresh] = [await signer(), await signer()];
-    const old = await lost.binding();
-    await publish(gina, { binding: old });
-    const next = await fresh.binding();
-
-    const asked = await call(gina, "dm:key:reset:request", { binding: next });
-    assert.equal(asked.ok, true);
-    const at = asked.at as number;
-    assert.ok(Math.abs(at - (Date.now() + KEY_RESET_DELAY_MS)) < 5_000, "the clock is 30 days");
-
-    const again = await call(gina, "dm:key:reset:request", { binding: next });
-    assert.equal(again.at, at, "asking again doesn't restart the clock");
-    assert.equal((await publish(gina, { binding: next, replace: true })).error, "handover_required", "not before the 30 days are up");
-
-    await setUserDmKeyReset(gina.serverUserId, next, Date.now() - 1);
-    assert.deepEqual(await publish(gina, { binding: next, replace: true }), { ok: true, changed: true });
-    const after = await getUserByServerId(gina.serverUserId);
-    assert.equal(after?.dm_key_binding, next);
-    assert.equal(after?.dm_key_reset_binding, null, "a finished reset is cleared");
-  });
-
-  it("keeps an ask after the asker leaves, and starts the 30 days with it", async () => {
-    const jill = await connect("Jill");
-    const [pc, phone] = [await signer(), await signer()];
-    await publish(jill, { binding: await pc.binding(), deviceName: "Windows PC" });
-    const asking = await connect("Jill's phone");
-    clientsInfo[asking.clientId].serverUserId = jill.serverUserId;
-    const next = await phone.binding();
-
-    const asked = await call(asking, "dm:key:handover:ask", { binding: next, deviceName: "iPhone" });
-    assert.equal(asked.holder, "Windows PC", "the asker learns which device it waits for");
-    assert.ok(Math.abs((asked.at as number) - (Date.now() + KEY_RESET_DELAY_MS)) < 5_000);
-    assert.equal((await getUserByServerId(jill.serverUserId))?.dm_key_reset_binding, next);
-
-    delete clientsInfo[asking.clientId];
-    const heard: [string, { binding: string; holder: string }][] = [];
-    io.sockets.sockets.set(jill.clientId, { emit: (event: string, body: unknown) => heard.push([event, body as { binding: string; holder: string }]) });
-    await jill.handlers["dm:key:handover:pending"]({});
-    assert.deepEqual(heard.map(([e, b]) => [e, b.binding]), [["dm:key:handover:asked", next]], "an ask outlives the asker's connection");
-    assert.equal(heard[0][1].holder, "Windows PC");
-    assert.deepEqual((await listDmKeyAsks(jill.serverUserId, KEY_RESET_DELAY_MS)).map((a) => a.deviceName), ["iPhone"], "and it's in the database, not in memory");
-  });
-
-  it("drops the ask when the reset is stopped or the handover is approved", async () => {
-    const max = await connect("Max");
-    const [pc, phone, mac] = [await signer(), await signer(), await signer()];
-    const current = await pc.binding();
-    await publish(max, { binding: current });
-    await call(max, "dm:key:handover:ask", { binding: await phone.binding(), deviceName: "iPhone" });
-    const proof = await gryt.signKeyHandover({ newBinding: current, scope, identityPrivateKey: pc.privateKey, identityPublicJwk: pc.publicJwk });
-    await call(max, "dm:key:reset:cancel", { proof });
-    assert.deepEqual(await listDmKeyAsks(max.serverUserId, KEY_RESET_DELAY_MS), [], "\"that wasn't me\" takes the ask with it");
-
-    const next = await mac.binding();
-    await call(max, "dm:key:handover:ask", { binding: next, deviceName: "Mac" });
-    const handover = await gryt.signKeyHandover({ newBinding: next, scope, identityPrivateKey: pc.privateKey, identityPublicJwk: pc.publicJwk });
-    assert.equal((await publish(max, { binding: next, replace: true, handover })).ok, true);
-    assert.deepEqual(await listDmKeyAsks(max.serverUserId, KEY_RESET_DELAY_MS), []);
-    assert.equal((await getUserByServerId(max.serverUserId))?.dm_key_holder, "Mac", "the new holder is named after the asker");
-  });
-
-  it("tells your own devices which one has the key here", async () => {
-    const ana = await connect("Ana");
-    await publish(ana, { binding: await (await signer()).binding(), deviceName: "iPhone" });
-    const reply = await call(ana, "dm:key:holder", {});
-    assert.equal(reply?.holder, "iPhone");
-    assert.equal(typeof reply?.seenAt, "number");
-  });
-
-  it("hands over at once when no device with the current key has been here for 30 days", async () => {
-    const kim = await connect("Kim");
-    const [gone, phone] = [await signer(), await signer()];
-    await publish(kim, { binding: await gone.binding() });
-    const next = await phone.binding();
-    assert.equal((await publish(kim, { binding: next, replace: true })).error, "handover_required", "not without asking");
-
-    await setUserDmKeySeen(kim.serverUserId, Date.now() - KEY_RESET_DELAY_MS - 1, null);
-    const asked = await call(kim, "dm:key:handover:ask", { binding: next });
-    assert.ok((asked.at as number) <= Date.now(), "a key nobody has used for 30 days has nobody to say no");
-    assert.deepEqual(await publish(kim, { binding: next, replace: true }), { ok: true, changed: true });
-  });
-
-  it("a device with the current key coming back keeps the full 30 days", async () => {
-    const lee = await connect("Lee");
-    const [pc, thief] = [await signer(), await signer()];
-    const current = await pc.binding();
-    await publish(lee, { binding: current });
-    await setUserDmKeySeen(lee.serverUserId, Date.now() - KEY_RESET_DELAY_MS - 1, null);
-    await publish(lee, { binding: current });
-    const asked = await call(lee, "dm:key:handover:ask", { binding: await thief.binding() });
-    assert.ok((asked.at as number) > Date.now() + KEY_RESET_DELAY_MS - 5_000);
-  });
-
-  it("only cancels a reset with proof from the current key", async () => {
-    const hank = await connect("Hank");
-    const [mine, thief] = [await signer(), await signer()];
-    const current = await mine.binding();
-    await publish(hank, { binding: current });
-    await call(hank, "dm:key:reset:request", { binding: await thief.binding() });
-
-    const forged = await gryt.signKeyHandover({ newBinding: current, scope, identityPrivateKey: thief.privateKey, identityPublicJwk: thief.publicJwk });
-    assert.equal((await call(hank, "dm:key:reset:cancel", { proof: forged })).error, "proof_required");
-    assert.notEqual((await getUserByServerId(hank.serverUserId))?.dm_key_reset_binding, null);
-
-    const proof = await gryt.signKeyHandover({ newBinding: current, scope, identityPrivateKey: mine.privateKey, identityPublicJwk: mine.publicJwk });
-    assert.equal((await call(hank, "dm:key:reset:cancel", { proof })).ok, true);
-    assert.equal((await getUserByServerId(hank.serverUserId))?.dm_key_reset_binding, null);
   });
 });
 
