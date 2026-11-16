@@ -811,6 +811,13 @@ describe("asking to be added (GRYT-1858)", () => {
 
     const m = await connect("Mo");
     assert.equal((await m.call("mls:add:request", { conversationId: conv, deviceId: kLaptop.id })).error, "unknown_device");
+
+    // Liv's app was closed when Kai asked: her next sync hands the ask over.
+    const liv = await makeDevice("liv-2", 1);
+    await publish(l, liv);
+    l.clear();
+    assert.equal((await l.call("mls:sync", { deviceId: liv.id })).ok, true);
+    assert.deepEqual(l.received("mls:add:requested"), [pushed]);
   });
 });
 
