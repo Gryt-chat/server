@@ -307,12 +307,12 @@ describe("one identity per account (GRYT-1868)", () => {
     for (const m of [frank, frankPhone, stranger]) {
       io.sockets.sockets.set(m.clientId, { emit: (event: string, body: unknown) => (heard[m.clientId] ??= []).push([event, body]) });
     }
-    await publish(frankPhone, { binding: await (await signer()).binding() });
+    await publish(frankPhone, { binding: await (await signer()).binding(), deviceName: "iPhone" });
     delete heard[frankPhone.clientId];
     const binding = await (await signer()).binding();
     await call(frank, "dm:key:handover:ask", { binding, deviceName: "Mac" });
 
-    assert.deepEqual(heard[frankPhone.clientId]?.[0], ["dm:key:handover:asked", { binding, deviceName: "Mac", askerId: binding }]);
+    assert.deepEqual(heard[frankPhone.clientId]?.[0], ["dm:key:handover:asked", { binding, deviceName: "Mac", askerId: binding, holder: "iPhone" }]);
     assert.equal(heard[stranger.clientId], undefined, "nobody else's devices hear it");
     assert.ok(!heard[frank.clientId]?.some((e) => (e as unknown[])[0] === "dm:key:handover:asked"), "the asker doesn't ask itself");
 

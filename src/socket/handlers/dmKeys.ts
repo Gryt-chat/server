@@ -131,7 +131,7 @@ export function registerDmKeyHandlers(ctx: HandlerContext): EventHandlerMap {
       await addDmKeyAsk(serverUserId, binding, deviceName, Date.now());
       for (const [cid, ci] of Object.entries(clientsInfo)) {
         if (cid !== clientId && ci.serverUserId === serverUserId) {
-          io.sockets.sockets.get(cid)?.emit("dm:key:handover:asked", asked({ binding, deviceName }));
+          io.sockets.sockets.get(cid)?.emit("dm:key:handover:asked", { ...asked({ binding, deviceName }), holder: user.dm_key_holder ?? null });
         }
       }
       pushNotify(clientsInfo, [serverUserId], "approve", `handover:${serverUserId}`, { evenIfPresent: true });
