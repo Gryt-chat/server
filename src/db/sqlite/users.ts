@@ -35,12 +35,8 @@ function rowToUser(r: Record<string, unknown>): UserRecord {
     status_line: (r.status_line as string) || null,
     dm_key_binding: (r.dm_key_binding as string) || null,
     person_key_binding: (r.person_key_binding as string) || null,
-    dm_key_reset_binding: (r.dm_key_reset_binding as string) || null,
-    dm_key_reset_at: r.dm_key_reset_at == null ? null : Number(r.dm_key_reset_at),
     dm_key_seen_at: r.dm_key_seen_at == null ? null : Number(r.dm_key_seen_at),
     dm_key_holder: (r.dm_key_holder as string) || null,
-    dm_key_handover: (r.dm_key_handover as string) || null,
-    dm_key_handover_from: (r.dm_key_handover_from as string) || null,
     account_key: (r.account_key as string) || null,
   };
 }
@@ -151,12 +147,8 @@ export async function upsertUser(
     // one, and a member with no binding simply has no encrypted messages.
     dm_key_binding: null,
     person_key_binding: null,
-    dm_key_reset_binding: null,
-    dm_key_reset_at: null,
     dm_key_seen_at: null,
     dm_key_holder: null,
-    dm_key_handover: null,
-    dm_key_handover_from: null,
     account_key: null,
   };
 }
@@ -174,13 +166,6 @@ export async function setUserDmKeyBinding(
   );
 }
 
-/** Start (or with nulls, cancel) a key reset. The caller checks who may. */
-export async function setUserDmKeyReset(serverUserId: string, binding: string | null, at: number | null): Promise<void> {
-  getSqliteDb()
-    .prepare(`UPDATE users SET dm_key_reset_binding = ?, dm_key_reset_at = ? WHERE server_user_id = ?`)
-    .run(binding, at, serverUserId);
-}
-
 export async function setUserDmKeySeen(serverUserId: string, at: number, holder: string | null): Promise<void> {
   getSqliteDb()
     .prepare(`UPDATE users SET dm_key_seen_at = ?, dm_key_holder = ? WHERE server_user_id = ?`)
@@ -189,13 +174,6 @@ export async function setUserDmKeySeen(serverUserId: string, at: number, holder:
 
 export async function setUserAccountKey(serverUserId: string, accountKey: string): Promise<void> {
   getSqliteDb().prepare(`UPDATE users SET account_key = ? WHERE server_user_id = ?`).run(accountKey, serverUserId);
-}
-
-/** The last handover, or nulls when the key changed without one. */
-export async function setUserDmKeyHandover(serverUserId: string, note: string | null, from: string | null): Promise<void> {
-  getSqliteDb()
-    .prepare(`UPDATE users SET dm_key_handover = ?, dm_key_handover_from = ? WHERE server_user_id = ?`)
-    .run(note, from, serverUserId);
 }
 
 /** Checked by the caller (`services/personKeyBinding.ts`), not here. Null withdraws it. */

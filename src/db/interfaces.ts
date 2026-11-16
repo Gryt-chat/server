@@ -66,15 +66,9 @@ export interface UserRecord {
   dm_key_binding: string | null;
   /** Signed by the same identity key as `dm_key_binding`, which is checked on the way in. */
   person_key_binding: string | null;
-  /** A pending reset to this binding, with no handover note (GRYT-1886). Takes over at `dm_key_reset_at`, in ms. */
-  dm_key_reset_binding: string | null;
-  dm_key_reset_at: number | null;
   /** When a device with the current key was last connected, in ms, and what it calls itself. */
   dm_key_seen_at: number | null;
   dm_key_holder: string | null;
-  /** The note the replaced key signed when it handed over, and that key's binding, so contacts can follow it. */
-  dm_key_handover: string | null;
-  dm_key_handover_from: string | null;
   /** The account key the identity service vouched for at this member's last certificate join. */
   account_key: string | null;
   /** Null when they have no designed look. Stored and passed on without being

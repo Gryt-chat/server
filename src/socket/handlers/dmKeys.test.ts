@@ -214,7 +214,6 @@ describe("one identity per account (GRYT-1868)", () => {
   const gryt = {
     ...(require("@gryt/crypto/dm-key-binding") as typeof import("@gryt/crypto/dist/dm-key-binding")),
     ...(require("@gryt/crypto/dm-keys") as typeof import("@gryt/crypto/dist/dm-keys")),
-    ...(require("@gryt/crypto/key-handover") as typeof import("@gryt/crypto/dist/key-handover")),
   };
   /* eslint-enable @typescript-eslint/no-require-imports */
   const scope = "srv:one-identity" as Parameters<typeof gryt.deriveDmKeyPair>[1];
