@@ -118,6 +118,19 @@ function entryView(conversationId: string, e: MlsLogEntry): Record<string, unkno
   };
 }
 
+/* Asks to be added, kept until a Welcome reaches that device, for members whose apps were closed.
+   shortcut: in memory, so a restart drops them; the waiting device asks again within a minute. */
+const ADD_ASK_TTL_MS = 24 * 60 * 60_000;
+const addAsks = new Map<string, Map<string, { serverUserId: string; at: number }>>();
+
+function openAddAsks(conversationId: string): { serverUserId: string; deviceId: string }[] {
+  const asks = addAsks.get(conversationId);
+  if (!asks) return [];
+  for (const [deviceId, a] of asks) if (Date.now() - a.at > ADD_ASK_TTL_MS) asks.delete(deviceId);
+  if (asks.size === 0) addAsks.delete(conversationId);
+  return [...asks].map(([deviceId, a]) => ({ serverUserId: a.serverUserId, deviceId }));
+}
+
 export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
   const { io, socket, clientId, clientsInfo, serverId, sfuClient, getClientIp } = ctx;
 
@@ -645,6 +658,7 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
         };
         await fanOut(memberIds, entry, payload.conversationId);
         welcomes.forEach((w, i) => {
+          addAsks.get(payload.conversationId)?.delete(w.deviceId);
           const recipients = socketsOf([w.serverUserId]);
           emitTo(recipients, "mls:welcome", {
             welcomeId: result.welcomeIds[i],
@@ -853,6 +867,12 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
           moreWelcomes: waiting.length > MAX_SYNC_WELCOMES,
           keyPackages: { ...countMlsKeyPackages(self, payload.deviceId), target: MLS_MAX_KEY_PACKAGES },
         });
+        if (!registered) return;
+        for (const g of listMlsGroupsForMember(self)) {
+          for (const a of openAddAsks(g.conversationId)) {
+            if (a.deviceId !== payload.deviceId) socket.emit("mls:add:requested", { conversationId: g.conversationId, ...a });
+          }
+        }
       } catch (err) {
         consola.error("mls:sync failed", err);
         ack(fail("failed", "Could not sync"));
@@ -877,6 +897,9 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
           return;
         }
         ack({ ok: true });
+        const asks = addAsks.get(payload.conversationId) ?? new Map();
+        asks.set(payload.deviceId, { serverUserId: auth.tokenPayload.serverUserId, at: Date.now() });
+        addAsks.set(payload.conversationId, asks);
         emitTo(socketsOf(memberIds), "mls:add:requested", {
           conversationId: payload.conversationId,
           serverUserId: auth.tokenPayload.serverUserId,
