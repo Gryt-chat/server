@@ -454,7 +454,7 @@ describe("one identity per account (GRYT-1868)", () => {
 });
 
 describe("device approval prompts", () => {
-  it("reach your other devices with only the type, and a no reaches the asker", async () => {
+  it("pass the ticket to your other devices only, and a no reaches the asker", async () => {
     const mac = await connect("Mac owner");
     const pcId = "socket-pc";
     clientsInfo[pcId] = { ...clientsInfo[mac.clientId] } as Clients[string];
@@ -465,8 +465,11 @@ describe("device approval prompts", () => {
       io.sockets.sockets.set(id, { emit: (event: string, body: unknown) => got[id].push({ event, body }) });
     }
 
-    await mac.handlers["device:approve:ask"]({ deviceType: "Mac <script>" });
-    assert.deepEqual(got[pcId], [{ event: "device:approve:asked", body: { askId: mac.clientId, deviceType: "Mac script" } }]);
+    await mac.handlers["device:approve:ask"]({ ticket: "not a jwt" });
+    assert.equal(got[pcId].length, 0, "only something shaped like a ticket is passed on");
+    const ticket = shapedLikeABinding();
+    await mac.handlers["device:approve:ask"]({ ticket });
+    assert.deepEqual(got[pcId], [{ event: "device:approve:asked", body: { askId: mac.clientId, ticket } }]);
     assert.equal(got[mac.clientId].length, 0, "not to itself");
     assert.equal(got[stranger.clientId].length, 0, "not to another account");
 

@@ -194,13 +194,14 @@ export function registerDmKeyHandlers(ctx: HandlerContext): EventHandlerMap {
       broadcastMemberList(io, clientsInfo, serverId);
     },
 
-    /** A device waiting to be approved: your other devices here show a prompt. Only the device type travels. */
-    "device:approve:ask": async (payload: { deviceType?: string }) => {
+    /** A device waiting to be approved: your other devices here show a prompt. The ticket is the identity service's; devices check it. */
+    "device:approve:ask": async (payload: { ticket?: string }) => {
       const serverUserId = clientsInfo[clientId]?.serverUserId;
-      if (!serverUserId || !checkRateLimit("device:approve:ask", serverUserId, getClientIp(), RL_DM_KEY).allowed) return;
-      const deviceType = typeof payload?.deviceType === "string" ? payload.deviceType.replace(/[^\p{L}\p{N} ._-]/gu, "").slice(0, 32) : "";
+      const ticket = payload?.ticket;
+      if (!serverUserId || typeof ticket !== "string" || ticket.length > 2048 || !COMPACT_JWT.test(ticket)) return;
+      if (!checkRateLimit("device:approve:ask", serverUserId, getClientIp(), RL_DM_KEY).allowed) return;
       for (const [cid, ci] of Object.entries(clientsInfo)) {
-        if (cid !== clientId && ci.serverUserId === serverUserId) io.sockets.sockets.get(cid)?.emit("device:approve:asked", { askId: clientId, deviceType });
+        if (cid !== clientId && ci.serverUserId === serverUserId) io.sockets.sockets.get(cid)?.emit("device:approve:asked", { askId: clientId, ticket });
       }
       pushNotify(clientsInfo, [serverUserId], "approve", `device:${serverUserId}`, { evenIfPresent: true });
     },
