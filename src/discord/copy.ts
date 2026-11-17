@@ -8,6 +8,7 @@ import {
   getDiscordBridgeChannel,
   getServerConfig,
   insertImportedMessages,
+  rememberDiscordMessages,
   saveDiscordBridgeChannel,
   type DiscordImportProgress,
 } from "../db";
@@ -135,6 +136,7 @@ async function copyHistory(
       if (row) built.push(row);
     }
     const inserted = insertImportedMessages(built);
+    rememberDiscordMessages(page.map((m) => linkOf(m, conversationId)));
     progress.messages_imported += inserted;
     progress.messages_already_there += built.length - inserted;
 
@@ -182,7 +184,8 @@ async function copyThread(
   warn: (m: string) => void,
   assets: ReturnType<typeof discordCdnAssets>,
 ): Promise<void> {
-  if (!t.parentId || getDiscordBridgeChannel(t.id)?.backfill_done) return;
+  const parentId = t.parentId;
+  if (!parentId || getDiscordBridgeChannel(t.id)?.backfill_done) return;
   const all: Message[] = [];
   let before: string | undefined;
   try {
@@ -197,8 +200,9 @@ async function copyThread(
     return;
   }
   all.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+  rememberDiscordMessages(all.map((m) => linkOf(m, importedId("channel", parentId))));
   await importThreadMessages({
-    thread: { id: t.id, name: clip(t.name, 80) ?? `thread-${t.id}`, parentId: t.parentId },
+    thread: { id: t.id, name: clip(t.name, 80) ?? `thread-${t.id}`, parentId },
     messages: all.map(toDceMessage),
     noticeId,
     rows,
@@ -211,5 +215,10 @@ async function copyThread(
       progress.messages_already_there += batch.length - inserted;
     },
   });
-  saveDiscordBridgeChannel({ discord_channel_id: t.id, gryt_channel_id: importedId("channel", t.parentId), backfill_before: null, backfill_done: true });
+  saveDiscordBridgeChannel({ discord_channel_id: t.id, gryt_channel_id: importedId("thread", t.id), backfill_before: null, backfill_done: true });
+}
+
+/** A Discord message's place in the map. Its Gryt id is derived from its Discord id, like every copied row. */
+export function linkOf(m: { id: string; channelId: string }, conversationId: string) {
+  return { gryt_message_id: importedId("message", m.id), gryt_conversation_id: conversationId, discord_channel_id: m.channelId, discord_message_id: m.id, from_gryt: false };
 }

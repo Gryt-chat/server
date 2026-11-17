@@ -34,6 +34,7 @@ const media: ImportMedia = {
 function message(n: number, id = `7000000000000${String(n).padStart(5, "0")}`) {
   return {
     id,
+    channelId: "800000000000000001",
     type: MessageType.Default,
     createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, n)),
     createdTimestamp: Date.UTC(2026, 0, 1, 0, 0, n),

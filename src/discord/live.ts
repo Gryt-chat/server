@@ -15,12 +15,14 @@ import {
 import {
   DEFAULT_UPLOAD_MAX_BYTES,
   addReactionToMessage,
+  bridgeWebhookIds,
   getServerConfig,
   getDiscordBridge,
   getMessageById,
   getServerChannel,
   getThread,
   insertImportedMessages,
+  rememberDiscordMessages,
   refreshImportedThreadCounters,
   removeReactionFromMessage,
   setMessagePinned,
@@ -37,6 +39,7 @@ import { enrichAttachments } from "../socket/handlers/chat";
 import { appendCachedMessage, replaceCachedMessage } from "../socket/utils/messageCache";
 import { recipientClientIds } from "../socket/utils/recipients";
 import { toDceMessage } from "./adapter";
+import { linkOf } from "./copy";
 import { discordCdnAssets } from "./assets";
 
 const CHANNEL_ACCESS = { allowed: true, kind: "channel" } as const;
@@ -52,6 +55,8 @@ async function placeOf(m: Message | PartialMessage, botId: string | undefined): 
   const b = getDiscordBridge();
   if (!b || m.guildId !== b.guild_id || b.direction === "to_discord") return null;
   if (m.author?.id && m.author.id === botId) return null;
+  // Gryt's own messages, posted by the bridge's webhooks, coming back.
+  if (m.webhookId && bridgeWebhookIds().has(m.webhookId)) return null;
   const ch = m.channel;
   const parent = ch.isThread() ? ch.parentId : ch.id;
   if (!parent) return null;
@@ -114,6 +119,7 @@ export function attachLiveSync(c: Client, media: ImportMedia): void {
     if (place.threadId && !getThread(place.threadId) && m.channel.isThread()) {
       const t = m.channel;
       const all = [...(await t.messages.fetch({ limit: 100 })).values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+      rememberDiscordMessages(all.map((x) => linkOf(x, place.conversationId)));
       await importThreadMessages({
         thread: { id: t.id, name: t.name, parentId: t.parentId ?? "" },
         messages: all.map(toDceMessage),
@@ -127,6 +133,7 @@ export function attachLiveSync(c: Client, media: ImportMedia): void {
     } else {
       const row = await rows.buildRow(toDceMessage(m), assets, place.conversationId, place.discordChannelId, place.threadId);
       if (!row || insertImportedMessages([row]) === 0) return;
+      rememberDiscordMessages([linkOf(m, place.conversationId)]);
       if (place.threadId) refreshImportedThreadCounters(place.threadId);
     }
     const stored = await getMessageById(place.conversationId, importedId("message", m.id));

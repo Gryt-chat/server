@@ -6,6 +6,7 @@ import type { ImportMedia } from "../import/discord/importer";
 import { resetMessageCache } from "../socket/utils/messageCache";
 import { copyGuild } from "./copy";
 import { attachLiveSync } from "./live";
+import { setOutboundClient } from "./outbound";
 
 /** Read, write with each member's name and picture, mirror pins, reactions and threads. Not Administrator. */
 export const BRIDGE_PERMISSIONS =
@@ -43,6 +44,12 @@ export async function applicationIdForToken(botToken: string): Promise<string | 
 }
 
 let client: Client | null = null;
+
+/** The logged-in bot, or null. Outbound sync checks this rather than assuming a connection. */
+export function bridgeClient(): Client | null {
+  return client?.isReady() ? client : null;
+}
+setOutboundClient(bridgeClient);
 let media: ImportMedia | null = null;
 let copying = false;
 

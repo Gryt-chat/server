@@ -3,6 +3,7 @@
  * thread counters, in that order. Authorisation is the caller's.
  */
 
+import { toDiscord } from "../discord/outbound";
 import consola from "consola";
 import type { Server } from "socket.io";
 
@@ -58,6 +59,7 @@ export async function deleteMessageEverywhere({
   }
 
   dropCachedMessage(conversationId, messageId);
+  if (access.kind !== "dm") toDiscord.deleted(messageId);
 
   const recipients = await recipientClientIds(conversationId, access, clientsInfo, sfuClient);
   recipients.forEach((cid) => {
