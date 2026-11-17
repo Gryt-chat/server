@@ -51,6 +51,12 @@ export function bridgeClient(): Client | null {
   return client?.isReady() ? client : null;
 }
 setOutboundClient(bridgeClient);
+
+/** The Discord server the bot is linked to, once it's in it. */
+export function linkedGuild(): Guild | null {
+  const id = getDiscordBridge()?.guild_id;
+  return (id && client?.guilds.cache.get(id)) || null;
+}
 let media: ImportMedia | null = null;
 let copying = false;
 

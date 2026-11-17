@@ -1228,6 +1228,8 @@ function runMigrations(d: DatabaseSync): void {
   for (const col of ["webhook_id", "webhook_token"]) {
     if (!hasColumn(d, "discord_bridge_channels", col)) d.exec(`ALTER TABLE discord_bridge_channels ADD COLUMN ${col} TEXT`);
   }
+  // Set by the owner's channel matching: copy into this Gryt channel, or leave the Discord one out.
+  if (!hasColumn(d, "discord_bridge_channels", "skip")) d.exec("ALTER TABLE discord_bridge_channels ADD COLUMN skip INTEGER NOT NULL DEFAULT 0");
 
   migrateFileOwnership(d);
   clearHiddenConversations(d);

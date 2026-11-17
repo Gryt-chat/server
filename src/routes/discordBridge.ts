@@ -1,12 +1,15 @@
 /* eslint-disable @typescript-eslint/no-restricted-types -- the request body is outside input, checked field by field below */
+import { ChannelType } from "discord.js";
 import express from "express";
 import type { NextFunction, Request, Response } from "express";
 
-import { clearDiscordBridge, getDiscordBridge, getUserByServerId, insertServerAudit, linkDiscordMember, listDiscordAuthors, listDiscordMemberLinks, saveDiscordBridgeApp, unlinkDiscordMember } from "../db";
-import { applicationIdForToken, inviteUrl, startDiscordBridge, startDiscordCopy, stopDiscordBridge } from "../discord/bridge";
+import { clearDiscordBridge, getDiscordBridge, getUserByServerId, insertServerAudit, linkDiscordMember, listDiscordAuthors, listDiscordMemberLinks, saveDiscordBridgeApp, unlinkDiscordMember, grytChannelFor, listServerChannels, setDiscordChannelMatch } from "../db";
+import { applicationIdForToken, inviteUrl, linkedGuild, startDiscordBridge, startDiscordCopy, stopDiscordBridge } from "../discord/bridge";
 import { isSnowflake } from "../import/discord/dce";
 import { requireBearerToken } from "../middleware/requireBearerToken";
 import { redeemLinkCode } from "../discord/commands";
+import { suggestMatches, type Side } from "../discord/match";
+import { importedId } from "../import/discord/ids";
 import { requireOwner } from "./discordImport";
 
 const handle = (fn: (req: Request, res: Response) => Promise<void>) =>
@@ -111,6 +114,65 @@ discordBridgeRouter.delete("/people/:discordUserId", handle(async (req, res) => 
     return;
   }
   await insertServerAudit({ actorServerUserId: actor ?? null, action: "discord_unlink", target: discordUserId });
+  res.json({ ok: true });
+}));
+
+const TEXT_TYPES = new Set([ChannelType.GuildText, ChannelType.GuildAnnouncement, ChannelType.GuildForum]);
+const VOICE_TYPES = new Set([ChannelType.GuildVoice, ChannelType.GuildStageVoice]);
+
+/** The Discord server's channels, what each copies into now, and suggested matches for the ones with none. */
+discordBridgeRouter.get("/channels", handle(async (_req, res) => {
+  const guild = linkedGuild();
+  if (!guild) {
+    res.status(409).json({ error: "not_linked", message: "Add the bot to your Discord server first." });
+    return;
+  }
+  const discord: (Side & { category: string | null })[] = [];
+  for (const c of (await guild.channels.fetch()).values()) {
+    if (!c) continue;
+    let kind: Side["kind"] | null = null;
+    if (TEXT_TYPES.has(c.type)) kind = "text";
+    else if (VOICE_TYPES.has(c.type)) kind = "voice";
+    if (kind) discord.push({ id: c.id, name: c.name, kind, category: c.parent?.name ?? null });
+  }
+  const gryt: Side[] = (await listServerChannels()).map((c) => ({ id: c.channel_id, name: c.name, kind: c.type === "voice" ? "voice" : "text" }));
+  const suggested = suggestMatches(discord, gryt);
+  res.json({
+    gryt,
+    discord: discord.map((d) => {
+      const derived = importedId("channel", d.id);
+      const current = grytChannelFor(d.id, derived);
+      let target = current ?? "skip";
+      if (current === derived) target = "new";
+      return { ...d, target, suggested: target === "new" ? (suggested.get(d.id) ?? null) : null };
+    }),
+  });
+}));
+
+/** The owner's matches: "new", "skip" or a Gryt channel id each, one Discord channel per Gryt channel. */
+discordBridgeRouter.put("/channels", handle(async (req, res) => {
+  const matches = (req.body as { matches?: unknown } | undefined)?.matches;
+  if (!Array.isArray(matches)) {
+    res.status(400).json({ error: "invalid_payload" });
+    return;
+  }
+  const known = new Set((await listServerChannels()).map((c) => c.channel_id));
+  const used = new Set<string>();
+  const clean: { discordChannelId: string; target: string }[] = [];
+  for (const m of matches as { discordChannelId?: unknown; target?: unknown }[]) {
+    const id = typeof m?.discordChannelId === "string" ? m.discordChannelId : "";
+    const target = typeof m?.target === "string" ? m.target : "";
+    const ok = isSnowflake(id) && (target === "new" || target === "skip" || known.has(target));
+    if (!ok || (target !== "new" && target !== "skip" && used.has(target))) {
+      res.status(400).json({ error: "invalid_match", message: "Each Discord channel goes to one channel here, and one channel here takes one Discord channel." });
+      return;
+    }
+    used.add(target);
+    clean.push({ discordChannelId: id, target });
+  }
+  for (const m of clean) {
+    setDiscordChannelMatch(m.discordChannelId, m.target === "skip" ? "skip" : { grytChannelId: m.target === "new" ? importedId("channel", m.discordChannelId) : m.target });
+  }
   res.json({ ok: true });
 }));
 

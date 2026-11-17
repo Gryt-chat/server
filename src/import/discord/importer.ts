@@ -70,6 +70,8 @@ interface ChannelFile {
 
 export interface ChannelPlan {
   id: string;
+  /** The owner matched it to a channel that's already here. */
+  grytChannelId?: string;
   name: string;
   kind: "text" | "voice" | "forum";
   topic: string | null;
@@ -97,7 +99,7 @@ export async function createImportedChannels(channels: Iterable<ChannelPlan>): P
   let sidebarEnd = items.reduce((max, i) => Math.max(max, i.position), 0) + 10;
 
   for (const c of channels) {
-    const channelId = importedId("channel", c.id);
+    const channelId = c.grytChannelId ?? importedId("channel", c.id);
     let parentItem: string | null = null;
     if (c.categoryId) {
       parentItem = folderItemId(c.categoryId);
@@ -124,7 +126,8 @@ export async function createImportedChannels(channels: Iterable<ChannelPlan>): P
 
 
 export interface ThreadCopy {
-  thread: { id: string; name: string; parentId: string };
+  /** `conversationId` when the parent was matched to a channel that's already here. */
+  thread: { id: string; name: string; parentId: string; conversationId?: string };
   /** Oldest first. */
   messages: DceMessage[];
   /** The parent's ThreadCreated notice, when there is one. */
@@ -139,7 +142,7 @@ export interface ThreadCopy {
 /** One thread into its parent channel: the root found or made, then the replies. Safe to rerun. */
 export async function importThreadMessages(opts: ThreadCopy): Promise<void> {
   const { thread, messages } = opts;
-  const conversationId = importedId("channel", thread.parentId);
+  const conversationId = thread.conversationId ?? importedId("channel", thread.parentId);
   // Discord gives a thread started from a message that message's id. Otherwise
   // the parent has a ThreadCreated notice, or, for forum posts, nothing at all.
   let rootDiscordId: string | null = null;

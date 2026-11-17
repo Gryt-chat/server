@@ -6,6 +6,7 @@ import { ChannelType, MessageType, type AnyThreadChannel, type Guild, type Messa
 import {
   DEFAULT_UPLOAD_MAX_BYTES,
   getDiscordBridgeChannel,
+  grytChannelFor,
   getServerConfig,
   insertImportedMessages,
   rememberDiscordMessages,
@@ -69,7 +70,10 @@ export async function copyGuild(guild: Guild, opts: CopyOptions): Promise<Discor
 
   await importRoles(guild).catch((e) => warn(`roles: ${e instanceof Error ? e.message : String(e)}`));
   const channels = [...(await guild.channels.fetch()).values()].filter((c): c is NonThreadGuildBasedChannel => !!c);
-  const plans = plan(channels);
+  const plans = plan(channels).flatMap((p) => {
+    const target = grytChannelFor(p.id, importedId("channel", p.id));
+    return target ? [{ ...p, grytChannelId: target }] : [];
+  });
   const names = new Map(plans.map((p) => [p.id, p.name]));
   const rows = new DiscordRowBuilder(opts.media, progress, warn, names);
   progress.channels_total = plans.length;
@@ -81,16 +85,19 @@ export async function copyGuild(guild: Guild, opts: CopyOptions): Promise<Discor
       progress.current_channel = p.name;
       opts.onProgress?.({ ...progress });
       const channel = channels.find((c) => c.id === p.id);
-      if (channel?.isTextBased()) await copyHistory(channel.id, (before) => channel.messages.fetch({ limit: PAGE, ...(before ? { before } : {}) }), rows, progress, warn, assets, opts, notices);
+      if (channel?.isTextBased()) await copyHistory(channel.id, p.grytChannelId ?? importedId("channel", p.id), (before) => channel.messages.fetch({ limit: PAGE, ...(before ? { before } : {}) }), rows, progress, warn, assets, opts, notices);
       progress.channels_done += 1;
     }
 
-    const threads = await listThreads(guild, channels, warn);
+    const threads = (await listThreads(guild, channels, warn)).flatMap((t) => {
+      const parent = t.parentId ? grytChannelFor(t.parentId, importedId("channel", t.parentId)) : null;
+      return parent ? [{ t, parent }] : [];
+    });
     progress.channels_total += threads.length;
-    for (const t of threads) {
+    for (const { t, parent } of threads) {
       progress.current_channel = t.name;
       opts.onProgress?.({ ...progress });
-      await copyThread(t, notices.get(t.id) ?? null, rows, progress, warn, assets);
+      await copyThread(t, parent, notices.get(t.id) ?? null, rows, progress, warn, assets);
       progress.channels_done += 1;
     }
 
@@ -109,6 +116,7 @@ export async function copyGuild(guild: Guild, opts: CopyOptions): Promise<Discor
 
 async function copyHistory(
   discordChannelId: string,
+  conversationId: string,
   fetchPage: (before: string | null) => Promise<Map<string, Message>>,
   rows: DiscordRowBuilder,
   progress: DiscordImportProgress,
@@ -117,7 +125,6 @@ async function copyHistory(
   opts: CopyOptions,
   notices: Map<string, string>,
 ): Promise<void> {
-  const conversationId = importedId("channel", discordChannelId);
   const cursor = getDiscordBridgeChannel(discordChannelId) ?? { discord_channel_id: discordChannelId, gryt_channel_id: conversationId, backfill_before: null, backfill_done: false };
   if (cursor.backfill_done) return;
 
@@ -178,6 +185,7 @@ async function listThreads(guild: Guild, channels: NonThreadGuildBasedChannel[],
 
 async function copyThread(
   t: AnyThreadChannel,
+  conversationId: string,
   noticeId: string | null,
   rows: DiscordRowBuilder,
   progress: DiscordImportProgress,
@@ -200,9 +208,9 @@ async function copyThread(
     return;
   }
   all.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
-  rememberDiscordMessages(all.map((m) => linkOf(m, importedId("channel", parentId))));
+  rememberDiscordMessages(all.map((m) => linkOf(m, conversationId)));
   await importThreadMessages({
-    thread: { id: t.id, name: clip(t.name, 80) ?? `thread-${t.id}`, parentId },
+    thread: { id: t.id, name: clip(t.name, 80) ?? `thread-${t.id}`, parentId, conversationId },
     messages: all.map(toDceMessage),
     noticeId,
     rows,

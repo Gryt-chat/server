@@ -7,7 +7,7 @@ import { after, before, describe, it } from "node:test";
 
 import { ChannelType, MessageType, type Guild } from "discord.js";
 
-import { getServerChannel, listMessages, listThreadsByConversation } from "../db";
+import { getServerChannel, listMessages, listThreadsByConversation, setDiscordChannelMatch, upsertServerChannel } from "../db";
 import { initSqlite } from "../db/sqlite/connection";
 import { importedId } from "../import/discord/ids";
 import type { ImportMedia } from "../import/discord/importer";
@@ -118,5 +118,22 @@ describe("copying a Discord server", () => {
     assert.equal(isDiscordCdn("https://cdn.discordapp.com/attachments/1/2/a.png"), true);
     assert.equal(isDiscordCdn("https://evil.example/a.png"), false);
     assert.equal(isDiscordCdn("http://cdn.discordapp.com/a.png"), false);
+  });
+});
+
+describe("copying into channels the owner matched", () => {
+  it("copies into an existing channel, and leaves a skipped one out", async () => {
+    await upsertServerChannel({ channelId: "existing-general", name: "general", type: "text", position: 1 });
+    setDiscordChannelMatch("800000000000000001", { grytChannelId: "existing-general" });
+    // The earlier copy marked this channel done; a fresh match starts its history over.
+    const { saveDiscordBridgeChannel } = await import("../db");
+    saveDiscordBridgeChannel({ discord_channel_id: "800000000000000001", gryt_channel_id: "existing-general", backfill_before: null, backfill_done: false });
+    await copyGuild(fakeGuild(), { media, startedBy: "user_owner" });
+    assert.ok((await listMessages("existing-general", 5)).some((m) => m.text === "message 101"));
+
+    setDiscordChannelMatch("800000000000000001", "skip");
+    saveDiscordBridgeChannel({ discord_channel_id: "800000000000000001", gryt_channel_id: "existing-general", backfill_before: null, backfill_done: false });
+    const progress = await copyGuild(fakeGuild(), { media, startedBy: "user_owner" });
+    assert.equal(progress.channels_total, 0);
   });
 });
