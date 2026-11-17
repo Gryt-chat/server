@@ -19,7 +19,7 @@ import { importedId } from "../import/discord/ids";
 import { pluginRefs } from "../plugins/refs";
 import { syncAllClients } from "../socket/utils/clients";
 import { sfuRoomId } from "../socket/utils/voiceRooms";
-import { Regroup } from "./opusFrames";
+import { Leveller, loadCodec } from "./gain";
 import { removeDiscordVoiceParticipant, setDiscordVoiceParticipant } from "./voiceParticipants";
 
 /** Discord sends 20 ms Opus frames; 960 samples at 48 kHz. */
@@ -81,7 +81,7 @@ export class Floor {
 interface Outbound {
   player: AudioPlayer;
   stream: Readable;
-  regroup: Regroup;
+  level: Leveller | null;
   floor: Floor;
 }
 
@@ -170,6 +170,7 @@ function leave(): void {
     pluginRefs()?.sfuClient?.virtualVoiceLeave(BRIDGE_LISTENER);
     b.out.player.stop(true);
     b.out.stream.destroy();
+    b.out.level?.destroy();
   }
   b.conn.destroy();
 }
@@ -177,12 +178,14 @@ function leave(): void {
 /** Gryt into Discord: one voice at a time, since a bot is one speaker there. Whoever talks keeps it until they stop. */
 export function hearGryt(listener: string, speaker: string, datagram: Buffer): void {
   const out = current?.out;
-  if (listener !== BRIDGE_LISTENER || !out || datagram.length <= 8 || datagram[0] !== 1) return;
+  // Flag 2 is the transport's once-a-second round-trip probe, not Opus.
+  if (listener !== BRIDGE_LISTENER || !out || datagram.length <= 8 || datagram[0] !== 1 || datagram[1] & 2) return;
   if (speaker.startsWith("discord:") || isExcludedFromBridge("gryt", speaker)) return;
   const turn = out.floor.take(speaker, Date.now());
   if (!turn.play) return;
-  if (turn.changed) out.regroup.reset();
-  for (const packet of out.regroup.push(datagram.subarray(8))) {
+  if (!out.level) return;
+  if (turn.changed) out.level.reset();
+  for (const packet of out.level.push(datagram.subarray(8))) {
     if (out.stream.readableLength < MAX_QUEUED) out.stream.push(Buffer.from(packet));
   }
 }
@@ -195,7 +198,14 @@ function speakIntoDiscord(b: Bridged): void {
   player.play(createAudioResource(stream, { inputType: StreamType.Opus }));
   player.on("error", (e) => consola.warn("[DiscordVoice] playing into Discord failed", e.message));
   b.conn.subscribe(player);
-  b.out = { player, stream, regroup: new Regroup(), floor: new Floor() };
+  const out: Outbound = { player, stream, level: null, floor: new Floor() };
+  b.out = out;
+  loadCodec().then(
+    (codec) => {
+      if (b.out === out) out.level = new Leveller(codec);
+    },
+    (e: Error) => consola.warn("[DiscordVoice] Opus codec failed to load", e.message),
+  );
   refs.sfuClient.setVirtualAudioHandler(hearGryt);
   refs.sfuClient.virtualVoiceJoin(sfuRoomId(refs.serverId, b.grytChannelId), BRIDGE_LISTENER, true);
 }
