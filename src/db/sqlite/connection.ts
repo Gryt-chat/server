@@ -1228,6 +1228,8 @@ function runMigrations(d: DatabaseSync): void {
   if (!hasColumn(d, "discord_bridge", "sync_new_channels")) d.exec("ALTER TABLE discord_bridge ADD COLUMN sync_new_channels INTEGER NOT NULL DEFAULT 1");
   // Kinds of change the owner switched off, as JSON; and whether the copy takes Discord's name and icon.
   if (!hasColumn(d, "discord_bridge", "sync_off")) d.exec("ALTER TABLE discord_bridge ADD COLUMN sync_off TEXT NOT NULL DEFAULT '[]'");
+  // Written into the Discord app's description too, so a second Gryt server can tell the app is taken.
+  if (!hasColumn(d, "discord_bridge", "claim_id")) d.exec("ALTER TABLE discord_bridge ADD COLUMN claim_id TEXT");
   if (!hasColumn(d, "discord_bridge", "copy_identity")) d.exec("ALTER TABLE discord_bridge ADD COLUMN copy_identity INTEGER NOT NULL DEFAULT 0");
   // Where each Discord channel's history copy stopped, so a restart picks up there.
   d.exec(`CREATE TABLE IF NOT EXISTS discord_bridge_channels (

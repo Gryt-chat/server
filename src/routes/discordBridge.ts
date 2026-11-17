@@ -1,11 +1,13 @@
 /* eslint-disable @typescript-eslint/no-restricted-types -- the request body is outside input, checked field by field below */
+import { randomUUID } from "node:crypto";
+
 import { ChannelType } from "discord.js";
 import consola from "consola";
 import express from "express";
 import type { NextFunction, Request, Response } from "express";
 
 import { clearDiscordBridge, getDiscordBridge, getUserByServerId, insertServerAudit, linkDiscordMember, listDiscordAuthors, listDiscordMemberLinks, saveDiscordBridgeApp, unlinkDiscordMember, grytChannelFor, listServerChannels, setDiscordChannelMatch, listExcludedFromBridge, setExcludedFromBridge, updateDiscordBridge, discordBridgeStats, discordPersonLinkedTo, listEmojis, channelsHaveMessages, getServerConfig, SYNC_KINDS, type SyncKind } from "../db";
-import { applicationIdForToken, inviteUrl, linkedGuild, pauseDiscordCopy, startDiscordBridge, startDiscordCopy, stopDiscordBridge } from "../discord/bridge";
+import { applicationIdForToken, claimApplication, inviteUrl, linkedGuild, pauseDiscordCopy, releaseApplication, startDiscordBridge, startDiscordCopy, stopDiscordBridge } from "../discord/bridge";
 import { emojiName } from "../import/discord/content";
 import { isSnowflake } from "../import/discord/dce";
 import { requireBearerToken } from "../middleware/requireBearerToken";
@@ -89,7 +91,12 @@ discordBridgeRouter.put("/", handle(async (req, res) => {
     res.status(400).json({ error: "app_mismatch", message: "That token belongs to a different application than the ID you pasted." });
     return;
   }
-  saveDiscordBridgeApp(applicationId, botToken);
+  const claimId = getDiscordBridge()?.claim_id ?? randomUUID();
+  if ((await claimApplication(botToken, claimId).catch(() => "ok" as const)) === "taken") {
+    res.status(409).json({ error: "app_in_use", message: "This Discord app is already linked to another Gryt server. Make a new application for this one. If that server is gone, remove “(gryt:…)” from the app's description in the Developer Portal and try again." });
+    return;
+  }
+  saveDiscordBridgeApp(applicationId, botToken, claimId);
   void startDiscordBridge();
   res.json(view());
 }));
@@ -291,6 +298,8 @@ discordBridgeRouter.put("/sync", handle(async (req, res) => {
 }));
 
 discordBridgeRouter.delete("/", handle(async (_req, res) => {
+  const b = getDiscordBridge();
+  if (b) await releaseApplication(b.bot_token, b.claim_id).catch((e) => consola.warn("[DiscordBridge] couldn't release the app", e));
   await stopDiscordBridge();
   clearDiscordBridge();
   res.json(view());

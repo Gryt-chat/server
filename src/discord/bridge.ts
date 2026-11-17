@@ -47,6 +47,35 @@ export async function applicationIdForToken(botToken: string): Promise<string | 
   }
 }
 
+const CLAIM = /\s*\(gryt:([0-9a-f-]{36})\)/;
+
+/** The Gryt server an app's description says it belongs to, if any. */
+export function claimIn(description: string | null | undefined): string | null {
+  return CLAIM.exec(description ?? "")?.[1] ?? null;
+}
+
+/** One app per Gryt server: two servers on one bot would each leave the other's Discord server and copy each other's posts.
+    The claim lives in the app's description, the one place every Gryt server using the token can read. */
+export async function claimApplication(botToken: string, claimId: string): Promise<"ok" | "taken"> {
+  const rest = new REST().setToken(botToken);
+  const app = (await rest.get(Routes.currentApplication())) as { description?: string };
+  const current = claimIn(app.description);
+  if (current && current !== claimId) return "taken";
+  if (current === claimId) return "ok";
+  const description = `${(app.description ?? "").slice(0, 340)} (gryt:${claimId})`.trim();
+  await rest.patch(Routes.currentApplication(), { body: { description } }).catch((e) => consola.warn("[DiscordBridge] couldn't write the claim", e));
+  return "ok";
+}
+
+/** Unlinking hands the app back, so another Gryt server can use it. */
+export async function releaseApplication(botToken: string, claimId: string | null): Promise<void> {
+  if (!claimId) return;
+  const rest = new REST().setToken(botToken);
+  const app = (await rest.get(Routes.currentApplication())) as { description?: string };
+  if (claimIn(app.description) !== claimId) return;
+  await rest.patch(Routes.currentApplication(), { body: { description: (app.description ?? "").replace(CLAIM, "").trim() } });
+}
+
 let client: Client | null = null;
 
 /** The logged-in bot, or null. Outbound sync checks this rather than assuming a connection. */

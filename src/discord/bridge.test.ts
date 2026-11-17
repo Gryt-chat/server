@@ -8,7 +8,7 @@ import { PermissionFlagsBits } from "discord.js";
 
 import { clearDiscordBridge, getDiscordBridge, saveDiscordBridgeApp, updateDiscordBridge } from "../db";
 import { initSqlite } from "../db/sqlite/connection";
-import { BRIDGE_PERMISSIONS, inviteUrl, statusForCloseCode } from "./bridge";
+import { BRIDGE_PERMISSIONS, claimIn, inviteUrl, statusForCloseCode } from "./bridge";
 
 let dir: string;
 
@@ -48,5 +48,20 @@ describe("discord bridge", () => {
 
     clearDiscordBridge();
     assert.equal(getDiscordBridge(), null);
+  });
+});
+
+describe("one app per Gryt server", () => {
+  it("reads which Gryt server an app's description says it belongs to", () => {
+    const id = "3f2b8c1e-9a4d-4e7f-8b21-5c6d7e8f9a0b";
+    assert.equal(claimIn(`Mirrors our server to Gryt. (gryt:${id})`), id);
+    assert.equal(claimIn("Just a bot"), null);
+    assert.equal(claimIn(null), null);
+  });
+
+  it("keeps the claim when a new token is pasted", () => {
+    saveDiscordBridgeApp("222222222222222222", "token", "3f2b8c1e-9a4d-4e7f-8b21-5c6d7e8f9a0b");
+    saveDiscordBridgeApp("222222222222222222", "newer-token");
+    assert.equal(getDiscordBridge()?.claim_id, "3f2b8c1e-9a4d-4e7f-8b21-5c6d7e8f9a0b");
   });
 });
