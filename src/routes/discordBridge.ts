@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-restricted-types -- the request body is outside input, checked field by field below */
 import { ChannelType } from "discord.js";
+import consola from "consola";
 import express from "express";
 import type { NextFunction, Request, Response } from "express";
 
@@ -9,7 +10,9 @@ import { isSnowflake } from "../import/discord/dce";
 import { requireBearerToken } from "../middleware/requireBearerToken";
 import { redeemLinkCode } from "../discord/commands";
 import { suggestMatches, type Side } from "../discord/match";
+import { grantDiscordRoles } from "../discord/roles";
 import { importedId } from "../import/discord/ids";
+import { broadcastServerUiUpdate } from "../socket/utils/server";
 import { requireOwner } from "./discordImport";
 
 const handle = (fn: (req: Request, res: Response) => Promise<void>) =>
@@ -30,6 +33,17 @@ function view() {
     direction: b.direction,
     copy: { status: b.copy_status, progress: b.copy_progress },
   };
+}
+
+/** The roles they hold on Discord, the copied ones, given in the background; a link works without them. */
+function giveDiscordRoles(discordUserId: string, serverUserId: string): void {
+  const guild = linkedGuild();
+  if (!guild) return;
+  grantDiscordRoles(guild, discordUserId, serverUserId)
+    .then((n) => {
+      if (n > 0) broadcastServerUiUpdate("other");
+    })
+    .catch((e) => consola.warn("[DiscordBridge] couldn't give Discord roles", e));
 }
 
 export const discordBridgeRouter = express.Router();
@@ -102,6 +116,7 @@ discordBridgeRouter.put("/people/:discordUserId", handle(async (req, res) => {
     return;
   }
   linkDiscordMember(discordUserId, serverUserId, actor, "admin");
+  giveDiscordRoles(discordUserId, serverUserId);
   await insertServerAudit({ actorServerUserId: actor, action: "discord_link", target: serverUserId, meta: { discordUserId, proof: "admin" } });
   res.json({ ok: true });
 }));
@@ -196,6 +211,7 @@ discordLinkRouter.post("/", handle(async (req, res) => {
     return;
   }
   linkDiscordMember(pending.discordUserId, serverUserId, serverUserId, "code");
+  giveDiscordRoles(pending.discordUserId, serverUserId);
   await insertServerAudit({ actorServerUserId: serverUserId, action: "discord_link", target: serverUserId, meta: { discordUserId: pending.discordUserId, proof: "code" } });
   res.json({ discordName: pending.discordName });
 }));
