@@ -1,0 +1,93 @@
+import consola from "consola";
+import { Client, Events, GatewayIntentBits, PermissionFlagsBits, REST, Routes, type Guild } from "discord.js";
+
+import { getDiscordBridge, updateDiscordBridge, type DiscordBridgeStatus } from "../db";
+
+/** Read, write with each member's name and picture, mirror pins, reactions and threads. Not Administrator. */
+export const BRIDGE_PERMISSIONS =
+  PermissionFlagsBits.ViewChannel |
+  PermissionFlagsBits.ReadMessageHistory |
+  PermissionFlagsBits.SendMessages |
+  PermissionFlagsBits.SendMessagesInThreads |
+  PermissionFlagsBits.CreatePublicThreads |
+  PermissionFlagsBits.ManageWebhooks |
+  PermissionFlagsBits.ManageMessages |
+  PermissionFlagsBits.AddReactions |
+  PermissionFlagsBits.AttachFiles |
+  PermissionFlagsBits.EmbedLinks;
+
+export function inviteUrl(applicationId: string): string {
+  const q = new URLSearchParams({ client_id: applicationId, scope: "bot", permissions: BRIDGE_PERMISSIONS.toString() });
+  return `https://discord.com/oauth2/authorize?${q.toString()}`;
+}
+
+/** Gateway close codes that won't fix themselves by reconnecting. */
+export function statusForCloseCode(code: number): DiscordBridgeStatus | null {
+  if (code === 4004) return "token_invalid";
+  if (code === 4014) return "intents_missing";
+  return null;
+}
+
+/** Answers the application id the token belongs to, or null when Discord refuses it. */
+export async function applicationIdForToken(botToken: string): Promise<string | null> {
+  try {
+    const app = (await new REST().setToken(botToken).get(Routes.currentApplication())) as { id?: string };
+    return typeof app.id === "string" ? app.id : null;
+  } catch {
+    return null;
+  }
+}
+
+let client: Client | null = null;
+
+function setStatus(status: DiscordBridgeStatus, guild?: Guild | null): void {
+  updateDiscordBridge({ status, ...(guild !== undefined ? { guild_id: guild?.id ?? null, guild_name: guild?.name ?? null } : {}) });
+}
+
+/** One Discord server per Gryt server: the first one the bot is in stays, any other is left. */
+async function settleGuild(c: Client): Promise<void> {
+  const linked = getDiscordBridge()?.guild_id ?? null;
+  const guilds = [...c.guilds.cache.values()];
+  const keep = guilds.find((g) => g.id === linked) ?? (linked ? undefined : guilds[0]);
+  for (const g of guilds) {
+    if (g.id !== keep?.id) await g.leave().catch((e) => consola.warn(`[DiscordBridge] couldn't leave ${g.id}`, e));
+  }
+  if (keep) setStatus("linked", keep);
+  else setStatus(linked ? "removed" : "waiting_for_invite");
+}
+
+export async function startDiscordBridge(): Promise<void> {
+  await stopDiscordBridge();
+  const config = getDiscordBridge();
+  if (!config) return;
+
+  const c = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMessageReactions] });
+  client = c;
+  c.once(Events.ClientReady, () => void settleGuild(c));
+  c.on(Events.GuildCreate, () => void settleGuild(c));
+  c.on(Events.GuildDelete, (g) => {
+    if (g.id === getDiscordBridge()?.guild_id) setStatus("removed");
+  });
+  c.on(Events.ShardDisconnect, (event) => {
+    const status = statusForCloseCode(event.code);
+    if (status) setStatus(status);
+  });
+  c.on(Events.Error, (e) => consola.warn("[DiscordBridge]", e.message));
+
+  setStatus("connecting");
+  try {
+    await c.login(config.bot_token);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    setStatus(/intent/i.test(message) ? "intents_missing" : "token_invalid");
+    consola.warn("[DiscordBridge] login failed:", message);
+    if (client === c) client = null;
+    await c.destroy();
+  }
+}
+
+export async function stopDiscordBridge(): Promise<void> {
+  const c = client;
+  client = null;
+  if (c) await c.destroy();
+}

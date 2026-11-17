@@ -25,4 +25,5 @@ export * from "./mentions";
 export * from "./readMarkers";
 export * from "./webhooks";
 export * from "./mls";
+export * from "./discordBridge";
 export * from "./discordImports";

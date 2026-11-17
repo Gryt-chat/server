@@ -1183,6 +1183,17 @@ function runMigrations(d: DatabaseSync): void {
     finished_at TEXT
   )`);
   d.exec("CREATE INDEX IF NOT EXISTS idx_discord_imports_status ON discord_imports(status, created_at)");
+  // One row at most: a Gryt server links to one Discord server, through its owner's own app.
+  d.exec(`CREATE TABLE IF NOT EXISTS discord_bridge (
+    id TEXT PRIMARY KEY CHECK (id = 'bridge'),
+    application_id TEXT NOT NULL,
+    bot_token TEXT NOT NULL,
+    guild_id TEXT,
+    guild_name TEXT,
+    status TEXT NOT NULL DEFAULT 'connecting',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`);
 
   migrateFileOwnership(d);
   clearHiddenConversations(d);
