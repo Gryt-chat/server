@@ -17,6 +17,7 @@ import { createImportedChannels, emptyProgress, importThreadMessages, type Chann
 import { DiscordRowBuilder } from "../import/discord/rows";
 import { toDceMessage } from "./adapter";
 import { discordCdnAssets } from "./assets";
+import { importRoles } from "./roles";
 
 const TEXT_TYPES = new Set([ChannelType.GuildText, ChannelType.GuildAnnouncement]);
 const VOICE_TYPES = new Set([ChannelType.GuildVoice, ChannelType.GuildStageVoice]);
@@ -65,6 +66,7 @@ export async function copyGuild(guild: Guild, opts: CopyOptions): Promise<Discor
   const maxBytes = typeof cfg?.upload_max_bytes === "number" ? cfg.upload_max_bytes : DEFAULT_UPLOAD_MAX_BYTES;
   const assets = discordCdnAssets(join(process.env.DATA_DIR || "./data", "tmp", "discord-bridge"), maxBytes);
 
+  await importRoles(guild).catch((e) => warn(`roles: ${e instanceof Error ? e.message : String(e)}`));
   const channels = [...(await guild.channels.fetch()).values()].filter((c): c is NonThreadGuildBasedChannel => !!c);
   const plans = plan(channels);
   const names = new Map(plans.map((p) => [p.id, p.name]));
