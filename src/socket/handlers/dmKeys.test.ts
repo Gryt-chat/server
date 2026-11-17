@@ -307,6 +307,45 @@ describe("device approval prompts", () => {
 
     const pc = { handlers: registerDmKeyHandlers({ io, socket: { id: pcId, emit() {}, join() {}, leave() {} }, clientId: pcId, serverId: "key-test", clientsInfo, sfuClient: null, getClientIp: () => "10.0.9.9", clientAddressIsOwn: () => true } as unknown as HandlerContext) };
     await pc.handlers["device:approve:deny"]({ askId: mac.clientId });
-    assert.deepEqual(got[mac.clientId], [{ event: "device:approve:denied", body: {} }]);
+    assert.deepEqual(got[mac.clientId], [
+      { event: "device:approve:denied", body: {} },
+      { event: "device:approve:closed", body: { askId: mac.clientId } },
+    ]);
+    assert.deepEqual(got[pcId].at(-1), { event: "device:approve:closed", body: { askId: mac.clientId } }, "so the card goes away");
+  });
+
+  const ticketExpiring = (msFromNow: number) =>
+    `eyJhbGciOiJFUzI1NiJ9.${Buffer.from(JSON.stringify({ exp: Math.floor((Date.now() + msFromNow) / 1000) })).toString("base64url")}.c2ln`;
+
+  it("hands a waiting ask to a device that connects later, until its ticket runs out", async () => {
+    const phone = await connect("Late phone owner");
+    const laptopId = `${phone.clientId}-laptop`;
+    clientsInfo[laptopId] = { ...clientsInfo[phone.clientId] } as Clients[string];
+    const laptop = registerDmKeyHandlers({ io, socket: { id: laptopId, emit() {}, join() {}, leave() {} }, clientId: laptopId, serverId: "key-test", clientsInfo, sfuClient: null, getClientIp: () => "10.0.9.8", clientAddressIsOwn: () => true } as unknown as HandlerContext);
+    const pending = () => new Promise<{ askId: string }[]>((resolve) => void phone.handlers["device:approve:pending"](undefined, resolve));
+
+    const fresh = ticketExpiring(10 * 60_000);
+    await laptop["device:approve:ask"]({ ticket: fresh });
+    assert.deepEqual(await pending(), [{ askId: laptopId, ticket: fresh }]);
+
+    await laptop["device:approve:ask"]({ ticket: ticketExpiring(-1000) });
+    assert.deepEqual(await pending(), [], "an expired ticket can't be approved, so it isn't shown");
+
+    await laptop["device:approve:ask"]({ ticket: fresh });
+    delete clientsInfo[laptopId];
+    assert.deepEqual(await pending(), [], "nor an ask whose device has gone");
+  });
+
+  it("closes the ask once that device publishes its key", async () => {
+    const owner = await connect("Approved owner");
+    const newId = `${owner.clientId}-new`;
+    clientsInfo[newId] = { ...clientsInfo[owner.clientId] } as Clients[string];
+    const fresh = registerDmKeyHandlers({ io, socket: { id: newId, emit() {}, join() {}, leave() {} }, clientId: newId, serverId: "key-test", clientsInfo, sfuClient: null, getClientIp: () => "10.0.9.7", clientAddressIsOwn: () => true } as unknown as HandlerContext);
+    const pending = () => new Promise<unknown[]>((resolve) => void owner.handlers["device:approve:pending"](undefined, resolve));
+
+    await fresh["device:approve:ask"]({ ticket: ticketExpiring(10 * 60_000) });
+    assert.equal((await pending()).length, 1);
+    await fresh["dm:key:publish"]({ binding: shapedLikeABinding() });
+    assert.deepEqual(await pending(), []);
   });
 });

@@ -2,6 +2,7 @@ import type { HandlerContext, EventHandlerMap } from "./types";
 import { getUserByServerId, setUserDmKeyBinding, setUserDmKeySeen } from "../../db";
 import { dmBindingIdentity } from "../../services/personKeyBinding";
 import { pushNotify } from "../../services/push";
+import { messagePreview } from "../../services/pushPreview";
 import { checkRateLimit, type RateLimitRule } from "../../utils/rateLimiter";
 import { broadcastMemberList } from "../utils/clients";
 import { calculateJwkThumbprint, EmbeddedJWK, type JWK, jwtVerify } from "jose";
@@ -42,8 +43,40 @@ const RL_DM_KEY: RateLimitRule = {
   scoreDecayMs: 30_000,
 };
 
+/** Asks still waiting, by account then asking socket, so a device that connects later can answer one. */
+const pendingAsks = new Map<string, Map<string, string>>();
+
+/** The ticket's own expiry (10 minutes from the identity service). Read, not verified: devices verify it. */
+function ticketExpiresAt(ticket: string): number {
+  try {
+    const exp = (JSON.parse(Buffer.from(ticket.split(".")[1], "base64url").toString()) as { exp?: number }).exp;
+    return typeof exp === "number" ? exp * 1000 : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** The asks for this account whose device is still connected and whose ticket hasn't run out. */
+export function openApproveAsks(serverUserId: string, clientsInfo: HandlerContext["clientsInfo"], now = Date.now()): { askId: string; ticket: string }[] {
+  const asks = pendingAsks.get(serverUserId);
+  if (!asks) return [];
+  for (const [askId, ticket] of asks) {
+    if (clientsInfo[askId]?.serverUserId !== serverUserId || ticketExpiresAt(ticket) <= now) asks.delete(askId);
+  }
+  if (asks.size === 0) pendingAsks.delete(serverUserId);
+  return [...asks].map(([askId, ticket]) => ({ askId, ticket }));
+}
+
 export function registerDmKeyHandlers(ctx: HandlerContext): EventHandlerMap {
   const { io, clientId, clientsInfo, serverId, getClientIp } = ctx;
+
+  /** Drops an answered ask and tells the account's devices, so their cards go away. */
+  const closeAsk = (serverUserId: string, askId: string) => {
+    if (!pendingAsks.get(serverUserId)?.delete(askId)) return;
+    for (const [cid, ci] of Object.entries(clientsInfo)) {
+      if (ci.serverUserId === serverUserId) io.sockets.sockets.get(cid)?.emit("device:approve:closed", { askId });
+    }
+  };
 
   return {
     "dm:key:publish": async (payload: { binding?: string | null; replace?: boolean; deviceName?: string; account?: string }, ack?: (reply: { ok: boolean; changed?: boolean; error?: string; message?: string }) => void) => {
@@ -94,6 +127,8 @@ export function registerDmKeyHandlers(ctx: HandlerContext): EventHandlerMap {
       }
 
       await setUserDmKeyBinding(serverUserId, binding);
+      // A device publishing a key has been approved, so its ask is answered.
+      if (binding) closeAsk(serverUserId, clientId);
       if (binding) await setUserDmKeySeen(serverUserId, Date.now(), deviceName);
       reply({ ok: true, changed: true });
 
@@ -108,10 +143,23 @@ export function registerDmKeyHandlers(ctx: HandlerContext): EventHandlerMap {
       const ticket = payload?.ticket;
       if (!serverUserId || typeof ticket !== "string" || ticket.length > 2048 || !COMPACT_JWT.test(ticket)) return;
       if (!checkRateLimit("device:approve:ask", serverUserId, getClientIp(), RL_DM_KEY).allowed) return;
+      openApproveAsks(serverUserId, clientsInfo);
+      if (!pendingAsks.has(serverUserId)) pendingAsks.set(serverUserId, new Map());
+      pendingAsks.get(serverUserId)?.set(clientId, ticket);
       for (const [cid, ci] of Object.entries(clientsInfo)) {
         if (cid !== clientId && ci.serverUserId === serverUserId) io.sockets.sockets.get(cid)?.emit("device:approve:asked", { askId: clientId, ticket });
       }
-      pushNotify(clientsInfo, [serverUserId], "approve", `device:${serverUserId}`, { evenIfPresent: true });
+      pushNotify(clientsInfo, [serverUserId], "approve", `device:${serverUserId}`, {
+        evenIfPresent: true,
+        preview: () => messagePreview({ sender: "New device", body: "Wants to open your messages. Tap to check it's you.", conversationId: `device:${serverUserId}` }),
+      });
+    },
+
+    /** The asks still waiting, for a device that wasn't connected when they were made. */
+    "device:approve:pending": (_payload: object | undefined, ack?: (asks: { askId: string; ticket: string }[]) => void) => {
+      const serverUserId = clientsInfo[clientId]?.serverUserId;
+      if (typeof ack !== "function") return;
+      ack(serverUserId ? openApproveAsks(serverUserId, clientsInfo).filter((a) => a.askId !== clientId) : []);
     },
 
     /** "Not me": tells the waiting device, which must be on the same account. */
@@ -120,6 +168,7 @@ export function registerDmKeyHandlers(ctx: HandlerContext): EventHandlerMap {
       const askId = payload?.askId;
       if (!serverUserId || typeof askId !== "string" || clientsInfo[askId]?.serverUserId !== serverUserId) return;
       io.sockets.sockets.get(askId)?.emit("device:approve:denied", {});
+      closeAsk(serverUserId, askId);
     },
   };
 }
