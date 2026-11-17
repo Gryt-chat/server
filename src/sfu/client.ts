@@ -41,7 +41,8 @@ export class SFUClient {
   private roomManager: SFURoomManager;
   private callbacks: SFUEventCallbacks = {};
   /** Voice members this server speaks for; the SFU drops them with the connection, so they're added again on reconnect. */
-  private virtualPeers = new Map<string, string>();
+  private virtualPeers = new Map<string, { roomId: string; listen: boolean }>();
+  private onVirtualAudio: ((listener: string, speaker: string, datagram: Buffer) => void) | null = null;
 
   constructor(serverId: string, serverPassword: string, sfuHost: string) {
     this.serverId = serverId;
@@ -89,7 +90,7 @@ export class SFUClient {
           
           this.roomManager.reregisterRooms()
             .then(() => {
-              for (const [userId, roomId] of this.virtualPeers) this.sendVirtual("virtual_voice_join", roomId, userId);
+              for (const [userId, p] of this.virtualPeers) this.sendVirtual("virtual_voice_join", p.roomId, userId, p.listen);
               if (this.roomManager.registeredRooms.size > 0) {
                 this.roomManager.requestSync();
               }
@@ -102,7 +103,10 @@ export class SFUClient {
         });
 
         this.ws.on('message', (data: WebSocket.Data, isBinary: boolean) => {
-          if (isBinary) return;
+          if (isBinary) {
+            this.handleVirtualFrame(data as Buffer);
+            return;
+          }
           try {
             const message: WebSocketMessage = JSON.parse(data.toString());
             this.handleMessage(message);
@@ -366,16 +370,30 @@ export class SFUClient {
   }
 
   /** Adds a voice member whose audio this server sends, such as someone in a Discord voice channel. */
-  virtualVoiceJoin(roomId: string, userId: string): void {
-    this.virtualPeers.set(userId, roomId);
-    this.sendVirtual("virtual_voice_join", roomId, userId);
+  virtualVoiceJoin(roomId: string, userId: string, listen = false): void {
+    this.virtualPeers.set(userId, { roomId, listen });
+    this.sendVirtual("virtual_voice_join", roomId, userId, listen);
+  }
+
+  /** The room's audio for a member that joined with `listen`: which listener, whose voice by user id, then the datagram. */
+  setVirtualAudioHandler(fn: ((listener: string, speaker: string, datagram: Buffer) => void) | null): void {
+    this.onVirtualAudio = fn;
+  }
+
+  private handleVirtualFrame(b: Buffer): void {
+    if (b.length < 2 || b[0] !== 2 || b.length < 3 + b[1]) return;
+    const peer = b.subarray(2, 2 + b[1]).toString();
+    const userLen = b[2 + b[1]];
+    const at = 3 + b[1];
+    if (!peer.startsWith("virtual:") || b.length < at + userLen) return;
+    this.onVirtualAudio?.(peer.slice("virtual:".length), b.subarray(at, at + userLen).toString(), b.subarray(at + userLen));
   }
 
   virtualVoiceLeave(userId: string): void {
-    const roomId = this.virtualPeers.get(userId);
-    if (!roomId) return;
+    const p = this.virtualPeers.get(userId);
+    if (!p) return;
     this.virtualPeers.delete(userId);
-    this.sendVirtual("virtual_voice_leave", roomId, userId);
+    this.sendVirtual("virtual_voice_leave", p.roomId, userId);
   }
 
   /** One own-transport datagram from a virtual member: op 1, peer id length, peer id, datagram. */
@@ -386,9 +404,9 @@ export class SFUClient {
     this.ws.send(Buffer.concat([Buffer.from([1, peer.length]), peer, Buffer.from(datagram)]), { binary: true });
   }
 
-  private sendVirtual(event: string, roomId: string, userId: string): void {
+  private sendVirtual(event: string, roomId: string, userId: string, listen = false): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    this.ws.send(JSON.stringify({ event, data: JSON.stringify({ room_id: roomId, user_id: userId, server_id: this.serverId, server_password: this.serverToken, listen: false }) }));
+    this.ws.send(JSON.stringify({ event, data: JSON.stringify({ room_id: roomId, user_id: userId, server_id: this.serverId, server_password: this.serverToken, listen }) }));
   }
 
   async setHiddenPeers(roomId: string, userId: string, hidden: string[]): Promise<void> {
