@@ -10,6 +10,7 @@ import {
   getServerConfig,
   insertImportedMessages,
   isExcludedFromBridge,
+  listDiscordAuthors,
   rememberDiscordMessages,
   saveDiscordBridgeChannel,
   type DiscordImportProgress,
@@ -22,6 +23,8 @@ import { toDceMessage } from "./adapter";
 import { broadcastServerUiUpdate } from "../socket/utils/server";
 import { discordCdnAssets } from "./assets";
 import { takeDiscordIdentity } from "./identity";
+import { ensureMembers } from "./presence";
+import { refreshDiscordProfiles } from "./profiles";
 import { importRoles } from "./roles";
 
 const TEXT_TYPES = new Set([ChannelType.GuildText, ChannelType.GuildAnnouncement]);
@@ -116,6 +119,10 @@ export async function copyGuild(guild: Guild, opts: CopyOptions): Promise<Discor
       await copyThread(t, parent, notices.get(t.id) ?? null, rows, progress, warn, assets);
       progress.channels_done += 1;
     }
+
+    const authors = new Set(listDiscordAuthors().map((a) => a.discord_user_id));
+    await ensureMembers(guild);
+    await refreshDiscordProfiles([...guild.members.cache.values()].filter((m) => authors.has(m.id)), rows, assets).catch((e) => warn(`names and pictures: ${e instanceof Error ? e.message : String(e)}`));
 
     for (const e of (await guild.emojis.fetch()).values()) {
       const name = emojiName(e.name ?? undefined);

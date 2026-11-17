@@ -9,6 +9,7 @@ import { copyGuild } from "./copy";
 import { attachLayoutSync } from "./layout";
 import { attachLiveSync } from "./live";
 import { setOutboundClient } from "./outbound";
+import { attachPresence } from "./presence";
 
 /** Read, write with each member's name and picture, mirror pins, reactions and threads. Not Administrator. */
 export const BRIDGE_PERMISSIONS =
@@ -124,7 +125,7 @@ export async function startDiscordBridge(store?: ImportMedia): Promise<void> {
   if (!config) return;
 
   const c = new Client({
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMessageReactions],
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildPresences, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMessageReactions],
     // Edits, deletes and reactions on messages from before the bot started arrive as partials.
     partials: [Partials.Message, Partials.Channel, Partials.Reaction],
   });
@@ -132,6 +133,7 @@ export async function startDiscordBridge(store?: ImportMedia): Promise<void> {
   if (media) attachLiveSync(c, media);
   attachCommands(c);
   attachLayoutSync(c);
+  attachPresence(c);
   c.once(Events.ClientReady, () => void settleGuild(c));
   c.on(Events.GuildCreate, () => void settleGuild(c));
   c.on(Events.GuildDelete, (g) => {

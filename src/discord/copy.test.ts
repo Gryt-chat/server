@@ -87,6 +87,7 @@ function fakeGuild(): Guild {
     },
     emojis: { fetch: async () => new Map() },
     roles: { fetch: async () => new Map() },
+    members: { fetch: async () => new Map(), cache: new Map([["900000000000000001", { id: "900000000000000001", displayName: "pixelfox now", user: { bot: false }, displayAvatarURL: () => "https://example.com/new.png" }]]) },
   } as unknown as Guild;
 }
 
@@ -100,6 +101,7 @@ describe("copying a Discord server", () => {
     const latest = await listMessages(channelId, 5);
     assert.ok(latest.some((m) => m.text === "message 101"));
     assert.equal(latest[0].sender_server_id, "discord:900000000000000001");
+    assert.equal(latest[0].sender_display_name, "pixelfox now");
   });
 
   it("copies threads under their root, making one for a post with none", async () => {

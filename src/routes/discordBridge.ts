@@ -11,6 +11,7 @@ import { isSnowflake } from "../import/discord/dce";
 import { requireBearerToken } from "../middleware/requireBearerToken";
 import { redeemLinkCode, removeDiscordPersonMessages } from "../discord/commands";
 import { suggestMatches, type Side } from "../discord/match";
+import { discordPresence, ensureMembers } from "../discord/presence";
 import { grantDiscordRoles } from "../discord/roles";
 import { importedId } from "../import/discord/ids";
 import { resetMessageCache } from "../socket/utils/messageCache";
@@ -141,8 +142,6 @@ discordBridgeRouter.get("/preview", handle(async (_req, res) => {
   });
 }));
 
-let membersFetchedFor: string | null = null;
-
 /** Everyone on the Discord server and everyone whose messages came from it, and who they're linked to. */
 discordBridgeRouter.get("/people", handle(async (_req, res) => {
   const links = new Map(listDiscordMemberLinks().map((l) => [l.discord_user_id, l]));
@@ -151,15 +150,7 @@ discordBridgeRouter.get("/people", handle(async (_req, res) => {
   for (const a of listDiscordAuthors()) people.set(a.discord_user_id, { name: a.name, avatar: null, messages: a.messages });
   const guild = linkedGuild();
   if (guild) {
-    // Discord allows one full member list per 30 seconds; the members intent keeps the cache current after it.
-    if (membersFetchedFor !== guild.id) {
-      try {
-        await guild.members.fetch();
-        membersFetchedFor = guild.id;
-      } catch (e) {
-        consola.warn("[DiscordBridge] couldn't list Discord members", e);
-      }
-    }
+    await ensureMembers(guild);
     for (const m of guild.members.cache.values()) {
       if (m.user.bot) continue;
       const known = people.get(m.id);
@@ -323,4 +314,15 @@ discordLinkRouter.post("/", handle(async (req, res) => {
   giveDiscordRoles(pending.discordUserId, serverUserId);
   await insertServerAudit({ actorServerUserId: serverUserId, action: "discord_link", target: serverUserId, meta: { discordUserId: pending.discordUserId, proof: "code" } });
   res.json({ discordName: pending.discordName });
+}));
+
+/** For any member: the synced Discord people, for the member list's Discord section. */
+export const discordPeopleRouter = express.Router();
+
+discordPeopleRouter.use(requireBearerToken);
+
+discordPeopleRouter.get("/", handle(async (_req, res) => {
+  const guild = getDiscordBridge()?.status === "linked" ? linkedGuild() : null;
+  if (guild) await ensureMembers(guild);
+  res.json({ people: guild ? discordPresence(guild) : [] });
 }));

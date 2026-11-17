@@ -283,3 +283,10 @@ export function discordPersonLinkedTo(serverUserId: string): string | null {
 export function channelsHaveMessages(): boolean {
   return !!getSqliteDb().prepare(`SELECT 1 FROM messages m JOIN channels c ON c.channel_id = m.conversation_id LIMIT 1`).get();
 }
+
+/** Every copied message from a Discord person shows their current name and picture, as Discord does. */
+export function updateDiscordSenderProfile(discordUserId: string, name: string, avatarFileId: string | null): number {
+  return Number(getSqliteDb()
+    .prepare(`UPDATE messages SET sender_display_name = ?, sender_avatar_file_id = COALESCE(?, sender_avatar_file_id) WHERE sender_server_id = ?`)
+    .run(name, avatarFileId, `discord:${discordUserId}`).changes);
+}

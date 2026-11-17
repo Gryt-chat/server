@@ -44,6 +44,7 @@ import { recipientClientIds } from "../socket/utils/recipients";
 import { toDceMessage } from "./adapter";
 import { linkOf } from "./copy";
 import { discordCdnAssets } from "./assets";
+import { refreshDiscordProfiles } from "./profiles";
 
 const CHANNEL_ACCESS = { allowed: true, kind: "channel" } as const;
 
@@ -196,6 +197,16 @@ export function attachLiveSync(c: Client, media: ImportMedia): void {
       replaceCachedMessage(place.conversationId, updated);
       await emit(place.conversationId, "chat:reaction", await view(updated));
     });
+  c.on(Events.GuildMemberUpdate, guarded("profile", async (before, after) => {
+    if (after.guild.id !== getDiscordBridge()?.guild_id) return;
+    if (!before.partial && before.displayName === after.displayName && before.displayAvatarURL() === after.displayAvatarURL()) return;
+    await withAssets((assets) => refreshDiscordProfiles([after], rows, assets));
+  }));
+  c.on(Events.UserUpdate, guarded("profile", async (_before, user) => {
+    const m = c.guilds.cache.get(getDiscordBridge()?.guild_id ?? "")?.members.cache.get(user.id);
+    if (m) await withAssets((assets) => refreshDiscordProfiles([m], rows, assets));
+  }));
+
   c.on(Events.MessageReactionAdd, react(true));
   c.on(Events.MessageReactionRemove, react(false));
 }

@@ -121,7 +121,8 @@ export async function createImportedChannels(channels: Iterable<ChannelPlan>): P
         layout: c.kind === "forum" ? "forum" : "chat",
       });
     }
-    if (c.grytChannelId && c.grytChannelId !== importedId("channel", c.id)) await moveChannelRowToEnd(channelId, parentItem);
+    // The bridge passes every target, so each run puts them all back in Discord's order.
+    if (c.grytChannelId) await moveChannelRowToEnd(channelId, parentItem);
     else await addChannelRowIfMissing(channelId, parentItem);
   }
 }
