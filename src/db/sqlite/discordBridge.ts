@@ -10,7 +10,11 @@ export type DiscordBridgeStatus =
   | "removed";
 
 export type DiscordBridgeDirection = "to_gryt" | "both" | "to_discord";
-export type DiscordBridgeCopyStatus = "idle" | "running" | "done" | "failed";
+export type DiscordBridgeCopyStatus = "idle" | "running" | "paused" | "done" | "failed";
+
+/** What the owner can switch off in the live bridge. Messages off stops new ones both ways. */
+export const SYNC_KINDS = ["messages", "edits", "deletes", "replies", "reactions", "emoji", "pins", "threads", "files"] as const;
+export type SyncKind = (typeof SYNC_KINDS)[number];
 
 export interface DiscordBridgeRecord {
   application_id: string;
@@ -23,6 +27,8 @@ export interface DiscordBridgeRecord {
   copy_progress: DiscordImportProgress | null;
   copy_started_by: string | null;
   sync_new_channels: boolean;
+  sync_off: SyncKind[];
+  copy_identity: boolean;
   created_at: Date;
   updated_at: Date;
 }
@@ -41,6 +47,8 @@ export function getDiscordBridge(): DiscordBridgeRecord | null {
     copy_progress: r.copy_progress ? (JSON.parse(r.copy_progress as string) as DiscordImportProgress) : null,
     copy_started_by: (r.copy_started_by as string) ?? null,
     sync_new_channels: r.sync_new_channels !== 0,
+    sync_off: parseSyncOff(r.sync_off),
+    copy_identity: r.copy_identity === 1,
     created_at: fromIso(r.created_at as string),
     updated_at: fromIso(r.updated_at as string),
   };
@@ -68,6 +76,8 @@ export function updateDiscordBridge(patch: {
   copy_progress?: string;
   copy_started_by?: string;
   sync_new_channels?: number;
+  sync_off?: string;
+  copy_identity?: number;
 }): void {
   const sets: string[] = [];
   const values: (string | number | null)[] = [];
@@ -80,6 +90,20 @@ export function updateDiscordBridge(patch: {
   getSqliteDb()
     .prepare(`UPDATE discord_bridge SET ${sets.join(", ")}, updated_at = ? WHERE id = 'bridge'`)
     .run(...values, toIso(new Date()));
+}
+
+function parseSyncOff(raw: unknown): SyncKind[] {
+  try {
+    const v = JSON.parse(typeof raw === "string" ? raw : "[]") as unknown;
+    return Array.isArray(v) ? v.filter((k): k is SyncKind => (SYNC_KINDS as readonly unknown[]).includes(k)) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Cheap enough per event: one row, read by primary key. */
+export function bridgeSyncs(kind: SyncKind): boolean {
+  return !(getDiscordBridge()?.sync_off ?? []).includes(kind);
 }
 
 export function clearDiscordBridge(): void {
@@ -239,4 +263,18 @@ export function setExcludedFromBridge(kind: ExcludedKind, id: string, excluded: 
 
 export function listExcludedFromBridge(kind: ExcludedKind): string[] {
   return (getSqliteDb().prepare(`SELECT id FROM discord_bridge_excluded WHERE kind = ?`).all(kind) as { id: string }[]).map((r) => r.id);
+}
+
+/** The live tab's header: how much is matched, and when the last matched message was. */
+export function discordBridgeStats(): { messagesMatched: number; lastMessageAt: string | null } {
+  const m = getSqliteDb()
+    .prepare(`SELECT COUNT(*) AS n, MAX(m.created_at) AS last FROM discord_bridge_messages b LEFT JOIN messages m ON m.conversation_id = b.gryt_conversation_id AND m.message_id = b.gryt_message_id`)
+    .get() as { n: number; last: string | null };
+  return { messagesMatched: m.n, lastMessageAt: m.last };
+}
+
+/** The Discord person a member is linked to, if any; an admin link is one to one. */
+export function discordPersonLinkedTo(serverUserId: string): string | null {
+  const r = getSqliteDb().prepare(`SELECT discord_user_id FROM discord_member_links WHERE server_user_id = ?`).get(serverUserId) as { discord_user_id: string } | undefined;
+  return r?.discord_user_id ?? null;
 }

@@ -3,6 +3,7 @@ import { basename, posix, relative, sep } from "node:path";
 
 import {
   addChannelRowIfMissing,
+  moveChannelRowToEnd,
   ensureImportedThread,
   getMessageById,
   getServerChannel,
@@ -120,7 +121,8 @@ export async function createImportedChannels(channels: Iterable<ChannelPlan>): P
         layout: c.kind === "forum" ? "forum" : "chat",
       });
     }
-    await addChannelRowIfMissing(channelId, parentItem);
+    if (c.grytChannelId && c.grytChannelId !== importedId("channel", c.id)) await moveChannelRowToEnd(channelId, parentItem);
+    else await addChannelRowIfMissing(channelId, parentItem);
   }
 }
 

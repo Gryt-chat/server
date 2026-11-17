@@ -7,10 +7,10 @@ import { after, before, describe, it } from "node:test";
 
 import { ChannelType, MessageType, type Guild } from "discord.js";
 
-import { getServerChannel, listMessages, listThreadsByConversation, setDiscordChannelMatch, upsertServerChannel } from "../db";
+import { addChannelRowIfMissing, getServerChannel, listMessages, listServerSidebarItems, listThreadsByConversation, setDiscordChannelMatch, upsertServerChannel } from "../db";
 import { initSqlite } from "../db/sqlite/connection";
 import { importedId } from "../import/discord/ids";
-import type { ImportMedia } from "../import/discord/importer";
+import { createImportedChannels, type ImportMedia } from "../import/discord/importer";
 import { isDiscordCdn } from "./assets";
 import { copyGuild } from "./copy";
 
@@ -135,5 +135,24 @@ describe("copying into channels the owner matched", () => {
     saveDiscordBridgeChannel({ discord_channel_id: "800000000000000001", gryt_channel_id: "existing-general", backfill_before: null, backfill_done: false });
     const progress = await copyGuild(fakeGuild(), { media, startedBy: "user_owner" });
     assert.equal(progress.channels_total, 0);
+  });
+
+  it("moves a matched channel into its Discord folder", async () => {
+    await upsertServerChannel({ channelId: "top-general", name: "general", type: "text", position: 1 });
+    await addChannelRowIfMissing("top-general", null);
+    await createImportedChannels([{ id: "800000000000000009", name: "general", kind: "text", topic: null, categoryId: "800000000000000008", categoryName: "Text Channels", grytChannelId: "top-general" }]);
+    const items = await listServerSidebarItems();
+    const row = items.find((i) => i.channel_id === "top-general");
+    assert.equal(items.find((i) => i.item_id === row?.parent_item_id)?.label, "Text Channels");
+  });
+
+  it("stops between pages when paused, and says how far each channel got", async () => {
+    const { saveDiscordBridgeChannel } = await import("../db");
+    setDiscordChannelMatch("800000000000000001", { grytChannelId: "existing-general" });
+    saveDiscordBridgeChannel({ discord_channel_id: "800000000000000001", gryt_channel_id: "existing-general", backfill_before: null, backfill_done: false });
+    const paused = await copyGuild(fakeGuild(), { media, startedBy: "user_owner", stopped: () => true });
+    assert.equal(paused.channels_done, 0);
+    const done = await copyGuild(fakeGuild(), { media, startedBy: "user_owner" });
+    assert.deepEqual(done.channels?.map((c) => [c.name, c.done]), [["general", true]]);
   });
 });

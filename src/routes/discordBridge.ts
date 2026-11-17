@@ -4,8 +4,9 @@ import consola from "consola";
 import express from "express";
 import type { NextFunction, Request, Response } from "express";
 
-import { clearDiscordBridge, getDiscordBridge, getUserByServerId, insertServerAudit, linkDiscordMember, listDiscordAuthors, listDiscordMemberLinks, saveDiscordBridgeApp, unlinkDiscordMember, grytChannelFor, listServerChannels, setDiscordChannelMatch, listExcludedFromBridge, setExcludedFromBridge, updateDiscordBridge } from "../db";
-import { applicationIdForToken, inviteUrl, linkedGuild, startDiscordBridge, startDiscordCopy, stopDiscordBridge } from "../discord/bridge";
+import { clearDiscordBridge, getDiscordBridge, getUserByServerId, insertServerAudit, linkDiscordMember, listDiscordAuthors, listDiscordMemberLinks, saveDiscordBridgeApp, unlinkDiscordMember, grytChannelFor, listServerChannels, setDiscordChannelMatch, listExcludedFromBridge, setExcludedFromBridge, updateDiscordBridge, discordBridgeStats, discordPersonLinkedTo, listEmojis, SYNC_KINDS, type SyncKind } from "../db";
+import { applicationIdForToken, inviteUrl, linkedGuild, pauseDiscordCopy, startDiscordBridge, startDiscordCopy, stopDiscordBridge } from "../discord/bridge";
+import { emojiName } from "../import/discord/content";
 import { isSnowflake } from "../import/discord/dce";
 import { requireBearerToken } from "../middleware/requireBearerToken";
 import { redeemLinkCode, removeDiscordPersonMessages } from "../discord/commands";
@@ -28,13 +29,23 @@ function view() {
     configured: true,
     applicationId: b.application_id,
     status: b.status,
-    guild: b.guild_id ? { id: b.guild_id, name: b.guild_name } : null,
+    guild: b.guild_id ? guildView(b.guild_id, b.guild_name) : null,
     inviteUrl: inviteUrl(b.application_id),
     direction: b.direction,
     copy: { status: b.copy_status, progress: b.copy_progress },
     syncNewChannels: b.sync_new_channels,
     excludedMembers: listExcludedFromBridge("gryt"),
+    syncOff: b.sync_off,
+    stats: b.copy_status === "idle" ? null : discordBridgeStats(),
   };
+}
+
+/** Name, icon and counts for the server card; only the name is known while the bot is away. */
+function guildView(id: string, name: string | null) {
+  const g = linkedGuild();
+  if (!g || g.id !== id) return { id, name, icon: null, members: null, channels: null };
+  const channels = g.channels.cache.filter((c) => TEXT_TYPES.has(c.type) || VOICE_TYPES.has(c.type)).size;
+  return { id, name: g.name, icon: g.iconURL({ extension: "png", size: 128 }), members: g.memberCount, channels };
 }
 
 /** The roles they hold on Discord, the copied ones, given in the background; a link works without them. */
@@ -84,7 +95,7 @@ discordBridgeRouter.put("/", handle(async (req, res) => {
 const DIRECTIONS = new Set(["to_gryt", "both", "to_discord"]);
 
 discordBridgeRouter.post("/copy", handle(async (req, res) => {
-  const direction = (req.body as { direction?: unknown } | undefined)?.direction;
+  const { direction, identity } = (req.body ?? {}) as { direction?: unknown; identity?: unknown };
   const serverUserId = req.tokenPayload?.serverUserId;
   if (typeof direction !== "string" || !DIRECTIONS.has(direction) || !serverUserId) {
     res.status(400).json({ error: "invalid_payload", message: "Pick which way the bridge goes." });
@@ -94,18 +105,60 @@ discordBridgeRouter.post("/copy", handle(async (req, res) => {
     res.status(409).json({ error: "not_linked", message: "Add the bot to your Discord server first." });
     return;
   }
-  startDiscordCopy(direction as "to_gryt" | "both" | "to_discord", serverUserId);
+  startDiscordCopy(direction as "to_gryt" | "both" | "to_discord", serverUserId, identity === true);
   res.status(202).json(view());
+}));
+
+discordBridgeRouter.post("/copy/pause", handle(async (req, res) => {
+  const paused = (req.body as { paused?: unknown } | undefined)?.paused;
+  const status = getDiscordBridge()?.copy_status;
+  if (typeof paused !== "boolean" || (status !== "running" && status !== "paused")) {
+    res.status(409).json({ error: "not_copying" });
+    return;
+  }
+  pauseDiscordCopy(paused);
+  res.json(view());
+}));
+
+/** What "Before you start" asks about: whether this server already has a name, messages, and emoji that clash. */
+discordBridgeRouter.get("/preview", handle(async (_req, res) => {
+  const guild = linkedGuild();
+  if (!guild) {
+    res.status(409).json({ error: "not_linked", message: "Add the bot to your Discord server first." });
+    return;
+  }
+  const mine = new Set((await listEmojis()).map((e) => e.name));
+  const theirs = [...(await guild.emojis.fetch()).values()].map((e) => emojiName(e.name ?? undefined)).filter((n): n is string => !!n);
+  const roles = (await guild.roles.fetch()).filter((r) => !r.managed && r.id !== guild.id).size;
+  res.json({
+    emoji: theirs.length,
+    emojiClashes: theirs.filter((n) => mine.has(n)),
+    roles,
+  });
 }));
 
 /** Everyone whose messages came from Discord, and who they're linked to. */
 discordBridgeRouter.get("/people", handle(async (_req, res) => {
   const links = new Map(listDiscordMemberLinks().map((l) => [l.discord_user_id, l]));
   const excluded = new Set(listExcludedFromBridge("discord"));
+  const people = new Map<string, { name: string | null; avatar: string | null; messages: number }>();
+  for (const a of listDiscordAuthors()) people.set(a.discord_user_id, { name: a.name, avatar: null, messages: a.messages });
+  const guild = linkedGuild();
+  if (guild) {
+    try {
+      for (const m of (await guild.members.fetch()).values()) {
+        if (m.user.bot) continue;
+        const known = people.get(m.id);
+        people.set(m.id, { name: m.displayName, avatar: m.displayAvatarURL({ extension: "png", size: 64 }), messages: known?.messages ?? 0 });
+      }
+    } catch (e) {
+      consola.warn("[DiscordBridge] couldn't list Discord members", e);
+    }
+  }
   res.json({
-    people: listDiscordAuthors().map((a) => {
-      const l = links.get(a.discord_user_id);
-      return { discordUserId: a.discord_user_id, name: a.name, messages: a.messages, linkedTo: l?.server_user_id ?? null, proof: l?.proof ?? null, sync: !excluded.has(a.discord_user_id) };
+    people: [...people].map(([id, p]) => {
+      const l = links.get(id);
+      return { discordUserId: id, name: p.name, avatar: p.avatar, messages: p.messages, linkedTo: l?.server_user_id ?? null, proof: l?.proof ?? null, sync: !excluded.has(id) };
     }),
   });
 }));
@@ -116,6 +169,11 @@ discordBridgeRouter.put("/people/:discordUserId", handle(async (req, res) => {
   const actor = req.tokenPayload?.serverUserId;
   if (!isSnowflake(discordUserId) || typeof serverUserId !== "string" || !actor || !(await getUserByServerId(serverUserId))) {
     res.status(400).json({ error: "invalid_payload", message: "Pick a member of this server to link." });
+    return;
+  }
+  const taken = discordPersonLinkedTo(serverUserId);
+  if (taken && taken !== discordUserId) {
+    res.status(409).json({ error: "member_taken", message: "That member is already linked to someone else from Discord. Unlink them first." });
     return;
   }
   linkDiscordMember(discordUserId, serverUserId, actor, "admin");
@@ -195,12 +253,16 @@ discordBridgeRouter.put("/channels", handle(async (req, res) => {
 }));
 
 discordBridgeRouter.put("/settings", handle(async (req, res) => {
-  const syncNewChannels = (req.body as { syncNewChannels?: unknown } | undefined)?.syncNewChannels;
-  if (typeof syncNewChannels !== "boolean") {
+  const { syncNewChannels, syncOff } = (req.body ?? {}) as { syncNewChannels?: unknown; syncOff?: unknown };
+  const kinds = Array.isArray(syncOff) ? syncOff.filter((k): k is SyncKind => (SYNC_KINDS as readonly unknown[]).includes(k)) : null;
+  if ((syncNewChannels !== undefined && typeof syncNewChannels !== "boolean") || (syncOff !== undefined && !kinds) || (syncNewChannels === undefined && !kinds)) {
     res.status(400).json({ error: "invalid_payload" });
     return;
   }
-  updateDiscordBridge({ sync_new_channels: syncNewChannels ? 1 : 0 });
+  updateDiscordBridge({
+    ...(typeof syncNewChannels === "boolean" ? { sync_new_channels: syncNewChannels ? 1 : 0 } : {}),
+    ...(kinds ? { sync_off: JSON.stringify([...new Set(kinds)]) } : {}),
+  });
   res.json(view());
 }));
 

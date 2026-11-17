@@ -289,6 +289,13 @@ export async function addChannelRowIfMissing(channelId: string, parentItemId: st
   await upsertServerSidebarItem({ itemId: `sb_ch_${channelId.slice(0, 54)}`, kind: "channel", channelId, position: end, parentItemId });
 }
 
+/** A matched channel takes its Discord place: into the folder, after what's placed so far. */
+export async function moveChannelRowToEnd(channelId: string, parentItemId: string | null): Promise<void> {
+  const db = getSqliteDb();
+  const { end } = db.prepare(`SELECT COALESCE(MAX(position), 0) + 10 AS end FROM sidebar_items`).get() as { end: number };
+  db.prepare(`UPDATE sidebar_items SET parent_item_id = ?, position = ?, updated_at = ? WHERE kind = 'channel' AND channel_id = ?`).run(parentItemId, end, toIso(new Date()), channelId);
+}
+
 /** A channel's sidebar entry is the only thing that puts it on screen, so
     cascading would leave six channels existing with no way to reach them. */
 export async function deleteServerSidebarItem(itemId: string): Promise<void> {

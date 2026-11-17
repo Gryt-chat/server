@@ -1226,6 +1226,9 @@ function runMigrations(d: DatabaseSync): void {
     PRIMARY KEY (kind, id)
   )`);
   if (!hasColumn(d, "discord_bridge", "sync_new_channels")) d.exec("ALTER TABLE discord_bridge ADD COLUMN sync_new_channels INTEGER NOT NULL DEFAULT 1");
+  // Kinds of change the owner switched off, as JSON; and whether the copy takes Discord's name and icon.
+  if (!hasColumn(d, "discord_bridge", "sync_off")) d.exec("ALTER TABLE discord_bridge ADD COLUMN sync_off TEXT NOT NULL DEFAULT '[]'");
+  if (!hasColumn(d, "discord_bridge", "copy_identity")) d.exec("ALTER TABLE discord_bridge ADD COLUMN copy_identity INTEGER NOT NULL DEFAULT 0");
   // Where each Discord channel's history copy stopped, so a restart picks up there.
   d.exec(`CREATE TABLE IF NOT EXISTS discord_bridge_channels (
     discord_channel_id TEXT PRIMARY KEY,

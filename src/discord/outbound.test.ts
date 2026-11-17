@@ -87,6 +87,14 @@ describe("Gryt to Discord", () => {
     assert.equal(posted.length, 0);
   });
 
+  it("leaves out what the owner switched off", async () => {
+    updateDiscordBridge({ sync_off: JSON.stringify(["edits"]) });
+    posted.length = 0;
+    await messageEdited(message({ text: "edited again" }));
+    assert.equal(posted.length, 0);
+    updateDiscordBridge({ sync_off: "[]" });
+  });
+
   it("stays quiet when the bridge only copies into Gryt", async () => {
     updateDiscordBridge({ direction: "to_gryt" });
     posted.length = 0;
