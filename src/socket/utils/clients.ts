@@ -15,6 +15,7 @@ import { memberIdentity } from "./memberIdentity";
 import { scopedChannelIds, visibleChannelIds } from "../../services/channelPermissions";
 import { hasPermission, listRolesByMember } from "../../services/permissions";
 import { cardFields } from "../../utils/memberCard";
+import { discordVoiceParticipants } from "../../discord/voiceParticipants";
 
 /** A member whose permissions were never cached receives no broadcasts, so all
     three admission paths call this and all three await it. */
@@ -87,7 +88,36 @@ export function publicClientRecord(client: Clients[string], voiceChannelId: stri
   };
 }
 
-export type PublicClient = ReturnType<typeof publicClientRecord>;
+export type PublicClient = ReturnType<typeof publicClientRecord> & { discord?: { name: string; avatar: string } };
+
+/** People in a bridged Discord voice channel, in the same shape, so the voice list shows them. */
+function discordVoiceRecords(visible?: ReadonlySet<string>): [string, PublicClient][] {
+  return discordVoiceParticipants().flatMap((p) => {
+    const room = visible ? voiceRoomFor(visible, p.channelId) : publicVoiceRoom(p.channelId);
+    if (!room) return [];
+    const record: PublicClient = {
+      serverUserId: p.serverUserId,
+      nickname: p.name,
+      isMuted: false,
+      isDeafened: false,
+      isServerMuted: false,
+      isServerDeafened: false,
+      isAFK: false,
+      streamID: "",
+      hasJoinedChannel: true,
+      voiceChannelId: room,
+      isConnectedToVoice: true,
+      cameraEnabled: false,
+      cameraStreamID: "",
+      screenShareEnabled: false,
+      screenShareVideoStreamID: "",
+      screenShareAudioStreamID: "",
+      screenShares: [],
+      discord: { name: p.name, avatar: p.avatar },
+    };
+    return [[`discord-voice:${p.serverUserId}`, record]];
+  });
+}
 
 /** `server:clients` and `server:details.clients`, keyed by socket id. `visible`
     also blanks the channels this recipient cannot see. */
@@ -101,6 +131,7 @@ export function publicClientList(
     const room = visible ? voiceRoomFor(visible, client.voiceChannelId) : publicVoiceRoom(client.voiceChannelId);
     list[clientId] = publicClientRecord(client, room);
   }
+  for (const [id, record] of discordVoiceRecords(visible)) list[id] = record;
   return list;
 }
 
@@ -168,7 +199,7 @@ export function syncAllClients(io: Server, clientsInfo: Clients) {
         isServerDeafened: client.isServerDeafened,
       }))
       .sort((a, b) => a.id.localeCompare(b.id))
-  );
+  ) + JSON.stringify(discordVoiceParticipants());
 
   if (currentStateHash === lastClientsStateByIO.get(io)) return;
 
