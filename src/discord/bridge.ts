@@ -6,6 +6,7 @@ import type { ImportMedia } from "../import/discord/importer";
 import { resetMessageCache } from "../socket/utils/messageCache";
 import { attachCommands, registerCommands } from "./commands";
 import { copyGuild } from "./copy";
+import { attachLayoutSync } from "./layout";
 import { attachLiveSync } from "./live";
 import { setOutboundClient } from "./outbound";
 
@@ -121,6 +122,7 @@ export async function startDiscordBridge(store?: ImportMedia): Promise<void> {
   client = c;
   if (media) attachLiveSync(c, media);
   attachCommands(c);
+  attachLayoutSync(c);
   c.once(Events.ClientReady, () => void settleGuild(c));
   c.on(Events.GuildCreate, () => void settleGuild(c));
   c.on(Events.GuildDelete, (g) => {

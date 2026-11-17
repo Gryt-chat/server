@@ -137,6 +137,14 @@ export async function upsertServerChannel(channel: {
     name, type, position, description, rPtt, dRnn, maxBr, eMode, tiv, layout, automated, forumTags, defaultNotification, now);
 }
 
+/** Name and topic only; every other setting stays as the owner left it. */
+export async function renameServerChannel(channelId: string, name: string, description: string | null): Promise<boolean> {
+  const n = String(name).trim().slice(0, 80);
+  if (!n) return false;
+  const d = description == null ? null : String(description).trim().slice(0, 200);
+  return getSqliteDb().prepare(`UPDATE channels SET name = ?, description = ?, updated_at = ? WHERE channel_id = ?`).run(n, d, toIso(new Date()), channelId).changes > 0;
+}
+
 export async function getServerChannel(channelId: string): Promise<ServerChannelRecord | null> {
   const db = getSqliteDb();
   const row = db.prepare(`SELECT * FROM channels WHERE channel_id = ?`).get(channelId) as Record<string, unknown> | undefined;
