@@ -77,6 +77,12 @@ export class DiscordRowBuilder {
     return { fileId };
   }
 
+  /** A Discord person's current picture, stored like the ones on their messages. */
+  async avatar(url: string, authorId: string, assets: AssetSource): Promise<string | null> {
+    const stored = await this.store(null, "avatar", url, assets, `${authorId}.png`, discordSenderId(authorId), true);
+    return "fileId" in stored ? stored.fileId : null;
+  }
+
   async buildRow(
     msg: DceMessage,
     assets: AssetSource,

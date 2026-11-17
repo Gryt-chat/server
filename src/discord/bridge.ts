@@ -9,6 +9,7 @@ import { copyGuild } from "./copy";
 import { attachLayoutSync } from "./layout";
 import { attachLiveSync } from "./live";
 import { setOutboundClient } from "./outbound";
+import { attachPresence } from "./presence";
 
 /** Read, write with each member's name and picture, mirror pins, reactions and threads. Not Administrator. */
 export const BRIDGE_PERMISSIONS =
@@ -19,6 +20,7 @@ export const BRIDGE_PERMISSIONS =
   PermissionFlagsBits.CreatePublicThreads |
   PermissionFlagsBits.ManageWebhooks |
   PermissionFlagsBits.ManageMessages |
+  PermissionFlagsBits.PinMessages |
   PermissionFlagsBits.AddReactions |
   PermissionFlagsBits.AttachFiles |
   PermissionFlagsBits.EmbedLinks;
@@ -71,9 +73,11 @@ async function runCopy(): Promise<void> {
     const progress = await copyGuild(guild, {
       media,
       startedBy: b.copy_started_by,
+      identity: b.copy_identity,
       onProgress: (p) => updateDiscordBridge({ copy_progress: JSON.stringify(p) }),
+      stopped: () => getDiscordBridge()?.copy_status !== "running",
     });
-    updateDiscordBridge({ copy_status: "done", copy_progress: JSON.stringify(progress) });
+    if (getDiscordBridge()?.copy_status === "running") updateDiscordBridge({ copy_status: "done", copy_progress: JSON.stringify(progress), copy_identity: 0 });
   } catch (e) {
     consola.error("[DiscordBridge] copy failed", e);
     updateDiscordBridge({ copy_status: "failed" });
@@ -83,9 +87,15 @@ async function runCopy(): Promise<void> {
   }
 }
 
-export function startDiscordCopy(direction: DiscordBridgeDirection, startedBy: string): void {
-  updateDiscordBridge({ direction, copy_status: "running", copy_started_by: startedBy });
+export function startDiscordCopy(direction: DiscordBridgeDirection, startedBy: string, identity: boolean): void {
+  updateDiscordBridge({ direction, copy_status: "running", copy_started_by: startedBy, copy_identity: identity ? 1 : 0 });
   void runCopy();
+}
+
+/** Pausing stops between pages; resuming picks up each channel where it stopped. */
+export function pauseDiscordCopy(paused: boolean): void {
+  updateDiscordBridge({ copy_status: paused ? "paused" : "running" });
+  if (!paused) void runCopy();
 }
 
 function setStatus(status: DiscordBridgeStatus, guild?: Guild | null): void {
@@ -115,7 +125,7 @@ export async function startDiscordBridge(store?: ImportMedia): Promise<void> {
   if (!config) return;
 
   const c = new Client({
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMessageReactions],
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildPresences, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMessageReactions],
     // Edits, deletes and reactions on messages from before the bot started arrive as partials.
     partials: [Partials.Message, Partials.Channel, Partials.Reaction],
   });
@@ -123,6 +133,7 @@ export async function startDiscordBridge(store?: ImportMedia): Promise<void> {
   if (media) attachLiveSync(c, media);
   attachCommands(c);
   attachLayoutSync(c);
+  attachPresence(c);
   c.once(Events.ClientReady, () => void settleGuild(c));
   c.on(Events.GuildCreate, () => void settleGuild(c));
   c.on(Events.GuildDelete, (g) => {

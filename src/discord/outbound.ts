@@ -2,6 +2,7 @@ import consola from "consola";
 import { WebhookClient, type Client, type TextChannel } from "discord.js";
 
 import {
+  bridgeSyncs,
   discordChannelFor,
   discordMessageFor,
   getDiscordBridge,
@@ -58,7 +59,7 @@ async function webhookFor(grytChannelId: string): Promise<{ hook: Hook; discordC
 }
 
 async function replyLine(m: MessageRecord): Promise<string> {
-  if (!m.reply_to_message_id) return "";
+  if (!m.reply_to_message_id || !bridgeSyncs("replies")) return "";
   const target = discordMessageFor(m.reply_to_message_id);
   if (!target) return "";
   const guild = getDiscordBridge()?.guild_id;
@@ -66,7 +67,7 @@ async function replyLine(m: MessageRecord): Promise<string> {
 }
 
 async function filesOf(m: MessageRecord): Promise<{ attachment: Buffer; name: string }[]> {
-  const ids = Array.isArray(m.attachments) ? m.attachments.slice(0, MAX_FILES) : [];
+  const ids = Array.isArray(m.attachments) && bridgeSyncs("files") ? m.attachments.slice(0, MAX_FILES) : [];
   if (ids.length === 0) return [];
   const records = await getFilesByIds(ids);
   const out: { attachment: Buffer; name: string }[] = [];
@@ -84,7 +85,7 @@ async function filesOf(m: MessageRecord): Promise<{ attachment: Buffer; name: st
 
 /** A Gryt message posted into the linked Discord channel, under the member's name. */
 export async function messageCreated(m: MessageRecord & { sender_nickname?: string }): Promise<void> {
-  if (!sending() || !fromGryt(m)) return;
+  if (!sending() || !fromGryt(m) || !bridgeSyncs("messages") || (m.thread_id && !bridgeSyncs("threads"))) return;
   const threadId = m.thread_id ? discordChannelFor(m.thread_id)?.discord_channel_id : undefined;
   if (m.thread_id && !threadId) return;
   const target = await webhookFor(m.conversation_id);
@@ -104,7 +105,7 @@ export async function messageCreated(m: MessageRecord & { sender_nickname?: stri
 
 export async function messageEdited(m: MessageRecord): Promise<void> {
   const link = discordMessageFor(m.message_id);
-  if (!sending() || !link?.from_gryt) return;
+  if (!sending() || !link?.from_gryt || !bridgeSyncs("edits")) return;
   const target = await webhookFor(m.conversation_id);
   if (!target) return;
   const threadId = link.discord_channel_id !== target.discordChannelId ? link.discord_channel_id : undefined;
@@ -115,7 +116,7 @@ export async function messageEdited(m: MessageRecord): Promise<void> {
 export async function messageDeleted(grytMessageId: string): Promise<void> {
   const link = discordMessageFor(grytMessageId);
   const c = getClient();
-  if (!sending() || !link || !c) return;
+  if (!sending() || !link || !c || !bridgeSyncs("deletes")) return;
   if (link.from_gryt) {
     const target = await webhookFor(link.gryt_conversation_id);
     const threadId = target && link.discord_channel_id !== target.discordChannelId ? link.discord_channel_id : undefined;
@@ -129,7 +130,7 @@ export async function messageDeleted(grytMessageId: string): Promise<void> {
 export async function messagePinned(grytMessageId: string, pinned: boolean): Promise<void> {
   const link = discordMessageFor(grytMessageId);
   const c = getClient();
-  if (!sending() || !link || !c) return;
+  if (!sending() || !link || !c || !bridgeSyncs("pins")) return;
   const channel = (await c.channels.fetch(link.discord_channel_id)) as TextChannel | null;
   const msg = await channel?.messages.fetch(link.discord_message_id);
   if (!msg || msg.pinned === pinned) return;
@@ -140,7 +141,7 @@ export async function messagePinned(grytMessageId: string, pinned: boolean): Pro
 export async function reactionsChanged(m: MessageRecord): Promise<void> {
   const link = discordMessageFor(m.message_id);
   const c = getClient();
-  if (!sending() || !link || !c) return;
+  if (!sending() || !link || !c || !bridgeSyncs("reactions")) return;
   const channel = (await c.channels.fetch(link.discord_channel_id)) as TextChannel | null;
   const msg = await channel?.messages.fetch(link.discord_message_id);
   if (!msg) return;

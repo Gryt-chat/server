@@ -3,6 +3,7 @@ import { basename, posix, relative, sep } from "node:path";
 
 import {
   addChannelRowIfMissing,
+  moveChannelRowToEnd,
   ensureImportedThread,
   getMessageById,
   getServerChannel,
@@ -120,7 +121,9 @@ export async function createImportedChannels(channels: Iterable<ChannelPlan>): P
         layout: c.kind === "forum" ? "forum" : "chat",
       });
     }
-    await addChannelRowIfMissing(channelId, parentItem);
+    // The bridge passes every target, so each run puts them all back in Discord's order.
+    if (c.grytChannelId) await moveChannelRowToEnd(channelId, parentItem);
+    else await addChannelRowIfMissing(channelId, parentItem);
   }
 }
 

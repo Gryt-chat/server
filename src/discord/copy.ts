@@ -10,6 +10,7 @@ import {
   getServerConfig,
   insertImportedMessages,
   isExcludedFromBridge,
+  listDiscordAuthors,
   rememberDiscordMessages,
   saveDiscordBridgeChannel,
   type DiscordImportProgress,
@@ -19,7 +20,11 @@ import { importedId } from "../import/discord/ids";
 import { createImportedChannels, emptyProgress, importThreadMessages, type ChannelPlan, type ImportMedia } from "../import/discord/importer";
 import { DiscordRowBuilder } from "../import/discord/rows";
 import { toDceMessage } from "./adapter";
+import { broadcastServerUiUpdate } from "../socket/utils/server";
 import { discordCdnAssets } from "./assets";
+import { takeDiscordIdentity } from "./identity";
+import { ensureMembers } from "./presence";
+import { refreshDiscordProfiles } from "./profiles";
 import { importRoles } from "./roles";
 
 const TEXT_TYPES = new Set([ChannelType.GuildText, ChannelType.GuildAnnouncement]);
@@ -32,6 +37,9 @@ export interface CopyOptions {
   media: ImportMedia;
   startedBy: string;
   onProgress?: (progress: DiscordImportProgress) => void;
+  /** Checked between pages: true stops the copy where it is, to resume later. */
+  stopped?: () => boolean;
+  identity?: boolean;
 }
 
 function plan(channels: NonThreadGuildBasedChannel[]): ChannelPlan[] {
@@ -69,6 +77,7 @@ export async function copyGuild(guild: Guild, opts: CopyOptions): Promise<Discor
   const maxBytes = typeof cfg?.upload_max_bytes === "number" ? cfg.upload_max_bytes : DEFAULT_UPLOAD_MAX_BYTES;
   const assets = discordCdnAssets(join(process.env.DATA_DIR || "./data", "tmp", "discord-bridge"), maxBytes);
 
+  if (opts.identity) await takeDiscordIdentity(guild, assets).catch((e) => warn(`name and icon: ${e instanceof Error ? e.message : String(e)}`));
   await importRoles(guild).catch((e) => warn(`roles: ${e instanceof Error ? e.message : String(e)}`));
   const channels = [...(await guild.channels.fetch()).values()].filter((c): c is NonThreadGuildBasedChannel => !!c);
   const plans = plan(channels).flatMap((p) => {
@@ -78,15 +87,23 @@ export async function copyGuild(guild: Guild, opts: CopyOptions): Promise<Discor
   const names = new Map(plans.map((p) => [p.id, p.name]));
   const rows = new DiscordRowBuilder(opts.media, progress, warn, names);
   progress.channels_total = plans.length;
+  progress.channels = plans.map((p) => ({ name: p.name, messages: 0, done: false }));
   await createImportedChannels(plans);
+  broadcastServerUiUpdate("other");
   const notices = new Map<string, string>();
 
   try {
-    for (const p of plans) {
+    for (const [i, p] of plans.entries()) {
+      if (opts.stopped?.()) return progress;
       progress.current_channel = p.name;
       opts.onProgress?.({ ...progress });
       const channel = channels.find((c) => c.id === p.id);
-      if (channel?.isTextBased()) await copyHistory(channel.id, p.grytChannelId ?? importedId("channel", p.id), (before) => channel.messages.fetch({ limit: PAGE, ...(before ? { before } : {}) }), rows, progress, warn, assets, opts, notices);
+      const row = progress.channels[i];
+      const before = progress.messages_imported + progress.messages_already_there;
+      if (channel?.isTextBased()) await copyHistory(channel.id, p.grytChannelId ?? importedId("channel", p.id), (b) => channel.messages.fetch({ limit: PAGE, ...(b ? { before: b } : {}) }), rows, progress, warn, assets, opts, notices);
+      if (opts.stopped?.()) return progress;
+      row.messages = progress.messages_imported + progress.messages_already_there - before;
+      row.done = true;
       progress.channels_done += 1;
     }
 
@@ -96,11 +113,16 @@ export async function copyGuild(guild: Guild, opts: CopyOptions): Promise<Discor
     });
     progress.channels_total += threads.length;
     for (const { t, parent } of threads) {
+      if (opts.stopped?.()) return progress;
       progress.current_channel = t.name;
       opts.onProgress?.({ ...progress });
       await copyThread(t, parent, notices.get(t.id) ?? null, rows, progress, warn, assets);
       progress.channels_done += 1;
     }
+
+    const authors = new Set(listDiscordAuthors().map((a) => a.discord_user_id));
+    await ensureMembers(guild);
+    await refreshDiscordProfiles([...guild.members.cache.values()].filter((m) => authors.has(m.id)), rows, assets).catch((e) => warn(`names and pictures: ${e instanceof Error ? e.message : String(e)}`));
 
     for (const e of (await guild.emojis.fetch()).values()) {
       const name = emojiName(e.name ?? undefined);
@@ -111,6 +133,7 @@ export async function copyGuild(guild: Guild, opts: CopyOptions): Promise<Discor
     progress.current_channel = null;
     opts.onProgress?.({ ...progress });
     await assets.cleanup();
+    broadcastServerUiUpdate("other");
   }
   return progress;
 }
@@ -130,6 +153,7 @@ async function copyHistory(
   if (cursor.backfill_done) return;
 
   for (;;) {
+    if (opts.stopped?.()) return;
     let page: Message[];
     try {
       page = [...(await fetchPage(cursor.backfill_before)).values()];
@@ -233,3 +257,4 @@ async function copyThread(
 export function linkOf(m: { id: string; channelId: string }, conversationId: string) {
   return { gryt_message_id: importedId("message", m.id), gryt_conversation_id: conversationId, discord_channel_id: m.channelId, discord_message_id: m.id, from_gryt: false };
 }
+

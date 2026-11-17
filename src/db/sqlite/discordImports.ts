@@ -16,6 +16,8 @@ export interface DiscordImportProgress {
   files_missing: number;
   emojis_queued: number;
   current_channel?: string | null;
+  /** Each channel's own count, for the bridge's progress list. */
+  channels?: { name: string; messages: number; done: boolean }[];
 }
 
 export interface DiscordImportRecord {

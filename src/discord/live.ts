@@ -15,6 +15,7 @@ import {
 import {
   DEFAULT_UPLOAD_MAX_BYTES,
   addReactionToMessage,
+  bridgeSyncs,
   bridgeWebhookIds,
   getServerConfig,
   getDiscordBridge,
@@ -43,6 +44,7 @@ import { recipientClientIds } from "../socket/utils/recipients";
 import { toDceMessage } from "./adapter";
 import { linkOf } from "./copy";
 import { discordCdnAssets } from "./assets";
+import { refreshDiscordProfiles } from "./profiles";
 
 const CHANNEL_ACCESS = { allowed: true, kind: "channel" } as const;
 
@@ -116,7 +118,7 @@ export function attachLiveSync(c: Client, media: ImportMedia): void {
 
   c.on(Events.MessageCreate, guarded("new message", async (m: Message) => {
     const place = await placeOf(m, botId());
-    if (!place) return;
+    if (!place || !bridgeSyncs("messages") || (place.threadId && !bridgeSyncs("threads"))) return;
     await withAssets(async (assets) => {
     if (place.threadId && !getThread(place.threadId) && m.channel.isThread()) {
       const t = m.channel;
@@ -133,7 +135,10 @@ export function attachLiveSync(c: Client, media: ImportMedia): void {
         flush: async (batch) => void insertImportedMessages(batch),
       });
     } else {
-      const row = await rows.buildRow(toDceMessage(m), assets, place.conversationId, place.discordChannelId, place.threadId);
+      const dce = toDceMessage(m);
+      if (!bridgeSyncs("files")) dce.attachments = [];
+      if (!bridgeSyncs("replies")) dce.reference = undefined;
+      const row = await rows.buildRow(dce, assets, place.conversationId, place.discordChannelId, place.threadId);
       if (!row || insertImportedMessages([row]) === 0) return;
       rememberDiscordMessages([linkOf(m, place.conversationId)]);
       if (place.threadId) refreshImportedThreadCounters(place.threadId);
@@ -151,7 +156,7 @@ export function attachLiveSync(c: Client, media: ImportMedia): void {
     const place = await placeOf(m, botId());
     if (!place) return;
     const id = importedId("message", m.id);
-    if (before.partial || before.content !== m.content) {
+    if (bridgeSyncs("edits") && (before.partial || before.content !== m.content)) {
       const row = await withAssets((assets) => rows.buildRow(toDceMessage(m), assets, place.conversationId, place.discordChannelId, place.threadId));
       const updated = row?.text ? await updateMessageText(place.conversationId, id, row.text) : null;
       if (updated) {
@@ -159,7 +164,7 @@ export function attachLiveSync(c: Client, media: ImportMedia): void {
         await emit(place.conversationId, "chat:edited", await view(updated));
       }
     }
-    if (before.partial || before.pinned !== m.pinned) {
+    if (bridgeSyncs("pins") && (before.partial || before.pinned !== m.pinned)) {
       const updated = await setMessagePinned(place.conversationId, id, m.pinned ? discordSenderId("0") : null);
       if (updated) {
         replaceCachedMessage(place.conversationId, updated);
@@ -171,7 +176,7 @@ export function attachLiveSync(c: Client, media: ImportMedia): void {
   c.on(Events.MessageDelete, guarded("delete", async (m: Message | PartialMessage) => {
     const place = await placeOf(m, botId());
     const refs = pluginRefs();
-    if (!place || !refs) return;
+    if (!place || !refs || !bridgeSyncs("deletes")) return;
     const id = importedId("message", m.id);
     const message = await getMessageById(place.conversationId, id);
     if (!message) return;
@@ -180,7 +185,8 @@ export function attachLiveSync(c: Client, media: ImportMedia): void {
 
   const react = (add: boolean) =>
     guarded(add ? "reaction" : "reaction removal", async (r: MessageReaction | PartialMessageReaction, user: User | PartialUser) => {
-      if (user.id === botId() || isExcludedFromBridge("discord", user.id)) return;
+      if (user.id === botId() || isExcludedFromBridge("discord", user.id) || !bridgeSyncs("reactions")) return;
+      if (r.emoji.id && !bridgeSyncs("emoji")) return;
       const place = await placeOf(r.message, botId());
       const src = reactionSrc(r);
       if (!place || !src) return;
@@ -191,6 +197,16 @@ export function attachLiveSync(c: Client, media: ImportMedia): void {
       replaceCachedMessage(place.conversationId, updated);
       await emit(place.conversationId, "chat:reaction", await view(updated));
     });
+  c.on(Events.GuildMemberUpdate, guarded("profile", async (before, after) => {
+    if (after.guild.id !== getDiscordBridge()?.guild_id) return;
+    if (!before.partial && before.displayName === after.displayName && before.displayAvatarURL() === after.displayAvatarURL()) return;
+    await withAssets((assets) => refreshDiscordProfiles([after], rows, assets));
+  }));
+  c.on(Events.UserUpdate, guarded("profile", async (_before, user) => {
+    const m = c.guilds.cache.get(getDiscordBridge()?.guild_id ?? "")?.members.cache.get(user.id);
+    if (m) await withAssets((assets) => refreshDiscordProfiles([m], rows, assets));
+  }));
+
   c.on(Events.MessageReactionAdd, react(true));
   c.on(Events.MessageReactionRemove, react(false));
 }
