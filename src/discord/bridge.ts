@@ -1,7 +1,10 @@
 import consola from "consola";
 import { Client, Events, GatewayIntentBits, PermissionFlagsBits, REST, Routes, type Guild } from "discord.js";
 
-import { getDiscordBridge, updateDiscordBridge, type DiscordBridgeStatus } from "../db";
+import { getDiscordBridge, updateDiscordBridge, type DiscordBridgeDirection, type DiscordBridgeStatus } from "../db";
+import type { ImportMedia } from "../import/discord/importer";
+import { resetMessageCache } from "../socket/utils/messageCache";
+import { copyGuild } from "./copy";
 
 /** Read, write with each member's name and picture, mirror pins, reactions and threads. Not Administrator. */
 export const BRIDGE_PERMISSIONS =
@@ -39,6 +42,35 @@ export async function applicationIdForToken(botToken: string): Promise<string | 
 }
 
 let client: Client | null = null;
+let media: ImportMedia | null = null;
+let copying = false;
+
+/** Runs once at a time; a copy cut off by a restart is picked up when the bot is back in its server. */
+async function runCopy(): Promise<void> {
+  const b = getDiscordBridge();
+  const guild = b?.guild_id ? client?.guilds.cache.get(b.guild_id) : undefined;
+  if (copying || !b || !guild || !media || b.copy_status !== "running" || !b.copy_started_by) return;
+  copying = true;
+  try {
+    const progress = await copyGuild(guild, {
+      media,
+      startedBy: b.copy_started_by,
+      onProgress: (p) => updateDiscordBridge({ copy_progress: JSON.stringify(p) }),
+    });
+    updateDiscordBridge({ copy_status: "done", copy_progress: JSON.stringify(progress) });
+  } catch (e) {
+    consola.error("[DiscordBridge] copy failed", e);
+    updateDiscordBridge({ copy_status: "failed" });
+  } finally {
+    copying = false;
+    resetMessageCache();
+  }
+}
+
+export function startDiscordCopy(direction: DiscordBridgeDirection, startedBy: string): void {
+  updateDiscordBridge({ direction, copy_status: "running", copy_started_by: startedBy });
+  void runCopy();
+}
 
 function setStatus(status: DiscordBridgeStatus, guild?: Guild | null): void {
   updateDiscordBridge({ status, ...(guild !== undefined ? { guild_id: guild?.id ?? null, guild_name: guild?.name ?? null } : {}) });
@@ -52,11 +84,15 @@ async function settleGuild(c: Client): Promise<void> {
   for (const g of guilds) {
     if (g.id !== keep?.id) await g.leave().catch((e) => consola.warn(`[DiscordBridge] couldn't leave ${g.id}`, e));
   }
-  if (keep) setStatus("linked", keep);
+  if (keep) {
+    setStatus("linked", keep);
+    void runCopy();
+  }
   else setStatus(linked ? "removed" : "waiting_for_invite");
 }
 
-export async function startDiscordBridge(): Promise<void> {
+export async function startDiscordBridge(store?: ImportMedia): Promise<void> {
+  if (store) media = store;
   await stopDiscordBridge();
   const config = getDiscordBridge();
   if (!config) return;

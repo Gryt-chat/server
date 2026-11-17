@@ -68,13 +68,16 @@ interface ChannelFile {
   part: number;
 }
 
-interface PlannedChannel {
+export interface ChannelPlan {
   id: string;
   name: string;
   kind: "text" | "voice" | "forum";
   topic: string | null;
   categoryId: string | null;
   categoryName: string | null;
+}
+
+interface PlannedChannel extends ChannelPlan {
   files: ChannelFile[];
 }
 
@@ -85,7 +88,42 @@ interface PlannedThread {
   files: ChannelFile[];
 }
 
-function emptyProgress(): DiscordImportProgress {
+/** Only what's missing. A channel the owner renamed or moved after an earlier run stays as they left it. */
+export async function createImportedChannels(channels: Iterable<ChannelPlan>): Promise<void> {
+  const existing = await listServerChannels();
+  let position = existing.reduce((max, c) => Math.max(max, c.position), 0) + 1;
+  const items = await listServerSidebarItems();
+  const folders = new Set(items.filter((i) => i.kind === "folder").map((i) => i.item_id));
+  let sidebarEnd = items.reduce((max, i) => Math.max(max, i.position), 0) + 10;
+
+  for (const c of channels) {
+    const channelId = importedId("channel", c.id);
+    let parentItem: string | null = null;
+    if (c.categoryId) {
+      parentItem = folderItemId(c.categoryId);
+      if (!folders.has(parentItem)) {
+        await upsertServerSidebarItem({ itemId: parentItem, kind: "folder", label: c.categoryName ?? "Discord", position: sidebarEnd });
+        sidebarEnd += 10;
+        folders.add(parentItem);
+      }
+    }
+    if (!(await getServerChannel(channelId))) {
+      await upsertServerChannel({
+        channelId,
+        name: c.name,
+        type: c.kind === "voice" ? "voice" : "text",
+        position: position++,
+        description: c.topic,
+        textInVoice: c.kind === "voice",
+        layout: c.kind === "forum" ? "forum" : "chat",
+      });
+    }
+    await addChannelRowIfMissing(channelId, parentItem);
+  }
+}
+
+
+export function emptyProgress(): DiscordImportProgress {
   return {
     channels_total: 0, channels_done: 0, messages_imported: 0, messages_already_there: 0,
     messages_skipped: 0, files_stored: 0, files_already_there: 0, files_skipped: 0,
@@ -213,38 +251,8 @@ class DiscordImport {
     if (this.progress.channels_total === 0) throw new Error("No DiscordChatExporter JSON files were found in that folder.");
   }
 
-  /** Only what's missing. A channel the owner renamed or moved after an earlier run stays as they left it. */
   private async createChannels(): Promise<void> {
-    const existing = await listServerChannels();
-    let position = existing.reduce((max, c) => Math.max(max, c.position), 0) + 1;
-    const items = await listServerSidebarItems();
-    const folders = new Set(items.filter((i) => i.kind === "folder").map((i) => i.item_id));
-    let sidebarEnd = items.reduce((max, i) => Math.max(max, i.position), 0) + 10;
-
-    for (const c of this.channels.values()) {
-      const channelId = importedId("channel", c.id);
-      let parentItem: string | null = null;
-      if (c.categoryId) {
-        parentItem = folderItemId(c.categoryId);
-        if (!folders.has(parentItem)) {
-          await upsertServerSidebarItem({ itemId: parentItem, kind: "folder", label: c.categoryName ?? "Discord", position: sidebarEnd });
-          sidebarEnd += 10;
-          folders.add(parentItem);
-        }
-      }
-      if (!(await getServerChannel(channelId))) {
-        await upsertServerChannel({
-          channelId,
-          name: c.name,
-          type: c.kind === "voice" ? "voice" : "text",
-          position: position++,
-          description: c.topic,
-          textInVoice: c.kind === "voice",
-          layout: c.kind === "forum" ? "forum" : "chat",
-        });
-      }
-      await addChannelRowIfMissing(channelId, parentItem);
-    }
+    await createImportedChannels(this.channels.values());
   }
 
   private async parseWhole(path: string): Promise<DceExport | null> {

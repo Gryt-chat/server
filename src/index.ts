@@ -165,7 +165,7 @@ initSqlite()
     if (!uploadsDisabled()) startMediaSweep();
     startMlsRetention();
     resumeDiscordImports(uploadsDisabled() ? noFileStorageMedia : uploadPathMedia);
-    void startDiscordBridge();
+    void startDiscordBridge(uploadsDisabled() ? noFileStorageMedia : uploadPathMedia);
     if (!uploadsDisabled()) {
       startEmojiQueueWorker();
     }
