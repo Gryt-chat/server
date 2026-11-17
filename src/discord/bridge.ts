@@ -12,7 +12,7 @@ import { setOutboundClient } from "./outbound";
 import { attachPresence } from "./presence";
 import { attachVoiceBridge, stopVoiceBridge } from "./voice";
 
-/** Read, write with each member's name and picture, mirror pins, reactions and threads, and hear voice. Not Administrator. */
+/** Read, write with each member's name and picture, mirror pins, reactions and threads, and voice both ways. Not Administrator. */
 export const BRIDGE_PERMISSIONS =
   PermissionFlagsBits.ViewChannel |
   PermissionFlagsBits.ReadMessageHistory |
@@ -25,7 +25,8 @@ export const BRIDGE_PERMISSIONS =
   PermissionFlagsBits.AddReactions |
   PermissionFlagsBits.AttachFiles |
   PermissionFlagsBits.EmbedLinks |
-  PermissionFlagsBits.Connect;
+  PermissionFlagsBits.Connect |
+  PermissionFlagsBits.Speak;
 
 export function inviteUrl(applicationId: string): string {
   const q = new URLSearchParams({ client_id: applicationId, scope: "bot applications.commands", permissions: BRIDGE_PERMISSIONS.toString() });

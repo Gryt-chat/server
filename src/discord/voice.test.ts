@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { nextTimestamp, voicePacket } from "./voice";
+import { Floor, nextTimestamp, voicePacket } from "./voice";
 
 describe("Discord voice into Gryt", () => {
   it("wraps an Opus frame the way @gryt/voice reads it", () => {
@@ -19,5 +19,14 @@ describe("Discord voice into Gryt", () => {
     assert.equal(nextTimestamp(960, 1000, 1001), 1920);
     assert.equal(nextTimestamp(960, 1000, 3000), 960 + 100 * 960);
     assert.equal(nextTimestamp(0xffff_ffff, 0, 20), 959);
+  });
+
+  it("gives Discord one Gryt speaker at a time, until they've been quiet a moment", () => {
+    const f = new Floor();
+    assert.deepEqual(f.take("a", 0), { play: true, changed: true });
+    assert.deepEqual(f.take("b", 100), { play: false, changed: false });
+    assert.deepEqual(f.take("a", 200), { play: true, changed: false });
+    assert.deepEqual(f.take("b", 500), { play: false, changed: false });
+    assert.deepEqual(f.take("b", 700), { play: true, changed: true });
   });
 });

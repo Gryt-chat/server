@@ -1,12 +1,25 @@
 import consola from "consola";
 import { ChannelType, Events, type Client, type Guild, type VoiceBasedChannel } from "discord.js";
-import { EndBehaviorType, joinVoiceChannel, type AudioReceiveStream, type VoiceConnection } from "@discordjs/voice";
+import { Readable } from "node:stream";
+
+import {
+  EndBehaviorType,
+  NoSubscriberBehavior,
+  StreamType,
+  createAudioPlayer,
+  createAudioResource,
+  joinVoiceChannel,
+  type AudioPlayer,
+  type AudioReceiveStream,
+  type VoiceConnection,
+} from "@discordjs/voice";
 
 import { getDiscordBridge, grytChannelFor, isExcludedFromBridge } from "../db";
 import { importedId } from "../import/discord/ids";
 import { pluginRefs } from "../plugins/refs";
 import { syncAllClients } from "../socket/utils/clients";
 import { sfuRoomId } from "../socket/utils/voiceRooms";
+import { Regroup } from "./opusFrames";
 import { removeDiscordVoiceParticipant, setDiscordVoiceParticipant } from "./voiceParticipants";
 
 /** Discord sends 20 ms Opus frames; 960 samples at 48 kHz. */
@@ -40,11 +53,44 @@ interface Speaker {
   lastAt: number;
 }
 
+/** The bot's own voice member in the Gryt room, which hears it and speaks into Discord. */
+export const BRIDGE_LISTENER = "discord-bridge";
+/** How long the current speaker keeps the floor after their last packet. */
+const FLOOR_MS = 400;
+/** About 200 ms of audio waiting; past that, packets are dropped so Discord doesn't fall behind. */
+const MAX_QUEUED = 10;
+
+/** Who is heard in Discord: whoever talks keeps it until they've been quiet for FLOOR_MS. */
+export class Floor {
+  speaker: string | null = null;
+  private lastAt = 0;
+
+  /** True when this packet is the one to play; `changed` when it starts a new speaker. */
+  take(speaker: string, now: number): { play: boolean; changed: boolean } {
+    if (this.speaker === speaker) {
+      this.lastAt = now;
+      return { play: true, changed: false };
+    }
+    if (this.speaker && now - this.lastAt < FLOOR_MS) return { play: false, changed: false };
+    this.speaker = speaker;
+    this.lastAt = now;
+    return { play: true, changed: true };
+  }
+}
+
+interface Outbound {
+  player: AudioPlayer;
+  stream: Readable;
+  regroup: Regroup;
+  floor: Floor;
+}
+
 interface Bridged {
   discordChannelId: string;
   grytChannelId: string;
   conn: VoiceConnection;
   people: Map<string, Speaker>;
+  out: Outbound | null;
 }
 
 let current: Bridged | null = null;
@@ -120,13 +166,47 @@ function leave(): void {
   current = null;
   if (!b) return;
   for (const id of [...b.people.keys()]) dropPerson(b, id);
+  if (b.out) {
+    pluginRefs()?.sfuClient?.virtualVoiceLeave(BRIDGE_LISTENER);
+    b.out.player.stop(true);
+    b.out.stream.destroy();
+  }
   b.conn.destroy();
 }
 
+/** Gryt into Discord: one voice at a time, since a bot is one speaker there. Whoever talks keeps it until they stop. */
+export function hearGryt(listener: string, speaker: string, datagram: Buffer): void {
+  const out = current?.out;
+  if (listener !== BRIDGE_LISTENER || !out || datagram.length <= 8 || datagram[0] !== 1) return;
+  if (speaker.startsWith("discord:") || isExcludedFromBridge("gryt", speaker)) return;
+  const turn = out.floor.take(speaker, Date.now());
+  if (!turn.play) return;
+  if (turn.changed) out.regroup.reset();
+  for (const packet of out.regroup.push(datagram.subarray(8))) {
+    if (out.stream.readableLength < MAX_QUEUED) out.stream.push(Buffer.from(packet));
+  }
+}
+
+function speakIntoDiscord(b: Bridged): void {
+  const refs = pluginRefs();
+  if (!refs?.sfuClient) return;
+  const stream = new Readable({ objectMode: true, read() {} });
+  const player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Play, maxMissedFrames: Number.POSITIVE_INFINITY } });
+  player.play(createAudioResource(stream, { inputType: StreamType.Opus }));
+  player.on("error", (e) => consola.warn("[DiscordVoice] playing into Discord failed", e.message));
+  b.conn.subscribe(player);
+  b.out = { player, stream, regroup: new Regroup(), floor: new Floor() };
+  refs.sfuClient.setVirtualAudioHandler(hearGryt);
+  refs.sfuClient.virtualVoiceJoin(sfuRoomId(refs.serverId, b.grytChannelId), BRIDGE_LISTENER, true);
+}
+
 function join(guild: Guild, channel: VoiceBasedChannel, grytChannelId: string): void {
-  const conn = joinVoiceChannel({ channelId: channel.id, guildId: guild.id, adapterCreator: guild.voiceAdapterCreator, selfDeaf: false, selfMute: true });
-  const b: Bridged = { discordChannelId: channel.id, grytChannelId, conn, people: new Map() };
+  const direction = getDiscordBridge()?.direction;
+  const conn = joinVoiceChannel({ channelId: channel.id, guildId: guild.id, adapterCreator: guild.voiceAdapterCreator, selfDeaf: false, selfMute: direction === "to_gryt" });
+  const b: Bridged = { discordChannelId: channel.id, grytChannelId, conn, people: new Map(), out: null };
   current = b;
+  if (direction !== "to_gryt") speakIntoDiscord(b);
+  if (direction === "to_discord") return;
   conn.receiver.speaking.on("start", (userId) => {
     if (current !== b) return;
     addPerson(b, guild, userId);
@@ -139,12 +219,13 @@ function join(guild: Guild, channel: VoiceBasedChannel, grytChannelId: string): 
 export function reconcileVoice(c: Client): void {
   const b = getDiscordBridge();
   const guild = b?.guild_id ? c.guilds.cache.get(b.guild_id) : undefined;
-  const wanted = b?.status === "linked" && b.direction !== "to_discord" && guild ? pick(guild) : null;
+  const wanted = b?.status === "linked" && guild ? pick(guild) : null;
   if (!wanted || !guild) {
     leave();
     return;
   }
   if (current?.discordChannelId === wanted.channel.id) {
+    if (b?.direction === "to_discord") return;
     const here = new Set(humans(wanted.channel).map((m) => m.id));
     for (const id of [...current.people.keys()]) if (!here.has(id)) dropPerson(current, id);
     for (const id of here) addPerson(current, guild, id);
