@@ -590,6 +590,11 @@
     fflate "0.8.3"
     ts-mls "npm:@gryt/ts-mls@1.6.4-gryt.1"
 
+"@gryt/voice@0.9.3":
+  version "0.9.3"
+  resolved "https://registry.yarnpkg.com/@gryt/voice/-/voice-0.9.3.tgz#6a91fbe1d95440868664e68777b4f55e7a1887d3"
+  integrity sha512-HBeVQvPKS7pPYS5qmboqA+yQpxjyQjzZTqme9DUnDWfaiq/oxsUhKW8LMZZpnaG/c5sz3mTwywmtM/ZPVRkneg==
+
 "@hpke/common@^1.10.0":
   version "1.10.1"
   resolved "https://registry.yarnpkg.com/@hpke/common/-/common-1.10.1.tgz#11f205e5ba24d558c1bd4ac671580d95d488af18"
