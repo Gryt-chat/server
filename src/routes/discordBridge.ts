@@ -4,7 +4,7 @@ import consola from "consola";
 import express from "express";
 import type { NextFunction, Request, Response } from "express";
 
-import { clearDiscordBridge, getDiscordBridge, getUserByServerId, insertServerAudit, linkDiscordMember, listDiscordAuthors, listDiscordMemberLinks, saveDiscordBridgeApp, unlinkDiscordMember, grytChannelFor, listServerChannels, setDiscordChannelMatch, listExcludedFromBridge, setExcludedFromBridge, updateDiscordBridge, discordBridgeStats, discordPersonLinkedTo, listEmojis, SYNC_KINDS, type SyncKind } from "../db";
+import { clearDiscordBridge, getDiscordBridge, getUserByServerId, insertServerAudit, linkDiscordMember, listDiscordAuthors, listDiscordMemberLinks, saveDiscordBridgeApp, unlinkDiscordMember, grytChannelFor, listServerChannels, setDiscordChannelMatch, listExcludedFromBridge, setExcludedFromBridge, updateDiscordBridge, discordBridgeStats, discordPersonLinkedTo, listEmojis, channelsHaveMessages, getServerConfig, SYNC_KINDS, type SyncKind } from "../db";
 import { applicationIdForToken, inviteUrl, linkedGuild, pauseDiscordCopy, startDiscordBridge, startDiscordCopy, stopDiscordBridge } from "../discord/bridge";
 import { emojiName } from "../import/discord/content";
 import { isSnowflake } from "../import/discord/dce";
@@ -13,6 +13,7 @@ import { redeemLinkCode, removeDiscordPersonMessages } from "../discord/commands
 import { suggestMatches, type Side } from "../discord/match";
 import { grantDiscordRoles } from "../discord/roles";
 import { importedId } from "../import/discord/ids";
+import { resetMessageCache } from "../socket/utils/messageCache";
 import { broadcastServerUiUpdate } from "../socket/utils/server";
 import { requireOwner } from "./discordImport";
 
@@ -130,14 +131,19 @@ discordBridgeRouter.get("/preview", handle(async (_req, res) => {
   const mine = new Set((await listEmojis()).map((e) => e.name));
   const theirs = [...(await guild.emojis.fetch()).values()].map((e) => emojiName(e.name ?? undefined)).filter((n): n is string => !!n);
   const roles = (await guild.roles.fetch()).filter((r) => !r.managed && r.id !== guild.id).size;
+  const cfg = await getServerConfig().catch(() => null);
   res.json({
+    hasMessages: channelsHaveMessages(),
+    name: cfg?.display_name ?? null,
     emoji: theirs.length,
     emojiClashes: theirs.filter((n) => mine.has(n)),
     roles,
   });
 }));
 
-/** Everyone whose messages came from Discord, and who they're linked to. */
+let membersFetchedFor: string | null = null;
+
+/** Everyone on the Discord server and everyone whose messages came from it, and who they're linked to. */
 discordBridgeRouter.get("/people", handle(async (_req, res) => {
   const links = new Map(listDiscordMemberLinks().map((l) => [l.discord_user_id, l]));
   const excluded = new Set(listExcludedFromBridge("discord"));
@@ -145,14 +151,19 @@ discordBridgeRouter.get("/people", handle(async (_req, res) => {
   for (const a of listDiscordAuthors()) people.set(a.discord_user_id, { name: a.name, avatar: null, messages: a.messages });
   const guild = linkedGuild();
   if (guild) {
-    try {
-      for (const m of (await guild.members.fetch()).values()) {
-        if (m.user.bot) continue;
-        const known = people.get(m.id);
-        people.set(m.id, { name: m.displayName, avatar: m.displayAvatarURL({ extension: "png", size: 64 }), messages: known?.messages ?? 0 });
+    // Discord allows one full member list per 30 seconds; the members intent keeps the cache current after it.
+    if (membersFetchedFor !== guild.id) {
+      try {
+        await guild.members.fetch();
+        membersFetchedFor = guild.id;
+      } catch (e) {
+        consola.warn("[DiscordBridge] couldn't list Discord members", e);
       }
-    } catch (e) {
-      consola.warn("[DiscordBridge] couldn't list Discord members", e);
+    }
+    for (const m of guild.members.cache.values()) {
+      if (m.user.bot) continue;
+      const known = people.get(m.id);
+      people.set(m.id, { name: m.displayName, avatar: m.displayAvatarURL({ extension: "png", size: 64 }), messages: known?.messages ?? 0 });
     }
   }
   res.json({
@@ -177,6 +188,7 @@ discordBridgeRouter.put("/people/:discordUserId", handle(async (req, res) => {
     return;
   }
   linkDiscordMember(discordUserId, serverUserId, actor, "admin");
+  resetMessageCache();
   giveDiscordRoles(discordUserId, serverUserId);
   await insertServerAudit({ actorServerUserId: actor, action: "discord_link", target: serverUserId, meta: { discordUserId, proof: "admin" } });
   res.json({ ok: true });
@@ -189,6 +201,7 @@ discordBridgeRouter.delete("/people/:discordUserId", handle(async (req, res) => 
     res.status(404).json({ error: "not_linked" });
     return;
   }
+  resetMessageCache();
   await insertServerAudit({ actorServerUserId: actor ?? null, action: "discord_unlink", target: discordUserId });
   res.json({ ok: true });
 }));
@@ -213,13 +226,15 @@ discordBridgeRouter.get("/channels", handle(async (_req, res) => {
   }
   const gryt: Side[] = (await listServerChannels()).map((c) => ({ id: c.channel_id, name: c.name, kind: c.type === "voice" ? "voice" : "text" }));
   const suggested = suggestMatches(discord, gryt);
+  const here = new Set(gryt.map((g) => g.id));
   res.json({
     gryt,
     discord: discord.map((d) => {
       const derived = importedId("channel", d.id);
       const current = grytChannelFor(d.id, derived);
       let target = current ?? "skip";
-      if (current === derived) target = "new";
+      // Already copied into its own channel: that channel is the match now.
+      if (current === derived && !here.has(derived)) target = "new";
       return { ...d, target, suggested: target === "new" ? (suggested.get(d.id) ?? null) : null };
     }),
   });
@@ -253,15 +268,18 @@ discordBridgeRouter.put("/channels", handle(async (req, res) => {
 }));
 
 discordBridgeRouter.put("/settings", handle(async (req, res) => {
-  const { syncNewChannels, syncOff } = (req.body ?? {}) as { syncNewChannels?: unknown; syncOff?: unknown };
+  const { syncNewChannels, syncOff, direction } = (req.body ?? {}) as { syncNewChannels?: unknown; syncOff?: unknown; direction?: unknown };
   const kinds = Array.isArray(syncOff) ? syncOff.filter((k): k is SyncKind => (SYNC_KINDS as readonly unknown[]).includes(k)) : null;
-  if ((syncNewChannels !== undefined && typeof syncNewChannels !== "boolean") || (syncOff !== undefined && !kinds) || (syncNewChannels === undefined && !kinds)) {
+  const way = typeof direction === "string" && DIRECTIONS.has(direction) ? (direction as "to_gryt" | "both" | "to_discord") : null;
+  const bad = (syncNewChannels !== undefined && typeof syncNewChannels !== "boolean") || (syncOff !== undefined && !kinds) || (direction !== undefined && !way);
+  if (bad || (syncNewChannels === undefined && !kinds && !way)) {
     res.status(400).json({ error: "invalid_payload" });
     return;
   }
   updateDiscordBridge({
     ...(typeof syncNewChannels === "boolean" ? { sync_new_channels: syncNewChannels ? 1 : 0 } : {}),
     ...(kinds ? { sync_off: JSON.stringify([...new Set(kinds)]) } : {}),
+    ...(way ? { direction: way } : {}),
   });
   res.json(view());
 }));
@@ -301,6 +319,7 @@ discordLinkRouter.post("/", handle(async (req, res) => {
     return;
   }
   linkDiscordMember(pending.discordUserId, serverUserId, serverUserId, "code");
+  resetMessageCache();
   giveDiscordRoles(pending.discordUserId, serverUserId);
   await insertServerAudit({ actorServerUserId: serverUserId, action: "discord_link", target: serverUserId, meta: { discordUserId: pending.discordUserId, proof: "code" } });
   res.json({ discordName: pending.discordName });

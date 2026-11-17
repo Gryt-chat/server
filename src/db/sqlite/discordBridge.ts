@@ -278,3 +278,8 @@ export function discordPersonLinkedTo(serverUserId: string): string | null {
   const r = getSqliteDb().prepare(`SELECT discord_user_id FROM discord_member_links WHERE server_user_id = ?`).get(serverUserId) as { discord_user_id: string } | undefined;
   return r?.discord_user_id ?? null;
 }
+
+/** Whether any channel here has a message yet: an empty server just becomes a copy of the Discord one. */
+export function channelsHaveMessages(): boolean {
+  return !!getSqliteDb().prepare(`SELECT 1 FROM messages m JOIN channels c ON c.channel_id = m.conversation_id LIMIT 1`).get();
+}
