@@ -123,6 +123,79 @@ export async function createImportedChannels(channels: Iterable<ChannelPlan>): P
 }
 
 
+export interface ThreadCopy {
+  thread: { id: string; name: string; parentId: string };
+  /** Oldest first. */
+  messages: DceMessage[];
+  /** The parent's ThreadCreated notice, when there is one. */
+  noticeId: string | null;
+  rows: DiscordRowBuilder;
+  assets: AssetSource;
+  progress: DiscordImportProgress;
+  warn: (message: string) => void;
+  flush: (batch: ImportedMessageRow[]) => Promise<void>;
+}
+
+/** One thread into its parent channel: the root found or made, then the replies. Safe to rerun. */
+export async function importThreadMessages(opts: ThreadCopy): Promise<void> {
+  const { thread, messages } = opts;
+  const conversationId = importedId("channel", thread.parentId);
+  // Discord gives a thread started from a message that message's id. Otherwise
+  // the parent has a ThreadCreated notice, or, for forum posts, nothing at all.
+  let rootDiscordId: string | null = null;
+  if (importedMessageExists(conversationId, importedId("message", thread.id))) rootDiscordId = thread.id;
+  else {
+    const notice = opts.noticeId;
+    if (notice && importedMessageExists(conversationId, importedId("message", notice))) rootDiscordId = notice;
+  }
+
+  let replies = messages;
+  let rootRow: ImportedMessageRow | null = null;
+  if (!rootDiscordId) {
+    // The thread's first message goes into the parent as the root.
+    const index = messages.findIndex((m) => IMPORTED_MESSAGE_TYPES.has(m?.type ?? "") && isSnowflake(m?.id));
+    if (index === -1) {
+      opts.warn(`Thread "${thread.name}" has no messages to import.`);
+      return;
+    }
+    const root = messages[index];
+    rootRow = await opts.rows.buildRow(root, opts.assets, conversationId, thread.id, null);
+    if (!rootRow || !root.id) return;
+    await opts.flush([rootRow]);
+    rootDiscordId = root.id;
+    replies = messages.slice(index + 1);
+  }
+
+  const rootId = importedId("message", rootDiscordId);
+  const root = rootRow ?? (await getMessageById(conversationId, rootId));
+  const threadId = ensureImportedThread({
+    thread_id: importedId("thread", thread.id),
+    conversation_id: conversationId,
+    root_message_id: rootId,
+    title: thread.name,
+    created_by: root?.sender_server_id ?? "system",
+    created_at: root?.created_at ?? new Date(),
+  });
+
+  let batch: ImportedMessageRow[] = [];
+  for (const msg of replies) {
+    if (msg?.id === rootDiscordId) {
+      // A forum post's first message, put into the forum as the root on an earlier run.
+      opts.progress.messages_already_there += 1;
+      continue;
+    }
+    const row = await opts.rows.buildRow(msg, opts.assets, conversationId, thread.id, threadId);
+    if (!row) continue;
+    batch.push(row);
+    if (batch.length >= BATCH_SIZE) {
+      await opts.flush(batch);
+      batch = [];
+    }
+  }
+  await opts.flush(batch);
+  refreshImportedThreadCounters(threadId);
+}
+
 export function emptyProgress(): DiscordImportProgress {
   return {
     channels_total: 0, channels_done: 0, messages_imported: 0, messages_already_there: 0,
@@ -305,67 +378,20 @@ class DiscordImport {
 
   private async importThread(thread: PlannedThread): Promise<void> {
     this.progress.current_channel = thread.name;
-    const conversationId = importedId("channel", thread.parentId);
     const messages: DceMessage[] = [];
     for (const file of thread.files) {
       for (const m of await this.readChannelFile(file)) messages.push(m);
     }
-    const file = thread.files[0];
-
-    // Discord gives a thread started from a message that message's id. Otherwise
-    // the parent has a ThreadCreated notice, or, for forum posts, nothing at all.
-    let rootDiscordId: string | null = null;
-    if (importedMessageExists(conversationId, importedId("message", thread.id))) rootDiscordId = thread.id;
-    else {
-      const notice = this.threadNotices.get(thread.id);
-      if (notice && importedMessageExists(conversationId, importedId("message", notice))) rootDiscordId = notice;
-    }
-
-    let replies = messages;
-    let rootRow: ImportedMessageRow | null = null;
-    if (!rootDiscordId) {
-      // The thread's first message goes into the parent as the root.
-      const index = messages.findIndex((m) => IMPORTED_MESSAGE_TYPES.has(m?.type ?? "") && isSnowflake(m?.id));
-      if (index === -1) {
-        this.warn(`Thread "${thread.name}" has no messages to import.`);
-        return;
-      }
-      const root = messages[index];
-      rootRow = await this.rows.buildRow(root, this.assets(file), conversationId, thread.id, null);
-      if (!rootRow || !root.id) return;
-      await this.flush([rootRow]);
-      rootDiscordId = root.id;
-      replies = messages.slice(index + 1);
-    }
-
-    const rootId = importedId("message", rootDiscordId);
-    const root = rootRow ?? (await getMessageById(conversationId, rootId));
-    const threadId = ensureImportedThread({
-      thread_id: importedId("thread", thread.id),
-      conversation_id: conversationId,
-      root_message_id: rootId,
-      title: thread.name,
-      created_by: root?.sender_server_id ?? "system",
-      created_at: root?.created_at ?? new Date(),
+    await importThreadMessages({
+      thread,
+      messages,
+      noticeId: this.threadNotices.get(thread.id) ?? null,
+      rows: this.rows,
+      assets: this.assets(thread.files[0]),
+      progress: this.progress,
+      warn: (m) => this.warn(m),
+      flush: (batch) => this.flush(batch),
     });
-
-    let batch: ImportedMessageRow[] = [];
-    for (const msg of replies) {
-      if (msg?.id === rootDiscordId) {
-        // A forum post's first message, put into the forum as the root on an earlier run.
-        this.progress.messages_already_there += 1;
-        continue;
-      }
-      const row = await this.rows.buildRow(msg, this.assets(file), conversationId, thread.id, threadId);
-      if (!row) continue;
-      batch.push(row);
-      if (batch.length >= BATCH_SIZE) {
-        await this.flush(batch);
-        batch = [];
-      }
-    }
-    await this.flush(batch);
-    refreshImportedThreadCounters(threadId);
   }
 
   private async flush(batch: ImportedMessageRow[]): Promise<void> {
