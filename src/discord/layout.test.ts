@@ -55,6 +55,15 @@ describe("Discord layout into Gryt", () => {
     assert.equal((await getServerChannel(id))?.name, "memes-and-clips");
   });
 
+  it("leaves a new channel out when new channels don't sync", async () => {
+    updateDiscordBridge({ sync_new_channels: 0 });
+    const other = { ...channel("off-topic", null), id: "900000000000000003" };
+    client.emit(Events.ChannelCreate, other);
+    await until(() => grytChannelFor("900000000000000003", importedId("channel", "900000000000000003")) === null);
+    assert.equal(await getServerChannel(importedId("channel", "900000000000000003")), null);
+    updateDiscordBridge({ sync_new_channels: 1 });
+  });
+
   it("stops syncing a deleted Discord channel, and keeps the Gryt one", async () => {
     client.emit(Events.ChannelDelete, channel("memes-and-clips", "both now"));
     await until(() => grytChannelFor(ID, id) === null);

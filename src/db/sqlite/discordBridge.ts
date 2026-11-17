@@ -22,6 +22,7 @@ export interface DiscordBridgeRecord {
   copy_status: DiscordBridgeCopyStatus;
   copy_progress: DiscordImportProgress | null;
   copy_started_by: string | null;
+  sync_new_channels: boolean;
   created_at: Date;
   updated_at: Date;
 }
@@ -39,6 +40,7 @@ export function getDiscordBridge(): DiscordBridgeRecord | null {
     copy_status: r.copy_status as DiscordBridgeCopyStatus,
     copy_progress: r.copy_progress ? (JSON.parse(r.copy_progress as string) as DiscordImportProgress) : null,
     copy_started_by: (r.copy_started_by as string) ?? null,
+    sync_new_channels: r.sync_new_channels !== 0,
     created_at: fromIso(r.created_at as string),
     updated_at: fromIso(r.updated_at as string),
   };
@@ -65,9 +67,10 @@ export function updateDiscordBridge(patch: {
   copy_status?: DiscordBridgeCopyStatus;
   copy_progress?: string;
   copy_started_by?: string;
+  sync_new_channels?: number;
 }): void {
   const sets: string[] = [];
-  const values: (string | null)[] = [];
+  const values: (string | number | null)[] = [];
   for (const [k, v] of Object.entries(patch)) {
     if (v === undefined) continue;
     sets.push(`${k} = ?`);
@@ -219,4 +222,21 @@ export function setDiscordChannelMatch(discordChannelId: string, target: { grytC
        ON CONFLICT(discord_channel_id) DO UPDATE SET gryt_channel_id = CASE WHEN excluded.skip = 1 THEN gryt_channel_id ELSE excluded.gryt_channel_id END, skip = excluded.skip`,
     )
     .run(discordChannelId, gryt, skip ? 1 : 0);
+}
+
+export type ExcludedKind = "discord" | "gryt";
+
+/** The owner switched this person's sync off. Everyone is in until then. */
+export function isExcludedFromBridge(kind: ExcludedKind, id: string): boolean {
+  return !!getSqliteDb().prepare(`SELECT 1 FROM discord_bridge_excluded WHERE kind = ? AND id = ?`).get(kind, id);
+}
+
+export function setExcludedFromBridge(kind: ExcludedKind, id: string, excluded: boolean): void {
+  const db = getSqliteDb();
+  if (excluded) db.prepare(`INSERT OR IGNORE INTO discord_bridge_excluded (kind, id, created_at) VALUES (?, ?, ?)`).run(kind, id, toIso(new Date()));
+  else db.prepare(`DELETE FROM discord_bridge_excluded WHERE kind = ? AND id = ?`).run(kind, id);
+}
+
+export function listExcludedFromBridge(kind: ExcludedKind): string[] {
+  return (getSqliteDb().prepare(`SELECT id FROM discord_bridge_excluded WHERE kind = ?`).all(kind) as { id: string }[]).map((r) => r.id);
 }

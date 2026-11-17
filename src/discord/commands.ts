@@ -55,6 +55,13 @@ export async function registerCommands(guild: Guild): Promise<void> {
 
 /** Deletes a Discord person's copied messages from Gryt, the same way a moderator's delete does. */
 export async function forgetDiscordPerson(discordUserId: string): Promise<number> {
+  const removed = await removeDiscordPersonMessages(discordUserId);
+  unlinkDiscordMember(discordUserId);
+  return removed;
+}
+
+/** Every copied message from one Discord person, deleted the way a moderator's delete does it. */
+export async function removeDiscordPersonMessages(discordUserId: string): Promise<number> {
   const refs = pluginRefs();
   let removed = 0;
   for (const { conversation_id: conversationId, message_id: messageId } of discordPersonMessageIds(discordUserId)) {
@@ -65,7 +72,6 @@ export async function forgetDiscordPerson(discordUserId: string): Promise<number
       : await deleteMessage(conversationId, messageId);
     if (ok) removed += 1;
   }
-  unlinkDiscordMember(discordUserId);
   return removed;
 }
 

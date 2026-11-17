@@ -4,11 +4,11 @@ import consola from "consola";
 import express from "express";
 import type { NextFunction, Request, Response } from "express";
 
-import { clearDiscordBridge, getDiscordBridge, getUserByServerId, insertServerAudit, linkDiscordMember, listDiscordAuthors, listDiscordMemberLinks, saveDiscordBridgeApp, unlinkDiscordMember, grytChannelFor, listServerChannels, setDiscordChannelMatch } from "../db";
+import { clearDiscordBridge, getDiscordBridge, getUserByServerId, insertServerAudit, linkDiscordMember, listDiscordAuthors, listDiscordMemberLinks, saveDiscordBridgeApp, unlinkDiscordMember, grytChannelFor, listServerChannels, setDiscordChannelMatch, listExcludedFromBridge, setExcludedFromBridge, updateDiscordBridge } from "../db";
 import { applicationIdForToken, inviteUrl, linkedGuild, startDiscordBridge, startDiscordCopy, stopDiscordBridge } from "../discord/bridge";
 import { isSnowflake } from "../import/discord/dce";
 import { requireBearerToken } from "../middleware/requireBearerToken";
-import { redeemLinkCode } from "../discord/commands";
+import { redeemLinkCode, removeDiscordPersonMessages } from "../discord/commands";
 import { suggestMatches, type Side } from "../discord/match";
 import { grantDiscordRoles } from "../discord/roles";
 import { importedId } from "../import/discord/ids";
@@ -32,6 +32,8 @@ function view() {
     inviteUrl: inviteUrl(b.application_id),
     direction: b.direction,
     copy: { status: b.copy_status, progress: b.copy_progress },
+    syncNewChannels: b.sync_new_channels,
+    excludedMembers: listExcludedFromBridge("gryt"),
   };
 }
 
@@ -99,10 +101,11 @@ discordBridgeRouter.post("/copy", handle(async (req, res) => {
 /** Everyone whose messages came from Discord, and who they're linked to. */
 discordBridgeRouter.get("/people", handle(async (_req, res) => {
   const links = new Map(listDiscordMemberLinks().map((l) => [l.discord_user_id, l]));
+  const excluded = new Set(listExcludedFromBridge("discord"));
   res.json({
     people: listDiscordAuthors().map((a) => {
       const l = links.get(a.discord_user_id);
-      return { discordUserId: a.discord_user_id, name: a.name, messages: a.messages, linkedTo: l?.server_user_id ?? null, proof: l?.proof ?? null };
+      return { discordUserId: a.discord_user_id, name: a.name, messages: a.messages, linkedTo: l?.server_user_id ?? null, proof: l?.proof ?? null, sync: !excluded.has(a.discord_user_id) };
     }),
   });
 }));
@@ -189,6 +192,31 @@ discordBridgeRouter.put("/channels", handle(async (req, res) => {
     setDiscordChannelMatch(m.discordChannelId, m.target === "skip" ? "skip" : { grytChannelId: m.target === "new" ? importedId("channel", m.discordChannelId) : m.target });
   }
   res.json({ ok: true });
+}));
+
+discordBridgeRouter.put("/settings", handle(async (req, res) => {
+  const syncNewChannels = (req.body as { syncNewChannels?: unknown } | undefined)?.syncNewChannels;
+  if (typeof syncNewChannels !== "boolean") {
+    res.status(400).json({ error: "invalid_payload" });
+    return;
+  }
+  updateDiscordBridge({ sync_new_channels: syncNewChannels ? 1 : 0 });
+  res.json(view());
+}));
+
+/** Switch one person's sync on or off. Off for a Discord person can also remove what was already copied from them. */
+discordBridgeRouter.put("/sync", handle(async (req, res) => {
+  const body = (req.body ?? {}) as { kind?: unknown; id?: unknown; sync?: unknown; removeCopied?: unknown };
+  const kind = body.kind === "discord" || body.kind === "gryt" ? body.kind : null;
+  const id = typeof body.id === "string" ? body.id : "";
+  if (!kind || !id || typeof body.sync !== "boolean" || (kind === "discord" && !isSnowflake(id))) {
+    res.status(400).json({ error: "invalid_payload" });
+    return;
+  }
+  setExcludedFromBridge(kind, id, !body.sync);
+  const removed = kind === "discord" && !body.sync && body.removeCopied === true ? await removeDiscordPersonMessages(id) : 0;
+  await insertServerAudit({ actorServerUserId: req.tokenPayload?.serverUserId ?? null, action: body.sync ? "discord_sync_on" : "discord_sync_off", target: id, meta: { kind, removed } });
+  res.json({ ok: true, removed });
 }));
 
 discordBridgeRouter.delete("/", handle(async (_req, res) => {

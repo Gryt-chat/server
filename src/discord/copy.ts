@@ -9,6 +9,7 @@ import {
   grytChannelFor,
   getServerConfig,
   insertImportedMessages,
+  isExcludedFromBridge,
   rememberDiscordMessages,
   saveDiscordBridgeChannel,
   type DiscordImportProgress,
@@ -139,6 +140,7 @@ async function copyHistory(
     const built = [];
     for (const m of page) {
       if (m.type === MessageType.ThreadCreated && m.reference?.channelId) notices.set(m.reference.channelId, m.id);
+      if (isExcludedFromBridge("discord", m.author.id)) continue;
       const row = await rows.buildRow(toDceMessage(m), assets, conversationId, discordChannelId, null);
       if (row) built.push(row);
     }
@@ -208,10 +210,11 @@ async function copyThread(
     return;
   }
   all.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+  const kept = all.filter((m) => !isExcludedFromBridge("discord", m.author.id));
   rememberDiscordMessages(all.map((m) => linkOf(m, conversationId)));
   await importThreadMessages({
     thread: { id: t.id, name: clip(t.name, 80) ?? `thread-${t.id}`, parentId, conversationId },
-    messages: all.map(toDceMessage),
+    messages: kept.map(toDceMessage),
     noticeId,
     rows,
     assets,
