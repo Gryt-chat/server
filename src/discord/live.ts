@@ -32,10 +32,10 @@ import {
 import { deleteMessageEverywhere } from "../moderation/deleteMessage";
 import { pluginRefs } from "../plugins/refs";
 import { emojiName } from "../import/discord/content";
-import { DISCORD_SENDER_PREFIX, discordSenderId, importedId } from "../import/discord/ids";
+import { discordSenderId, importedId } from "../import/discord/ids";
 import { emptyProgress, importThreadMessages, type ImportMedia } from "../import/discord/importer";
 import { DiscordRowBuilder } from "../import/discord/rows";
-import { enrichAttachments } from "../socket/handlers/chat";
+import { enrichAttachments, enrichSenders } from "../socket/handlers/chat";
 import { appendCachedMessage, replaceCachedMessage } from "../socket/utils/messageCache";
 import { recipientClientIds } from "../socket/utils/recipients";
 import { toDceMessage } from "./adapter";
@@ -71,12 +71,10 @@ function reactionSrc(r: MessageReaction | PartialMessageReaction): string | null
   return name ? `:${name}:` : null;
 }
 
-/** What history sends for a Discord author: the name and picture are on the row. */
+/** What history sends: a Discord author by the name on the row, or their member once linked. */
 async function view(m: MessageRecord): Promise<MessageRecord> {
-  const shown = m.sender_server_id.startsWith(DISCORD_SENDER_PREFIX)
-    ? { ...m, sender_nickname: m.sender_display_name ?? "Discord user", sender_imported_from: "discord" as const }
-    : m;
-  const [withFiles] = await enrichAttachments([shown]);
+  const [named] = await enrichSenders([m]);
+  const [withFiles] = await enrichAttachments([named]);
   return withFiles;
 }
 

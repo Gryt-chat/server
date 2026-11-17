@@ -4,6 +4,7 @@ import { Client, Events, GatewayIntentBits, Partials, PermissionFlagsBits, REST,
 import { getDiscordBridge, updateDiscordBridge, type DiscordBridgeDirection, type DiscordBridgeStatus } from "../db";
 import type { ImportMedia } from "../import/discord/importer";
 import { resetMessageCache } from "../socket/utils/messageCache";
+import { attachCommands, registerCommands } from "./commands";
 import { copyGuild } from "./copy";
 import { attachLiveSync } from "./live";
 import { setOutboundClient } from "./outbound";
@@ -22,7 +23,7 @@ export const BRIDGE_PERMISSIONS =
   PermissionFlagsBits.EmbedLinks;
 
 export function inviteUrl(applicationId: string): string {
-  const q = new URLSearchParams({ client_id: applicationId, scope: "bot", permissions: BRIDGE_PERMISSIONS.toString() });
+  const q = new URLSearchParams({ client_id: applicationId, scope: "bot applications.commands", permissions: BRIDGE_PERMISSIONS.toString() });
   return `https://discord.com/oauth2/authorize?${q.toString()}`;
 }
 
@@ -94,6 +95,7 @@ async function settleGuild(c: Client): Promise<void> {
   }
   if (keep) {
     setStatus("linked", keep);
+    void registerCommands(keep);
     void runCopy();
   }
   else setStatus(linked ? "removed" : "waiting_for_invite");
@@ -112,6 +114,7 @@ export async function startDiscordBridge(store?: ImportMedia): Promise<void> {
   });
   client = c;
   if (media) attachLiveSync(c, media);
+  attachCommands(c);
   c.once(Events.ClientReady, () => void settleGuild(c));
   c.on(Events.GuildCreate, () => void settleGuild(c));
   c.on(Events.GuildDelete, (g) => {

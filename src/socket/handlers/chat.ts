@@ -32,6 +32,7 @@ import {
   getImageJobStatusForFile,
   getServerConfig,
   getWebhooksByIds,
+  discordLinksFor,
   getConversation,
   touchConversation,
   DEFAULT_UPLOAD_MAX_BYTES,
@@ -217,14 +218,16 @@ function pollForViewer(m: MessageRecord, viewer?: string): Kinded {
   return out;
 }
 
-async function enrichSenders(messages: MessageRecord[]): Promise<MessageRecord[]> {
+export async function enrichSenders(messages: MessageRecord[]): Promise<MessageRecord[]> {
   const senderIds = [...new Set(messages.map(m => m.sender_server_id).filter(Boolean))];
   if (senderIds.length === 0) return messages;
 
   const webhookIds = senderIds
     .filter(id => id.startsWith(WEBHOOK_PREFIX))
     .map(id => id.slice(WEBHOOK_PREFIX.length));
-  const userIds = senderIds.filter(id => !id.startsWith(WEBHOOK_PREFIX) && !id.startsWith(DISCORD_SENDER_PREFIX));
+  // A linked Discord person shows as their member; the row keeps its Discord sender, so unlinking undoes it.
+  const links = discordLinksFor(senderIds.filter(id => id.startsWith(DISCORD_SENDER_PREFIX)).map(id => id.slice(DISCORD_SENDER_PREFIX.length)));
+  const userIds = [...senderIds.filter(id => !id.startsWith(WEBHOOK_PREFIX) && !id.startsWith(DISCORD_SENDER_PREFIX)), ...links.values()];
 
   const [userMap, webhookMap] = await Promise.all([
     userIds.length > 0 ? getUsersByServerIds(userIds) : Promise.resolve(new Map()),
@@ -243,6 +246,11 @@ async function enrichSenders(messages: MessageRecord[]): Promise<MessageRecord[]
     }
     // Imported from Discord: the name and picture are on the row, as a webhook's are.
     if (m.sender_server_id.startsWith(DISCORD_SENDER_PREFIX)) {
+      const member = links.get(m.sender_server_id.slice(DISCORD_SENDER_PREFIX.length));
+      const info = member ? userMap.get(member) : undefined;
+      if (member && info) {
+        return { ...m, sender_nickname: info.nickname, sender_avatar_file_id: info.avatar_file_id, sender_linked_server_id: member, sender_imported_from: "discord" as const };
+      }
       return {
         ...m,
         sender_nickname: m.sender_display_name ?? "Discord user",
