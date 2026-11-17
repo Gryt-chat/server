@@ -20,6 +20,7 @@ import {
   getDiscordBridge,
   getMessageById,
   getServerChannel,
+  grytChannelFor,
   getThread,
   insertImportedMessages,
   rememberDiscordMessages,
@@ -60,7 +61,8 @@ async function placeOf(m: Message | PartialMessage, botId: string | undefined): 
   const ch = m.channel;
   const parent = ch.isThread() ? ch.parentId : ch.id;
   if (!parent) return null;
-  const conversationId = importedId("channel", parent);
+  const conversationId = grytChannelFor(parent, importedId("channel", parent));
+  if (!conversationId) return null;
   if (!(await getServerChannel(conversationId))) return null;
   return { conversationId, discordChannelId: ch.id, threadId: ch.isThread() ? importedId("thread", ch.id) : null };
 }

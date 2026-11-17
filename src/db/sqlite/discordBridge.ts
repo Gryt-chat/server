@@ -199,3 +199,24 @@ export function discordPersonMessageIds(discordUserId: string): { conversation_i
     .prepare(`SELECT conversation_id, message_id FROM messages WHERE sender_server_id = ?`)
     .all(`discord:${discordUserId}`) as { conversation_id: string; message_id: string }[];
 }
+
+/** The Gryt channel a Discord channel copies into: the owner's match, a new one by default, or null when skipped. */
+export function grytChannelFor(discordChannelId: string, derived: string): string | null {
+  const r = getSqliteDb().prepare(`SELECT gryt_channel_id, skip FROM discord_bridge_channels WHERE discord_channel_id = ?`).get(discordChannelId) as
+    | { gryt_channel_id: string; skip: number }
+    | undefined;
+  if (!r) return derived;
+  return r.skip === 1 ? null : r.gryt_channel_id;
+}
+
+/** The owner's matches, before or after a copy. A changed match only moves what's copied from now on. */
+export function setDiscordChannelMatch(discordChannelId: string, target: { grytChannelId: string } | "skip"): void {
+  const skip = target === "skip";
+  const gryt = skip ? "" : target.grytChannelId;
+  getSqliteDb()
+    .prepare(
+      `INSERT INTO discord_bridge_channels (discord_channel_id, gryt_channel_id, backfill_before, backfill_done, skip) VALUES (?, ?, NULL, 0, ?)
+       ON CONFLICT(discord_channel_id) DO UPDATE SET gryt_channel_id = CASE WHEN excluded.skip = 1 THEN gryt_channel_id ELSE excluded.gryt_channel_id END, skip = excluded.skip`,
+    )
+    .run(discordChannelId, gryt, skip ? 1 : 0);
+}
