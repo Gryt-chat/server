@@ -85,6 +85,7 @@ function fakeGuild(): Guild {
       fetchActiveThreads: async () => ({ threads: new Map([[fromMessage.id, fromMessage], [post.id, post]]) }),
     },
     emojis: { fetch: async () => new Map() },
+    roles: { fetch: async () => new Map() },
   } as unknown as Guild;
 }
 
