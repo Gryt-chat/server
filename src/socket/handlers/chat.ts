@@ -876,7 +876,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
             attachmentCount: created.attachments?.length ?? 0,
             at: created.created_at.toISOString(),
           });
-          toDiscord.created({ ...created, sender_nickname: user.nickname ?? undefined });
+          toDiscord.created({ ...created, sender_nickname: user.nickname ?? undefined, sender_avatar_file_id: user.avatar_file_id ?? undefined });
         }
 
         /* After delivery, so a parse that threw cannot stop a message. Sealed

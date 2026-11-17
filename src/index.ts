@@ -41,6 +41,7 @@ import { linkPreviewRouter } from "./routes/linkPreview";
 import { oEmbedRouter } from "./routes/oembed";
 import { mediaMetadataRouter } from "./routes/mediaMetadata";
 import { webhooksRouter } from "./routes/webhooks";
+import { discordAvatarRouter } from "./discord/avatarLink";
 import { discordBridgeRouter, discordLinkRouter, discordPeopleRouter } from "./routes/discordBridge";
 import { discordImportRouter } from "./routes/discordImport";
 import { clearLinkHistoryOnStart, linkHistoryRouter } from "./routes/linkHistory";
@@ -381,6 +382,7 @@ app.use("/api/imports/discord", httpRateLimit("http:api", RL_HTTP_API), discordI
 app.use("/api/discord/bridge", httpRateLimit("http:api", RL_HTTP_API), discordBridgeRouter);
 app.use("/api/discord/link", httpRateLimit("http:api", RL_HTTP_API), discordLinkRouter);
 app.use("/api/discord/people", httpRateLimit("http:api", RL_HTTP_API), discordPeopleRouter);
+app.use("/api/discord/avatar", httpRateLimit("http:public", RL_HTTP_PUBLIC), discordAvatarRouter);
 app.use("/api/link-history", httpRateLimit("http:link-history", RL_HTTP_CHAT_UPLOAD), linkHistoryRouter);
 
 app.use(apiErrorHandler);

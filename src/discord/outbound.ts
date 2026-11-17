@@ -13,6 +13,7 @@ import {
   type MessageRecord,
 } from "../db";
 import { DISCORD_SENDER_PREFIX } from "../import/discord/ids";
+import { discordAvatarLink } from "./avatarLink";
 import { getObjectAsBuffer, uploadsFolder } from "../storage";
 
 /** Discord's own limit for a message. */
@@ -84,7 +85,7 @@ async function filesOf(m: MessageRecord): Promise<{ attachment: Buffer; name: st
 }
 
 /** A Gryt message posted into the linked Discord channel, under the member's name. */
-export async function messageCreated(m: MessageRecord & { sender_nickname?: string }): Promise<void> {
+export async function messageCreated(m: MessageRecord & { sender_nickname?: string; sender_avatar_file_id?: string }): Promise<void> {
   if (!sending() || !fromGryt(m) || !bridgeSyncs("messages") || (m.thread_id && !bridgeSyncs("threads"))) return;
   const threadId = m.thread_id ? discordChannelFor(m.thread_id)?.discord_channel_id : undefined;
   if (m.thread_id && !threadId) return;
@@ -96,6 +97,7 @@ export async function messageCreated(m: MessageRecord & { sender_nickname?: stri
   const sent = await target.hook.send({
     content: content || undefined,
     username: (m.sender_nickname ?? "Gryt member").slice(0, 80),
+    avatarURL: discordAvatarLink(m.sender_server_id, m.sender_avatar_file_id),
     files,
     allowedMentions: { parse: [] },
     ...(threadId ? { threadId } : {}),
