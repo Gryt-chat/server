@@ -1191,8 +1191,23 @@ function runMigrations(d: DatabaseSync): void {
     guild_id TEXT,
     guild_name TEXT,
     status TEXT NOT NULL DEFAULT 'connecting',
+    direction TEXT,
+    copy_status TEXT NOT NULL DEFAULT 'idle',
+    copy_progress TEXT,
+    copy_started_by TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
+  )`);
+  // The copy columns came after the table shipped.
+  for (const [col, def] of [["direction", "TEXT"], ["copy_status", "TEXT NOT NULL DEFAULT 'idle'"], ["copy_progress", "TEXT"], ["copy_started_by", "TEXT"]]) {
+    if (!hasColumn(d, "discord_bridge", col)) d.exec(`ALTER TABLE discord_bridge ADD COLUMN ${col} ${def}`);
+  }
+  // Where each Discord channel's history copy stopped, so a restart picks up there.
+  d.exec(`CREATE TABLE IF NOT EXISTS discord_bridge_channels (
+    discord_channel_id TEXT PRIMARY KEY,
+    gryt_channel_id TEXT NOT NULL,
+    backfill_before TEXT,
+    backfill_done INTEGER NOT NULL DEFAULT 0
   )`);
 
   migrateFileOwnership(d);

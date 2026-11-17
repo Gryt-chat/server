@@ -3,7 +3,7 @@ import express from "express";
 import type { NextFunction, Request, Response } from "express";
 
 import { clearDiscordBridge, getDiscordBridge, saveDiscordBridgeApp } from "../db";
-import { applicationIdForToken, inviteUrl, startDiscordBridge, stopDiscordBridge } from "../discord/bridge";
+import { applicationIdForToken, inviteUrl, startDiscordBridge, startDiscordCopy, stopDiscordBridge } from "../discord/bridge";
 import { isSnowflake } from "../import/discord/dce";
 import { requireBearerToken } from "../middleware/requireBearerToken";
 import { requireOwner } from "./discordImport";
@@ -23,6 +23,8 @@ function view() {
     status: b.status,
     guild: b.guild_id ? { id: b.guild_id, name: b.guild_name } : null,
     inviteUrl: inviteUrl(b.application_id),
+    direction: b.direction,
+    copy: { status: b.copy_status, progress: b.copy_progress },
   };
 }
 
@@ -57,6 +59,23 @@ discordBridgeRouter.put("/", handle(async (req, res) => {
   saveDiscordBridgeApp(applicationId, botToken);
   void startDiscordBridge();
   res.json(view());
+}));
+
+const DIRECTIONS = new Set(["to_gryt", "both", "to_discord"]);
+
+discordBridgeRouter.post("/copy", handle(async (req, res) => {
+  const direction = (req.body as { direction?: unknown } | undefined)?.direction;
+  const serverUserId = req.tokenPayload?.serverUserId;
+  if (typeof direction !== "string" || !DIRECTIONS.has(direction) || !serverUserId) {
+    res.status(400).json({ error: "invalid_payload", message: "Pick which way the bridge goes." });
+    return;
+  }
+  if (getDiscordBridge()?.status !== "linked") {
+    res.status(409).json({ error: "not_linked", message: "Add the bot to your Discord server first." });
+    return;
+  }
+  startDiscordCopy(direction as "to_gryt" | "both" | "to_discord", serverUserId);
+  res.status(202).json(view());
 }));
 
 discordBridgeRouter.delete("/", handle(async (_req, res) => {
