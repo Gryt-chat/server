@@ -2,10 +2,11 @@
 import express from "express";
 import type { NextFunction, Request, Response } from "express";
 
-import { clearDiscordBridge, getDiscordBridge, saveDiscordBridgeApp } from "../db";
+import { clearDiscordBridge, getDiscordBridge, getUserByServerId, insertServerAudit, linkDiscordMember, listDiscordAuthors, listDiscordMemberLinks, saveDiscordBridgeApp, unlinkDiscordMember } from "../db";
 import { applicationIdForToken, inviteUrl, startDiscordBridge, startDiscordCopy, stopDiscordBridge } from "../discord/bridge";
 import { isSnowflake } from "../import/discord/dce";
 import { requireBearerToken } from "../middleware/requireBearerToken";
+import { redeemLinkCode } from "../discord/commands";
 import { requireOwner } from "./discordImport";
 
 const handle = (fn: (req: Request, res: Response) => Promise<void>) =>
@@ -78,8 +79,61 @@ discordBridgeRouter.post("/copy", handle(async (req, res) => {
   res.status(202).json(view());
 }));
 
+/** Everyone whose messages came from Discord, and who they're linked to. */
+discordBridgeRouter.get("/people", handle(async (_req, res) => {
+  const links = new Map(listDiscordMemberLinks().map((l) => [l.discord_user_id, l]));
+  res.json({
+    people: listDiscordAuthors().map((a) => {
+      const l = links.get(a.discord_user_id);
+      return { discordUserId: a.discord_user_id, name: a.name, messages: a.messages, linkedTo: l?.server_user_id ?? null, proof: l?.proof ?? null };
+    }),
+  });
+}));
+
+discordBridgeRouter.put("/people/:discordUserId", handle(async (req, res) => {
+  const discordUserId = String(req.params.discordUserId);
+  const serverUserId = (req.body as { serverUserId?: unknown } | undefined)?.serverUserId;
+  const actor = req.tokenPayload?.serverUserId;
+  if (!isSnowflake(discordUserId) || typeof serverUserId !== "string" || !actor || !(await getUserByServerId(serverUserId))) {
+    res.status(400).json({ error: "invalid_payload", message: "Pick a member of this server to link." });
+    return;
+  }
+  linkDiscordMember(discordUserId, serverUserId, actor, "admin");
+  await insertServerAudit({ actorServerUserId: actor, action: "discord_link", target: serverUserId, meta: { discordUserId, proof: "admin" } });
+  res.json({ ok: true });
+}));
+
+discordBridgeRouter.delete("/people/:discordUserId", handle(async (req, res) => {
+  const discordUserId = String(req.params.discordUserId);
+  const actor = req.tokenPayload?.serverUserId;
+  if (!unlinkDiscordMember(discordUserId)) {
+    res.status(404).json({ error: "not_linked" });
+    return;
+  }
+  await insertServerAudit({ actorServerUserId: actor ?? null, action: "discord_unlink", target: discordUserId });
+  res.json({ ok: true });
+}));
+
 discordBridgeRouter.delete("/", handle(async (_req, res) => {
   await stopDiscordBridge();
   clearDiscordBridge();
   res.json(view());
+}));
+
+/** For any member: a code from `/link` on the bot proves the Discord account is theirs. */
+export const discordLinkRouter = express.Router();
+
+discordLinkRouter.use(requireBearerToken);
+
+discordLinkRouter.post("/", handle(async (req, res) => {
+  const code = (req.body as { code?: unknown } | undefined)?.code;
+  const serverUserId = req.tokenPayload?.serverUserId;
+  const pending = typeof code === "string" && serverUserId ? redeemLinkCode(code) : null;
+  if (!pending || !serverUserId) {
+    res.status(400).json({ error: "invalid_code", message: "That code didn't work. Run /link on Discord again for a new one." });
+    return;
+  }
+  linkDiscordMember(pending.discordUserId, serverUserId, serverUserId, "code");
+  await insertServerAudit({ actorServerUserId: serverUserId, action: "discord_link", target: serverUserId, meta: { discordUserId: pending.discordUserId, proof: "code" } });
+  res.json({ discordName: pending.discordName });
 }));

@@ -1210,6 +1210,14 @@ function runMigrations(d: DatabaseSync): void {
     discord_message_id TEXT NOT NULL UNIQUE,
     from_gryt INTEGER NOT NULL DEFAULT 0
   )`);
+  // A Discord person shown as a Gryt member. Messages keep their Discord sender, so removing the row undoes it.
+  d.exec(`CREATE TABLE IF NOT EXISTS discord_member_links (
+    discord_user_id TEXT PRIMARY KEY,
+    server_user_id TEXT NOT NULL,
+    linked_by TEXT NOT NULL,
+    proof TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  )`);
   // Where each Discord channel's history copy stopped, so a restart picks up there.
   d.exec(`CREATE TABLE IF NOT EXISTS discord_bridge_channels (
     discord_channel_id TEXT PRIMARY KEY,

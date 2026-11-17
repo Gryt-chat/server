@@ -39,6 +39,8 @@ export const AUTHOR_COLUMNS: ReadonlyArray<readonly [table: string, column: stri
   ["mls_groups", "created_by_server_user_id"],
   ["mls_log", "sender_server_user_id"],
   ["discord_imports", "started_by_server_user_id"],
+  ["discord_member_links", "server_user_id"],
+  ["discord_member_links", "linked_by"],
 ];
 
 interface MemberRow {

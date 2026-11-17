@@ -146,3 +146,56 @@ export function bridgeWebhookIds(): Set<string> {
   const rows = getSqliteDb().prepare(`SELECT webhook_id FROM discord_bridge_channels WHERE webhook_id IS NOT NULL`).all() as { webhook_id: string }[];
   return new Set(rows.map((r) => r.webhook_id));
 }
+
+export interface DiscordMemberLink {
+  discord_user_id: string;
+  server_user_id: string;
+  linked_by: string;
+  proof: "code" | "admin";
+  created_at: Date;
+}
+
+export function linkDiscordMember(discordUserId: string, serverUserId: string, linkedBy: string, proof: "code" | "admin"): void {
+  getSqliteDb()
+    .prepare(
+      `INSERT INTO discord_member_links (discord_user_id, server_user_id, linked_by, proof, created_at) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(discord_user_id) DO UPDATE SET server_user_id = excluded.server_user_id, linked_by = excluded.linked_by, proof = excluded.proof, created_at = excluded.created_at`,
+    )
+    .run(discordUserId, serverUserId, linkedBy, proof, toIso(new Date()));
+}
+
+export function unlinkDiscordMember(discordUserId: string): boolean {
+  return getSqliteDb().prepare(`DELETE FROM discord_member_links WHERE discord_user_id = ?`).run(discordUserId).changes > 0;
+}
+
+export function listDiscordMemberLinks(): DiscordMemberLink[] {
+  const rows = getSqliteDb().prepare(`SELECT * FROM discord_member_links`).all() as (Omit<DiscordMemberLink, "created_at"> & { created_at: string })[];
+  return rows.map((r) => ({ ...r, created_at: fromIso(r.created_at) }));
+}
+
+/** Discord user id → Gryt member, for the ones asked about. */
+export function discordLinksFor(discordUserIds: string[]): Map<string, string> {
+  if (discordUserIds.length === 0) return new Map();
+  const rows = getSqliteDb()
+    .prepare(`SELECT discord_user_id, server_user_id FROM discord_member_links WHERE discord_user_id IN (${discordUserIds.map(() => "?").join(",")})`)
+    .all(...discordUserIds) as { discord_user_id: string; server_user_id: string }[];
+  return new Map(rows.map((r) => [r.discord_user_id, r.server_user_id]));
+}
+
+/** Everyone who wrote something that came from Discord, newest name first. */
+export function listDiscordAuthors(): { discord_user_id: string; name: string | null; messages: number }[] {
+  const rows = getSqliteDb()
+    .prepare(
+      `SELECT substr(sender_server_id, 9) AS discord_user_id, MAX(sender_display_name) AS name, COUNT(*) AS messages
+       FROM messages WHERE sender_server_id LIKE 'discord:%' GROUP BY sender_server_id ORDER BY messages DESC LIMIT 500`,
+    )
+    .all() as { discord_user_id: string; name: string | null; messages: number }[];
+  return rows;
+}
+
+/** Where a Discord person's copied messages are, for deleting them on request. */
+export function discordPersonMessageIds(discordUserId: string): { conversation_id: string; message_id: string }[] {
+  return getSqliteDb()
+    .prepare(`SELECT conversation_id, message_id FROM messages WHERE sender_server_id = ?`)
+    .all(`discord:${discordUserId}`) as { conversation_id: string; message_id: string }[];
+}
