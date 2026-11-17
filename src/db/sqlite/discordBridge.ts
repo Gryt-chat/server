@@ -29,6 +29,7 @@ export interface DiscordBridgeRecord {
   sync_new_channels: boolean;
   sync_off: SyncKind[];
   copy_identity: boolean;
+  claim_id: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -49,22 +50,23 @@ export function getDiscordBridge(): DiscordBridgeRecord | null {
     sync_new_channels: r.sync_new_channels !== 0,
     sync_off: parseSyncOff(r.sync_off),
     copy_identity: r.copy_identity === 1,
+    claim_id: (r.claim_id as string) ?? null,
     created_at: fromIso(r.created_at as string),
     updated_at: fromIso(r.updated_at as string),
   };
 }
 
 /** A new token keeps the linked guild, so pasting a fresh token after a reset picks up where it was. */
-export function saveDiscordBridgeApp(applicationId: string, botToken: string): void {
+export function saveDiscordBridgeApp(applicationId: string, botToken: string, claimId: string | null = null): void {
   const now = toIso(new Date());
   getSqliteDb()
     .prepare(
-      `INSERT INTO discord_bridge (id, application_id, bot_token, status, created_at, updated_at)
-       VALUES ('bridge', ?, ?, 'connecting', ?, ?)
+      `INSERT INTO discord_bridge (id, application_id, bot_token, status, claim_id, created_at, updated_at)
+       VALUES ('bridge', ?, ?, 'connecting', ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET application_id = excluded.application_id, bot_token = excluded.bot_token,
-         status = 'connecting', updated_at = excluded.updated_at`,
+         status = 'connecting', claim_id = COALESCE(excluded.claim_id, discord_bridge.claim_id), updated_at = excluded.updated_at`,
     )
-    .run(applicationId, botToken, now, now);
+    .run(applicationId, botToken, claimId, now, now);
 }
 
 export function updateDiscordBridge(patch: {
