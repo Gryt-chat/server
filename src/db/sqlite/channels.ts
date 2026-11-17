@@ -143,16 +143,39 @@ export async function getServerChannel(channelId: string): Promise<ServerChannel
   return row ? rowToChannel(row) : null;
 }
 
+/** Mentions and attachment links go with the messages by foreign key; the media sweep removes the files. */
 export async function deleteServerChannel(channelId: string): Promise<void> {
   const db = getSqliteDb();
-  db.prepare(`DELETE FROM channels WHERE channel_id = ?`).run(channelId);
+  db.exec("BEGIN");
+  try {
+    for (const table of ["messages", "threads", "read_markers"]) {
+      db.prepare(`DELETE FROM ${table} WHERE conversation_id = ?`).run(channelId);
+    }
+    db.prepare(`DELETE FROM webhooks WHERE channel_id = ?`).run(channelId);
+    db.prepare(`DELETE FROM channels WHERE channel_id = ?`).run(channelId);
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+}
+
+const DEFAULTS_SEEDED = "default_channels_seeded";
+
+function markDefaultsSeeded(): void {
+  getSqliteDb().prepare(`INSERT OR IGNORE INTO schema_meta (key, value) VALUES (?, '1')`).run(DEFAULTS_SEEDED);
 }
 
 /** Answers whether it wrote any, because the caller's permission cache is keyed
-    on the channel list and is now wrong. */
+    on the channel list and is now wrong. Seeds once per server, so deleting every channel sticks. */
 export async function ensureDefaultChannels(): Promise<boolean> {
   const existing = await listServerChannels();
-  if (existing.length > 0) return false;
+  if (existing.length > 0) {
+    markDefaultsSeeded();
+    return false;
+  }
+  if (getSqliteDb().prepare(`SELECT 1 FROM schema_meta WHERE key = ?`).get(DEFAULTS_SEEDED)) return false;
+  markDefaultsSeeded();
   const voiceId = (process.env.VOICE_CHANNEL_ID || "voice").trim().slice(0, 64) || "voice";
   const voiceName = (process.env.VOICE_CHANNEL_NAME || "Voice Chat").trim().slice(0, 80) || "Voice Chat";
   await upsertServerChannel({ channelId: "general", name: "General", type: "text", position: 10, description: "General text chat" });
@@ -305,7 +328,10 @@ function writeKeepingFolderScopes(write: () => void): void {
 /** As {@link ensureDefaultChannels}: true when this call seeded something. */
 export async function ensureDefaultSidebarItems(): Promise<boolean> {
   const existing = await listServerSidebarItems();
-  if (existing.length > 0) return false;
+  if (existing.length > 0) {
+    markDefaultsSeeded();
+    return false;
+  }
   await ensureDefaultChannels();
   const chans = await listServerChannels();
   let pos = 10;
@@ -313,5 +339,5 @@ export async function ensureDefaultSidebarItems(): Promise<boolean> {
     await upsertServerSidebarItem({ itemId: `sb_ch_${String(ch.channel_id).slice(0, 54)}`, kind: "channel", channelId: ch.channel_id, position: pos });
     pos += 10;
   }
-  return true;
+  return chans.length > 0;
 }
