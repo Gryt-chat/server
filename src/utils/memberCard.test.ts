@@ -187,6 +187,7 @@ describe("the banner's fade", () => {
 describe("the banner's height", () => {
   it("keeps the short banner and leaves out the tall one", () => {
     assert.deepEqual(normaliseCardStyle({ bannerSize: "short" }), { bannerSize: "short" });
+    assert.deepEqual(normaliseCardStyle({ bannerSize: "card" }), { bannerSize: "card" });
     assert.equal(normaliseCardStyle({ bannerSize: "tall" }), null);
     assert.equal(normaliseCardStyle({ bannerSize: true }), null);
   });
