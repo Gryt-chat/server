@@ -41,8 +41,10 @@ import { linkPreviewRouter } from "./routes/linkPreview";
 import { oEmbedRouter } from "./routes/oembed";
 import { mediaMetadataRouter } from "./routes/mediaMetadata";
 import { webhooksRouter } from "./routes/webhooks";
+import { discordBridgeRouter } from "./routes/discordBridge";
 import { discordImportRouter } from "./routes/discordImport";
 import { clearLinkHistoryOnStart, linkHistoryRouter } from "./routes/linkHistory";
+import { startDiscordBridge } from "./discord/bridge";
 import { resumeDiscordImports } from "./import/discord/runner";
 import { noFileStorageMedia, uploadPathMedia } from "./import/discord/media";
 import { parsesOwnJson } from "./routes/ownJsonParsers";
@@ -163,6 +165,7 @@ initSqlite()
     if (!uploadsDisabled()) startMediaSweep();
     startMlsRetention();
     resumeDiscordImports(uploadsDisabled() ? noFileStorageMedia : uploadPathMedia);
+    void startDiscordBridge();
     if (!uploadsDisabled()) {
       startEmojiQueueWorker();
     }
@@ -375,6 +378,7 @@ app.use("/api/oembed", httpRateLimit("http:outbound", RL_HTTP_OUTBOUND), oEmbedR
 app.use("/api/media/metadata", httpRateLimit("http:outbound", RL_HTTP_OUTBOUND), mediaMetadataRouter);
 app.use("/api/webhooks", webhooksRouter);
 app.use("/api/imports/discord", httpRateLimit("http:api", RL_HTTP_API), discordImportRouter);
+app.use("/api/discord/bridge", httpRateLimit("http:api", RL_HTTP_API), discordBridgeRouter);
 app.use("/api/link-history", httpRateLimit("http:link-history", RL_HTTP_CHAT_UPLOAD), linkHistoryRouter);
 
 app.use(apiErrorHandler);
