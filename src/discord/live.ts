@@ -22,6 +22,7 @@ import {
   getServerChannel,
   grytChannelFor,
   getThread,
+  isExcludedFromBridge,
   insertImportedMessages,
   rememberDiscordMessages,
   refreshImportedThreadCounters,
@@ -56,6 +57,7 @@ async function placeOf(m: Message | PartialMessage, botId: string | undefined): 
   const b = getDiscordBridge();
   if (!b || m.guildId !== b.guild_id || b.direction === "to_discord") return null;
   if (m.author?.id && m.author.id === botId) return null;
+  if (m.author?.id && isExcludedFromBridge("discord", m.author.id)) return null;
   // Gryt's own messages, posted by the bridge's webhooks, coming back.
   if (m.webhookId && bridgeWebhookIds().has(m.webhookId)) return null;
   const ch = m.channel;
@@ -178,7 +180,7 @@ export function attachLiveSync(c: Client, media: ImportMedia): void {
 
   const react = (add: boolean) =>
     guarded(add ? "reaction" : "reaction removal", async (r: MessageReaction | PartialMessageReaction, user: User | PartialUser) => {
-      if (user.id === botId()) return;
+      if (user.id === botId() || isExcludedFromBridge("discord", user.id)) return;
       const place = await placeOf(r.message, botId());
       const src = reactionSrc(r);
       if (!place || !src) return;

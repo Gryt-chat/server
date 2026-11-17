@@ -7,7 +7,7 @@ import { after, before, describe, it } from "node:test";
 
 import type { Client } from "discord.js";
 
-import { discordMessageFor, saveDiscordBridgeApp, saveDiscordBridgeChannel, updateDiscordBridge, type MessageRecord } from "../db";
+import { discordMessageFor, saveDiscordBridgeApp, saveDiscordBridgeChannel, setExcludedFromBridge, updateDiscordBridge, type MessageRecord } from "../db";
 import { initSqlite } from "../db/sqlite/connection";
 import { messageCreated, messageEdited, messageDeleted, setOutboundClient, setWebhookFactory } from "./outbound";
 
@@ -78,6 +78,13 @@ describe("Gryt to Discord", () => {
     await messageEdited(message({ text: "count me in, bringing snacks" }));
     await messageDeleted("m1");
     assert.deepEqual(posted.map((p) => p.op), ["edit", "delete"]);
+  });
+
+  it("doesn't post a member the owner switched off", async () => {
+    setExcludedFromBridge("gryt", "user_skip", true);
+    posted.length = 0;
+    await messageCreated(message({ message_id: "m4", sender_server_id: "user_skip" }));
+    assert.equal(posted.length, 0);
   });
 
   it("stays quiet when the bridge only copies into Gryt", async () => {

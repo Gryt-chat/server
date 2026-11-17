@@ -41,6 +41,10 @@ export function attachLayoutSync(c: Client): void {
     run("new channel", async () => {
       const kind = kindOf(ch);
       if (!kind || !syncing(ch.guildId)) return;
+      if (!getDiscordBridge()?.sync_new_channels) {
+        setDiscordChannelMatch(ch.id, "skip");
+        return;
+      }
       const target = grytChannelFor(ch.id, importedId("channel", ch.id));
       if (!target) return;
       await createImportedChannels([{ ...planOf(ch, kind), grytChannelId: target }]);

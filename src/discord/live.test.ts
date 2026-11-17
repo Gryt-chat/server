@@ -9,7 +9,7 @@ import { after, before, describe, it } from "node:test";
 import { Events, MessageType, type Client } from "discord.js";
 import type { Server } from "socket.io";
 
-import { getMessageById, saveDiscordBridgeApp, updateDiscordBridge, upsertServerChannel } from "../db";
+import { getMessageById, saveDiscordBridgeApp, setExcludedFromBridge, updateDiscordBridge, upsertServerChannel } from "../db";
 import { initSqlite } from "../db/sqlite/connection";
 import { importedId } from "../import/discord/ids";
 import type { ImportMedia } from "../import/discord/importer";
@@ -113,6 +113,15 @@ describe("live Discord sync", () => {
     client.emit(Events.MessageCreate, elsewhere);
     await new Promise((r) => setTimeout(r, 100));
     assert.equal(await getMessageById(importedId("channel", "500000000000000013"), importedId("message", "500000000000000012")), null);
+  });
+
+  it("leaves out someone the owner switched off", async () => {
+    setExcludedFromBridge("discord", "500000000000000009", true);
+    const skipped = { ...fakeMessage("not copied"), id: "500000000000000014" };
+    client.emit(Events.MessageCreate, skipped);
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(await getMessageById(conversationId, importedId("message", "500000000000000014")), null);
+    setExcludedFromBridge("discord", "500000000000000009", false);
   });
 
   it("follows a delete", async () => {

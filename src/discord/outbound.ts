@@ -5,6 +5,7 @@ import {
   discordChannelFor,
   discordMessageFor,
   getDiscordBridge,
+  isExcludedFromBridge,
   getFilesByIds,
   rememberDiscordMessages,
   saveDiscordChannelWebhook,
@@ -40,7 +41,7 @@ function sending(): boolean {
 
 /** Our own copies coming back from Discord would loop, and Discord's own messages are already there. */
 function fromGryt(m: MessageRecord): boolean {
-  return !m.sender_server_id.startsWith(DISCORD_SENDER_PREFIX);
+  return !m.sender_server_id.startsWith(DISCORD_SENDER_PREFIX) && !isExcludedFromBridge("gryt", m.sender_server_id);
 }
 
 async function webhookFor(grytChannelId: string): Promise<{ hook: Hook; discordChannelId: string } | null> {
@@ -145,7 +146,7 @@ export async function reactionsChanged(m: MessageRecord): Promise<void> {
   if (!msg) return;
   const wanted = new Set(
     (m.reactions ?? [])
-      .filter((r) => r.users.some((u) => !u.startsWith(DISCORD_SENDER_PREFIX)))
+      .filter((r) => r.users.some((u) => !u.startsWith(DISCORD_SENDER_PREFIX) && !isExcludedFromBridge("gryt", u)))
       .map((r) => r.src)
       .filter((src) => !src.startsWith(":")),
   );

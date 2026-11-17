@@ -1218,6 +1218,14 @@ function runMigrations(d: DatabaseSync): void {
     proof TEXT NOT NULL,
     created_at TEXT NOT NULL
   )`);
+  // People the owner left out of the bridge: a Discord user id, or a Gryt member's server user id.
+  d.exec(`CREATE TABLE IF NOT EXISTS discord_bridge_excluded (
+    kind TEXT NOT NULL CHECK (kind IN ('discord', 'gryt')),
+    id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (kind, id)
+  )`);
+  if (!hasColumn(d, "discord_bridge", "sync_new_channels")) d.exec("ALTER TABLE discord_bridge ADD COLUMN sync_new_channels INTEGER NOT NULL DEFAULT 1");
   // Where each Discord channel's history copy stopped, so a restart picks up there.
   d.exec(`CREATE TABLE IF NOT EXISTS discord_bridge_channels (
     discord_channel_id TEXT PRIMARY KEY,
