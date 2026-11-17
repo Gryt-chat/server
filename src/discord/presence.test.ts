@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-restricted-types -- the fake guild is cast through unknown; it only has what discordPresence reads */
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
