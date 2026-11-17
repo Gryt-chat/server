@@ -15,33 +15,20 @@ import {
   upsertServerSidebarItem,
   type DiscordImportProgress,
   type ImportedMessageRow,
-  type Reaction,
-  type StoredWebhookCard,
 } from "../../db";
-import { WEBHOOK_LIMITS as L } from "../../routes/webhookSchemas";
-import {
-  authorName,
-  clip,
-  composeText,
-  emojiName,
-  hasCardContent,
-  httpUrl,
-  isLinkPreview,
-  normaliseHexColor,
-  rewriteDiscordMarkup,
-} from "./content";
+import { clip } from "./content";
 import {
   DM_TYPES,
   IMPORTED_MESSAGE_TYPES,
   isSnowflake,
   THREAD_TYPES,
   VOICE_TYPES,
-  type DceEmbed,
   type DceExport,
   type DceMessage,
 } from "./dce";
 import { indexExportFolder, readExportHead, resolveExportAsset, type ExportFolder } from "./exportFolder";
-import { discordSenderId, folderItemId, importedId } from "./ids";
+import { folderItemId, importedId } from "./ids";
+import { DiscordRowBuilder, type AssetSource } from "./rows";
 
 function channelKind(type: string | undefined): "text" | "voice" | "forum" {
   if (VOICE_TYPES.has(type ?? "")) return "voice";
@@ -111,11 +98,6 @@ function partOf(fileName: string): number {
   return m ? Number(m[1]) : 1;
 }
 
-function asDate(v: unknown): Date | null {
-  if (typeof v !== "string") return null;
-  const d = new Date(v);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
 
 class DiscordImport {
   readonly progress = emptyProgress();
@@ -126,11 +108,21 @@ class DiscordImport {
   private readonly channelNames = new Map<string, string>();
   /** ThreadCreated notices by the thread they announce, filled while parents import. */
   private readonly threadNotices = new Map<string, string>();
-  /** A file is stored once per run, whichever message names it. */
-  private readonly stored = new Map<string, boolean>();
-  private readonly emojis = new Map<string, string>();
+  private readonly rows: DiscordRowBuilder;
 
-  constructor(private readonly opts: ImportOptions) {}
+  constructor(private readonly opts: ImportOptions) {
+    this.rows = new DiscordRowBuilder(opts.media, this.progress, (m) => this.warn(m), this.channelNames);
+  }
+
+  private assets(file: ChannelFile): AssetSource {
+    return {
+      missingNote: "not in the export",
+      resolve: async (ref) => {
+        const path = resolveExportAsset(this.folder, file.relDir, ref);
+        return path ? { path, key: relative(this.folder.root, path).split(sep).join("/") } : null;
+      },
+    };
+  }
 
   warn(message: string): void {
     if (this.warnings.length < 200) this.warnings.push(message);
@@ -152,7 +144,7 @@ class DiscordImport {
       this.progress.channels_done += 1;
       await this.report();
     }
-    await this.queueEmojis();
+    await this.rows.queueEmojis(this.opts.startedBy);
     this.progress.current_channel = null;
     await this.report();
     return { progress: this.progress, warnings: this.warnings };
@@ -291,7 +283,7 @@ class DiscordImport {
         if (msg?.type === "ThreadCreated" && isSnowflake(msg.reference?.channelId) && isSnowflake(msg.id)) {
           this.threadNotices.set(msg.reference.channelId, msg.id);
         }
-        const row = await this.buildRow(msg, file, conversationId, channel.id, null);
+        const row = await this.rows.buildRow(msg, this.assets(file), conversationId, channel.id, null);
         if (!row) continue;
         batch.push(row);
         if (batch.length >= BATCH_SIZE) {
@@ -331,7 +323,7 @@ class DiscordImport {
         return;
       }
       const root = messages[index];
-      rootRow = await this.buildRow(root, file, conversationId, thread.id, null);
+      rootRow = await this.rows.buildRow(root, this.assets(file), conversationId, thread.id, null);
       if (!rootRow || !root.id) return;
       await this.flush([rootRow]);
       rootDiscordId = root.id;
@@ -356,7 +348,7 @@ class DiscordImport {
         this.progress.messages_already_there += 1;
         continue;
       }
-      const row = await this.buildRow(msg, file, conversationId, thread.id, threadId);
+      const row = await this.rows.buildRow(msg, this.assets(file), conversationId, thread.id, threadId);
       if (!row) continue;
       batch.push(row);
       if (batch.length >= BATCH_SIZE) {
@@ -376,209 +368,6 @@ class DiscordImport {
     await this.report();
   }
 
-  /** Stores a file once per run under a derived id, keyed by its path when `key` is null.
-      Returns the id, or a note saying why it's absent. */
-  private async store(
-    key: string | null,
-    kind: "file" | "avatar" | "sticker",
-    ref: string | null | undefined,
-    file: ChannelFile,
-    originalName: string,
-    uploadedBy: string,
-    imageOnly = false,
-  ): Promise<{ fileId: string } | { note: string }> {
-    const path = resolveExportAsset(this.folder, file.relDir, ref);
-    if (!path) {
-      this.progress.files_missing += 1;
-      return { note: "not in the export" };
-    }
-    const fileId = importedId(kind, key ?? relative(this.folder.root, path).split(sep).join("/"));
-    const known = this.stored.get(fileId);
-    if (known === true) return { fileId };
-    if (known === false) return { note: "couldn't be stored" };
-
-    const outcome = await this.opts.media.storeFile({ fileId, path, originalName, uploadedBy, imageOnly });
-    if (outcome.kind === "skipped") {
-      this.stored.set(fileId, false);
-      this.progress.files_skipped += 1;
-      this.warn(`${originalName}: ${outcome.reason}`);
-      return { note: outcome.reason };
-    }
-    this.stored.set(fileId, true);
-    if (outcome.kind === "stored") this.progress.files_stored += 1;
-    else this.progress.files_already_there += 1;
-    return { fileId };
-  }
-
-  private async buildRow(
-    msg: DceMessage,
-    file: ChannelFile,
-    conversationId: string,
-    discordChannelId: string,
-    threadId: string | null,
-  ): Promise<ImportedMessageRow | null> {
-    const createdAt = asDate(msg?.timestamp);
-    if (!msg || !isSnowflake(msg.id) || !createdAt || !IMPORTED_MESSAGE_TYPES.has(msg.type ?? "")) {
-      this.progress.messages_skipped += 1;
-      return null;
-    }
-    const author = msg.author;
-    const authorId = isSnowflake(author?.id) ? author.id : "0";
-    const sender = discordSenderId(authorId);
-    const content = typeof msg.content === "string" ? msg.content : "";
-    const notes: string[] = [];
-    const attachments: string[] = [];
-    const media: string[] = [];
-
-    let avatarFileId: string | null = null;
-    if (author?.avatarUrl) {
-      const stored = await this.store(null, "avatar", author.avatarUrl, file, `${authorId}.png`, sender, true);
-      if ("fileId" in stored) {
-        avatarFileId = stored.fileId;
-        media.push(stored.fileId);
-      }
-    }
-
-    const allAttachments = [...(msg.attachments ?? []), ...(msg.forwardedMessage?.attachments ?? [])];
-    for (const a of allAttachments) {
-      const name = clip(a?.fileName, 255) ?? "file";
-      const key = isSnowflake(a?.id) ? a.id : `${msg.id}:${a?.url ?? name}`;
-      const stored = await this.store(key, "file", a?.url, file, name, sender);
-      if ("fileId" in stored) attachments.push(stored.fileId);
-      else notes.push(`*(${name} wasn't imported: ${stored.note})*`);
-    }
-
-    for (const s of msg.stickers ?? []) {
-      const name = clip(s?.name, 64) ?? "sticker";
-      if (s?.format === "Lottie") {
-        notes.push(`*(sticker: ${name})*`);
-        continue;
-      }
-      const stored = await this.store(isSnowflake(s?.id) ? s.id : `${msg.id}:${name}`, "sticker", s?.sourceUrl, file, `${name}.png`, sender, true);
-      if ("fileId" in stored) attachments.push(stored.fileId);
-      else notes.push(`*(sticker: ${name})*`);
-    }
-
-    const cards: StoredWebhookCard[] = [];
-    for (const embed of msg.embeds ?? []) {
-      if (!embed || isLinkPreview(embed, content) || !hasCardContent(embed) || cards.length >= L.cards) continue;
-      const card = await this.buildCard(embed, file, sender);
-      cards.push(card);
-      for (const id of [card.author?.icon_file_id, card.image_file_id, card.thumbnail_file_id, card.footer?.icon_file_id]) {
-        if (id) media.push(id);
-      }
-    }
-
-    const reactions: Reaction[] = [];
-    for (const r of msg.reactions ?? []) {
-      const e = r?.emoji;
-      if (!e?.name) continue;
-      let src = e.name;
-      if (isSnowflake(e.id)) {
-        const name = emojiName(e.name);
-        if (!name) continue;
-        src = `:${name}:`;
-        this.noteEmoji(name, e.imageUrl, file);
-      }
-      const users = (r.users ?? []).flatMap((u) => (isSnowflake(u?.id) ? [discordSenderId(u.id)] : []));
-      reactions.push({ src, amount: Math.max(users.length, Number(r.count) || 0), users });
-    }
-    for (const e of msg.inlineEmojis ?? []) {
-      const name = isSnowflake(e?.id) ? emojiName(e.name) : null;
-      if (name) this.noteEmoji(name, e.imageUrl, file);
-    }
-
-    let body = rewriteDiscordMarkup(content, msg.mentions, this.channelNames);
-    const forwarded = msg.forwardedMessage?.content;
-    if (typeof forwarded === "string" && forwarded.trim()) {
-      const quoted = rewriteDiscordMarkup(forwarded, msg.mentions, this.channelNames).split("\n").map((l) => `> ${l}`).join("\n");
-      body = [body, "*Forwarded:*", quoted].filter((p) => p.trim()).join("\n");
-    }
-    if (msg.type === "ThreadCreated" && !body.trim()) body = "*Started a thread.*";
-
-    const text = composeText(body, notes);
-    if (!text && attachments.length === 0 && cards.length === 0) {
-      this.progress.messages_skipped += 1;
-      return null;
-    }
-
-    const ref = msg.reference;
-    const replyTo =
-      msg.type === "Reply" && isSnowflake(ref?.messageId) && (!ref.channelId || ref.channelId === discordChannelId)
-        ? importedId("message", ref.messageId)
-        : null;
-
-    return {
-      conversation_id: conversationId,
-      message_id: importedId("message", msg.id),
-      sender_server_id: sender,
-      sender_display_name: authorName(author),
-      sender_avatar_file_id: avatarFileId,
-      text,
-      attachments,
-      reactions,
-      cards,
-      reply_to_message_id: replyTo,
-      thread_id: threadId,
-      created_at: createdAt,
-      edited_at: asDate(msg.timestampEdited),
-      media_file_ids: media,
-    };
-  }
-
-  private async buildCard(embed: DceEmbed, file: ChannelFile, sender: string): Promise<StoredWebhookCard> {
-    const picture = async (ref: string | null | undefined): Promise<string | undefined> => {
-      if (!ref) return undefined;
-      const stored = await this.store(null, "file", ref, file, basename(ref.replace(/\\/g, "/")) || "image", sender, true);
-      return "fileId" in stored ? stored.fileId : undefined;
-    };
-    const card: StoredWebhookCard = {};
-    const title = clip(embed.title, L.title);
-    if (title) card.title = title;
-    const url = httpUrl(embed.url);
-    if (url) card.url = url;
-    const description = clip(embed.description, L.description);
-    if (description) card.description = description;
-    const color = normaliseHexColor(embed.color);
-    if (color) card.color = color;
-    const authorNameText = clip(embed.author?.name, L.authorName);
-    if (authorNameText) {
-      const icon = await picture(embed.author?.iconUrl);
-      const authorUrl = httpUrl(embed.author?.url);
-      card.author = { name: authorNameText, ...(authorUrl ? { url: authorUrl } : {}), ...(icon ? { icon_file_id: icon } : {}) };
-    }
-    const fields = (embed.fields ?? [])
-      .map((f) => ({ name: clip(f?.name, L.fieldName), value: clip(f?.value, L.fieldValue), inline: !!f?.isInline }))
-      .filter((f): f is { name: string; value: string; inline: boolean } => !!f.name && !!f.value)
-      .slice(0, L.fields);
-    if (fields.length > 0) card.fields = fields;
-    const image = await picture(embed.image?.url ?? embed.images?.[0]?.url);
-    if (image) card.image_file_id = image;
-    const thumbnail = await picture(embed.thumbnail?.url);
-    if (thumbnail) card.thumbnail_file_id = thumbnail;
-    const footerText = clip(embed.footer?.text, L.footerText);
-    if (footerText) {
-      const icon = await picture(embed.footer?.iconUrl);
-      card.footer = { text: footerText, ...(icon ? { icon_file_id: icon } : {}) };
-    }
-    const ts = asDate(embed.timestamp);
-    if (ts) card.timestamp = ts.toISOString();
-    return card;
-  }
-
-  private noteEmoji(name: string, ref: string | null | undefined, file: ChannelFile): void {
-    if (this.emojis.has(name)) return;
-    const path = resolveExportAsset(this.folder, file.relDir, ref);
-    if (path) this.emojis.set(name, path);
-  }
-
-  private async queueEmojis(): Promise<void> {
-    for (const [name, path] of this.emojis) {
-      if (await this.opts.media.queueEmoji({ name, path, uploadedBy: this.opts.startedBy })) {
-        this.progress.emojis_queued += 1;
-      }
-    }
-  }
 }
 
 /** Imports every DCE JSON file under `root`. Safe to run again: it only adds what isn't there. */
