@@ -94,6 +94,7 @@ import {
   replaceCachedMessage,
   sweepMessageCache,
 } from "../utils/messageCache";
+import { toDiscord } from "../../discord/outbound";
 import { DISCORD_SENDER_PREFIX } from "../../import/discord/ids";
 
 const RL_SEND: RateLimitRule = { limit: 20, windowMs: 10_000, banMs: 30_000, scorePerAction: 1, maxScore: 10, scoreDecayMs: 2000 };
@@ -867,6 +868,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
             attachmentCount: created.attachments?.length ?? 0,
             at: created.created_at.toISOString(),
           });
+          toDiscord.created({ ...created, sender_nickname: user.nickname ?? undefined });
         }
 
         /* After delivery, so a parse that threw cannot stop a message. Sealed
@@ -1636,6 +1638,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
           const poll = isStoredPoll(updatedMessage.poll) ? publicPoll(updatedMessage.poll, clientsInfo[cid]?.serverUserId) : undefined;
           io.sockets.sockets.get(cid)?.emit("chat:reaction", poll ? { ...enrichedReaction, poll } : enrichedReaction);
         });
+        if (access.kind !== "dm") toDiscord.reactions(updatedMessage);
       } catch (err) {
         consola.error("chat:react failed", err);
         socket.emit("chat:error", "Failed to add reaction");
@@ -1841,6 +1844,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         connectedClients.forEach((cid) => {
           io.sockets.sockets.get(cid)?.emit("chat:edited", enriched);
         });
+        if (access.kind !== "dm") toDiscord.edited(updated);
       } catch (err) {
         consola.error("chat:edit failed", err);
         socket.emit("chat:error", "Failed to edit message");
@@ -1902,6 +1906,7 @@ export function registerChatHandlers(ctx: HandlerContext): EventHandlerMap {
         connectedClients.forEach((cid) => {
           io.sockets.sockets.get(cid)?.emit("chat:pinned", event);
         });
+        if (access.kind !== "dm") toDiscord.pinned(payload.messageId, !!updated.pinned_at);
       } catch (err) {
         consola.error("chat:pin failed", err);
         socket.emit("chat:error", "Failed to pin message");

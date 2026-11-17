@@ -106,3 +106,43 @@ export function saveDiscordBridgeChannel(c: DiscordBridgeChannelRecord): void {
     )
     .run(c.discord_channel_id, c.gryt_channel_id, c.backfill_before, c.backfill_done ? 1 : 0);
 }
+
+export interface DiscordMessageLink {
+  gryt_message_id: string;
+  gryt_conversation_id: string;
+  discord_channel_id: string;
+  discord_message_id: string;
+  from_gryt: boolean;
+}
+
+export function rememberDiscordMessages(links: DiscordMessageLink[]): void {
+  if (links.length === 0) return;
+  const insert = getSqliteDb().prepare(
+    `INSERT OR IGNORE INTO discord_bridge_messages (gryt_message_id, gryt_conversation_id, discord_channel_id, discord_message_id, from_gryt) VALUES (?, ?, ?, ?, ?)`,
+  );
+  for (const l of links) insert.run(l.gryt_message_id, l.gryt_conversation_id, l.discord_channel_id, l.discord_message_id, l.from_gryt ? 1 : 0);
+}
+
+export function discordMessageFor(grytMessageId: string): DiscordMessageLink | null {
+  const r = getSqliteDb().prepare(`SELECT * FROM discord_bridge_messages WHERE gryt_message_id = ?`).get(grytMessageId) as
+    | (Omit<DiscordMessageLink, "from_gryt"> & { from_gryt: number })
+    | undefined;
+  return r ? { ...r, from_gryt: r.from_gryt === 1 } : null;
+}
+
+/** The Discord channel or thread behind a Gryt channel or thread id, with its webhook once one is made. */
+export function discordChannelFor(grytChannelId: string): { discord_channel_id: string; webhook_id: string | null; webhook_token: string | null } | null {
+  const r = getSqliteDb()
+    .prepare(`SELECT discord_channel_id, webhook_id, webhook_token FROM discord_bridge_channels WHERE gryt_channel_id = ? LIMIT 1`)
+    .get(grytChannelId) as { discord_channel_id: string; webhook_id: string | null; webhook_token: string | null } | undefined;
+  return r ?? null;
+}
+
+export function saveDiscordChannelWebhook(discordChannelId: string, webhookId: string, webhookToken: string): void {
+  getSqliteDb().prepare(`UPDATE discord_bridge_channels SET webhook_id = ?, webhook_token = ? WHERE discord_channel_id = ?`).run(webhookId, webhookToken, discordChannelId);
+}
+
+export function bridgeWebhookIds(): Set<string> {
+  const rows = getSqliteDb().prepare(`SELECT webhook_id FROM discord_bridge_channels WHERE webhook_id IS NOT NULL`).all() as { webhook_id: string }[];
+  return new Set(rows.map((r) => r.webhook_id));
+}

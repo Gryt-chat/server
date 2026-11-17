@@ -28,6 +28,7 @@ const media: ImportMedia = { storeFile: async () => ({ kind: "stored" }), queueE
 function fakeMessage(content: string, pinned = false) {
   return {
     id: MSG,
+    channelId: CHANNEL,
     guildId: GUILD,
     partial: false,
     type: MessageType.Default,

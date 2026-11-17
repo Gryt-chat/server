@@ -1202,6 +1202,14 @@ function runMigrations(d: DatabaseSync): void {
   for (const [col, def] of [["direction", "TEXT"], ["copy_status", "TEXT NOT NULL DEFAULT 'idle'"], ["copy_progress", "TEXT"], ["copy_started_by", "TEXT"]]) {
     if (!hasColumn(d, "discord_bridge", col)) d.exec(`ALTER TABLE discord_bridge ADD COLUMN ${col} ${def}`);
   }
+  // Which Discord message is which Gryt message, for replies, edits, deletes and reactions across.
+  d.exec(`CREATE TABLE IF NOT EXISTS discord_bridge_messages (
+    gryt_message_id TEXT PRIMARY KEY,
+    gryt_conversation_id TEXT NOT NULL,
+    discord_channel_id TEXT NOT NULL,
+    discord_message_id TEXT NOT NULL UNIQUE,
+    from_gryt INTEGER NOT NULL DEFAULT 0
+  )`);
   // Where each Discord channel's history copy stopped, so a restart picks up there.
   d.exec(`CREATE TABLE IF NOT EXISTS discord_bridge_channels (
     discord_channel_id TEXT PRIMARY KEY,
@@ -1209,6 +1217,9 @@ function runMigrations(d: DatabaseSync): void {
     backfill_before TEXT,
     backfill_done INTEGER NOT NULL DEFAULT 0
   )`);
+  for (const col of ["webhook_id", "webhook_token"]) {
+    if (!hasColumn(d, "discord_bridge_channels", col)) d.exec(`ALTER TABLE discord_bridge_channels ADD COLUMN ${col} TEXT`);
+  }
 
   migrateFileOwnership(d);
   clearHiddenConversations(d);
