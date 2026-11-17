@@ -1,10 +1,11 @@
 import consola from "consola";
-import { Client, Events, GatewayIntentBits, PermissionFlagsBits, REST, Routes, type Guild } from "discord.js";
+import { Client, Events, GatewayIntentBits, Partials, PermissionFlagsBits, REST, Routes, type Guild } from "discord.js";
 
 import { getDiscordBridge, updateDiscordBridge, type DiscordBridgeDirection, type DiscordBridgeStatus } from "../db";
 import type { ImportMedia } from "../import/discord/importer";
 import { resetMessageCache } from "../socket/utils/messageCache";
 import { copyGuild } from "./copy";
+import { attachLiveSync } from "./live";
 
 /** Read, write with each member's name and picture, mirror pins, reactions and threads. Not Administrator. */
 export const BRIDGE_PERMISSIONS =
@@ -97,8 +98,13 @@ export async function startDiscordBridge(store?: ImportMedia): Promise<void> {
   const config = getDiscordBridge();
   if (!config) return;
 
-  const c = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMessageReactions] });
+  const c = new Client({
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMessageReactions],
+    // Edits, deletes and reactions on messages from before the bot started arrive as partials.
+    partials: [Partials.Message, Partials.Channel, Partials.Reaction],
+  });
   client = c;
+  if (media) attachLiveSync(c, media);
   c.once(Events.ClientReady, () => void settleGuild(c));
   c.on(Events.GuildCreate, () => void settleGuild(c));
   c.on(Events.GuildDelete, (g) => {
