@@ -10,8 +10,9 @@ import { attachLayoutSync } from "./layout";
 import { attachLiveSync } from "./live";
 import { setOutboundClient } from "./outbound";
 import { attachPresence } from "./presence";
+import { attachVoiceBridge, stopVoiceBridge } from "./voice";
 
-/** Read, write with each member's name and picture, mirror pins, reactions and threads. Not Administrator. */
+/** Read, write with each member's name and picture, mirror pins, reactions and threads, and hear voice. Not Administrator. */
 export const BRIDGE_PERMISSIONS =
   PermissionFlagsBits.ViewChannel |
   PermissionFlagsBits.ReadMessageHistory |
@@ -23,7 +24,8 @@ export const BRIDGE_PERMISSIONS =
   PermissionFlagsBits.PinMessages |
   PermissionFlagsBits.AddReactions |
   PermissionFlagsBits.AttachFiles |
-  PermissionFlagsBits.EmbedLinks;
+  PermissionFlagsBits.EmbedLinks |
+  PermissionFlagsBits.Connect;
 
 export function inviteUrl(applicationId: string): string {
   const q = new URLSearchParams({ client_id: applicationId, scope: "bot applications.commands", permissions: BRIDGE_PERMISSIONS.toString() });
@@ -154,7 +156,7 @@ export async function startDiscordBridge(store?: ImportMedia): Promise<void> {
   if (!config) return;
 
   const c = new Client({
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildPresences, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMessageReactions],
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildPresences, GatewayIntentBits.GuildVoiceStates, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMessageReactions],
     // Edits, deletes and reactions on messages from before the bot started arrive as partials.
     partials: [Partials.Message, Partials.Channel, Partials.Reaction],
   });
@@ -163,6 +165,7 @@ export async function startDiscordBridge(store?: ImportMedia): Promise<void> {
   attachCommands(c);
   attachLayoutSync(c);
   attachPresence(c);
+  attachVoiceBridge(c);
   c.once(Events.ClientReady, () => void settleGuild(c));
   c.on(Events.GuildCreate, () => void settleGuild(c));
   c.on(Events.GuildDelete, (g) => {
@@ -187,6 +190,7 @@ export async function startDiscordBridge(store?: ImportMedia): Promise<void> {
 }
 
 export async function stopDiscordBridge(): Promise<void> {
+  stopVoiceBridge();
   const c = client;
   client = null;
   if (c) await c.destroy();

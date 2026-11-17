@@ -40,6 +40,8 @@ export class SFUClient {
   };
   private roomManager: SFURoomManager;
   private callbacks: SFUEventCallbacks = {};
+  /** Voice members this server speaks for; the SFU drops them with the connection, so they're added again on reconnect. */
+  private virtualPeers = new Map<string, string>();
 
   constructor(serverId: string, serverPassword: string, sfuHost: string) {
     this.serverId = serverId;
@@ -87,6 +89,7 @@ export class SFUClient {
           
           this.roomManager.reregisterRooms()
             .then(() => {
+              for (const [userId, roomId] of this.virtualPeers) this.sendVirtual("virtual_voice_join", roomId, userId);
               if (this.roomManager.registeredRooms.size > 0) {
                 this.roomManager.requestSync();
               }
@@ -98,7 +101,8 @@ export class SFUClient {
           resolve();
         });
 
-        this.ws.on('message', (data: WebSocket.Data) => {
+        this.ws.on('message', (data: WebSocket.Data, isBinary: boolean) => {
+          if (isBinary) return;
           try {
             const message: WebSocketMessage = JSON.parse(data.toString());
             this.handleMessage(message);
@@ -359,6 +363,32 @@ export class SFUClient {
 
   async disconnectUser(roomId: string, userId: string): Promise<void> {
     return this.roomManager.disconnectUser(roomId, userId);
+  }
+
+  /** Adds a voice member whose audio this server sends, such as someone in a Discord voice channel. */
+  virtualVoiceJoin(roomId: string, userId: string): void {
+    this.virtualPeers.set(userId, roomId);
+    this.sendVirtual("virtual_voice_join", roomId, userId);
+  }
+
+  virtualVoiceLeave(userId: string): void {
+    const roomId = this.virtualPeers.get(userId);
+    if (!roomId) return;
+    this.virtualPeers.delete(userId);
+    this.sendVirtual("virtual_voice_leave", roomId, userId);
+  }
+
+  /** One own-transport datagram from a virtual member: op 1, peer id length, peer id, datagram. */
+  sendVirtualAudio(userId: string, datagram: Uint8Array): void {
+    if (!this.virtualPeers.has(userId) || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    const peer = Buffer.from(`virtual:${userId}`);
+    if (peer.length > 255) return;
+    this.ws.send(Buffer.concat([Buffer.from([1, peer.length]), peer, Buffer.from(datagram)]), { binary: true });
+  }
+
+  private sendVirtual(event: string, roomId: string, userId: string): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ event, data: JSON.stringify({ room_id: roomId, user_id: userId, server_id: this.serverId, server_password: this.serverToken, listen: false }) }));
   }
 
   async setHiddenPeers(roomId: string, userId: string, hidden: string[]): Promise<void> {
