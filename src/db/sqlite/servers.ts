@@ -80,6 +80,7 @@ function rowToConfig(r: Record<string, unknown>): ServerConfigRecord {
     spam_filter_sensitivity: normalizeSpamSensitivity(r.spam_sensitivity),
     video_profiles_enabled: (r.video_profiles as number) !== 0,
     chat_video_mode: normalizeChatVideoMode(r.chat_video_mode),
+    plan_video_max: typeof r.plan_video_max === "string" ? r.plan_video_max : null,
     link_history_enabled: (r.link_history as number) !== 0,
     external_emojis_enabled: (r.external_emojis as number) === 1,
     is_configured: (r.is_configured as number) === 1,
@@ -248,6 +249,7 @@ export async function updateServerConfig(patch: {
   spamSensitivity?: SpamSensitivity;
   videoProfiles?: boolean;
   chatVideoMode?: ChatVideoMode;
+  planVideoMax?: string | null;
   linkHistory?: boolean;
   externalEmojis?: boolean;
   isConfigured?: boolean;
@@ -281,6 +283,7 @@ export async function updateServerConfig(patch: {
     spamSensitivity: { col: "spam_sensitivity", transform: (v) => normalizeSpamSensitivity(v) },
     videoProfiles: { col: "video_profiles", transform: (v) => v ? 1 : 0 },
     chatVideoMode: { col: "chat_video_mode", transform: (v) => normalizeChatVideoMode(v) },
+    planVideoMax: { col: "plan_video_max" },
     linkHistory: { col: "link_history", transform: (v) => v ? 1 : 0 },
     externalEmojis: { col: "external_emojis", transform: (v) => v ? 1 : 0 },
     isConfigured: { col: "is_configured", transform: (v) => v ? 1 : 0 },

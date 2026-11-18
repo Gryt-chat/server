@@ -3,6 +3,8 @@ import type { Server } from "socket.io";
 
 import { mayInChannel } from "../../services/channelPermissions";
 import { CAP_SHARE_SCREEN, CAP_SHARE_VIDEO, CAP_SPEAK, CAP_VIDEO_CHECKED } from "../../sfu/clientToken";
+import { getServerConfig } from "../../db";
+import { effectiveVideoCeiling, videoCeilingCapability } from "../../settings/videoCeiling";
 import type { Clients } from "../../types";
 import { syncAllClients } from "./clients";
 
@@ -20,6 +22,9 @@ export async function voiceCapabilities(
   capabilities.push(CAP_VIDEO_CHECKED);
   if (await may("share_video")) capabilities.push(CAP_SHARE_VIDEO);
   if (await may("share_screen")) capabilities.push(CAP_SHARE_SCREEN);
+  const cfg = await getServerConfig().catch(() => null);
+  const ceiling = videoCeilingCapability(effectiveVideoCeiling(cfg?.plan_video_max));
+  if (ceiling) capabilities.push(ceiling);
   return capabilities;
 }
 

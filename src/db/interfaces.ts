@@ -284,6 +284,7 @@ export interface ServerConfigRecord {
   /** Whether members may use a video avatar or banner, where the worker can transcode one. */
   video_profiles_enabled: boolean;
   chat_video_mode: ChatVideoMode;
+  plan_video_max: string | null;
   /** Holds a linked device's sealed history for it (GRYT-2055). */
   link_history_enabled: boolean;
   /** Whether messages here may show other Gryt servers' custom emoji. Off: they load from another host. */
