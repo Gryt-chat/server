@@ -487,6 +487,7 @@ uploadsRouter.get(
         }
         const found = verdict === "allowed" ? await getFile(fileId) : null;
         if (!found) { res.status(404).json({ error: "File not found" }); return; }
+        if (found.deleted_at) { res.status(410).json({ error: "file_deleted", message: "This file was deleted." }); return; }
         // Never the quarantined original: wait for the worker's copy, or say it isn't ready.
         const fileMeta = await waitOutOfQuarantine(fileId, found, getFile, QUARANTINE_WAIT_MS);
         if (fileMeta === "refused") {

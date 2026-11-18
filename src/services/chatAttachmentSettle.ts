@@ -12,23 +12,28 @@ import { settleQuarantine } from "./quarantineUpload";
 export async function settleChatAttachment(fileId: string): Promise<void> {
   try {
     if ((await settleQuarantine(fileId)) === "timeout") return;
-    // The socket layer's refs, which carry the SFU client that working out a channel's readers needs.
-    const refs = pluginRefs();
-    if (!refs) return;
-    for (const { conversation_id, message_id } of await listMessagesWithFile(fileId)) {
-      const message = await getMessageById(conversation_id, message_id);
-      if (!message) continue;
-      const access = await resolveConversationAccess(conversation_id, message.sender_server_id);
-      if (!access.allowed) continue;
-      const sender = await getUserByServerId(message.sender_server_id);
-      const [enriched] = await enrichAttachments([{ ...message, sender_nickname: sender?.nickname ?? message.sender_nickname }]);
-      if (!enriched?.enriched_attachments) continue;
-      const payload = { conversation_id, message_id, enriched_attachments: enriched.enriched_attachments };
-      for (const cid of await recipientClientIds(conversation_id, access, refs.clientsInfo, refs.sfuClient)) {
-        refs.io.sockets.sockets.get(cid)?.emit("chat:attachments", payload);
-      }
-    }
+    await resendMessagesWithFile(fileId);
   } catch (err) {
     consola.warn(`[uploads] Could not settle attachment ${fileId}`, err);
+  }
+}
+
+/** Sends each message carrying a file again, with its attachments as they are now. */
+export async function resendMessagesWithFile(fileId: string): Promise<void> {
+  // The socket layer's refs, which carry the SFU client that working out a channel's readers needs.
+  const refs = pluginRefs();
+  if (!refs) return;
+  for (const { conversation_id, message_id } of await listMessagesWithFile(fileId)) {
+    const message = await getMessageById(conversation_id, message_id);
+    if (!message) continue;
+    const access = await resolveConversationAccess(conversation_id, message.sender_server_id);
+    if (!access.allowed) continue;
+    const sender = await getUserByServerId(message.sender_server_id);
+    const [enriched] = await enrichAttachments([{ ...message, sender_nickname: sender?.nickname ?? message.sender_nickname }]);
+    if (!enriched?.enriched_attachments) continue;
+    const payload = { conversation_id, message_id, enriched_attachments: enriched.enriched_attachments };
+    for (const cid of await recipientClientIds(conversation_id, access, refs.clientsInfo, refs.sfuClient)) {
+      refs.io.sockets.sockets.get(cid)?.emit("chat:attachments", payload);
+    }
   }
 }

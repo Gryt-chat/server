@@ -163,7 +163,7 @@ export async function countPinnedMessages(conversationId: string): Promise<numbe
 
 /** Everything the server stores for uploads, by the sizes recorded when they landed. */
 export async function storedFileBytes(): Promise<number> {
-  const row = getSqliteDb().prepare(`SELECT COALESCE(SUM(size), 0) AS n FROM files`).get() as { n: number };
+  const row = getSqliteDb().prepare(`SELECT COALESCE(SUM(size), 0) AS n FROM files WHERE deleted_at IS NULL`).get() as { n: number };
   return Number(row.n) || 0;
 }
 
@@ -214,6 +214,7 @@ export async function getFile(fileId: string): Promise<FileRecord | null> {
     thumbnail_px: r.thumbnail_px != null ? Number(r.thumbnail_px) : null,
     original_name: (r.original_name as string) ?? null,
     dominant_color: (r.dominant_color as string) ?? null,
+    deleted_at: r.deleted_at ? fromIso(r.deleted_at as string) : null,
     created_at: fromIso(r.created_at as string),
   };
 }
@@ -243,6 +244,7 @@ export async function getAllFileRecords(): Promise<FileRecord[]> {
     thumbnail_px: r.thumbnail_px != null ? Number(r.thumbnail_px) : null,
     original_name: (r.original_name as string) ?? null,
     dominant_color: (r.dominant_color as string) ?? null,
+    deleted_at: r.deleted_at ? fromIso(r.deleted_at as string) : null,
     created_at: fromIso(r.created_at as string),
   }));
 }

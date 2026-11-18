@@ -290,6 +290,8 @@ export async function enrichAttachments(messages: MessageRecord[]): Promise<Mess
     const enriched = m.attachments.map(id => {
       const f = fileMap.get(id);
       if (!f) return { file_id: id, mime: null, size: null, original_name: null, width: null, height: null, has_thumbnail: false };
+      // Mime stays set so a message with only deleted files isn't pruned as broken.
+      if (f.deleted_at) return { file_id: id, deleted: true, mime: f.mime, size: f.size, original_name: f.original_name, width: null, height: null, has_thumbnail: false };
       const inQuarantine = isQuarantined(f.s3_key);
       return {
         ...(inQuarantine ? { processing: !refusedIds.has(f.file_id), refused: refusedIds.has(f.file_id) } : {}),

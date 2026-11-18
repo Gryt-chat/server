@@ -1337,6 +1337,9 @@ function migrateRolesToMultiple(d: DatabaseSync): void {
 /** What a file read is checked against (GRYT-921). Backfilled once, in the same
     transaction that creates the table, so no attachment is ever unowned. */
 function migrateFileOwnership(d: DatabaseSync): void {
+  if (!hasColumn(d, "files", "deleted_at")) {
+    d.exec("ALTER TABLE files ADD COLUMN deleted_at TEXT");
+  }
   if (!hasColumn(d, "files", "uploaded_by_server_user_id")) {
     d.exec("ALTER TABLE files ADD COLUMN uploaded_by_server_user_id TEXT");
   }

@@ -227,6 +227,8 @@ export interface FileRecord {
   dominant_color: string | null;
   /** Null for anything uploaded before GRYT-921, which recorded no uploader. */
   uploaded_by_server_user_id?: string | null;
+  /** Set when an owner deleted it to free space. The row stays so its messages can say so. */
+  deleted_at?: Date | null;
   created_at: Date;
 }
 
