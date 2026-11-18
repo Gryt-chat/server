@@ -13,6 +13,7 @@ import { broadcastServerUiUpdate } from "../socket/utils/server";
 import { syncMdnsAdvertising } from "../mdns";
 import { VALID_CENSOR_STYLES, type CensorStyle } from "../utils/profanityFilter";
 import { SPAM_SENSITIVITIES, type SpamSensitivity } from "../moderation/spamFilter";
+import { CHAT_VIDEO_MODES, type ChatVideoMode } from "./chatVideoMode";
 import { workerClearsQuarantine, workerTranscodesVideo } from "../services/workerCapabilities";
 
 /**
@@ -36,6 +37,7 @@ export interface SettingsPatch {
   spamFilter?: boolean;
   spamSensitivity?: string;
   videoProfiles?: boolean;
+  chatVideoMode?: string;
   externalEmojis?: boolean;
   linkHistory?: boolean;
 }
@@ -107,6 +109,9 @@ export async function applyServerSettings(
     : undefined;
 
   const videoProfiles: boolean | undefined = typeof patch.videoProfiles === "boolean" ? patch.videoProfiles : undefined;
+  const chatVideoMode: ChatVideoMode | undefined = CHAT_VIDEO_MODES.includes(patch.chatVideoMode as ChatVideoMode)
+    ? patch.chatVideoMode as ChatVideoMode
+    : undefined;
   const externalEmojis: boolean | undefined = typeof patch.externalEmojis === "boolean" ? patch.externalEmojis : undefined;
   const linkHistory: boolean | undefined = typeof patch.linkHistory === "boolean" ? patch.linkHistory : undefined;
 
@@ -127,6 +132,7 @@ export async function applyServerSettings(
     spamFilter,
     spamSensitivity,
     videoProfiles,
+    chatVideoMode,
     externalEmojis,
     linkHistory,
   });
@@ -152,6 +158,7 @@ export async function applyServerSettings(
       // So the log says who turned the spam filter off or down.
       ...(spamFilter !== undefined ? { spamFilter } : {}),
       ...(spamSensitivity !== undefined ? { spamSensitivity } : {}),
+      ...(chatVideoMode !== undefined ? { chatVideoMode } : {}),
     },
   }).catch((e) => consola.warn("audit log write failed", e));
 
@@ -180,6 +187,7 @@ export function settingsView(cfg: ServerConfigRecord, serverId: string, isOwner:
     spamFilter: cfg.spam_filter_enabled !== false,
     spamSensitivity: cfg.spam_filter_sensitivity ?? "normal",
     videoProfiles: cfg.video_profiles_enabled !== false,
+    chatVideoMode: cfg.chat_video_mode ?? "original",
     externalEmojis: cfg.external_emojis_enabled === true,
     linkHistory: cfg.link_history_enabled !== false,
     // What this host can do, so settings can say why a switch is off rather than hide it.

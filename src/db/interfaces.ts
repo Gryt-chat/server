@@ -4,9 +4,10 @@ import { promisify } from "util";
 
 import type { Permission } from "../constants/permissions";
 import type { SpamSensitivity } from "../moderation/spamFilter";
+import type { ChatVideoMode } from "../settings/chatVideoMode";
 import type { CensorStyle, ProfanityMode } from "../utils/profanityFilter";
 
-export type { CensorStyle, ProfanityMode, SpamSensitivity };
+export type { ChatVideoMode, CensorStyle, ProfanityMode, SpamSensitivity };
 
 /**
  * Not about identity tiers. A list, because the reader and the writer both check
@@ -282,6 +283,7 @@ export interface ServerConfigRecord {
   spam_filter_sensitivity: SpamSensitivity;
   /** Whether members may use a video avatar or banner, where the worker can transcode one. */
   video_profiles_enabled: boolean;
+  chat_video_mode: ChatVideoMode;
   /** Holds a linked device's sealed history for it (GRYT-2055). */
   link_history_enabled: boolean;
   /** Whether messages here may show other Gryt servers' custom emoji. Off: they load from another host. */
