@@ -28,3 +28,4 @@ export * from "./mls";
 export * from "./discordBridge";
 export * from "./discordImports";
 export * from "./usage";
+export * from "./storageFiles";

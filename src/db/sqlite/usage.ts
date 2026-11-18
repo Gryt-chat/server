@@ -16,7 +16,7 @@ export function usageNumbers(now = new Date()): UsageNumbers {
   const kinds = db.prepare(
     `SELECT CASE WHEN instr(s3_key, '/') > 0 THEN substr(s3_key, 1, instr(s3_key, '/') - 1) ELSE 'other' END AS kind,
             COALESCE(SUM(size), 0) AS bytes
-       FROM files GROUP BY kind`,
+       FROM files WHERE deleted_at IS NULL GROUP BY kind`,
   ).all() as Array<{ kind: string; bytes: number }>;
   const byKind: Record<string, number> = {};
   let total = 0;

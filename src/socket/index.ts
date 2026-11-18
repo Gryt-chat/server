@@ -42,6 +42,7 @@ import { getVouchChain, signServerProof } from "../auth/serverIdentity";
 import { registerChatHandlers } from "./handlers/chat";
 import { registerDirectMessageHandlers } from "./handlers/dm";
 import { registerVoiceHandlers } from "./handlers/voice";
+import { registerStorageHandlers } from "./handlers/storage";
 import { endRingsFor, registerCallHandlers } from "./handlers/calls";
 import { registerMemberHandlers } from "./handlers/members";
 import { registerSessionHandlers } from "./handlers/sessions";
@@ -361,6 +362,7 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
     ...registerMentionHandlers(ctx),
     ...registerReadMarkerHandlers(ctx),
     ...registerPushHandlers(ctx),
+    ...registerStorageHandlers(ctx),
   };
 
   /** A Cloud server whose payment failed refuses writes, or everything but its owner (GRYT-2172). */
