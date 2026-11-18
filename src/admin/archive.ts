@@ -28,7 +28,8 @@ function usage(): string {
     "",
     "Export works while the server runs. Import goes into an empty DATA_DIR,",
     "with the server stopped. The identity key comes along, so members keep",
-    "trusting the server at its new address.",
+    "trusting the server at its new address. That also means whoever holds",
+    "the file can be this server, so keep it as safe as DATA_DIR itself.",
   ].join("\n");
 }
 
