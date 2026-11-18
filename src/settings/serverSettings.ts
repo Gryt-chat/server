@@ -14,6 +14,7 @@ import { syncMdnsAdvertising } from "../mdns";
 import { VALID_CENSOR_STYLES, type CensorStyle } from "../utils/profanityFilter";
 import { SPAM_SENSITIVITIES, type SpamSensitivity } from "../moderation/spamFilter";
 import { CHAT_VIDEO_MODES, type ChatVideoMode } from "./chatVideoMode";
+import { effectiveVideoCeiling, parseVideoCeiling } from "./videoCeiling";
 import { workerClearsQuarantine, workerTranscodesVideo } from "../services/workerCapabilities";
 
 /**
@@ -38,6 +39,8 @@ export interface SettingsPatch {
   spamSensitivity?: string;
   videoProfiles?: boolean;
   chatVideoMode?: string;
+  /** "1080p60", or null to fall back to GRYT_PLAN_VIDEO_MAX. Only through management. */
+  planVideoMax?: string | null;
   externalEmojis?: boolean;
   linkHistory?: boolean;
 }
@@ -112,6 +115,10 @@ export async function applyServerSettings(
   const chatVideoMode: ChatVideoMode | undefined = CHAT_VIDEO_MODES.includes(patch.chatVideoMode as ChatVideoMode)
     ? patch.chatVideoMode as ChatVideoMode
     : undefined;
+  // A plan limit is the host's, never the owner's, so a client's patch can't move it.
+  const fromHost = actor.via === "management" && patch.planVideoMax !== undefined;
+  const validCeiling = patch.planVideoMax === null || parseVideoCeiling(patch.planVideoMax) !== null;
+  const planVideoMax: string | null | undefined = fromHost && validCeiling ? patch.planVideoMax : undefined;
   const externalEmojis: boolean | undefined = typeof patch.externalEmojis === "boolean" ? patch.externalEmojis : undefined;
   const linkHistory: boolean | undefined = typeof patch.linkHistory === "boolean" ? patch.linkHistory : undefined;
 
@@ -133,6 +140,7 @@ export async function applyServerSettings(
     spamSensitivity,
     videoProfiles,
     chatVideoMode,
+    planVideoMax,
     externalEmojis,
     linkHistory,
   });
@@ -159,6 +167,7 @@ export async function applyServerSettings(
       ...(spamFilter !== undefined ? { spamFilter } : {}),
       ...(spamSensitivity !== undefined ? { spamSensitivity } : {}),
       ...(chatVideoMode !== undefined ? { chatVideoMode } : {}),
+      ...(planVideoMax !== undefined ? { planVideoMax } : {}),
     },
   }).catch((e) => consola.warn("audit log write failed", e));
 
@@ -188,6 +197,7 @@ export function settingsView(cfg: ServerConfigRecord, serverId: string, isOwner:
     spamSensitivity: cfg.spam_filter_sensitivity ?? "normal",
     videoProfiles: cfg.video_profiles_enabled !== false,
     chatVideoMode: cfg.chat_video_mode ?? "original",
+    videoMax: effectiveVideoCeiling(cfg.plan_video_max),
     externalEmojis: cfg.external_emojis_enabled === true,
     linkHistory: cfg.link_history_enabled !== false,
     // What this host can do, so settings can say why a switch is off rather than hide it.

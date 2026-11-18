@@ -34,6 +34,7 @@ import {
 } from "../../db";
 
 import { pushVoiceCapabilities } from "./voiceCapabilities";
+import { effectiveVideoCeiling, type VideoCeiling } from "../../settings/videoCeiling";
 import { workerClearsQuarantine, workerTranscodesVideo } from "../../services/workerCapabilities";
 import { MLS_CIPHERSUITE_ID } from "../../services/mlsWire";
 import { mlsRetentionDays } from "../../jobs/mlsRetention";
@@ -390,6 +391,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
   let cfgUploadMaxBytes: number = DEFAULT_UPLOAD_MAX_BYTES;
   let cfgVideoProfiles = true;
   let cfgExternalEmojis = false;
+  let cfgVideoMax: VideoCeiling | null = null;
   let isOwner = false;
   let role = FALLBACK_ROLE_ID;
   let roleIds: string[] = [];
@@ -406,6 +408,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
     if (typeof cfg?.upload_max_bytes === "number") cfgUploadMaxBytes = cfg.upload_max_bytes;
     cfgVideoProfiles = cfg?.video_profiles_enabled !== false;
     cfgExternalEmojis = cfg?.external_emojis_enabled === true;
+    cfgVideoMax = effectiveVideoCeiling(cfg?.plan_video_max);
     isOwner = !!(cfg?.owner_gryt_user_id && cfg.owner_gryt_user_id === client.grytUserId);
     if (client.serverUserId && !client.serverUserId.startsWith("temp_")) {
       const standing = await getEffectiveStanding(client.serverUserId, client.grytUserId);
@@ -470,6 +473,8 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
       video_profiles: workerTranscodesVideo() && cfgVideoProfiles,
       /** Messages here may show other Gryt servers' custom emoji. */
       external_emojis: cfgExternalEmojis,
+      /** The plan's video ceiling on a Gryt Cloud server, or null: clients encode within it, the SFU enforces it. */
+      video_max: cfgVideoMax,
       version: process.env.SERVER_VERSION || "1.0.0",
       /** What code sits between a member and the people they talk to, so it is
           not configurable. No version: that names which known problem applies. */
