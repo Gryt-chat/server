@@ -1,7 +1,8 @@
 import express from "express";
 import consola from "consola";
 import { requireAdminToken } from "../middleware/requireAdminToken";
-import { getServerConfig, createServerConfigIfNotExists } from "../db";
+import { getServerConfig, createServerConfigIfNotExists, usageNumbers } from "../db";
+import { planStorageBytes } from "../settings/storageLimit";
 import { applyServerSettings, settingsView, type SettingsPatch } from "../settings/serverSettings";
 
 /**
@@ -33,6 +34,16 @@ managementRouter.patch("/settings", async (req, res) => {
   } catch (e) {
     consola.error("management: updating settings failed", e);
     res.status(500).json({ error: "settings_update_failed", message: "Could not update settings." });
+  }
+});
+
+managementRouter.get("/usage", (_req, res) => {
+  try {
+    const usage = usageNumbers();
+    res.json({ ...usage, storageBytes: { ...usage.storageBytes, limit: planStorageBytes() } });
+  } catch (e) {
+    consola.error("management: reading usage failed", e);
+    res.status(500).json({ error: "usage_read_failed", message: "Could not read usage." });
   }
 });
 
