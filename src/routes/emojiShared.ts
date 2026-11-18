@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from "express";
 import multer from "multer";
 
 import { DEFAULT_EMOJI_MAX_BYTES, getServerConfig } from "../db";
+import { refusedForStorage } from "../settings/storageLimit";
 
 /**
  * The server's own limit, which a fixed one could be raised past. The zero check
@@ -11,6 +12,7 @@ export function emojiUpload(fields: multer.Field[]) {
   return (req: Request, res: Response, next: NextFunction): void => {
     Promise.resolve()
       .then(async () => {
+        if (await refusedForStorage(res)) return;
         const cfg = await getServerConfig().catch(() => null);
         const maxBytes = typeof cfg?.emoji_max_bytes === "number" ? cfg.emoji_max_bytes : DEFAULT_EMOJI_MAX_BYTES;
         const limits = maxBytes > 0 ? { fileSize: maxBytes } : undefined;

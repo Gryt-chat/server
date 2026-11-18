@@ -20,6 +20,7 @@ import { MAX_INPUT_PIXELS, validateImage } from "../utils/imageValidation";
 import { sanitizeSvg } from "../utils/svgSanitize";
 import { verifyAccessToken } from "../utils/jwt";
 import { requireBearerToken } from "../middleware/requireBearerToken";
+import { refusedForStorage } from "../settings/storageLimit";
 
 const iconMaxMbRaw = (
   process.env.GRYT_SERVER_ICON_MAX_MB ||
@@ -89,6 +90,9 @@ serverRouter.post(
   // Before multer, which uses memoryStorage: the handler's own check read 20 MB
   // of an anonymous request into the heap and then answered 401.
   requireBearerToken,
+  (_req: Request, res: Response, next: NextFunction): void => {
+    refusedForStorage(res).then((refused) => { if (!refused) next(); }).catch(next);
+  },
   upload.single("file"),
   async (req: Request, res: Response, next: NextFunction) => {
     try {

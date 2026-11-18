@@ -63,6 +63,7 @@ async function applyWhenSettled(purpose: "avatar" | "banner", serverUserId: stri
 }
 import { storeUploadedFile } from "../services/storeUploadedFile";
 import { workerClearsQuarantine, workerTranscodesVideo } from "../services/workerCapabilities";
+import { refusedForStorage } from "../settings/storageLimit";
 
 /** What a banner or avatar video may be sent as; the worker writes all of them out as AV1 MP4. */
 const VIDEO_TYPES = new Set(["video/mp4", "video/webm", "video/quicktime"]);
@@ -88,6 +89,7 @@ function uploadToDisk(field: string) {
   return function bufferUploadToDisk(req: Request, res: Response, next: NextFunction): void {
     Promise.resolve()
       .then(async () => {
+        if (await refusedForStorage(res)) return;
         const cfg = await getServerConfig().catch(() => null);
         const maxBytes = typeof cfg?.upload_max_bytes === "number" ? cfg.upload_max_bytes : DEFAULT_UPLOAD_MAX_BYTES;
         const limits = typeof maxBytes === "number" && maxBytes > 0 ? { fileSize: maxBytes } : undefined;
@@ -103,6 +105,7 @@ function uploadAvatarToMemory(field: string) {
   return function bufferAvatarToMemory(req: Request, res: Response, next: NextFunction): void {
     Promise.resolve()
       .then(async () => {
+        if (await refusedForStorage(res)) return;
         const cfg = await getServerConfig().catch(() => null);
         const avatarMax = typeof cfg?.avatar_max_bytes === "number" ? cfg.avatar_max_bytes : DEFAULT_AVATAR_MAX_BYTES;
         const uploadMax = typeof cfg?.upload_max_bytes === "number" ? cfg.upload_max_bytes : DEFAULT_UPLOAD_MAX_BYTES;

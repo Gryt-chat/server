@@ -161,6 +161,12 @@ export async function countPinnedMessages(conversationId: string): Promise<numbe
   return row.n;
 }
 
+/** Everything the server stores for uploads, by the sizes recorded when they landed. */
+export async function storedFileBytes(): Promise<number> {
+  const row = getSqliteDb().prepare(`SELECT COALESCE(SUM(size), 0) AS n FROM files`).get() as { n: number };
+  return Number(row.n) || 0;
+}
+
 export async function insertFile(
   // dominant_color is written later by the image worker, so callers inserting
   // a fresh upload do not supply one.
