@@ -5,6 +5,7 @@ import { promisify } from "util";
 import type { Permission } from "../constants/permissions";
 import type { SpamSensitivity } from "../moderation/spamFilter";
 import type { ChatVideoMode } from "../settings/chatVideoMode";
+import type { PlanMode } from "../settings/planMode";
 import type { CensorStyle, ProfanityMode } from "../utils/profanityFilter";
 
 export type { ChatVideoMode, CensorStyle, ProfanityMode, SpamSensitivity };
@@ -285,6 +286,7 @@ export interface ServerConfigRecord {
   video_profiles_enabled: boolean;
   chat_video_mode: ChatVideoMode;
   plan_video_max: string | null;
+  plan_mode: PlanMode;
   /** Holds a linked device's sealed history for it (GRYT-2055). */
   link_history_enabled: boolean;
   /** Whether messages here may show other Gryt servers' custom emoji. Off: they load from another host. */

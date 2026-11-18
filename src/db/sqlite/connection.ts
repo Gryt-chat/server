@@ -95,6 +95,7 @@ function createSchema(d: DatabaseSync): void {
       video_profiles INTEGER NOT NULL DEFAULT 1,
       chat_video_mode TEXT NOT NULL DEFAULT 'original',
       plan_video_max TEXT,
+      plan_mode TEXT NOT NULL DEFAULT 'active',
       link_history INTEGER NOT NULL DEFAULT 1,
       external_emojis INTEGER NOT NULL DEFAULT 0,
       is_configured INTEGER NOT NULL DEFAULT 0,
@@ -1040,6 +1041,10 @@ function runMigrations(d: DatabaseSync): void {
   // Set by a host through management only (GRYT-2171). Null falls back to GRYT_PLAN_VIDEO_MAX.
   if (!hasColumn(d, "server_config", "plan_video_max")) {
     d.exec("ALTER TABLE server_config ADD COLUMN plan_video_max TEXT");
+  }
+  // Set by a host through management only (GRYT-2172).
+  if (!hasColumn(d, "server_config", "plan_mode")) {
+    d.exec("ALTER TABLE server_config ADD COLUMN plan_mode TEXT NOT NULL DEFAULT 'active'");
   }
 
   if (!hasColumn(d, "server_config", "link_history")) {
