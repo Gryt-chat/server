@@ -364,14 +364,19 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
   };
 
   /** A Cloud server whose payment failed refuses writes, or everything but its owner (GRYT-2172). */
-  async function refusedByPlan(event: string): Promise<boolean> {
+  async function refusedByPlan(event: string, payload: unknown): Promise<boolean> {
     const mode = await currentPlanMode();
     if (mode === "active") return false;
     const client = clientsInfo[clientId];
     const owner = mode === "paused" && !!client?.grytUserId && socketIsIdentified(clientsInfo, clientId)
       && (await getServerConfig())?.owner_gryt_user_id === client.grytUserId;
     if (!refusesEvent(mode, event, owner)) return false;
-    socket.emit("server:plan_mode", { mode, event, message: PLAN_MODE_MESSAGES[mode] });
+    const error = { error: mode, message: PLAN_MODE_MESSAGES[mode] };
+    // A send names itself by nonce, so the client fails that row rather than leaving it pending.
+    const nonce = (payload as { nonce?: unknown } | null)?.nonce;
+    if (!event.startsWith("chat:")) socket.emit("server:plan_mode", { ...error, event });
+    else if (typeof nonce === "string") socket.emit("chat:error", error, { nonce });
+    else socket.emit("chat:error", error);
     return true;
   }
 
@@ -465,7 +470,7 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
   // Register all domain handlers
   for (const [event, handler] of Object.entries(allHandlers)) {
     socket.on(event, async (...args: unknown[]) => {
-      if (await refusedByPlan(event)) return;
+      if (await refusedByPlan(event, args[0])) return;
       return (handler as (...a: unknown[]) => unknown)(...args);
     });
   }
