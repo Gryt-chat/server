@@ -15,6 +15,8 @@ import { VALID_CENSOR_STYLES, type CensorStyle } from "../utils/profanityFilter"
 import { SPAM_SENSITIVITIES, type SpamSensitivity } from "../moderation/spamFilter";
 import { CHAT_VIDEO_MODES, type ChatVideoMode } from "./chatVideoMode";
 import { effectiveVideoCeiling, parseVideoCeiling } from "./videoCeiling";
+import { PLAN_MODES, type PlanMode } from "./planMode";
+import { forgetPlanMode } from "./planModeCache";
 import { workerClearsQuarantine, workerTranscodesVideo } from "../services/workerCapabilities";
 
 /**
@@ -41,6 +43,8 @@ export interface SettingsPatch {
   chatVideoMode?: string;
   /** "1080p60", or null to fall back to GRYT_PLAN_VIDEO_MAX. Only through management. */
   planVideoMax?: string | null;
+  /** "active", "read_only" or "paused", after a Cloud payment fails. Only through management. */
+  planMode?: string;
   externalEmojis?: boolean;
   linkHistory?: boolean;
 }
@@ -119,6 +123,9 @@ export async function applyServerSettings(
   const fromHost = actor.via === "management" && patch.planVideoMax !== undefined;
   const validCeiling = patch.planVideoMax === null || parseVideoCeiling(patch.planVideoMax) !== null;
   const planVideoMax: string | null | undefined = fromHost && validCeiling ? patch.planVideoMax : undefined;
+  const planMode: PlanMode | undefined = actor.via === "management" && PLAN_MODES.includes(patch.planMode as PlanMode)
+    ? patch.planMode as PlanMode
+    : undefined;
   const externalEmojis: boolean | undefined = typeof patch.externalEmojis === "boolean" ? patch.externalEmojis : undefined;
   const linkHistory: boolean | undefined = typeof patch.linkHistory === "boolean" ? patch.linkHistory : undefined;
 
@@ -141,11 +148,13 @@ export async function applyServerSettings(
     videoProfiles,
     chatVideoMode,
     planVideoMax,
+    planMode,
     externalEmojis,
     linkHistory,
   });
 
   if (systemChannelId !== undefined) invalidateSystemChannelCache();
+  if (planMode !== undefined) forgetPlanMode();
 
   // This call and the one at boot are the only two, so skipping it leaves the
   // server advertising itself while its config says it is hidden.
@@ -168,6 +177,7 @@ export async function applyServerSettings(
       ...(spamSensitivity !== undefined ? { spamSensitivity } : {}),
       ...(chatVideoMode !== undefined ? { chatVideoMode } : {}),
       ...(planVideoMax !== undefined ? { planVideoMax } : {}),
+      ...(planMode !== undefined ? { planMode } : {}),
     },
   }).catch((e) => consola.warn("audit log write failed", e));
 
@@ -198,6 +208,7 @@ export function settingsView(cfg: ServerConfigRecord, serverId: string, isOwner:
     videoProfiles: cfg.video_profiles_enabled !== false,
     chatVideoMode: cfg.chat_video_mode ?? "original",
     videoMax: effectiveVideoCeiling(cfg.plan_video_max),
+    planMode: cfg.plan_mode ?? "active",
     externalEmojis: cfg.external_emojis_enabled === true,
     linkHistory: cfg.link_history_enabled !== false,
     // What this host can do, so settings can say why a switch is off rather than hide it.

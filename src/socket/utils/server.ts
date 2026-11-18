@@ -35,6 +35,7 @@ import {
 
 import { pushVoiceCapabilities } from "./voiceCapabilities";
 import { effectiveVideoCeiling, type VideoCeiling } from "../../settings/videoCeiling";
+import type { PlanMode } from "../../settings/planMode";
 import { workerClearsQuarantine, workerTranscodesVideo } from "../../services/workerCapabilities";
 import { MLS_CIPHERSUITE_ID } from "../../services/mlsWire";
 import { mlsRetentionDays } from "../../jobs/mlsRetention";
@@ -392,6 +393,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
   let cfgVideoProfiles = true;
   let cfgExternalEmojis = false;
   let cfgVideoMax: VideoCeiling | null = null;
+  let cfgPlanMode: PlanMode = "active";
   let isOwner = false;
   let role = FALLBACK_ROLE_ID;
   let roleIds: string[] = [];
@@ -409,6 +411,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
     cfgVideoProfiles = cfg?.video_profiles_enabled !== false;
     cfgExternalEmojis = cfg?.external_emojis_enabled === true;
     cfgVideoMax = effectiveVideoCeiling(cfg?.plan_video_max);
+    cfgPlanMode = cfg?.plan_mode ?? "active";
     isOwner = !!(cfg?.owner_gryt_user_id && cfg.owner_gryt_user_id === client.grytUserId);
     if (client.serverUserId && !client.serverUserId.startsWith("temp_")) {
       const standing = await getEffectiveStanding(client.serverUserId, client.grytUserId);
@@ -475,6 +478,8 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
       external_emojis: cfgExternalEmojis,
       /** The plan's video ceiling on a Gryt Cloud server, or null: clients encode within it, the SFU enforces it. */
       video_max: cfgVideoMax,
+      /** "read_only" or "paused" on a Gryt Cloud server whose payment failed, for a banner. */
+      plan_mode: cfgPlanMode,
       version: process.env.SERVER_VERSION || "1.0.0",
       /** What code sits between a member and the people they talk to, so it is
           not configurable. No version: that names which known problem applies. */

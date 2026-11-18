@@ -11,6 +11,9 @@ import type { SFUPeerEvent, SFUSyncRoom } from "../sfu/client";
 import { verifyAccessToken } from "../utils/jwt";
 import { generateFileUrlKey } from "../utils/fileUrl";
 import { getServerConfig, effectiveModerationState } from "../db";
+import { PLAN_MODE_MESSAGES, refusesEvent } from "../settings/planMode";
+import { currentPlanMode } from "../settings/planModeCache";
+import { socketIsIdentified } from "./utils/standing";
 import { checkSessionAllowed } from "../moderation/sessionGate";
 import { syncAllClients, verifyClient, broadcastMemberList, countOtherSessions } from "./utils/clients";
 import {
@@ -360,6 +363,18 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
     ...registerPushHandlers(ctx),
   };
 
+  /** A Cloud server whose payment failed refuses writes, or everything but its owner (GRYT-2172). */
+  async function refusedByPlan(event: string): Promise<boolean> {
+    const mode = await currentPlanMode();
+    if (mode === "active") return false;
+    const client = clientsInfo[clientId];
+    const owner = mode === "paused" && !!client?.grytUserId && socketIsIdentified(clientsInfo, clientId)
+      && (await getServerConfig())?.owner_gryt_user_id === client.grytUserId;
+    if (!refusesEvent(mode, event, owner)) return false;
+    socket.emit("server:plan_mode", { mode, event, message: PLAN_MODE_MESSAGES[mode] });
+    return true;
+  }
+
   // ── Base socket events ───────────────────────────────────────
 
   socket.on("error", (error) => consola.error(`Socket error from ${clientId}:`, error));
@@ -449,7 +464,10 @@ export function socketHandler(io: Server, socket: Socket, sfuClient: SFUClient |
 
   // Register all domain handlers
   for (const [event, handler] of Object.entries(allHandlers)) {
-    socket.on(event, handler);
+    socket.on(event, async (...args: unknown[]) => {
+      if (await refusedByPlan(event)) return;
+      return (handler as (...a: unknown[]) => unknown)(...args);
+    });
   }
 
   // ── Session restoration (access token on connect) ────────────
