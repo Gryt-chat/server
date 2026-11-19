@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { validateImage } from "../utils/imageValidation";
-import { MAX_ICON_FRAMES } from "./server";
+import { MAX_ICON_FRAMES } from "../services/serverIcon";
 
 /**
  * Built by hand because sharp will not write an animation from a stacked strip,
