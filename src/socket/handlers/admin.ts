@@ -50,6 +50,7 @@ import {
   normalizeBotName,
   normalizeBotDescription,
   getUserByGrytId,
+  countChannelMessages,
 } from "../../db";
 import { deleteFilesNow } from "../../jobs/mediaSweep";
 import { checkRateLimit, type RateLimitRule } from "../../utils/rateLimiter";
@@ -267,7 +268,7 @@ export function registerAdminHandlers(ctx: HandlerContext): EventHandlerMap {
           view.systemChannelId = null;
         }
 
-        socket.emit("server:settings", view);
+        socket.emit("server:settings", isOwner ? { ...view, messageCount: await countChannelMessages() } : view);
       } catch (e) {
         consola.error("server:settings:get failed", e);
         socket.emit("server:error", { error: "settings_failed", message: "Failed to load settings." });
