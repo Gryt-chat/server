@@ -26,6 +26,7 @@ COPY --from=builder --chown=gryt:gryt /app/dist/bundle.js ./bundle.js
 COPY --from=builder --chown=gryt:gryt /app/dist/admin-setOwner.js ./admin-setOwner.js
 COPY --from=builder --chown=gryt:gryt /app/dist/admin-resetDmKey.js ./admin-resetDmKey.js
 COPY --from=builder --chown=gryt:gryt /app/dist/admin-archive.js ./admin-archive.js
+COPY --from=builder --chown=gryt:gryt /app/dist/admin-setIcon.js ./admin-setIcon.js
 
 RUN mkdir -p /data && chown -R gryt:gryt /data
 

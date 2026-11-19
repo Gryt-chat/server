@@ -1,14 +1,11 @@
 import consola from "consola";
-import { reencodeThroughWorker } from "../services/workerReencode";
-import { workerClearsQuarantine } from "../services/workerCapabilities";
-import { storageErrorMessage } from "../services/avatarImage";
+import { deletePreviousIcon, saveRasterServerIcon } from "../services/serverIcon";
 import express from "express";
 import type { Request, Response, NextFunction } from "express";
 import multer from "multer";
-import sharp from "sharp";
 import { v4 as uuidv4 } from "uuid";
 
-import { deleteObject, putObject, STORAGE_DISABLED, uploadsDisabled, uploadsFolder } from "../storage";
+import { putObject, STORAGE_DISABLED, uploadsDisabled, uploadsFolder } from "../storage";
 import {
   createServerConfigIfNotExists,
   getServerConfig,
@@ -16,7 +13,6 @@ import {
   updateServerConfig,
 } from "../db";
 import { broadcastServerUiUpdate } from "../socket";
-import { MAX_INPUT_PIXELS, validateImage } from "../utils/imageValidation";
 import { sanitizeSvg } from "../utils/svgSanitize";
 import { verifyAccessToken } from "../utils/jwt";
 import { requireBearerToken } from "../middleware/requireBearerToken";
@@ -31,10 +27,6 @@ const iconMaxMb = Number.isFinite(Number(iconMaxMbRaw))
   ? Math.max(1, Number(iconMaxMbRaw))
   : 25;
 const iconMaxBytes = Math.floor(iconMaxMb * 1024 * 1024);
-
-/** Eight seconds at 60fps: roughly 0.5-0.7 MB at 256x256, against 1.3 kB for a
-    still icon. Generous, because the point is to stop a runaway. */
-export const MAX_ICON_FRAMES = 480;
 
 const allowedIconMimes = new Set<string>([
   "image/png",
@@ -59,15 +51,6 @@ const upload = multer({
     );
   },
 });
-
-/** Best effort: the config is already updated, so a failure leaves a few
-    kilobytes rather than failing the request. */
-function deletePreviousIcon(bucket: string, key: string | null | undefined): void {
-  if (!key) return;
-  deleteObject({ bucket, key }).catch((e) =>
-    consola.warn("previous icon delete failed", { key, error: e }),
-  );
-}
 
 export const serverRouter = express.Router();
 
@@ -198,101 +181,17 @@ serverRouter.post(
         return;
       }
 
-      const isAnimated =
-        iconMime === "image/gif" ||
-        iconMime === "image/webp" ||
-        iconMime === "image/avif";
-
-      // Written out in the worker's jail where there is one, at the same 256px square.
-      const fromWorker = workerClearsQuarantine()
-        ? await reencodeThroughWorker(file.buffer, iconMime, "avatars").catch(() => null)
-        : undefined;
-      if (fromWorker === null) {
-        res.status(400).json({ error: "invalid_file", message: "Could not process image. Please upload a valid PNG/JPEG/WebP/GIF/AVIF under the size limit." });
+      const saved = await saveRasterServerIcon(file.buffer, iconMime, safeHost, decoded.serverUserId);
+      if (!saved.ok) {
+        res.status(saved.status).json({ error: saved.error, message: saved.message });
         return;
       }
-
-      const validation = fromWorker
-        ? { valid: true as const, pages: 1 }
-        : await validateImage(file.buffer, { animated: isAnimated });
-      if (!validation.valid) {
-        res
-          .status(400)
-          .json({ error: "invalid_file", message: validation.reason });
-        return;
-      }
-
-      // Drawn at 38 pixels on every server somebody joined, so an uncapped GIF
-      // is hundreds of kilobytes each. Refused, not truncated.
-      const frames = validation.pages ?? 1;
-      if (isAnimated && frames > MAX_ICON_FRAMES) {
-        res.status(400).json({
-          error: "too_many_frames",
-          message:
-            `This icon has ${frames} frames and the limit is ${MAX_ICON_FRAMES}` +
-            ` — about ${MAX_ICON_FRAMES / 60} seconds at 60fps. Shorten it or` +
-            ` lower its frame rate and upload it again.`,
-        });
-        return;
-      }
-
-      // AVIF holds one frame and sharp stacks an animation into a tall strip, so
-      // a 95-frame GIF became a 256x9728 still. Same branch as emojiProcessing.
-      const outMime = isAnimated ? "image/webp" : "image/avif";
-      const outExt = isAnimated ? "webp" : "avif";
-
-      let out: Buffer;
-      if (fromWorker) {
-        out = fromWorker.body;
-      } else try {
-        const pipeline = sharp(file.buffer, {
-          animated: isAnimated,
-          failOn: "error",
-          // validateImage pixel-checks one page; this decodes every frame, and a
-          // modest frame is under the ceiling where two hundred are not.
-          limitInputPixels: MAX_INPUT_PIXELS,
-        }).resize(256, 256, { fit: "cover" });
-
-        out = isAnimated
-          ? await pipeline.webp().toBuffer()
-          : await pipeline.avif().toBuffer();
-      } catch {
-        res.status(400).json({
-          error: "invalid_file",
-          message:
-            "Could not process image. Please upload a valid PNG/JPEG/WebP/GIF/AVIF under the size limit.",
-        });
-        return;
-      }
-
-      const key = `server-icons/${safeHost}/${uuidv4()}.${fromWorker ? fromWorker.ext : outExt}`;
-      try {
-        await putObject({ bucket, key, body: out, contentType: fromWorker ? fromWorker.mime : outMime });
-      } catch (e) {
-        const raw = e instanceof Error ? e.message : "";
-        consola.error("icon upload s3 error", { bucket, key, message: raw });
-        res.status(502).json({ error: "s3_error", message: storageErrorMessage(raw, "Icon") });
-        return;
-      }
-
-      const previousIcon = cfg?.icon_url ?? null;
-      const updated = await updateServerConfig({
-        iconUrl: key, // stored as S3 key; GET /icon streams the object
-        isConfigured: true,
-      });
-      deletePreviousIcon(bucket, previousIcon);
-
-      insertServerAudit({
-        actorServerUserId: decoded.serverUserId,
-        action: "icon_update",
-        target: key,
-      }).catch((e) => consola.warn("audit log write failed", e));
 
       res.status(201).json({
         ok: true,
-        iconKey: key,
+        iconKey: saved.key,
         // For convenience; clients should still use https://<host>/icon
-        iconUrl: updated.icon_url,
+        iconUrl: saved.iconUrl,
       });
 
       // Push refreshed info/details to all connected sockets so UI updates live.
