@@ -54,8 +54,8 @@ describe("startup", () => {
   const at = index.indexOf("await createServerConfigIfNotExists({");
   const startup = index.slice(at, index.indexOf("syncMdnsAdvertising", at));
 
-  it("passes the name to the call that creates the row", () => {
-    assert.match(startup, /displayName: process\.env\.SERVER_NAME/);
+  it("passes the name to the call that creates the row, SERVER_DISPLAY_NAME first", () => {
+    assert.match(startup, /displayName: process\.env\.SERVER_DISPLAY_NAME \|\| process\.env\.SERVER_NAME/);
   });
 
   it("passes the description too, for the same reason", () => {
