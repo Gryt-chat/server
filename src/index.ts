@@ -152,7 +152,8 @@ initSqlite()
     // First run only; after that the config owns them. The name has to land
     // here because this is the call that creates the row.
     await createServerConfigIfNotExists({
-      displayName: process.env.SERVER_NAME || undefined,
+      // Gryt Cloud sets SERVER_DISPLAY_NAME, since SERVER_NAME is also part of the SFU id.
+      displayName: process.env.SERVER_DISPLAY_NAME || process.env.SERVER_NAME || undefined,
       description: process.env.SERVER_DESCRIPTION || undefined,
       discoverable: (process.env.SERVER_DISCOVERABLE || "").toLowerCase() !== "false",
     });

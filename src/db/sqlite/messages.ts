@@ -446,6 +446,12 @@ export async function countMessagesBySender(senderServerUserId: string): Promise
   return Number(row?.cnt ?? 0);
 }
 
+/** Messages in the server's channels, for the owner's overview. DMs aren't counted. */
+export async function countChannelMessages(): Promise<number> {
+  const row = getSqliteDb().prepare(`SELECT COUNT(*) AS cnt FROM messages WHERE conversation_id NOT LIKE 'dm\\_%' ESCAPE '\\'`).get() as { cnt: number } | undefined;
+  return Number(row?.cnt ?? 0);
+}
+
 /** Where a match starts and ends in a search snippet. Control characters, so no text can fake one. */
 /** Control characters can't be typed and would collide with the snippet marks. */
 function withoutControlChars(word: string): string {
