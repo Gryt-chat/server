@@ -16,6 +16,7 @@ import { SPAM_SENSITIVITIES, type SpamSensitivity } from "../moderation/spamFilt
 import { CHAT_VIDEO_MODES, type ChatVideoMode } from "./chatVideoMode";
 import { effectiveVideoCeiling, parseVideoCeiling } from "./videoCeiling";
 import { PLAN_MODES, type PlanMode } from "./planMode";
+import { type PlanDates, planDates, setPlanDates } from "./planDates";
 import { forgetPlanMode } from "./planModeCache";
 import { workerClearsQuarantine, workerTranscodesVideo } from "../services/workerCapabilities";
 
@@ -45,6 +46,8 @@ export interface SettingsPatch {
   planVideoMax?: string | null;
   /** "active", "read_only" or "paused", after a Cloud payment fails. Only through management. */
   planMode?: string;
+  /** When a lapsed plan goes read-only, pauses and is deleted, or null. Only through management. */
+  planDates?: PlanDates | null;
   externalEmojis?: boolean;
   linkHistory?: boolean;
 }
@@ -155,6 +158,7 @@ export async function applyServerSettings(
 
   if (systemChannelId !== undefined) invalidateSystemChannelCache();
   if (planMode !== undefined) forgetPlanMode();
+  if (actor.via === "management" && patch.planDates !== undefined) setPlanDates(patch.planDates);
 
   // This call and the one at boot are the only two, so skipping it leaves the
   // server advertising itself while its config says it is hidden.
@@ -209,6 +213,7 @@ export function settingsView(cfg: ServerConfigRecord, serverId: string, isOwner:
     chatVideoMode: cfg.chat_video_mode ?? "original",
     videoMax: effectiveVideoCeiling(cfg.plan_video_max),
     planMode: cfg.plan_mode ?? "active",
+    planDates: planDates(),
     externalEmojis: cfg.external_emojis_enabled === true,
     linkHistory: cfg.link_history_enabled !== false,
     // What this host can do, so settings can say why a switch is off rather than hide it.

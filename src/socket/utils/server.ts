@@ -38,6 +38,7 @@ import { effectiveVideoCeiling, type VideoCeiling } from "../../settings/videoCe
 import type { PlanMode } from "../../settings/planMode";
 import { workerClearsQuarantine, workerTranscodesVideo } from "../../services/workerCapabilities";
 import { MLS_CIPHERSUITE_ID } from "../../services/mlsWire";
+import { planDates } from "../../settings/planDates";
 import { mlsRetentionDays } from "../../jobs/mlsRetention";
 
 // Module-level references set by socketHandler so REST routes can trigger broadcasts
@@ -480,6 +481,10 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
       video_max: cfgVideoMax,
       /** "read_only" or "paused" on a Gryt Cloud server whose payment failed, for a banner. */
       plan_mode: cfgPlanMode,
+      /** The countdown behind plan_mode, in ms, when the host sent it. */
+      plan_read_only_at: planDates().readOnlyAt,
+      plan_paused_at: planDates().pausedAt,
+      plan_deleted_at: planDates().deletedAt,
       version: process.env.SERVER_VERSION || "1.0.0",
       /** What code sits between a member and the people they talk to, so it is
           not configurable. No version: that names which known problem applies. */
