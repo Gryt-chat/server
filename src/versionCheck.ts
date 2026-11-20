@@ -149,9 +149,10 @@ async function fetchSfuCurrentVersion(): Promise<string | null> {
 	const wsHost = process.env.SFU_WS_HOST;
 	if (!wsHost) return null;
 
-	const httpUrl = wsHost.replace(/^ws(s?):\/\//, "http$1://");
+	// Set where the SFU answers health on another port than its control socket, as on Gryt Cloud.
+	const health = process.env.SFU_HEALTH_URL || `${wsHost.replace(/^ws(s?):\/\//, "http$1://")}/health`;
 	try {
-		const res = await fetch(`${httpUrl}/health`, { signal: AbortSignal.timeout(5_000) });
+		const res = await fetch(health, { signal: AbortSignal.timeout(5_000) });
 		if (!res.ok) return null;
 		const data = await res.json();
 		return (data as { version?: string }).version ?? null;
