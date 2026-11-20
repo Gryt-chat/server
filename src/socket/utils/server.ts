@@ -466,6 +466,8 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
       discord_bridge: true,
       /** The owner's offer in an empty channel: only while nothing is linked and no channel has a message. */
       discord_offer: !getDiscordBridge() && !channelsHaveMessages(),
+      /** The bridge bot is in its Discord server, so a member's Link Discord can work. */
+      discord_live: getDiscordBridge()?.status === "linked",
       /** Where this server answers from anywhere, for a member who saved its LAN address (GRYT-2007). */
       public_host: publicHost(process.env.EXTERNAL_HOST),
       max_members: parseInt(process.env.MAX_MEMBERS || "100"),
