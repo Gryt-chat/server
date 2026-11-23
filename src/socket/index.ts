@@ -5,6 +5,7 @@ import { addressLabel } from "../utils/addressLabel";
 import { classifyClientKind } from "./utils/clientKind";
 import type { Server, Socket } from "socket.io";
 import type { Clients } from "../types";
+import { countVoiceUsers, setVoiceUsersReader } from "./voiceUsers";
 import { colors } from "../utils/colors";
 import type { SFUClient } from "../sfu/client";
 import type { SFUPeerEvent, SFUSyncRoom } from "../sfu/client";
@@ -65,6 +66,7 @@ import { addressIsOwn, resolveClientIp, trustedProxyHops } from "../config/clien
 export { broadcastChatNew, broadcastCustomEmojisUpdate, broadcastEmojiQueueUpdate, broadcastServerUiUpdate };
 
 const clientsInfo: Clients = {};
+setVoiceUsersReader(() => countVoiceUsers(clientsInfo));
 
 // Echoed into something this server signs, so it is attacker-supplied input
 // under our own signature. A real client sends 32 bytes of base64url.

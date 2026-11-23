@@ -3,6 +3,7 @@ import consola from "consola";
 import { requireAdminToken } from "../middleware/requireAdminToken";
 import { getServerConfig, createServerConfigIfNotExists, usageNumbers } from "../db";
 import { planStorageBytes } from "../settings/storageLimit";
+import { voiceUsers } from "../socket/voiceUsers";
 import { applyServerSettings, settingsView, type SettingsPatch } from "../settings/serverSettings";
 
 /**
@@ -40,7 +41,7 @@ managementRouter.patch("/settings", async (req, res) => {
 managementRouter.get("/usage", (_req, res) => {
   try {
     const usage = usageNumbers();
-    res.json({ ...usage, storageBytes: { ...usage.storageBytes, limit: planStorageBytes() } });
+    res.json({ ...usage, storageBytes: { ...usage.storageBytes, limit: planStorageBytes() }, voiceUsers: voiceUsers() });
   } catch (e) {
     consola.error("management: reading usage failed", e);
     res.status(500).json({ error: "usage_read_failed", message: "Could not read usage." });
