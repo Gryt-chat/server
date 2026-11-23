@@ -19,6 +19,15 @@ import { EMOJI_NAME_RE } from "./emojiShared";
 
 const BTTV_API = "https://api.betterttv.net/3";
 const BTTV_CDN = "https://cdn.betterttv.net/emote";
+// BTTV's own user lookup needs a BTTV sign-in; FFZ's room says a channel's Twitch id without one (GRYT-2226).
+const FFZ_ROOM_API = "https://api.frankerfacez.com/v1/room";
+const TWITCH_LOGIN_RE = /^[a-z0-9_]{3,25}$/i;
+
+function bttvListing(data: Record<string, unknown>) {
+  const pick = (list: unknown) =>
+    (Array.isArray(list) ? list : []).map((e: Record<string, unknown>) => ({ id: e.id, code: e.code, imageType: e.imageType, animated: e.animated }));
+  return { username: data.displayName || data.name, channelEmotes: pick(data.channelEmotes), sharedEmotes: pick(data.sharedEmotes) };
+}
 
 interface BttvEmoteInput {
   id: string;
@@ -162,6 +171,38 @@ export function registerBttvRoutes(router: Router): void {
             channelEmotes,
             sharedEmotes,
           });
+        })
+        .catch(next);
+    },
+  );
+
+  router.get(
+    "/bttv/twitch/:login",
+    (req: Request, res: Response, next: NextFunction): void => {
+      const login = String(req.params.login);
+      if (!TWITCH_LOGIN_RE.test(login)) {
+        res.status(400).json({ error: "invalid_twitch_login" });
+        return;
+      }
+
+      Promise.resolve()
+        .then(async () => {
+          const room = await fetch(`${FFZ_ROOM_API}/${encodeURIComponent(login.toLowerCase())}`);
+          const twitchId = room.ok ? (await room.json())?.room?.twitch_id : null;
+          if (typeof twitchId !== "number") {
+            res.status(404).json({ error: "twitch_channel_not_found", message: "No Twitch channel by that name." });
+            return;
+          }
+          const resp = await fetch(`${BTTV_API}/cached/users/twitch/${twitchId}`);
+          if (resp.status === 404) {
+            res.status(404).json({ error: "bttv_user_not_found", message: "That channel has no BetterTTV emotes." });
+            return;
+          }
+          if (!resp.ok) {
+            res.status(resp.status).json({ error: "bttv_fetch_failed", message: `BetterTTV returned ${resp.status}` });
+            return;
+          }
+          res.json(bttvListing(await resp.json()));
         })
         .catch(next);
     },
