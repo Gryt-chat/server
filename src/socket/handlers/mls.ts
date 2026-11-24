@@ -25,6 +25,7 @@ import {
   listConversationsForUser,
   lastResortMlsKeyPackages,
   listMlsDevices,
+  mlsGroupHeadAt,
   replaceMlsGroup,
   listMlsGroupsForMember,
   listMlsLog,
@@ -515,8 +516,8 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
       }
     },
 
-    /* A fresh group when every device in the old one is gone, so nobody could add anyone. Only
-       provable from a stored GroupInfo: otherwise any member could wipe a DM's unread log. */
+    /* A fresh group when every device in the old one is gone, so nobody could add anyone. Proven from
+       the stored GroupInfo, or without one, by every listed device registering after its last change. */
     "mls:group:replace": async (
       payload: { accessToken: string; conversationId: string; deviceId: string; oldGroupId: string; groupId: string },
       ack: Ack,
@@ -539,8 +540,12 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
         }
         const info = getMlsGroupInfo(group.groupId);
         const tree = info ? groupInfoPeople(info.data) : null;
-        const registered = new Set(listMlsDevices(memberIds).map((d) => d.deviceId));
-        if (!tree || [...tree.devices].some((d) => registered.has(d))) {
+        const registered = listMlsDevices(memberIds);
+        const headAt = tree ? null : mlsGroupHeadAt(group);
+        const abandoned = tree
+          ? ![...tree.devices].some((d) => registered.some((r) => r.deviceId === d))
+          : !!headAt && registered.every((r) => r.createdAt > headAt);
+        if (!abandoned) {
           ack(fail("not_abandoned", "Somebody in this group can still add devices."));
           return;
         }

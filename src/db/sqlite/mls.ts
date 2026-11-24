@@ -367,6 +367,20 @@ export function getMlsGroupInfo(groupId: string): { epoch: number; data: Uint8Ar
   return row ? { epoch: Number(row.group_info_epoch), data: new Uint8Array(row.group_info) } : null;
 }
 
+/** When the group last changed: its head entry, or once the log is pruned, the message that carried it. */
+export function mlsGroupHeadAt(group: MlsGroup): string | null {
+  if (group.headSeq === 0) return group.createdAt;
+  const db = getSqliteDb();
+  const log = db
+    .prepare(`SELECT created_at FROM mls_log WHERE group_id = ? AND seq = ?`)
+    .get(group.groupId, group.headSeq) as { created_at: string } | undefined;
+  if (log) return log.created_at;
+  const msg = db
+    .prepare(`SELECT created_at FROM messages WHERE conversation_id = ? AND mls_seq = ? AND created_at >= ? ORDER BY created_at DESC LIMIT 1`)
+    .get(group.conversationId, group.headSeq, group.createdAt) as { created_at: string } | undefined;
+  return msg?.created_at ?? null;
+}
+
 /** The first group registered for a conversation wins, and the loser is handed the winner. */
 export function createMlsGroup(
   groupId: string,

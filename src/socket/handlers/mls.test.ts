@@ -923,6 +923,58 @@ describe("rebuilding a group nobody can add to (GRYT-1862)", () => {
   });
 });
 
+describe("rebuilding a group from before GroupInfo was kept (GRYT-2138)", () => {
+  it("replaces it once every listed device registered after its last change", async () => {
+    const nora = await connect("Ines");
+    const otto = await connect("Tor");
+    const conv = (await openDirectConversation(nora.serverUserId, otto.serverUserId)).conversation_id;
+    const n1 = await makeDevice("ines-1", 1);
+    const o1 = await makeDevice("tor-1", 1);
+    await publish(nora, n1);
+    await publish(otto, o1);
+    const { groupIdHex } = await startGroup(n1);
+    assert.equal((await nora.call("mls:group:create", { conversationId: conv, groupId: groupIdHex })).ok, true);
+    await new Promise((r) => setTimeout(r, 5));
+    const n2 = await makeDevice("ines-2", 1);
+    await publish(nora, n2);
+    const replace = (groupId: string) =>
+      nora.call("mls:group:replace", { conversationId: conv, deviceId: n2.id, oldGroupId: groupIdHex, groupId });
+
+    assert.equal((await replace("a1".repeat(16))).error, "not_abandoned", "both first devices predate the group");
+    assert.equal((await nora.call("mls:device:remove", { deviceId: n1.id })).ok, true);
+    assert.equal((await replace("a1".repeat(16))).error, "not_abandoned", "tor-1 predates it and is still listed");
+    assert.equal((await otto.call("mls:device:remove", { deviceId: o1.id })).ok, true);
+    assert.equal((await replace("c1".repeat(16))).ok, true);
+  });
+
+  it("dates a pruned head from the message it carried, and refuses when that's gone too", async () => {
+    const nora = await connect("Vera");
+    const otto = await connect("Bo");
+    const conv = (await openDirectConversation(nora.serverUserId, otto.serverUserId)).conversation_id;
+    const n1 = await makeDevice("vera-1", 1);
+    await publish(nora, n1);
+    const { groupIdHex } = await startGroup(n1);
+    assert.equal((await nora.call("mls:group:create", { conversationId: conv, groupId: groupIdHex })).ok, true);
+    const db = getSqliteDb();
+    db.prepare(`UPDATE mls_groups SET head_seq = 4 WHERE group_id = ?`).run(groupIdHex);
+    await new Promise((r) => setTimeout(r, 5));
+    const n2 = await makeDevice("vera-2", 1);
+    await publish(nora, n2);
+    assert.equal((await nora.call("mls:device:remove", { deviceId: n1.id })).ok, true);
+    const replace = (groupId: string) =>
+      nora.call("mls:group:replace", { conversationId: conv, deviceId: n2.id, oldGroupId: groupIdHex, groupId });
+
+    assert.equal((await replace("a2".repeat(16))).error, "not_abandoned", "no log row and no message: no date");
+    const late = new Date(Date.now() + 60_000).toISOString();
+    db.prepare(`INSERT INTO messages (conversation_id, message_id, sender_server_id, mls_seq, created_at) VALUES (?, 'm4-2138', ?, 4, ?)`)
+      .run(conv, nora.serverUserId, late);
+    assert.equal((await replace("a2".repeat(16))).error, "not_abandoned", "vera-2 came before that message");
+    const { created_at } = db.prepare(`SELECT created_at FROM mls_groups WHERE group_id = ?`).get(groupIdHex) as { created_at: string };
+    db.prepare(`UPDATE messages SET created_at = ? WHERE message_id = 'm4-2138'`).run(created_at);
+    assert.equal((await replace("c2".repeat(16))).ok, true);
+  });
+});
+
 describe("packets socket.io will carry", () => {
   /* socket.io-parser closes the connection on more than ten binary parts (GRYT-1528). */
   it("hands out waiting Welcomes nine at a time, and says when there are more", async () => {
