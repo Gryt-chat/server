@@ -56,8 +56,8 @@ describe("who is at a screen", () => {
 });
 
 describe("previews (GRYT-1688)", () => {
-  const phone = (capability: string, previewKey: string | null) =>
-    ({ installId: `i-${capability.slice(2, 8)}`, capability, muted: new Set<string>(), loud: new Set<string>(), everyone: false, previewKey });
+  const phone = (capability: string, previewKey: string | null, mlsDeviceId: string | null = null) =>
+    ({ installId: `i-${capability.slice(2, 8)}`, capability, muted: new Set<string>(), loud: new Set<string>(), everyone: false, previewKey, mlsDeviceId });
   const KEY = Buffer.alloc(32, 7).toString("base64url");
 
   it("builds the preview once for every phone with a key, and seals it to each", async () => {
@@ -80,6 +80,18 @@ describe("previews (GRYT-1688)", () => {
     await h.pusher.settled();
     assert.equal(built, 0);
     assert.deepEqual(JSON.parse(h.calls[0].body), { kind: "dm" });
+  });
+
+  it("hands a phone the line its DM sender sealed to it, and the rest the server's (GRYT-2275)", async () => {
+    let built = 0;
+    const blob = "A".repeat(120);
+    const h = harness({ u1: [phone(CAP_A, KEY, "dev-a")], u2: [phone(CAP_B, KEY, "dev-b")] });
+    h.pusher.notify({}, ["u1", "u2"], "dm", "conv", { preview: async () => (built++, { title: "Alice", body: "New direct message" }), sealedFor: new Map([["dev-a", blob]]) });
+    await h.pusher.settled();
+    const byCap = new Map(h.calls.map((c) => [c.auth, (JSON.parse(c.body) as { preview?: string }).preview]));
+    assert.equal(byCap.get(`Bearer ${CAP_A}`), blob, "passed through as the sender sealed it");
+    assert.notEqual(byCap.get(`Bearer ${CAP_B}`), blob);
+    assert.equal(built, 1, "the server's own line only for the phone without one");
   });
 
   it("still pushes the fixed text when building the preview fails", async () => {

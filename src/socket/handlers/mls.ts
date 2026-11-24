@@ -25,6 +25,7 @@ import {
   listConversationsForUser,
   lastResortMlsKeyPackages,
   listMlsDevices,
+  dmPreviewKeys,
   mlsGroupHeadAt,
   replaceMlsGroup,
   listMlsGroupsForMember,
@@ -70,6 +71,18 @@ type Reply = Record<string, unknown> & { ok: boolean };
 type Ack = (reply: Reply) => void;
 
 const DEVICE_ID = /^[A-Za-z0-9_-]{1,64}$/;
+/* The relay's own preview shape. Anything else is dropped and that phone gets the fixed text. */
+const SEALED_PREVIEW = /^[A-Za-z0-9_-]{40,2048}$/;
+const MAX_SEALED_PREVIEWS = 64;
+
+function sealedPreviews(raw: unknown): Map<string, string> | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out = new Map<string, string>();
+  for (const p of raw.slice(0, MAX_SEALED_PREVIEWS) as { deviceId?: unknown; blob?: unknown }[]) {
+    if (typeof p?.deviceId === "string" && DEVICE_ID.test(p.deviceId) && typeof p.blob === "string" && SEALED_PREVIEW.test(p.blob)) out.set(p.deviceId, p.blob);
+  }
+  return out;
+}
 /** 1 to 64 bytes, lower-case hex. RFC 9420 leaves the length to the application. */
 const GROUP_ID = /^(?:[0-9a-f]{2}){1,64}$/;
 
@@ -406,7 +419,11 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
         }
         const memberIds = await dmOf(payload.conversationId, self, ack);
         if (!memberIds) return;
-        const devices = listMlsDevices(memberIds).map((d) => ({ serverUserId: d.serverUserId, deviceId: d.deviceId }));
+        const previewKeys = dmPreviewKeys(memberIds);
+        const devices = listMlsDevices(memberIds).map((d) => {
+          const p = previewKeys.get(d.deviceId);
+          return { serverUserId: d.serverUserId, deviceId: d.deviceId, ...(p ? { dmPreviewKey: p.key, dmPreviewSig: p.sig } : {}) };
+        });
         ack({ ok: true, devices });
       } catch (err) {
         consola.error("mls:devices failed", err);
@@ -683,7 +700,7 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
 
     /** An application message (PrivateMessage) or a proposal (PublicMessage). */
     "mls:send": async (
-      payload: { accessToken: string; conversationId: string; deviceId: string; message: unknown; placeholder?: unknown; attachmentIds?: unknown },
+      payload: { accessToken: string; conversationId: string; deviceId: string; message: unknown; placeholder?: unknown; attachmentIds?: unknown; previews?: unknown },
       ack: Ack,
     ) => {
       ack = typeof ack === "function" ? ack : () => {};
@@ -791,7 +808,7 @@ export function registerMlsHandlers(ctx: HandlerContext): EventHandlerMap {
             const blockers = await blockersOfSender(self);
             // Who and which server, never what: the server can't read an MLS message (GRYT-1688).
             const preview = async () => messagePreview({ sender: (await getUserByServerId(self))?.nickname, body: "New direct message", conversationId: payload.conversationId });
-            pushNotify(clientsInfo, memberIds.filter((id) => id !== self && !blockers.has(id)), "dm", payload.conversationId, { preview });
+            pushNotify(clientsInfo, memberIds.filter((id) => id !== self && !blockers.has(id)), "dm", payload.conversationId, { preview, sealedFor: sealedPreviews(payload.previews) });
           } catch (err) {
             consola.warn("mls push failed", payload.conversationId, err);
           }

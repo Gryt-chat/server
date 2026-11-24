@@ -20,6 +20,8 @@ export interface PushOptions {
   preview?: () => Promise<PushPreview | null>;
   /** Push even with a session open: a device asking to be approved is that open session. */
   evenIfPresent?: boolean;
+  /** Lines a DM sender sealed to each phone's own key, by MLS device id. Used instead of `preview` (GRYT-2275). */
+  sealedFor?: ReadonlyMap<string, string>;
 }
 
 export const DEFAULT_PUSH_RELAY = "https://push.gryt.chat";
@@ -67,11 +69,11 @@ export function createPusher(deps: PusherDeps) {
   const lastSent = new Map<string, number>();
   const inFlight = new Set<Promise<void>>();
 
-  async function send(device: PushDevice, kind: PushKind, preview: (() => Promise<PushPreview | null>) | null): Promise<void> {
+  async function send(device: PushDevice, kind: PushKind, preview: (() => Promise<PushPreview | null>) | null, fromSender?: string): Promise<void> {
     try {
-      const shown = device.previewKey && preview ? await preview() : null;
+      const shown = !fromSender && device.previewKey && preview ? await preview() : null;
       // Sealed to this phone's key, so the relay forwards it unread. Without one the relay's own text shows.
-      const sealed = shown && device.previewKey ? sealPreview(device.previewKey, device.capability, shown) : undefined;
+      const sealed = fromSender ?? (shown && device.previewKey ? sealPreview(device.previewKey, device.capability, shown) : undefined);
       const res = await deps.fetch(`${deps.relay}/v1/push`, {
         method: "POST",
         headers: { authorization: `Bearer ${device.capability}`, "content-type": "application/json" },
@@ -116,7 +118,8 @@ export function createPusher(deps: PusherDeps) {
         const key = `${device.capability}:${conversationId}`;
         if (now - (lastSent.get(key) ?? 0) < QUIET_MS) continue;
         lastSent.set(key, now);
-        const sending = send(device, kind, options.preview ? previewOnce : null).finally(() => inFlight.delete(sending));
+        const fromSender = device.mlsDeviceId ? options.sealedFor?.get(device.mlsDeviceId) : undefined;
+        const sending = send(device, kind, options.preview ? previewOnce : null, fromSender).finally(() => inFlight.delete(sending));
         inFlight.add(sending);
       }
     }

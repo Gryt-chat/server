@@ -780,6 +780,12 @@ function runMigrations(d: DatabaseSync): void {
   if (!hasColumn(d, "push_devices", "preview_key")) {
     d.exec("ALTER TABLE push_devices ADD COLUMN preview_key TEXT");
   }
+  // The phone's MLS device and the key a DM sender seals its line to, signed by that device (GRYT-2275).
+  if (!hasColumn(d, "push_devices", "mls_device_id")) {
+    d.exec("ALTER TABLE push_devices ADD COLUMN mls_device_id TEXT");
+    d.exec("ALTER TABLE push_devices ADD COLUMN dm_preview_key TEXT");
+    d.exec("ALTER TABLE push_devices ADD COLUMN dm_preview_sig TEXT");
+  }
 
   const cols = d.prepare("PRAGMA table_info(users)").all() as { name: string }[];
   const colNames = new Set(cols.map((c) => c.name));

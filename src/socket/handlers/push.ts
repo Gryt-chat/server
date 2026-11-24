@@ -1,6 +1,6 @@
 import consola from "consola";
 
-import { removePushDevice, savePushDevice } from "../../db";
+import { isMlsDevice, removePushDevice, savePushDevice } from "../../db";
 import { CAPABILITY_SHAPE, pushEnabled } from "../../services/push";
 import { PREVIEW_KEY_SHAPE } from "../../services/pushPreview";
 import { checkRateLimit, type RateLimitRule } from "../../utils/rateLimiter";
@@ -16,6 +16,10 @@ type Reply = { ok: true } | { ok: false; error: string };
 type Ack = (reply: Reply) => void;
 
 const INSTALL_ID = /^[A-Za-z0-9_-]{8,64}$/;
+const MLS_DEVICE_ID = /^[A-Za-z0-9_-]{1,64}$/;
+/* An X25519 key and an Ed25519 signature, base64url. The server only stores them; senders verify. */
+const DM_PREVIEW_KEY = /^[A-Za-z0-9_-]{43}$/;
+const DM_PREVIEW_SIG = /^[A-Za-z0-9_-]{86}$/;
 const MAX_IDS = 2000;
 
 /** Conversation ids from the phone, muted or at All. Null when it is not a short list of short strings. */
@@ -36,7 +40,10 @@ export function registerPushHandlers(ctx: HandlerContext): EventHandlerMap {
 
   return {
     "push:register": async (
-      payload: { accessToken: string; installId?: unknown; capability?: unknown; muted?: unknown; all?: unknown; everyone?: unknown; previewKey?: unknown },
+      payload: {
+        accessToken: string; installId?: unknown; capability?: unknown; muted?: unknown; all?: unknown; everyone?: unknown; previewKey?: unknown;
+        mlsDeviceId?: unknown; dmPreviewKey?: unknown; dmPreviewSig?: unknown;
+      },
       ack: Ack,
     ) => {
       ack = typeof ack === "function" ? ack : () => {};
@@ -54,8 +61,14 @@ export function registerPushHandlers(ctx: HandlerContext): EventHandlerMap {
           || (previewKey !== undefined && (typeof previewKey !== "string" || !PREVIEW_KEY_SHAPE.test(previewKey)))) {
           return ack({ ok: false, error: "invalid_payload" });
         }
+        const { mlsDeviceId, dmPreviewKey, dmPreviewSig } = payload;
+        const dmPreview = typeof mlsDeviceId === "string" && MLS_DEVICE_ID.test(mlsDeviceId)
+          && typeof dmPreviewKey === "string" && DM_PREVIEW_KEY.test(dmPreviewKey)
+          && typeof dmPreviewSig === "string" && DM_PREVIEW_SIG.test(dmPreviewSig);
         const auth = await requireAuth(socket, payload);
         if (!auth) return ack({ ok: false, error: "unauthorized" });
+        // Only this account's own device, so a phone can't take another's DM lines.
+        const ownMls = dmPreview && isMlsDevice(auth.tokenPayload.serverUserId, mlsDeviceId);
         // Muted wins over All, so a list that names one conversation twice stays quiet.
         const quiet = new Set(muted);
         savePushDevice(auth.tokenPayload.serverUserId, payload.installId, payload.capability, {
@@ -63,6 +76,8 @@ export function registerPushHandlers(ctx: HandlerContext): EventHandlerMap {
           loud: loud.filter((id) => !quiet.has(id)),
           everyone: payload.everyone === true,
           previewKey: typeof previewKey === "string" ? previewKey : null,
+          mlsDeviceId: ownMls ? mlsDeviceId : null,
+          dmPreviewKey: ownMls ? { key: dmPreviewKey, sig: dmPreviewSig } : null,
         });
         ack({ ok: true });
       } catch (err) {
