@@ -12,6 +12,14 @@ export interface PushDevice {
   everyone: boolean;
   /** What its previews are sealed to, so only that phone can read who wrote what (GRYT-1688). */
   previewKey: string | null;
+  /** The MLS device on that phone, whose DM senders seal a line to it themselves (GRYT-2275). */
+  mlsDeviceId?: string | null;
+}
+
+/** A DM preview key a phone signed with its MLS device key. Senders check the signature. */
+export interface DmPreviewKey {
+  key: string;
+  sig: string;
 }
 
 /** What the phone said about its notification settings when it last checked in. */
@@ -20,6 +28,8 @@ export interface PushSettings {
   loud?: readonly string[];
   everyone?: boolean;
   previewKey?: string | null;
+  mlsDeviceId?: string | null;
+  dmPreviewKey?: DmPreviewKey | null;
 }
 
 /** More than this and the oldest goes. Nobody has ten phones; a reinstall loop might. */
@@ -49,14 +59,16 @@ export function savePushDevice(
   const db = getSqliteDb();
   const at = toIso(now);
   db.prepare(
-    `INSERT INTO push_devices (server_user_id, install_id, capability, muted, loud, everyone, preview_key, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO push_devices (server_user_id, install_id, capability, muted, loud, everyone, preview_key, mls_device_id, dm_preview_key, dm_preview_sig, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(server_user_id, install_id) DO UPDATE SET capability = excluded.capability, muted = excluded.muted,
-       loud = excluded.loud, everyone = excluded.everyone, preview_key = excluded.preview_key, updated_at = excluded.updated_at`,
+       loud = excluded.loud, everyone = excluded.everyone, preview_key = excluded.preview_key, mls_device_id = excluded.mls_device_id,
+       dm_preview_key = excluded.dm_preview_key, dm_preview_sig = excluded.dm_preview_sig, updated_at = excluded.updated_at`,
   ).run(
     serverUserId, installId, capability,
     JSON.stringify(settings.muted ?? []), JSON.stringify(settings.loud ?? []), settings.everyone ? 1 : 0,
     settings.previewKey ?? null,
+    settings.mlsDeviceId ?? null, settings.dmPreviewKey?.key ?? null, settings.dmPreviewKey?.sig ?? null,
     at, at,
   );
   db.prepare(
@@ -71,8 +83,8 @@ export function listPushDevices(serverUserId: string, now = new Date()): PushDev
   const cutoff = toIso(new Date(now.getTime() - PUSH_DEVICE_STALE_DAYS * DAY_MS));
   db.prepare(`DELETE FROM push_devices WHERE server_user_id = ? AND updated_at < ?`).run(serverUserId, cutoff);
   const rows = db
-    .prepare(`SELECT install_id, capability, muted, loud, everyone, preview_key FROM push_devices WHERE server_user_id = ?`)
-    .all(serverUserId) as { install_id: string; capability: string; muted: string; loud: string; everyone: number; preview_key: string | null }[];
+    .prepare(`SELECT install_id, capability, muted, loud, everyone, preview_key, mls_device_id FROM push_devices WHERE server_user_id = ?`)
+    .all(serverUserId) as { install_id: string; capability: string; muted: string; loud: string; everyone: number; preview_key: string | null; mls_device_id: string | null }[];
   return rows.map((r) => ({
     installId: r.install_id,
     capability: r.capability,
@@ -80,7 +92,23 @@ export function listPushDevices(serverUserId: string, now = new Date()): PushDev
     loud: parseIds(r.loud),
     everyone: r.everyone === 1,
     previewKey: r.preview_key ?? null,
+    mlsDeviceId: r.mls_device_id ?? null,
   }));
+}
+
+/** By MLS device id, the newest a phone of these accounts registered. */
+export function dmPreviewKeys(serverUserIds: readonly string[]): Map<string, DmPreviewKey> {
+  const out = new Map<string, DmPreviewKey>();
+  if (serverUserIds.length === 0) return out;
+  const rows = getSqliteDb()
+    .prepare(
+      `SELECT mls_device_id, dm_preview_key, dm_preview_sig FROM push_devices
+        WHERE server_user_id IN (${serverUserIds.map(() => "?").join(", ")}) AND dm_preview_key IS NOT NULL
+        ORDER BY updated_at`,
+    )
+    .all(...serverUserIds) as { mls_device_id: string; dm_preview_key: string; dm_preview_sig: string }[];
+  for (const r of rows) out.set(r.mls_device_id, { key: r.dm_preview_key, sig: r.dm_preview_sig });
+  return out;
 }
 
 /** Accounts with a phone that wants every message in this conversation. Stale ones are dropped later, per account. */
