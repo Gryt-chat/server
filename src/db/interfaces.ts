@@ -1,3 +1,4 @@
+import type { ChannelPoster } from "../utils/channelPoster";
 import type { PublicPoll, StoredPoll } from "../polls/poll";
 import { randomBytes, scrypt as scryptCb, timingSafeEqual } from "crypto";
 import { promisify } from "util";
@@ -405,6 +406,9 @@ export interface ServerChannelRecord {
   default_notification: ChannelNotificationLevel | null;
   /** The tags a forum channel offers its topics. Empty on a normal channel. GRYT-981. */
   forum_tags: ForumTag[];
+  poster: ChannelPoster | null;
+  /** `#rrggbb`, tinting the channel's icon and header. */
+  color: string | null;
   /** Null means anybody holding send_messages, which is every channel unless an
       operator narrows it. */
   post_min_rank: number | null;

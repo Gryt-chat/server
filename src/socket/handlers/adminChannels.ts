@@ -29,7 +29,9 @@ import {
   setFolderPermissionScope,
   deletePermissionTemplate,
   resolveChannelScopes,
+  setChannelLook,
 } from "../../db";
+import { normaliseChannelColor, normaliseChannelPoster } from "../../utils/channelPoster";
 import { CHANNEL_PERMISSIONS } from "../../constants/permissions";
 import { checkRateLimit, type RateLimitRule } from "../../utils/rateLimiter";
 import {
@@ -257,6 +259,30 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
       } catch (e) {
         consola.error("server:channels:list failed", e);
         socket.emit("server:error", { error: "channels_failed", message: "Failed to list channels." });
+      }
+    },
+
+    // Its own event, so a rename from a client that doesn't know posters can't clear one.
+    'server:channels:look': async (payload: { accessToken: string; channelId: string; poster?: unknown; color?: unknown }) => {
+      try {
+        const rl = rlCheck("server:channels:look", ctx, RL_SETTINGS);
+        if (!rl.allowed) { emitRateLimited(ctx, rl); return; }
+        if (!payload || typeof payload.channelId !== "string") {
+          socket.emit("server:error", { error: "invalid_payload", message: "channelId required." });
+          return;
+        }
+        const auth = await requireAuth(socket, payload, { permission: "manage_channels" });
+        if (!auth) return;
+        const channelId = payload.channelId.trim();
+        if (!(await setChannelLook(channelId, normaliseChannelPoster(payload.poster), normaliseChannelColor(payload.color)))) {
+          socket.emit("server:error", { error: "channel_not_found", message: "That channel doesn't exist." });
+          return;
+        }
+        insertServerAudit({ actorServerUserId: auth.tokenPayload.serverUserId, action: "channel_look", target: channelId }).catch((e) => consola.warn("audit log write failed", e));
+        broadcastDetails(ctx);
+      } catch (e) {
+        consola.error("server:channels:look failed", e);
+        socket.emit("server:error", { error: "channels_update_failed", message: "Failed to update channel." });
       }
     },
 

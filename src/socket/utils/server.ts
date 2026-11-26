@@ -1,3 +1,4 @@
+import type { ChannelPoster } from "../../utils/channelPoster";
 import consola from "consola";
 import type { Server, Socket } from "socket.io";
 import type { Clients } from "../../types";
@@ -272,7 +273,7 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
   // Sidebar items are persisted in DB; bootstrap defaults if missing.
   // We still emit `channels` for backward compatibility (derived from sidebar items).
   let sidebar_items: { id: string; kind: string; position: number; channelId?: string; spacerHeight?: number; label?: string; parentItemId?: string }[] = [];
-  let channels: { id: string; name: string; type: string; description?: string; requirePushToTalk?: boolean; disableRnnoise?: boolean; maxBitrate?: number; eSportsMode?: boolean; textInVoice?: boolean; layout?: "chat" | "forum"; automated?: boolean; defaultNotificationLevel?: ChannelNotificationLevel; forumTags?: { id: string; name: string; emoji?: string | null; color?: string | null }[]; permissionScopeId?: string | null; canSend?: boolean; canJoin?: boolean; myPermissions?: readonly ChannelPermission[] }[] = [];
+  let channels: { id: string; name: string; type: string; description?: string; requirePushToTalk?: boolean; disableRnnoise?: boolean; maxBitrate?: number; eSportsMode?: boolean; textInVoice?: boolean; layout?: "chat" | "forum"; automated?: boolean; defaultNotificationLevel?: ChannelNotificationLevel; forumTags?: { id: string; name: string; emoji?: string | null; color?: string | null }[]; poster?: ChannelPoster | null; color?: string | null; permissionScopeId?: string | null; canSend?: boolean; canJoin?: boolean; myPermissions?: readonly ChannelPermission[] }[] = [];
   // Empty until read, so a failed read names nobody's voice channel.
   let visibleToThem: ReadonlySet<string> = new Set();
   try {
@@ -335,6 +336,8 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
           automated: c.automated || false,
           defaultNotificationLevel: channelNotificationLevel(c),
           forumTags: c.forum_tags,
+          poster: c.poster,
+          color: c.color,
           permissionScopeId: scopes.get(c.channel_id)?.scopeId ?? null,
           canSend: postable.has(c.channel_id),
           canJoin: joinable.has(c.channel_id),
@@ -359,6 +362,8 @@ export async function sendServerDetails(socket: Socket, clientsInfo: Clients, in
         automated: c.automated || false,
         defaultNotificationLevel: channelNotificationLevel(c),
         forumTags: c.forum_tags,
+        poster: c.poster,
+        color: c.color,
         permissionScopeId: scopes.get(c.channel_id)?.scopeId ?? null,
         canSend: postable.has(c.channel_id),
         canJoin: joinable.has(c.channel_id),
