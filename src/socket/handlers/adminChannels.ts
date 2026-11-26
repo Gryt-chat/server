@@ -31,7 +31,7 @@ import {
   resolveChannelScopes,
   setChannelLook,
 } from "../../db";
-import { normaliseChannelColor, normaliseChannelPoster } from "../../utils/channelPoster";
+import { type ChannelPoster, normaliseChannelColor, normaliseChannelPoster } from "../../utils/channelPoster";
 import { CHANNEL_PERMISSIONS } from "../../constants/permissions";
 import { checkRateLimit, type RateLimitRule } from "../../utils/rateLimiter";
 import {
@@ -263,7 +263,7 @@ export function registerAdminChannelHandlers(ctx: HandlerContext): EventHandlerM
     },
 
     // Its own event, so a rename from a client that doesn't know posters can't clear one.
-    'server:channels:look': async (payload: { accessToken: string; channelId: string; poster?: unknown; color?: unknown }) => {
+    'server:channels:look': async (payload: { accessToken: string; channelId: string; poster?: ChannelPoster | null; color?: string | null }) => {
       try {
         const rl = rlCheck("server:channels:look", ctx, RL_SETTINGS);
         if (!rl.allowed) { emitRateLimited(ctx, rl); return; }
