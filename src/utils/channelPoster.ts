@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-restricted-types -- checks a poster a client sent or the database stored */
+
 /**
  * A channel's poster, drawn at the start of its history, and the colour that tints its
  * icon and header. Every member reads both, so a bad value is dropped rather than refused.
