@@ -5,6 +5,7 @@ import {
   resolveChannelScopes,
   type ResolvedChannelScope,
 } from "./channelScopes";
+import { type ChannelPoster, normaliseChannelColor, readStoredChannelPoster } from "../../utils/channelPoster";
 import { fromIso, getSqliteDb, intToBool, toIso } from "./connection";
 
 function normalizeChannelType(t: unknown): "text" | "voice" {
@@ -72,6 +73,8 @@ function rowToChannel(r: Record<string, unknown>): ServerChannelRecord {
     automated: intToBool(r.automated as number),
     default_notification: normalizeNotificationLevel(r.default_notification),
     forum_tags: parseForumTags(r.forum_tags),
+    poster: readStoredChannelPoster(r.poster as string | null),
+    color: normaliseChannelColor(r.color),
     post_min_rank: r.post_min_rank != null ? Number(r.post_min_rank) : null,
     view_min_rank: r.view_min_rank != null ? Number(r.view_min_rank) : null,
     permission_scope_id: (r.permission_scope_id as string) ?? null,
@@ -135,6 +138,12 @@ export async function upsertServerChannel(channel: {
      ON CONFLICT(channel_id) DO UPDATE SET name=?, type=?, position=?, description=?, require_push_to_talk=?, disable_rnnoise=?, max_bitrate=?, esports_mode=?, text_in_voice=?, layout=?, automated=?, forum_tags=?, default_notification=?, updated_at=?`
   ).run(channelId, name, type, position, description, rPtt, dRnn, maxBr, eMode, tiv, layout, automated, forumTags, defaultNotification, now, now,
     name, type, position, description, rPtt, dRnn, maxBr, eMode, tiv, layout, automated, forumTags, defaultNotification, now);
+}
+
+/** Poster and colour only, so an edit from an older client can't clear them. Already checked. */
+export async function setChannelLook(channelId: string, poster: ChannelPoster | null, color: string | null): Promise<boolean> {
+  return getSqliteDb().prepare(`UPDATE channels SET poster = ?, color = ?, updated_at = ? WHERE channel_id = ?`)
+    .run(poster ? JSON.stringify(poster) : null, color, toIso(new Date()), channelId).changes > 0;
 }
 
 /** Name and topic only; every other setting stays as the owner left it. */

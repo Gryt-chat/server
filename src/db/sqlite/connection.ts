@@ -1144,6 +1144,10 @@ function runMigrations(d: DatabaseSync): void {
   if (!hasColumn(d, "channels", "forum_tags")) {
     d.exec("ALTER TABLE channels ADD COLUMN forum_tags TEXT");
   }
+  // The channel's poster (JSON, checked by utils/channelPoster) and colour. Null is none.
+  for (const column of ["poster", "color"]) {
+    if (!hasColumn(d, "channels", column)) d.exec(`ALTER TABLE channels ADD COLUMN ${column} TEXT`);
+  }
   if (!hasColumn(d, "threads", "tags")) {
     d.exec("ALTER TABLE threads ADD COLUMN tags TEXT");
   }
