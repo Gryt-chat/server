@@ -58,6 +58,34 @@ export class Gate {
   }
 }
 
+/** Gryt's engines decode 2.5 ms frames only, so Discord's 20 ms packets are decoded and sent on as these (GRYT-2427). */
+export const GRYT_FRAME = 120;
+/** What a Gryt member sends by default (@gryt/voice native/core/engine.h). */
+const GRYT_BITRATE = 192000;
+
+/** One Discord speaker's packets in, Gryt's 2.5 ms packets out. Throws on a packet that doesn't decode. */
+export class Reframer {
+  private readonly decoder: OpusDecoder;
+  private readonly encoder: OpusEncoder;
+
+  constructor(opus: OpusCodec) {
+    this.decoder = opus.decoder(FRAME);
+    this.encoder = opus.encoder({ frame: GRYT_FRAME, bitrate: GRYT_BITRATE });
+  }
+
+  push(packet: Uint8Array): Uint8Array[] {
+    const pcm = this.decoder.decode(packet);
+    const out: Uint8Array[] = [];
+    for (let at = 0; at + GRYT_FRAME <= pcm.length; at += GRYT_FRAME) out.push(this.encoder.encode(pcm.subarray(at, at + GRYT_FRAME)));
+    return out;
+  }
+
+  destroy(): void {
+    this.decoder.destroy();
+    this.encoder.destroy();
+  }
+}
+
 /** One speaker's packets in, louder 20 ms packets out, nothing during silence. */
 export class Leveller {
   private decoder: OpusDecoder;

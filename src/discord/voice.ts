@@ -19,7 +19,7 @@ import { importedId } from "../import/discord/ids";
 import { pluginRefs } from "../plugins/refs";
 import { syncAllClients } from "../socket/utils/clients";
 import { sfuRoomId } from "../socket/utils/voiceRooms";
-import { Leveller, loadCodec } from "./gain";
+import { GRYT_FRAME, Leveller, Reframer, loadCodec } from "./gain";
 import { removeDiscordVoiceParticipant, setDiscordVoiceParticipant } from "./voiceParticipants";
 
 /** Discord sends 20 ms Opus frames; 960 samples at 48 kHz. */
@@ -51,6 +51,7 @@ interface Speaker {
   seq: number;
   timestamp: number;
   lastAt: number;
+  reframe: Reframer | null;
 }
 
 /** The bot's own voice member in the Gryt room, which hears it and speaks into Discord. */
@@ -131,7 +132,7 @@ function addPerson(b: Bridged, guild: Guild, discordUserId: string): void {
   const serverUserId = `discord:${discordUserId}`;
   refs.sfuClient.virtualVoiceJoin(sfuRoomId(refs.serverId, b.grytChannelId), serverUserId);
   setDiscordVoiceParticipant({ serverUserId, name: member.displayName, avatar: member.displayAvatarURL({ extension: "png", size: 128 }), channelId: b.grytChannelId });
-  b.people.set(discordUserId, { serverUserId, stream: null, seq: 0, timestamp: 0, lastAt: 0 });
+  b.people.set(discordUserId, { serverUserId, stream: null, seq: 0, timestamp: 0, lastAt: 0, reframe: null });
   broadcast();
 }
 
@@ -141,12 +142,27 @@ function listen(b: Bridged, discordUserId: string): void {
   if (!person || person.stream || !sfu) return;
   const stream = b.conn.receiver.subscribe(discordUserId, { end: { behavior: EndBehaviorType.Manual } });
   person.stream = stream;
+  loadCodec().then(
+    (codec) => {
+      if (b.people.get(discordUserId) === person) person.reframe = new Reframer(codec);
+    },
+    (e: Error) => consola.warn("[DiscordVoice] Opus codec failed to load", e.message),
+  );
   stream.on("data", (opus: Buffer) => {
+    if (!person.reframe) return;
+    let frames: Uint8Array[];
+    try {
+      frames = person.reframe.push(opus);
+    } catch {
+      return;
+    }
     const now = Date.now();
-    person.seq = (person.seq + 1) & 0xffff;
     person.timestamp = person.lastAt ? nextTimestamp(person.timestamp, person.lastAt, now) : 0;
     person.lastAt = now;
-    sfu.sendVirtualAudio(person.serverUserId, voicePacket(person.seq, person.timestamp, opus));
+    frames.forEach((frame, k) => {
+      person.seq = (person.seq + 1) & 0xffff;
+      sfu.sendVirtualAudio(person.serverUserId, voicePacket(person.seq, (person.timestamp + k * GRYT_FRAME) >>> 0, frame));
+    });
   });
   stream.on("error", (e) => consola.warn("[DiscordVoice] receive failed", e.message));
 }
@@ -155,6 +171,7 @@ function dropPerson(b: Bridged, discordUserId: string): void {
   const person = b.people.get(discordUserId);
   if (!person) return;
   person.stream?.destroy();
+  person.reframe?.destroy();
   pluginRefs()?.sfuClient?.virtualVoiceLeave(person.serverUserId);
   removeDiscordVoiceParticipant(person.serverUserId);
   b.people.delete(discordUserId);
