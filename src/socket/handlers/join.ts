@@ -5,6 +5,7 @@ import { syncAllClients, broadcastMemberList, countOtherSessions, forgetSocketId
 import { resetMessageCache } from "../utils/messageCache";
 import { broadcastConversation } from "./dm";
 import { sendInfo, sendServerDetails } from "../utils/server";
+import { getServerKeyId } from "../../auth/serverIdentity";
 import { remindOutdatedWindowsClient } from "../utils/outdatedClient";
 import { postSystemMessage, formatJoinMessage } from "../utils/systemMessages";
 import { createChallenge, consumeChallenge, verifyCertificate, verifyAssertion, verifyIdentityLink, identityTierAccepted, identityTierOf, IdentityVerificationError, type BotDeclaration, type IdentityTier, looksLikeABotName } from "../../auth/identity";
@@ -289,7 +290,9 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
             }
           : undefined;
 
-        const challenge = createChallenge(socket.id, serverHost, nickname, inviteCode, botDeclaration);
+        // No key means no proof either, so a client that checks will refuse to sign.
+        const serverKey = await getServerKeyId().catch(() => undefined);
+        const challenge = createChallenge(socket.id, serverHost, serverKey, nickname, inviteCode, botDeclaration);
         socket.emit("server:challenge", challenge);
       } catch (err) {
         consola.error("server:join failed", err);
@@ -350,7 +353,11 @@ export function registerJoinHandlers(ctx: HandlerContext): EventHandlerMap {
             cert.jwk,
             challenge.serverHost,
             challenge.nonce,
+            challenge.serverKey,
           );
+          if (assertionResult.legacy) {
+            consola.warn(`Legacy join assertion without server_key from ${clientId}`);
+          }
 
           if (assertionResult.sub !== cert.sub) {
             throw new Error("Assertion subject does not match certificate subject");

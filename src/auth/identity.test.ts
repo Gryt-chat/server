@@ -473,11 +473,11 @@ describe("issuer-qualified ids", () => {
     is behind, which is the direction that used to fail. */
 async function makeAssertion(
   privateKey: Awaited<ReturnType<typeof makeKeyPair>>["privateKey"],
-  opts: { sub: string; aud: string; nonce: string; offsetSeconds?: number }
+  opts: { sub: string; aud: string; nonce: string; offsetSeconds?: number; serverKey?: string }
 ) {
   const now = Math.floor(Date.now() / 1000) + (opts.offsetSeconds ?? 0);
 
-  return await new SignJWT({ nonce: opts.nonce })
+  return await new SignJWT({ nonce: opts.nonce, server_key: opts.serverKey })
     .setProtectedHeader({ alg: "ES256", typ: "JWT" })
     .setSubject(opts.sub)
     .setAudience(opts.aud)
@@ -578,6 +578,53 @@ describe("assertions from a machine whose clock is wrong", () => {
         return true;
       }
     );
+  });
+});
+
+describe("assertions are bound to this server's key", () => {
+  const AUD = "10.0.0.5:5000";
+  const NONCE = "nonce-for-this-socket";
+  const OURS = "our-key-id";
+
+  const sign = async (serverKey?: string) => {
+    const { privateKey, publicJwk } = await makeKeyPair();
+    return { publicJwk, assertion: await makeAssertion(privateKey, { sub: "someone", aud: AUD, nonce: NONCE, serverKey }) };
+  };
+
+  const refusedFor = (err: unknown) => {
+    assert.ok(err instanceof IdentityVerificationError);
+    assert.equal(err.reason, "server_key_mismatch");
+    return true;
+  };
+
+  afterEach(() => {
+    delete process.env.GRYT_REQUIRE_SERVER_KEY;
+  });
+
+  it("accepts one naming our key", async () => {
+    const { assertion, publicJwk } = await sign(OURS);
+    assert.deepEqual(await verifyAssertion(assertion, publicJwk, AUD, NONCE, OURS), { sub: "someone", legacy: false });
+  });
+
+  it("refuses one naming another server's key", async () => {
+    const { assertion, publicJwk } = await sign("their-key-id");
+    await assert.rejects(() => verifyAssertion(assertion, publicJwk, AUD, NONCE, OURS), refusedFor);
+  });
+
+  it("refuses one naming a key when we have none", async () => {
+    const { assertion, publicJwk } = await sign(OURS);
+    await assert.rejects(() => verifyAssertion(assertion, publicJwk, AUD, NONCE, undefined), refusedFor);
+  });
+
+  it("accepts one from an older client as legacy", async () => {
+    const { assertion, publicJwk } = await sign();
+    assert.deepEqual(await verifyAssertion(assertion, publicJwk, AUD, NONCE, OURS), { sub: "someone", legacy: true });
+  });
+
+  it("refuses one from an older client once the key is required", async () => {
+    process.env.GRYT_REQUIRE_SERVER_KEY = "true";
+    const { assertion, publicJwk } = await sign();
+    await assert.rejects(() => verifyAssertion(assertion, publicJwk, AUD, NONCE, OURS), refusedFor);
   });
 });
 
