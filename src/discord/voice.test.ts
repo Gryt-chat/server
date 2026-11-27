@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { Floor, nextTimestamp, voicePacket } from "./voice";
+import { Leveller, loadCodec } from "./gain";
+import { Floor, droppedOpusPackets, levelled, nextTimestamp, voicePacket } from "./voice";
 
 describe("Discord voice into Gryt", () => {
   it("wraps an Opus frame the way @gryt/voice reads it", () => {
@@ -28,5 +29,21 @@ describe("Discord voice into Gryt", () => {
     assert.deepEqual(f.take("a", 200), { play: true, changed: false });
     assert.deepEqual(f.take("b", 500), { play: false, changed: false });
     assert.deepEqual(f.take("b", 700), { play: true, changed: true });
+  });
+
+  it("drops and counts a packet libopus rejects, and keeps levelling after it", async () => {
+    const codec = await loadCodec();
+    const enc = codec.encoder({ frame: 120, bitrate: 96000 });
+    const level = new Leveller(codec);
+    const before = droppedOpusPackets();
+    const out: Uint8Array[] = [];
+    for (let k = 0; k < 400; k++) {
+      if (k === 200) assert.deepEqual(levelled(level, Uint8Array.of(0xff, 0x00)), []);
+      out.push(...levelled(level, enc.encode(new Float32Array(120).map((_, i) => 0.02 * Math.sin((k * 120 + i) / 8)))));
+    }
+    assert.equal(droppedOpusPackets(), before + 1);
+    assert.equal(out.length, 50);
+    level.destroy();
+    enc.destroy();
   });
 });

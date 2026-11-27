@@ -193,6 +193,25 @@ function leave(): void {
   b.conn.destroy();
 }
 
+let dropped = 0;
+let warnedAt = -Infinity;
+
+/** The packets a member sends, levelled; one libopus rejects is dropped and counted rather than thrown (GRYT-2422). */
+export function levelled(level: Leveller, opus: Uint8Array, now = Date.now()): Uint8Array[] {
+  try {
+    return level.push(opus);
+  } catch (e) {
+    dropped++;
+    if (now - warnedAt >= 60_000) {
+      warnedAt = now;
+      consola.warn(`[DiscordVoice] dropped an Opus packet that doesn't decode (${dropped} so far)`, (e as Error).message);
+    }
+    return [];
+  }
+}
+
+export const droppedOpusPackets = (): number => dropped;
+
 /** Gryt into Discord: one voice at a time, since a bot is one speaker there. Whoever talks keeps it until they stop. */
 export function hearGryt(listener: string, speaker: string, datagram: Buffer): void {
   const out = current?.out;
@@ -204,7 +223,7 @@ export function hearGryt(listener: string, speaker: string, datagram: Buffer): v
   if (!out.level) return;
   if (turn.changed) out.level.reset();
   if (out.player.state.status === AudioPlayerStatus.Idle) out.stream = newStream(out.player);
-  for (const packet of out.level.push(datagram.subarray(8))) {
+  for (const packet of levelled(out.level, datagram.subarray(8))) {
     if (out.stream.readableLength < MAX_QUEUED) out.stream.push(Buffer.from(packet));
   }
 }
