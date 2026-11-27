@@ -215,7 +215,8 @@ const CERTIFICATE_CLOCK_TOLERANCE = "2 minutes";
 export type IdentityFailureReason =
   | "certificate_rejected"
   | "assertion_rejected"
-  | "nonce_mismatch";
+  | "nonce_mismatch"
+  | "server_key_mismatch";
 
 export class IdentityVerificationError extends Error {
   readonly reason: IdentityFailureReason;
@@ -569,12 +570,19 @@ export async function verifyCertificate(
 
 // ── Assertion verification ──────────────────────────────────────────
 
+/** Off until the cut-over in GRYT-2371: clients older than the `server_key` claim
+    still join, and are logged. */
+function serverKeyRequired(): boolean {
+  return process.env.GRYT_REQUIRE_SERVER_KEY === "true";
+}
+
 export async function verifyAssertion(
   assertionJwt: string,
   expectedJwk: JsonWebKey,
   expectedAud: string,
-  expectedNonce: string
-): Promise<{ sub: string }> {
+  expectedNonce: string,
+  expectedServerKey?: string
+): Promise<{ sub: string; legacy: boolean }> {
   const publicKey = await importJWK(expectedJwk, "ES256");
 
   let payload: JWTPayload;
@@ -623,7 +631,22 @@ export async function verifyAssertion(
     );
   }
 
-  return { sub };
+  // The Host only names whoever the client was talking to. This key is ours alone,
+  // so an assertion signed while joining another server can't be relayed here.
+  const serverKey = (payload as JWTPayload & { server_key?: unknown }).server_key;
+  if (serverKey === undefined && !serverKeyRequired()) {
+    return { sub, legacy: true };
+  }
+  if (serverKey === undefined || !expectedServerKey || serverKey !== expectedServerKey) {
+    throw new IdentityVerificationError(
+      "server_key_mismatch",
+      serverKey === undefined
+        ? "Assertion does not name this server's key"
+        : "Assertion names a different server's key"
+    );
+  }
+
+  return { sub, legacy: false };
 }
 
 // ── Nonce manager ───────────────────────────────────────────────────
@@ -641,6 +664,7 @@ export interface BotDeclaration {
 interface PendingChallenge {
   nonce: string;
   serverHost: string;
+  serverKey?: string;
   nickname: string;
   inviteCode?: string;
   /** Bound to the challenge, like the nickname: an operator is shown this, so it
@@ -665,14 +689,16 @@ setInterval(() => {
 export function createChallenge(
   socketId: string,
   serverHost: string,
+  serverKey: string | undefined,
   nickname: string,
   inviteCode?: string,
   bot?: BotDeclaration
-): { nonce: string; serverHost: string; identityTiers: IdentityTier[] } {
+): { nonce: string; serverHost: string; serverKey?: string; identityTiers: IdentityTier[] } {
   const nonce = randomBytes(32).toString("base64url");
   pendingChallenges.set(socketId, {
     nonce,
     serverHost,
+    serverKey,
     nickname,
     inviteCode,
     bot,
@@ -680,7 +706,7 @@ export function createChallenge(
   });
   // This is where the client chooses which identity to sign with, and
   // `server:info` awaits the config so it may not have arrived yet.
-  return { nonce, serverHost, identityTiers: getAcceptedIdentityTiers() };
+  return { nonce, serverHost, serverKey, identityTiers: getAcceptedIdentityTiers() };
 }
 
 export function consumeChallenge(socketId: string): PendingChallenge | null {
