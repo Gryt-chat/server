@@ -4,6 +4,7 @@ import { Readable } from "node:stream";
 
 import {
   EndBehaviorType,
+  AudioPlayerStatus,
   NoSubscriberBehavior,
   StreamType,
   createAudioPlayer,
@@ -202,20 +203,26 @@ export function hearGryt(listener: string, speaker: string, datagram: Buffer): v
   if (!turn.play) return;
   if (!out.level) return;
   if (turn.changed) out.level.reset();
+  if (out.player.state.status === AudioPlayerStatus.Idle) out.stream = newStream(out.player);
   for (const packet of out.level.push(datagram.subarray(8))) {
     if (out.stream.readableLength < MAX_QUEUED) out.stream.push(Buffer.from(packet));
   }
 }
 
+function newStream(player: AudioPlayer): Readable {
+  const stream = new Readable({ objectMode: true, read() {} });
+  player.play(createAudioResource(stream, { inputType: StreamType.Opus, silencePaddingFrames: 0 }));
+  return stream;
+}
+
 function speakIntoDiscord(b: Bridged): void {
   const refs = pluginRefs();
   if (!refs?.sfuClient) return;
-  const stream = new Readable({ objectMode: true, read() {} });
-  const player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Play, maxMissedFrames: Number.POSITIVE_INFINITY } });
-  player.play(createAudioResource(stream, { inputType: StreamType.Opus }));
+  // The sixth missed frame ends the player before it is sent: five silence frames, then speaking 0 (GRYT-2428).
+  const player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Play, maxMissedFrames: 6 } });
   player.on("error", (e) => consola.warn("[DiscordVoice] playing into Discord failed", e.message));
   b.conn.subscribe(player);
-  const out: Outbound = { player, stream, level: null, floor: new Floor() };
+  const out: Outbound = { player, stream: newStream(player), level: null, floor: new Floor() };
   b.out = out;
   loadCodec().then(
     (codec) => {
